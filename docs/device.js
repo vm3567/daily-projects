@@ -6,6 +6,7 @@ const KEYS = {
   claude: 'dp.claudeKey',
   gemini: 'dp.geminiKey',
   ui: 'dp.ui',
+  report: 'dp.report',
 };
 
 function get(k) {
@@ -22,6 +23,9 @@ export const device = {
   setAiKey: (provider, v) => set(provider === 'gemini' ? KEYS.gemini : KEYS.claude, v.trim()),
   ui: () => { try { return JSON.parse(get(KEYS.ui) || '{}'); } catch { return {}; } },
   setUi: (obj) => set(KEYS.ui, JSON.stringify(obj)),
+  /** The Time report's last choices (group, period, by, % or hours). */
+  report: () => { try { return JSON.parse(get(KEYS.report) || '{}'); } catch { return {}; } },
+  setReport: (obj) => set(KEYS.report, JSON.stringify(obj)),
   /** "Forget this device": remove every key and anything waiting. */
   forgetAll() {
     try {

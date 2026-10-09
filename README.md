@@ -97,7 +97,10 @@ Also: each red/yellow row has a one-tap **✓ OK** (or **Chased** when waiting),
 
 - Every open step has a **📝** button: tap it and **Today's update** is about that step ("📝 About: …").
 - Or use **change:** in Today's update to pick any open step, or **Whole project**.
-- Write what happened, tick **This step is done** if it is finished (it ticks the step you chose), press **Enter**. Then 📝 the next step.
+- **Click a step's words** and Today's update is about that step. Press **Enter** in the step to jump to the update box.
+- Write what happened. **Save** (or Enter) keeps the note. **✓ Save + done** (or **Ctrl/⌘+Enter**) keeps the note and ticks the step.
+- **Photos:** paste a screenshot into the box (Ctrl/⌘+V), or drag files onto the project page. Photos go on the update; other files go to Files.
+- When the project turns green, a **Next: …** button opens the next project that still needs you.
 - Each note shows under its own step, and the Diary and Today's summary say which step it was about.
 
 ---
@@ -108,6 +111,9 @@ Also: each red/yellow row has a one-tap **✓ OK** (or **Chased** when waiting),
 - **Next / previous project** in the list you are in (Today, All, Acton, …): **‹ Prev · Next ›** at the top of a project, keys **← →**, or **swipe left / right** on the iPhone.
 - **People:** the people you are waiting on show under **People** in the left menu. Inside a project, tap **👤 Name** to see all your pending work with that person. On a person's page, **‹ ›** (or **← →**) goes to the next person with open work.
 - **← Back** (or **Backspace**) returns to where you came from.
+- **Right-click a project** in the list: tick the next step, add a step, write an update, OK for today, Chased, start the timer, pause — without opening it.
+- **Search + Enter** opens the first project found.
+- The **Time report** remembers your last choices, and in the first week of a month it opens on **Last month** (owner report time).
 
 ---
 

@@ -1,6 +1,8 @@
 // The right column: everything about one project, all editable in place.
 
 import { h, fmtDay, fmtTime, fmtSize, keyHint, withKey, HAS_KEYBOARD } from './dom.js';
+
+const MOD = /Mac|iPhone|iPad/.test(globalThis.navigator ? navigator.platform || navigator.userAgent || '' : '') ? '⌘' : 'Ctrl';
 import { dotColour, todayIndia, isOverdue, indiaDate, waitingDays, lastWorkDate, nextStep, stepLinkedTo, personStatus, minutesBetween, fmtMinutes, weekStart } from '../rules.js';
 import { WAIT_RED_DAYS } from '../config.js';
 import { newId, PRIORITIES, cleanUrl, groupHasTimer } from '../ops.js';
@@ -17,7 +19,7 @@ const HISTORY_WORDS = {
 };
 
 /** Text box that saves on its own: after a short pause in typing, and when leaving the box. */
-function autoField(tag, props, onSave) {
+function autoField(tag, props, onSave, onEnter = null) {
   let timer = null;
   const save = (el) => { clearTimeout(timer); onSave(el.value); };
   return h(tag, {
@@ -25,8 +27,20 @@ function autoField(tag, props, onSave) {
     onInput: (e, el) => { clearTimeout(timer); timer = setTimeout(() => save(el), 900); },
     onChange: (e, el) => save(el),
     onFocusout: (e, el) => save(el),
-    onKeydown: tag === 'input' ? (e, el) => { if (e.key === 'Enter') { e.preventDefault(); el.blur(); } } : undefined,
+    onKeydown: tag === 'input' ? (e, el) => { if (e.key === 'Enter') { e.preventDefault(); el.blur(); if (onEnter) onEnter(); } } : undefined,
   });
+}
+
+function updateState(ui, p) {
+  return ((ui.update ||= {})[p.id] ||= { note: '', next: '' });
+}
+
+/** Put the cursor in Today's update ("What did you do on this step?"). */
+function focusUpdate(p) {
+  setTimeout(() => {
+    const n = document.querySelector(`[data-key="wn-${p.id}"]`);
+    if (n) { n.scrollIntoView({ block: 'center' }); n.focus(); }
+  }, 30);
 }
 
 /** Notes written about this step (newest 2), shown under it. */
@@ -54,6 +68,7 @@ function stepRow(ctx, p, s) {
   if (s.note && !open) tags.push(h('span', { class: 'tag' }, 'note'));
   if (s.repeat && !s.done) tags.push(h('span', { class: 'tag repeat', title: 'Repeats' }, `↻ ${REPEAT_WORD[s.repeat]}`));
   if (s.snoozedUntil && s.snoozedUntil > today && !s.done) tags.push(h('span', { class: 'tag' }, `from ${fmtDay(s.snoozedUntil)}`));
+  const aboutThis = () => { const u = updateState(ui, p); if (u.about !== s.id) { u.about = s.id; ctx.render(); } };
   return h('li', { class: 'step' + (s.done ? ' done' : '') + (s.snoozedUntil && s.snoozedUntil > today && !s.done ? ' later' : ''), key: 's-' + s.id, 'data-id': s.id },
     h('div', { class: 'step-main' },
       s.done ? null : h('span', { class: 'grip', title: 'Drag to reorder', 'aria-hidden': 'true' }, '⋮⋮'),
@@ -67,20 +82,19 @@ function stepRow(ctx, p, s) {
       }),
       s.done
         ? h('span', { class: 'step-text' }, s.text, h('span', { class: 'muted small' }, ` · ${fmtDay(s.doneAt ? indiaDate(s.doneAt) : '')}`))
-        : autoField('input', { class: 'step-text', value: s.text, 'aria-label': 'Step', key: 'st-' + s.id, 'data-mention': '1' },
-          (v) => store.dispatch('setStepField', { projectId: p.id, stepId: s.id, field: 'text', value: v })),
+        : autoField('input', {
+          class: 'step-text', value: s.text, 'aria-label': 'Step', key: 'st-' + s.id, 'data-mention': '1',
+          title: 'Click: Today\'s update is about this step. Enter: write what happened.',
+          // clicking a step points "Today's update" at it, so there is no extra button to reach for
+          onFocusin: () => aboutThis(),
+          onClick: () => aboutThis(),
+        },
+        (v) => store.dispatch('setStepField', { projectId: p.id, stepId: s.id, field: 'text', value: v }),
+        () => { const u = updateState(ui, p); u.about = s.id; ctx.render(); focusUpdate(p); }),
       ...tags,
       s.done ? null : h('button', {
         class: 'icon', title: 'Write what happened on this step', 'aria-label': `Update on ${s.text}`,
-        onClick: () => {
-          const u = ((ui.update ||= {})[p.id] ||= { done: false, note: '', next: '' });
-          u.about = s.id; u.done = false;
-          ctx.render();
-          setTimeout(() => {
-            const n = document.querySelector(`[data-key="wn-${p.id}"]`);
-            if (n) { n.scrollIntoView({ block: 'center' }); n.focus(); }
-          }, 30);
-        },
+        onClick: () => { updateState(ui, p).about = s.id; ctx.render(); focusUpdate(p); },
       }, '📝'),
       h('button', {
         class: 'icon', title: 'More', 'aria-label': 'More about this step',
@@ -278,16 +292,16 @@ function todaysUpdate(ctx, p, notesShown) {
   const today = todayIndia();
   const nextDue = p.state === 'active' ? nextStep(p, today, { dueOnly: true }) : null;
   const openSteps = p.state === 'active' ? p.steps.filter((s) => !s.done) : [];
-  const u = ((ui.update ||= {})[p.id] ||= { done: false, note: '', next: '' });
+  const u = updateState(ui, p);
   // Which step is this update about? The next step by default; any open step via the picker or a step's 📝; or the whole project.
   const chosen = u.about && u.about !== 'project' ? openSteps.find((s) => s.id === u.about) : null;
   const due = u.about === 'project' ? null : chosen || nextDue;
-  if (u.done && (!due || u.stepId !== due.id)) u.done = false; // "done" only counts for the step it was ticked for
-  const save = (form) => {
+  // "Save" = note only; "Save + done" (or Ctrl/⌘+Enter) = note and tick the step it is about.
+  const save = (form, done = false) => {
     const f = form.elements;
     const text = f.note.value.trim();
     const next = f.next ? f.next.value.trim() : '';
-    const tick = !!(due && u.done);
+    const tick = !!(due && done);
     const photos = u.photos || [];
     if (!text && !tick && !next && !photos.length) return;
     const steps = [];
@@ -302,21 +316,33 @@ function todaysUpdate(ctx, p, notesShown) {
     if (result) {
       f.note.value = '';
       if (f.next) f.next.value = '';
-      u.done = false; u.note = ''; u.next = ''; u.photos = []; u.about = null; // back to the next step
+      u.note = ''; u.next = ''; u.photos = []; u.about = null; // back to the next step
       ctx.render();
       if (tick && !next) ctx.afterTick(p.id, 'detail', result.undo); // keeps the Undo button
     }
   };
-  const nextBox = !openSteps.length || u.done;
+  const nextBox = !openSteps.length;
+  const addPhotos = async (files) => {
+    for (const f of files) {
+      const up = await uploadBlob(ctx, f);
+      if (up) { (u.photos ||= []).push(up); ctx.render(); }
+    }
+  };
+  // The project is green: offer the next project that still needs you, right here.
+  const np = p.state === 'active' && dotColour(p, today) === 'green' && ctx.nextOpenProject ? ctx.nextOpenProject(p.id) : null;
   const picker = openSteps.length > 1 || (openSteps.length && u.about === 'project')
     ? h('select', {
       class: 'about-select', key: 'about-' + p.id, value: u.about === 'project' ? 'project' : due ? due.id : 'project', 'aria-label': 'Which step is this update about?',
-      onChange: (e, el) => { u.about = el.value; u.done = false; ctx.render(); setTimeout(() => { const n = document.querySelector(`[data-key="wn-${p.id}"]`); if (n) n.focus(); }, 30); },
+      onChange: (e, el) => { u.about = el.value; ctx.render(); setTimeout(() => { const n = document.querySelector(`[data-key="wn-${p.id}"]`); if (n) n.focus(); }, 30); },
     },
     openSteps.map((s) => h('option', { value: s.id }, `${s.id === (nextDue || {}).id ? '→ ' : ''}${s.text}`)),
     h('option', { value: 'project' }, 'Whole project (no step)'))
     : null;
   return h('div', { class: 'update' },
+    np ? h('div', { class: 'next-project', key: 'np-' + p.id },
+      h('span', null, '✓ Green for today.'),
+      h('button', { class: 'btn primary small', onClick: () => ctx.openNextOpen(np.id) },
+        h('span', { class: `dot ${dotColour(np, today)}` }), ` Next: ${np.name} →`)) : null,
     h('div', { class: 'update-next' + (due || u.about === 'project' ? '' : ' none') },
       due ? [due === nextDue ? '→ Next: ' : '📝 About: ', h('strong', null, due.text), due.waiting ? h('span', { class: 'tag waiting' }, due.waitingOn ? `Waiting: ${due.waitingOn}` : 'Waiting') : null]
         : u.about === 'project' ? '📝 About: the whole project'
@@ -330,10 +356,14 @@ function todaysUpdate(ctx, p, notesShown) {
       name: 'note', key: 'wn-' + p.id, autocomplete: 'off', enterkeyhint: 'done', 'data-mention': '1', value: u.note,
       placeholder: withKey(due ? 'What did you do on this step?' : 'What did you do today?', 'W'),
       onInput: (e, el) => { u.note = el.value; }, // half-typed text survives switching projects
+      onKeydown: (e, el) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); save(el.form, true); } },
+      onPaste: (e) => { // a pasted screenshot becomes a photo on this update
+        const files = [...((e.clipboardData && e.clipboardData.files) || [])].filter((f) => f.type.startsWith('image/'));
+        if (!files.length) return;
+        e.preventDefault();
+        addPhotos(files);
+      },
     }),
-    due ? h('label', { class: 'check update-done' },
-      h('input', { type: 'checkbox', checked: u.done, onChange: (e, el) => { u.done = el.checked; u.stepId = due.id; ctx.render(); if (el.checked) setTimeout(() => { const n = document.querySelector(`[data-key="wn-next-${p.id}"]`); if (n) n.focus(); }, 30); } }),
-      ' This step is done') : null,
     nextBox ? h('input', {
       name: 'next', key: 'wn-next-' + p.id, autocomplete: 'off', enterkeyhint: 'done', 'data-mention': '1', value: u.next,
       onInput: (e, el) => { u.next = el.value; },
@@ -342,20 +372,14 @@ function todaysUpdate(ctx, p, notesShown) {
     (u.photos || []).length ? h('div', { class: 'photo-chips' }, u.photos.map((ph, i) => h('span', { class: 'tag photo', key: 'ph-' + ph.fileId },
       `📷 ${ph.name}`, h('button', { class: 'icon tiny-x', type: 'button', 'aria-label': 'Remove photo', onClick: () => { u.photos.splice(i, 1); ctx.render(); } }, '✕')))) : null,
     h('div', { class: 'row' },
-      h('button', { class: 'btn primary small', type: 'submit' }, 'Save update'),
+      h('button', { class: 'btn small', type: 'submit' }, 'Save'),
+      due ? h('button', { class: 'btn primary small', type: 'button', title: `Save the note and tick "${due.text}" (${MOD}+Enter)`, onClick: (e, el) => save(el.form, true) }, '✓ Save + done') : null,
       h('label', { class: 'btn small photo-btn', title: 'Take a photo or choose one' }, '📷 Photo',
         h('input', {
           type: 'file', accept: 'image/*', multiple: true, class: 'visually-hidden',
-          onChange: async (e, el) => {
-            const files = [...el.files];
-            el.value = '';
-            for (const f of files) {
-              const up = await uploadBlob(ctx, f);
-              if (up) { (u.photos ||= []).push(up); ctx.render(); }
-            }
-          },
+          onChange: async (e, el) => { const files = [...el.files]; el.value = ''; addPhotos(files); },
         })),
-      h('span', { class: 'muted small' }, 'Enter also saves'))),
+      h('span', { class: 'muted small' }, HAS_KEYBOARD ? (due ? `Enter = Save · ${MOD}+Enter = Save + done · paste a screenshot` : 'Enter = Save · paste a screenshot') : ''))),
     h('ul', { class: 'notes' }, p.workNotes.slice(0, notesShown).map((n) => {
       const st = n.stepId && p.steps.find((x) => x.id === n.stepId);
       return h('li', { key: 'n-' + n.id },
@@ -610,7 +634,28 @@ export function renderDetail(ctx) {
   const chip = (name, label) => (show[name] ? null : h('button', { class: 'chip', onClick: () => openPart(name) }, label));
   const notesShown = ui.notesLimit || 3;
 
-  return h('div', { class: 'detail-inner', key: 'detail-' + p.id },
+  const hasFiles = (e) => e.dataTransfer && [...(e.dataTransfer.types || [])].includes('Files');
+  return h('div', {
+    class: 'detail-inner' + (ui.dropOver ? ' drop-over' : ''), key: 'detail-' + p.id,
+    // drop a file anywhere: photos go on Today's update, other files go to Files
+    onDragover: (e) => { if (!hasFiles(e)) return; e.preventDefault(); if (!ui.dropOver) { ui.dropOver = true; ctx.render(); } },
+    onDragleave: (e, el) => { if (ui.dropOver && !el.contains(e.relatedTarget)) { ui.dropOver = false; ctx.render(); } },
+    onDrop: async (e) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      ui.dropOver = false;
+      const files = [...e.dataTransfer.files];
+      const photos = files.filter((f) => f.type.startsWith('image/'));
+      const others = files.filter((f) => !f.type.startsWith('image/'));
+      ctx.render();
+      if (photos.length) {
+        const u = updateState(ui, p);
+        for (const f of photos) { const up = await uploadBlob(ctx, f); if (up) { (u.photos ||= []).push(up); ctx.render(); } }
+        focusUpdate(p);
+      }
+      if (others.length) { opened.files = true; await uploadFiles(ctx, p.id, others); ctx.render(); }
+    },
+  },
     h('div', { class: 'detail-top' },
       h('button', { class: 'icon back', 'aria-label': 'Back to list', onClick: () => { ui.mobile = 'list'; ctx.render(); } }, '←'),
       h('span', { class: `dot ${colour}`, title: COLOUR_WORD[colour] }),

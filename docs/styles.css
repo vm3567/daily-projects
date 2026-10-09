@@ -656,3 +656,15 @@ kbd.hint {
 .work-tag .swatch { width: 12px; height: 12px; border-radius: 3px; }
 .work-tag li { display: flex; justify-content: space-between; gap: 10px; padding: 3px 0; border-bottom: 1px solid #f1f5f9; font-size: 13.5px; }
 .report .report-card + .report-card { margin-top: 14px; }
+
+/* ---------- fewer clicks (v23) ---------- */
+.next-project { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: var(--radius); padding: 8px 12px; margin-bottom: 10px; color: #166534; font-size: 14px; }
+.next-project .btn .dot { display: inline-block; vertical-align: middle; border: 1.5px solid #fff; }
+.update .row .btn.primary { margin-left: 0; }
+.detail-inner.drop-over { outline: 3px dashed #93c5fd; outline-offset: -6px; background: #f8fbff; }
+.step-text { cursor: text; }
+.row-menu { position: fixed; z-index: 60; min-width: 230px; max-width: 280px; background: #fff; border: 1px solid var(--line, #e2e8f0); border-radius: 10px; box-shadow: 0 10px 30px rgba(15, 23, 42, .16); padding: 6px; }
+.row-menu-title { font-size: 12px; color: var(--muted); padding: 4px 10px 6px; border-bottom: 1px solid #f1f5f9; margin-bottom: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row-menu-item { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; background: none; border: 0; border-radius: 6px; padding: 7px 10px; font: inherit; font-size: 14px; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row-menu-item:hover, .row-menu-item:focus-visible { background: var(--brand-soft); }
+.rm-icon { width: 18px; text-align: center; flex: none; }

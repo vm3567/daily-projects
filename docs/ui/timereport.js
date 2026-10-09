@@ -4,6 +4,7 @@
 import { h } from './dom.js';
 import { todayIndia, addDays, timeSplit, percents, fmtMinutes, weekStart, monthOf } from '../rules.js';
 import { workDoneByTag } from '../reports.js';
+import { device } from '../device.js';
 import { groupHasTimer } from '../ops.js';
 
 const COLOURS = ['#2563eb', '#16a34a', '#f59e0b', '#dc2626', '#7c3aed', '#0891b2', '#db2777', '#65a30d', '#ea580c', '#475569'];
@@ -164,12 +165,26 @@ export async function fullReportPng({ title, period, rows, pcts, work, tagColour
   return new Promise((res) => c.toBlob(res, 'image/png'));
 }
 
+/** Which period the report opens on: "Last month" in the first week of a month (owner report time), else what you used last. */
+export function startPreset(today, saved) {
+  if (Number(today.slice(8, 10)) <= 7) return 'lastMonth';
+  return saved && saved !== 'custom' && PRESETS_OK.includes(saved) ? saved : 'thisWeek';
+}
+const PRESETS_OK = ['thisWeek', 'lastWeek', 'thisMonth', 'lastMonth'];
+
 export function renderTimeReport(ctx) {
   const { store, ui } = ctx;
   const data = store.view.data;
   const groups = data.groups.filter(groupHasTimer);
   if (!groups.length) return h('div', { class: 'report' }, h('p', { class: 'muted' }, 'No group has the timer on. Turn it on in Settings.'));
-  const tr = (ui.timeReport ||= { groupId: groups[0].id, preset: 'thisWeek', by: 'tag', mode: 'pct', custom: {} });
+  if (!ui.timeReport) {
+    const saved = device.report();
+    ui.timeReport = {
+      groupId: saved.groupId || groups[0].id, preset: startPreset(todayIndia(), saved.preset),
+      by: saved.by === 'project' ? 'project' : 'tag', mode: saved.mode === 'hours' ? 'hours' : 'pct', custom: {},
+    };
+  }
+  const tr = ui.timeReport;
   if (!groups.some((g) => g.id === tr.groupId)) tr.groupId = groups[0].id;
   const group = groups.find((g) => g.id === tr.groupId);
   const [from, to] = rangeFor(tr.preset, todayIndia(), tr.custom);
@@ -193,7 +208,11 @@ export function renderTimeReport(ctx) {
   const total = rows.reduce((n, r) => n + r.minutes, 0);
   const period = from === to ? fmtDate(from) : `${fmtDate(from)} – ${fmtDate(to)}`;
   const title = `${group.name} — time by ${tr.by === 'tag' ? 'tag' : 'project'}`;
-  const set = (k, v) => { tr[k] = v; ctx.render(); };
+  const set = (k, v) => {
+    tr[k] = v;
+    device.setReport({ groupId: tr.groupId, preset: tr.preset, by: tr.by, mode: tr.mode }); // opens the same way next time
+    ctx.render();
+  };
   const seg = (k, opts) => h('div', { class: 'segmented' }, opts.map(([v, label]) => h('button', {
     class: 'seg' + (tr[k] === v ? ' on' : ''), 'aria-pressed': String(tr[k] === v), onClick: () => set(k, v),
   }, label)));

@@ -97,6 +97,8 @@ function rememberUi() {
 const ctx = {
   get store() { return store; },
   ui,
+  nextOpenProject: (id) => nextOpenProject(id),
+  openNextOpen: (id) => openNextOpen(id),
   toast,
   render: () => render(),
   aiSuggest: (p) => runAi(p, 'next'),
@@ -468,6 +470,19 @@ function select(id) {
 
 // ---------------------------------------------------------------- menu
 
+/** Enter in the search box opens the first project found. */
+function searchEnter(e, el) {
+  if (e.key !== 'Enter') return;
+  e.preventDefault();
+  clearTimeout(searchTimer);
+  ui.search = el.value;
+  if (!ui.search.trim()) return;
+  const first = sortForView(visibleProjects(), todayIndia())[0];
+  if (!first) { render(); toast('Nothing found', 1500); return; }
+  el.blur();
+  select(first.id);
+}
+
 function renderMenu() {
   const { data } = store.view;
   const active = data.projects.filter((p) => p.state === 'active');
@@ -485,6 +500,7 @@ function renderMenu() {
     h('input', {
       class: 'search', type: 'search', placeholder: withKey('Search…', '/'), value: ui.search, key: 'search-desktop', 'aria-label': 'Search',
       onInput: (e, el) => { ui.search = el.value; clearTimeout(searchTimer); searchTimer = setTimeout(render, 120); },
+      onKeydown: searchEnter,
     }),
     h('ul', { class: 'menu-list' },
       item('today', 'Today', active.length),
@@ -582,7 +598,10 @@ function projectRow(p, today) {
   const ns = nextStep(p, today); // shown as "Next:"
   const due = nextStep(p, today, { dueOnly: true }); // what the tick box ticks
   const canTick = due && p.state === 'active';
-  return h('li', { key: 'p-' + p.id, 'data-id': p.id, class: 'prow' + (ui.selected === p.id ? ' current' : '') },
+  return h('li', {
+    key: 'p-' + p.id, 'data-id': p.id, class: 'prow' + (ui.selected === p.id ? ' current' : ''),
+    onContextmenu: (e) => { e.preventDefault(); ui.rowMenu = { id: p.id, x: e.clientX, y: e.clientY }; render(); },
+  },
     canTick
       ? h('input', {
         type: 'checkbox', class: 'quick-tick', key: 'qt-' + p.id + '-' + due.id,
@@ -695,15 +714,45 @@ function followUpRow() {
     }, h('span', { class: `dot ${st.colour}` }), `${person.name} (${st.open})`))));
 }
 
+/** The small menu that opens when you right-click a project in the list. */
+function rowMenu() {
+  const m = ui.rowMenu;
+  const p = m && store.view.data.projects.find((x) => x.id === m.id);
+  if (!p) return null;
+  const today = todayIndia();
+  const due = p.state === 'active' && nextStep(p, today, { dueOnly: true });
+  const g = store.view.data.groups.find((x) => x.id === p.groupId);
+  const timing = store.view.data.timer && store.view.data.timer.projectId === p.id;
+  const item = (icon, label, fn) => h('button', {
+    class: 'row-menu-item', role: 'menuitem',
+    onClick: () => { ui.rowMenu = null; fn(); render(); },
+  }, h('span', { class: 'rm-icon', 'aria-hidden': 'true' }, icon), label);
+  const el = h('div', { class: 'row-menu', role: 'menu', key: 'row-menu', 'aria-label': `Actions for ${p.name}` },
+    h('div', { class: 'row-menu-title' }, p.name),
+    due ? item('✓', `Tick: ${due.text}`, () => quickTick(p, due)) : null,
+    p.state === 'active' ? item('+', 'Add a step', () => { select(p.id); focusKey('add-step-' + p.id); }) : null,
+    p.state === 'active' ? item('📝', 'Write an update', () => { select(p.id); focusKey('wn-' + p.id); }) : null,
+    due && due.waiting ? item('📞', `Chased${due.waitingOn ? ' ' + due.waitingOn : ''}`, () => chase(p, due)) : null,
+    p.state === 'active' ? item('👍', p.okDate === today ? 'Undo OK for today' : 'OK for today', () => toggleOk(p)) : null,
+    p.state === 'active' && groupHasTimer(g || {}) ? item(timing ? '⏹' : '▶', timing ? 'Stop timer' : 'Start timer', () => (timing ? stopTimer() : startTimer(p))) : null,
+    p.state === 'active' ? item('⏸', 'Pause project', () => act('pause', { projectId: p.id }, `Paused: ${p.name}`))
+      : p.state === 'paused' ? item('▶', 'Unpause project', () => act('unpause', { projectId: p.id }, `Back on Today: ${p.name}`)) : null,
+    item('↗', 'Open', () => select(p.id)));
+  // keep it on the screen (style object: allowed by the page's safety rules)
+  el.style.left = Math.max(8, Math.min(m.x, window.innerWidth - 270)) + 'px';
+  el.style.top = Math.max(8, Math.min(m.y, window.innerHeight - 330)) + 'px';
+  return el;
+}
+
 function canDrag() {
   return !ui.search && ui.sort === 'mine';
 }
 
 /** Tick a project's next step straight from the list. */
-function quickTick(p, step, el) {
-  el.checked = true;
+function quickTick(p, step, el = null) {
+  if (el) el.checked = true;
   const done = act('tickStep', { projectId: p.id, stepId: step.id });
-  if (!done) { el.checked = false; return; }
+  if (!done) { if (el) el.checked = false; return; }
   const after = store.view.data.projects.find((x) => x.id === p.id);
   const next = after && nextStep(after, todayIndia(), { dueOnly: true });
   if (next) toast(`✓ ${step.text}. Next: ${next.text}`, 4500, done.undo);
@@ -853,6 +902,7 @@ function renderListColumn() {
   const mobileSearch = h('input', {
     class: 'search mobile-only', type: 'search', placeholder: withKey('Search…', '/'), value: ui.search, key: 'search-mobile', 'aria-label': 'Search',
     onInput: (e, el) => { ui.search = el.value; clearTimeout(searchTimer); searchTimer = setTimeout(render, 120); },
+    onKeydown: searchEnter,
   });
 
   if (ui.view === 'diary' && !ui.search) return h('div', { class: 'col-inner' }, head, timerStrip(), renderDiary());
@@ -878,7 +928,8 @@ function renderListColumn() {
       ui.view === 'finished' || ui.view === 'paused' || ui.search ? null : newProjectForm(),
       showSort && !ui.adding ? sortSwitch() : null),
     ...listParts(list, today),
-    empty);
+    empty,
+    rowMenu());
 }
 
 /** Today: projects not yet green, then a folded "Done today (n)" group. Other views: one list. */
@@ -1391,6 +1442,23 @@ function goProject(step) {
   if (row) row.scrollIntoView({ block: 'nearest' });
 }
 
+/** The next project after this one (in the tab you are in) that is not green yet — red first. */
+function nextOpenProject(id) {
+  const today = todayIndia();
+  let list = ['diary', 'settings', 'dashboard', 'time', 'people'].includes(ui.view) || ui.search
+    ? store.view.data.projects.filter((p) => p.state === 'active') : sortForView(visibleProjects(), today);
+  list = list.filter((p) => p.state === 'active');
+  const i = Math.max(0, list.findIndex((p) => p.id === id));
+  const after = [...list.slice(i + 1), ...list.slice(0, i)].filter((p) => p.id !== id);
+  return after.find((p) => dotColour(p, today) === 'red') || after.find((p) => dotColour(p, today) !== 'green') || null;
+}
+
+function openNextOpen(id) {
+  select(id);
+  const row = root.querySelector(`.prow[data-id="${CSS.escape(id)}"]`);
+  if (row) row.scrollIntoView({ block: 'nearest' });
+}
+
 /** Next / previous person who has open work (people with nothing pending are skipped). */
 function neighbourPerson(step) {
   const list = peopleByFollowUp(store.view.data).filter((x) => x.st.open > 0).map((x) => x.person);
@@ -1509,6 +1577,9 @@ const KEYS = [
   ['r', 'Switch "My order" / "Red first"'],
   ['t  b  d  p', 'Go to Today / Dashboard / Diary / People'],
   ['@', 'In a step or note: pick a person'],
+  ['Ctrl/⌘ Enter', 'In Today\'s update: save and tick the step'],
+  ['Enter', 'In search: open the first project found'],
+  ['Right-click', 'On a project in the list: quick menu'],
   ['Esc', 'Leave a box, or close what is open'],
   ['?', 'Show or hide this list'],
 ];
@@ -1576,6 +1647,7 @@ function onKey(e) {
     const viewer = document.getElementById('viewer');
     if (!viewer.hidden) { closeSheet(); return; }
     if (ui.showKeys) { ui.showKeys = false; render(); return; }
+    if (ui.rowMenu) { ui.rowMenu = null; render(); return; }
     if (isTyping(document.activeElement)) { document.activeElement.blur(); return; }
     if (ui.round) { if (ui.round.mode) { ui.round.mode = null; render(); } else endRound(); return; }
     if (ui.menuOpen) { ui.menuOpen = false; render(); return; }
@@ -1709,6 +1781,9 @@ function start() {
   });
   window.addEventListener('offline', () => store.setStatus('offline', 'No connection'));
   document.addEventListener('keydown', onKey);
+  // a click anywhere else closes the right-click menu
+  document.addEventListener('click', (e) => { if (ui.rowMenu && !e.target.closest('.row-menu')) { ui.rowMenu = null; render(); } });
+  window.addEventListener('scroll', () => { if (ui.rowMenu) { ui.rowMenu = null; render(); } }, true);
 }
 
 installEvents(document.body);

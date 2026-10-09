@@ -31,7 +31,7 @@ installStorage();
 const { renderDetail } = await import('../docs/ui/detail.js');
 const { renderDashboard } = await import('../docs/ui/dashboard.js');
 const { renderPeopleList, renderPerson } = await import('../docs/ui/people.js');
-const { renderTimeReport, rangeFor } = await import('../docs/ui/timereport.js');
+const { renderTimeReport, rangeFor, startPreset } = await import('../docs/ui/timereport.js');
 
 function sampleState() {
   const now = new Date();
@@ -97,7 +97,7 @@ test('people list and person page draw', () => {
 
 test('time report draws (pie, legend in % and hours) and date ranges are right', () => {
   const s = sampleState();
-  const ui = {};
+  const ui = { timeReport: { groupId: s.data.groups[0].id, preset: 'thisWeek', by: 'tag', mode: 'pct', custom: {} } };
   const text = renderTimeReport(fakeCtx(s, ui)).textContent;
   assert.ok(text.includes('time by tag'));
   assert.ok(text.includes('Kiln'));
@@ -113,4 +113,29 @@ test('time report draws (pie, legend in % and hours) and date ranges are right',
   assert.deepEqual(rangeFor('thisMonth', '2026-10-09'), ['2026-10-01', '2026-10-09']);
   assert.deepEqual(rangeFor('lastMonth', '2026-01-15'), ['2025-12-01', '2025-12-31']);
   assert.deepEqual(rangeFor('custom', '2026-10-09', { from: '2026-10-08', to: '2026-10-01' }), ['2026-10-01', '2026-10-08']);
+});
+
+test('time report opens on "Last month" in the first week of a month, else on what was used last', () => {
+  assert.equal(startPreset('2026-11-03', 'thisWeek'), 'lastMonth');
+  assert.equal(startPreset('2026-11-12', 'lastWeek'), 'lastWeek');
+  assert.equal(startPreset('2026-11-12', 'custom'), 'thisWeek');
+  assert.equal(startPreset('2026-11-12', undefined), 'thisWeek');
+  const ui = {};
+  renderTimeReport(fakeCtx(sampleState(), ui));
+  assert.ok(['thisWeek', 'lastMonth'].includes(ui.timeReport.preset));
+});
+
+test('project page: "Save + done" button, and the next project offer when green', () => {
+  const s = sampleState();
+  applyOps(s, [
+    makeOp('createProject', { projectId: 'p2', name: 'Glaze trial', groupId: s.data.groups[0].id }),
+    makeOp('okForToday', { projectId: 'p1' }),
+  ]);
+  const ctx = fakeCtx(s, { selected: 'p1', update: {} });
+  ctx.nextOpenProject = () => s.data.projects.find((p) => p.id === 'p2');
+  ctx.openNextOpen = () => {};
+  const text = renderDetail(ctx).textContent;
+  assert.ok(text.includes('Save + done'), 'save + done button');
+  assert.ok(text.includes('Next: Glaze trial'), 'next project offered');
+  assert.ok(!text.includes('This step is done'), 'old tick box gone');
 });

@@ -3,7 +3,7 @@
 // morph() updates the page in place, so a box being typed in keeps its text and focus,
 // and a button being clicked is not swapped out from under the finger.
 
-const EVENTS = ['click', 'change', 'input', 'keydown', 'submit', 'dragover', 'dragleave', 'drop', 'focusout'];
+const EVENTS = ['click', 'change', 'input', 'keydown', 'submit', 'dragover', 'dragleave', 'drop', 'focusout', 'focusin', 'paste', 'contextmenu'];
 
 export function h(tag, props, ...children) {
   const el = document.createElement(tag);
