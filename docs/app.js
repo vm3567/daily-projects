@@ -33,7 +33,7 @@ const ui = {
   sort: saved.sort === 'red' ? 'red' : 'mine', // 'mine' = my drag order, 'red' = red first
   adding: false,
   openStep: null,
-  showDone: false,
+  showDone: saved.showDone !== false, // the Done list under the steps is open unless you closed it (remembered)
   ai: null,
   brief: { busy: false, error: '' },
   diaryDays: 14,
@@ -92,12 +92,13 @@ function act(type, args, message, ms = 4000) {
 }
 
 function rememberUi() {
-  device.setUi({ view: ui.view, selected: ui.selected, briefFolded: ui.briefFolded, sort: ui.sort });
+  device.setUi({ view: ui.view, selected: ui.selected, briefFolded: ui.briefFolded, sort: ui.sort, showDone: ui.showDone });
 }
 
 const ctx = {
   get store() { return store; },
   ui,
+  rememberUi: () => rememberUi(),
   nextOpenProject: (id) => nextOpenProject(id),
   openNextOpen: (id) => openNextOpen(id),
   toast,
@@ -462,9 +463,9 @@ function select(id) {
   if (ui.selected !== id) {
     ui.selected = id;
     ui.openStep = null;
-    ui.showDone = false;
     ui.historyLimit = 30;
     ui.notesLimit = 3;
+    ui.doneLimit = 10;
     ui.openParts = {};
     ui.editMeta = false;
     if (ui.ai && ui.ai.projectId !== id) ui.ai = null;
