@@ -12,7 +12,7 @@
 import { indiaDate, monthOf, laterDate, addDays, REPEATS, nextRepeatDate } from './rules.js';
 import { AI_DAILY_LIMIT, BRIEF_CLAIM_MINUTES } from './config.js';
 
-export const START_GROUPS = ['AI', 'Ceramic', 'General', 'Work / Office'];
+export const START_GROUPS = ['Acton', 'Personal', 'Ceramic Ninja'];
 export const PRIORITIES = ['high', 'medium', 'low'];
 export const DEFAULT_TARGET_DAYS = 30; // new projects get a target date 30 days ahead
 const PROJECT_FIELDS = ['name', 'groupId', 'priority', 'deadline', 'notes'];

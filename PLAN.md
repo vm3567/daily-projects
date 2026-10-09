@@ -43,7 +43,7 @@ Version: 5.
 | 14 | Pause | Yes. Hides the project from Today until I unpause it. |
 | 15 | Finish | Yes. Moves it to "Finished" with full history. |
 | 16 | Diary | Yes. Shows what I did each day, across all projects. |
-| 17 | Groups | AI, Ceramic, General, Work / Office (I can add more later) |
+| 17 | Groups | Acton, Personal, Ceramic Ninja (set 9 Oct; I can add more later) |
 | 18 | Look | Light and clean |
 | 19 | Adding projects | I add them myself on the page with a "+" button |
 | 20 | Layout | Like Outlook mail. 3 columns. One page. No moving between pages. |
