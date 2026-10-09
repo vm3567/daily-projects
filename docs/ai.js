@@ -87,7 +87,7 @@ const STYLE = 'Use short, plain, everyday English. Each item is one short action
 function describeProject(p, today) {
   const lines = [
     `Project: ${p.name}`,
-    `Priority: ${p.priority}${p.deadline ? `, deadline ${p.deadline}${isOverdue(p, today) ? ' (passed)' : ''}` : ''}`,
+    `Priority: ${p.priority}${p.deadline ? `, target date ${p.deadline}${isOverdue(p, today) ? ' (passed)' : ''}` : ''}`,
   ];
   const open = p.steps.filter((s) => !s.done);
   const done = p.steps.filter((s) => s.done).slice(-8);
@@ -127,7 +127,7 @@ function projectSummaryLine(p, today) {
     `[${p.id}] ${p.name}`,
     `dot ${dotColour(p, today)}`,
     `priority ${p.priority}`,
-    p.deadline ? `deadline ${p.deadline}${isOverdue(p, today) ? ' PASSED' : ` (${daysBetween(today, p.deadline)} days left)`}` : '',
+    p.deadline ? `target date ${p.deadline}${isOverdue(p, today) ? ' PASSED' : ` (${daysBetween(today, p.deadline)} days left)`}` : '',
     ns ? `next: ${ns.text}${ns.waiting ? ' (waiting)' : ''}` : 'no next step',
   ];
   return parts.filter(Boolean).join(' | ');

@@ -252,9 +252,9 @@ function metaLine(ctx, p, today) {
   const pri = p.priority[0].toUpperCase() + p.priority.slice(1);
   const overdue = isOverdue(p, today);
   if (!ui.editMeta) {
-    return h('button', { class: 'meta-line', key: 'meta-' + p.id, title: 'Change group, priority or deadline', onClick: () => { ui.editMeta = true; ctx.render(); } },
+    return h('button', { class: 'meta-line', key: 'meta-' + p.id, title: 'Change group, priority or target date', onClick: () => { ui.editMeta = true; ctx.render(); } },
       h('span', null, g ? g.name : ''), ' · ', h('span', { class: p.priority === 'high' ? 'meta-high' : '' }, pri),
-      p.deadline ? [' · ', h('span', { class: overdue ? 'late' : '' }, `${overdue ? 'Overdue' : 'Due'} ${fmtDay(p.deadline)}`)] : ' · No deadline',
+      p.deadline ? [' · ', h('span', { class: overdue ? 'late' : '' }, `${overdue ? 'Overdue' : 'Target'} ${fmtDay(p.deadline)}`)] : ' · No target date',
       h('span', { class: 'meta-edit', 'aria-hidden': 'true' }, ' ✎'));
   }
   return h('div', { class: 'fields', key: 'fields-' + p.id },
@@ -268,7 +268,7 @@ function metaLine(ctx, p, today) {
         value: p.priority,
         onChange: (e, el) => store.dispatch('setProjectField', { projectId: p.id, field: 'priority', value: el.value }),
       }, PRIORITIES.map((x) => h('option', { value: x }, x[0].toUpperCase() + x.slice(1))))),
-    h('label', { class: overdue ? 'late' : '' }, 'Deadline ',
+    h('label', { class: overdue ? 'late' : '' }, 'Target date ',
       h('input', {
         type: 'date', value: p.deadline || '',
         onChange: (e, el) => store.dispatch('setProjectField', { projectId: p.id, field: 'deadline', value: el.value || null }),

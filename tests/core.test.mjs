@@ -141,3 +141,11 @@ test('files: path has file id and safe name; delete project keeps history', () =
   assert.equal(s.data.projects.length, 0);
   assert.ok(s.history['2026-10'].some((e) => e.kind === 'deleted' && e.projectName === 'Kiln trial'));
 });
+
+test('new projects get a target date 30 days ahead (India date)', () => {
+  const s = fresh();
+  applyOp(s, op('createProject', { projectId: 'p1', name: 'A' }, '2026-10-09'));
+  assert.equal(s.data.projects[0].deadline, '2026-11-08');
+  applyOp(s, op('createProject', { projectId: 'p2', name: 'B', deadline: null }, '2026-10-09'));
+  assert.equal(s.data.projects[0].deadline, null, 'an explicit "no date" is kept');
+});

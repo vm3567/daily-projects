@@ -9,11 +9,12 @@
 // applyOp(state, op) changes the state in place and returns true, or returns false
 // when the operation must be skipped (for example, its item no longer exists).
 
-import { indiaDate, monthOf, laterDate } from './rules.js';
+import { indiaDate, monthOf, laterDate, addDays } from './rules.js';
 import { AI_DAILY_LIMIT, BRIEF_CLAIM_MINUTES } from './config.js';
 
 export const START_GROUPS = ['AI', 'Ceramic', 'General', 'Work / Office'];
 export const PRIORITIES = ['high', 'medium', 'low'];
+export const DEFAULT_TARGET_DAYS = 30; // new projects get a target date 30 days ahead
 const PROJECT_FIELDS = ['name', 'groupId', 'priority', 'deadline', 'notes'];
 const STEP_FIELDS = ['text', 'dueDate', 'note', 'waiting', 'waitingOn'];
 
@@ -128,7 +129,7 @@ const handlers = {
       groupId,
       name: cleanText(a.name, 200) || 'New project',
       priority: PRIORITIES.includes(a.priority) ? a.priority : 'medium',
-      deadline: cleanDate(a.deadline),
+      deadline: a.deadline === undefined ? addDays(indiaDate(op.at), DEFAULT_TARGET_DAYS) : cleanDate(a.deadline),
       notes: '',
       links: [],
       state: 'active',
@@ -164,7 +165,7 @@ const handlers = {
       const g = state.data.groups.find((x) => x.id === value);
       addEvent(state, op, p, 'group_changed', g ? g.name : '');
     } else if (a.field === 'priority') addEvent(state, op, p, 'edited', `Priority: ${value}`);
-    else if (a.field === 'deadline') addEvent(state, op, p, 'edited', value ? `Deadline: ${value}` : 'Deadline removed');
+    else if (a.field === 'deadline') addEvent(state, op, p, 'edited', value ? `Target date: ${value}` : 'Target date removed');
     // notes: no history event (it would add a line for every few words typed)
     return true;
   },

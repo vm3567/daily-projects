@@ -63,6 +63,7 @@ Version: 5.
 | 34 | AI limit | Max 50 AI uses a day |
 | 35 | Claude review on Mac | Claude goes through my projects one by one with me. It adds or changes things only after I say yes. |
 | 36 | Deleting a project | Its Diary lines stay, marked "(deleted project)" |
+| 37 | Target date | Every new project gets a target date 30 days ahead. I can change or remove it. ("Deadline" is called "Target date" in the app.) |
 
 ---
 

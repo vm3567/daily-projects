@@ -108,7 +108,7 @@ function line(p, today) {
     `${c.toUpperCase().padEnd(6)} ${p.name} [${p.id}]`,
     `group: ${p.groupName}`,
     `priority: ${p.priority}`,
-    p.deadline ? `deadline: ${p.deadline}${isOverdue(p, today) ? ' (PASSED)' : ''}` : null,
+    p.deadline ? `target date: ${p.deadline}${isOverdue(p, today) ? ' (PASSED)' : ''}` : null,
     ns ? `next: ${ns.text}${ns.waiting ? ` (WAITING${ns.waitingOn ? ' on ' + ns.waitingOn : ''})` : ''}` : 'next: NONE',
     p.lastTickDate ? `last tick: ${p.lastTickDate}` : 'never ticked',
   ];
