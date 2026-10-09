@@ -51,7 +51,7 @@ GitHub → your photo → **Settings** → **Password and authentication** → *
 1. Get a Claude key: https://console.anthropic.com → **API keys** → **Create key**. Add a small credit under **Billing**.
 2. In the app: **Settings → Claude key** → paste → **Save** → **Test**.
 3. Gemini (backup, optional): https://aistudio.google.com → **Get API key**. Paste it under **Gemini key**.
-4. Do this on each device (Mac and the iPhone icon).
+4. Paste each key once, on any device — it is kept in your private data, so all your devices use it.
 
 ---
 

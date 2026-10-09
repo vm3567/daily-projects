@@ -57,7 +57,7 @@ Version: 5.
 | 28 | Search | One search box. Searches project names, steps, notes. |
 | 29 | AI jobs | Break a project into steps, suggest the next step, Morning plan, Weekly review |
 | 30 | AI choice | Claude Haiku is the main AI (it does not train on my text). Gemini Flash is a backup switch in Settings. |
-| 31 | AI keys | Saved on each of my devices, in Settings |
+| 31 | AI keys | Pasted once in Settings on any device; stored in my PRIVATE data repository so every device uses them (changed 9 Oct). Left out of "Download backup". |
 | 32 | AI can read | All projects (names, steps, notes) |
 | 33 | AI output place | Morning plan and Weekly review show at the top of the Today screen |
 | 34 | AI limit | Max 50 AI uses a day |
@@ -70,6 +70,7 @@ Version: 5.
 | 41 | Fewer clicks | (1) Daily round: one project at a time, red first; each action (✓ step done, + add step, ✎ note, Chased, ✓ OK, Skip) saves and jumps to the next project. Keys g, then x s w c o n. (2) ✓ OK / Chased button on each list row. (3) Green projects fold into "Done today (n)" on Today. (4) Ticking the last step asks "What's next?". (5) Chased: notes the follow-up and restarts the waiting count. |
 | 42 | Undo, repeat, streak | Undo button on the message after tick / OK / chased / delete step or note / pause / finish / delete project (puts the project back exactly). Repeating steps: Every day / week / month in the step's ⋯; ticking makes a copy that comes back on the next date. Streak "🔥 N days all green" on Today and a 7-day bar chart in the Diary. Step and note deletes no longer ask "Are you sure?" (Undo instead). |
 | 43 | AI steps | One "✨ AI steps" button (key i) in each project: reads title, notes, steps and work notes, suggests 3–7 next steps in order (top = next). Untick, ✕ remove or edit any, then "Add N steps". Uses the chosen AI; if it fails, tries the other key. List rows no longer show the target date (only "Overdue"). |
+| 44 | Notes save sign | Under the big Notes box: "Typing…" → "Saving…" → "Saved ✓ time" (red if no connection). Typed text is also saved when leaving the app or switching tabs. |
 
 ---
 

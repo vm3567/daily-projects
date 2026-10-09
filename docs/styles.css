@@ -496,3 +496,9 @@ kbd.hint {
 .ai-text:hover, .ai-text:focus { border-color: var(--line); background: #fff; }
 .next-tag { color: #1e40af; background: var(--brand-soft); border-color: #c7d7fb; }
 .btn[disabled] { opacity: .5; cursor: default; }
+
+/* ---------- notes save sign (v13) ---------- */
+.save-row { margin-top: 4px; min-height: 18px; }
+.save-sign { font-size: 12.5px; }
+.save-sign.ok { color: var(--green); font-weight: 600; }
+.save-sign.bad { color: var(--red); font-weight: 600; }

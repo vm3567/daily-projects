@@ -242,6 +242,45 @@ function historyBlock(ctx, p) {
       : older ? h('button', { class: 'btn small', onClick: () => store.loadMonth(older) }, `Load ${older}`) : null);
 }
 
+/**
+ * The big Notes box, with its own save sign underneath:
+ *   "Typing…" → "Saving…" → "Saved ✓ 2:45 pm" (or "Not saved yet — no connection").
+ */
+const notesTimers = {}; // one save timer per project, kept across screen updates
+
+function notesBox(ctx, p) {
+  const { store, ui } = ctx;
+  const ns = (ui.notesSave ||= {});
+  const st = ns[p.id] || {};
+  const current = () => (store.view.data.projects.find((x) => x.id === p.id) || {}).notes;
+  const save = (el) => {
+    clearTimeout(notesTimers[p.id]);
+    const was = ns[p.id] || {};
+    if (el.value === current() && was.state !== 'typing') return; // nothing new
+    const changed = store.dispatch('setProjectField', { projectId: p.id, field: 'notes', value: el.value });
+    ns[p.id] = { state: changed || el.value === current() ? 'sent' : 'blocked', at: new Date().toISOString() };
+    ctx.render();
+  };
+  let sign;
+  if (st.state === 'typing') sign = h('span', { class: 'save-sign muted' }, 'Typing… (saves by itself)');
+  else if (st.state === 'blocked' || (st.state === 'sent' && store.status === 'offline')) sign = h('span', { class: 'save-sign bad' }, 'Not saved yet — no connection. Kept on this device.');
+  else if (st.state === 'sent' && (store.status === 'saving' || store.pending.length)) sign = h('span', { class: 'save-sign muted' }, 'Saving…');
+  else if (st.state === 'sent' && store.status === 'saved') sign = h('span', { class: 'save-sign ok' }, `Saved ✓ ${fmtTime(st.at)}`);
+  else sign = h('span', { class: 'save-sign muted' }, p.notes ? 'Saved ✓' : 'Saves by itself as you type');
+  return h('div', null,
+    h('textarea', {
+      class: 'notes-box', value: p.notes, rows: 4, placeholder: 'Free notes for this project', key: 'notes-' + p.id, 'data-mention': '1',
+      onInput: (e, el) => {
+        if ((ns[p.id] || {}).state !== 'typing') { ns[p.id] = { state: 'typing' }; ctx.render(); }
+        clearTimeout(notesTimers[p.id]);
+        notesTimers[p.id] = setTimeout(() => save(el), 900);
+      },
+      onChange: (e, el) => save(el),
+      onFocusout: (e, el) => save(el),
+    }),
+    h('div', { class: 'save-row', key: 'notes-sign-' + p.id }, sign));
+}
+
 function section(title, ...children) {
   return h('section', { class: 'block' }, h('h3', null, title), ...children);
 }
@@ -398,9 +437,7 @@ export function renderDetail(ctx) {
       p.workNotes.length > notesShown
         ? h('button', { class: 'link small', onClick: () => { ui.notesLimit = notesShown + 20; ctx.render(); } }, `Show older notes (${p.workNotes.length - notesShown})`) : null),
 
-    show.notes ? section('Notes',
-      autoField('textarea', { class: 'notes-box', value: p.notes, rows: 4, placeholder: 'Free notes for this project', key: 'notes-' + p.id, 'data-mention': '1' },
-        (v) => store.dispatch('setProjectField', { projectId: p.id, field: 'notes', value: v }))) : null,
+    show.notes ? section('Notes', notesBox(ctx, p)) : null,
     show.links ? section('Links', linksBlock(ctx, p)) : null,
     show.files ? section('Files', filesBlock(ctx, p)) : null,
     show.history ? section('History', historyBlock(ctx, p)) : null,

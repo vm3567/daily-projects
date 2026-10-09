@@ -555,6 +555,17 @@ const handlers = {
     return changed;
   },
 
+  /** AI keys shared by all my devices (kept in the PRIVATE data repository). Empty key = remove. */
+  setAiKey(state, op, a) {
+    if (a.provider !== 'claude' && a.provider !== 'gemini') return false;
+    const secrets = (state.data.secrets ||= {});
+    const key = String(a.key || '').trim().slice(0, 300);
+    if ((secrets[a.provider] || '') === key) return false;
+    if (key) secrets[a.provider] = key;
+    else delete secrets[a.provider];
+    return true;
+  },
+
   // ---------- Settings and AI ----------
   setAiProvider(state, op, a) {
     if (a.provider !== 'claude' && a.provider !== 'gemini') return false;
@@ -625,6 +636,7 @@ export function commitMessage(ops, data) {
   const p = a.projectId && data.projects.find((x) => x.id === a.projectId);
   const name = p ? p.name : '';
   const step = p && a.stepId && p.steps.find((s) => s.id === a.stepId);
+  if (op.type === 'setAiKey') return 'Update AI key';
   const words = {
     createProject: `New project: ${a.name || ''}`,
     tickStep: `Tick step: ${step ? step.text : ''}`,

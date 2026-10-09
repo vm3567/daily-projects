@@ -98,9 +98,25 @@ const ctx = {
 
 // ---------------------------------------------------------------- AI
 
+/** AI key: the one shared through my private data (newest, same on every device), else one saved only here. */
+function aiKeyFor(provider) {
+  const shared = store && store.view && store.view.data.secrets && store.view.data.secrets[provider];
+  return shared || device.aiKey(provider) || '';
+}
+
+/** Keys saved only on this device (from before keys were shared) are uploaded once, so other devices get them. */
+function shareLocalKeys() {
+  if (!store || !store.canEdit()) return;
+  const shared = store.view.data.secrets || {};
+  for (const provider of ['claude', 'gemini']) {
+    const local = device.aiKey(provider);
+    if (local && !shared[provider]) store.dispatch('setAiKey', { provider, key: local }); // never overwrite a shared key
+  }
+}
+
 function aiReady() {
   const provider = store.view.data.settings.aiProvider || 'claude';
-  return { provider, key: device.aiKey(provider) };
+  return { provider, key: aiKeyFor(provider) };
 }
 
 /** Count one AI use. Returns false if the daily limit is reached. */
@@ -135,7 +151,7 @@ function claimIsFresh(b) {
 /** ✨ AI steps: read the project and suggest the next steps, in order. Tries the other AI if one fails. */
 async function runSuggest(p) {
   const chosen = store.view.data.settings.aiProvider || 'claude';
-  const order = [chosen, chosen === 'claude' ? 'gemini' : 'claude'].filter((x) => device.aiKey(x));
+  const order = [chosen, chosen === 'claude' ? 'gemini' : 'claude'].filter((x) => aiKeyFor(x));
   if (!order.length) { ui.ai = { projectId: p.id, mode: 'suggest', state: 'nokey' }; render(); return; }
   if (!useAi()) { ui.ai = { projectId: p.id, mode: 'suggest', state: 'error', error: 'Daily AI limit reached — try tomorrow.' }; render(); return; }
   ui.ai = { projectId: p.id, mode: 'suggest', state: 'busy' };
@@ -143,7 +159,7 @@ async function runSuggest(p) {
   let lastError = null;
   for (const provider of order) {
     try {
-      const steps = await ai.suggestSteps(provider, device.aiKey(provider), p);
+      const steps = await ai.suggestSteps(provider, aiKeyFor(provider), p);
       ui.ai = { projectId: p.id, mode: 'suggest', state: 'list', steps, picked: steps.map(() => true), provider };
       render();
       return;
@@ -267,6 +283,13 @@ function todayScore() {
   const today = todayIndia();
   const active = store.view.data.projects.filter((p) => p.state === 'active');
   return { green: active.filter((p) => dotColour(p, today) === 'green').length, total: active.length };
+}
+
+/** Leaving the app or the tab: save whatever is being typed right now (it is kept on the device until it reaches GitHub). */
+function saveTypedText() {
+  const el = document.activeElement;
+  if (el && (el.nodeName === 'TEXTAREA' || el.nodeName === 'INPUT')) el.dispatchEvent(new Event('change', { bubbles: true }));
+  if (store && store.pending.length) store.flush();
 }
 
 /** The project in the right column counts as opened, if that column is on screen. */
@@ -762,7 +785,7 @@ function renderDiary() {
 // ---------------------------------------------------------------- Settings
 
 function keyForm(provider, label, help) {
-  const has = !!device.aiKey(provider);
+  const has = !!aiKeyFor(provider);
   return h('form', {
     class: 'setting',
     onSubmit: async (e) => {
@@ -771,8 +794,9 @@ function keyForm(provider, label, help) {
       const v = input.value.trim();
       if (!v) return;
       device.setAiKey(provider, v);
+      store.dispatch('setAiKey', { provider, key: v }); // shared with all my devices (private data)
       input.value = '';
-      toast(`${label} key saved on this device`);
+      toast(`${label} key saved — it now works on all your devices`);
       render();
     },
   },
@@ -784,12 +808,17 @@ function keyForm(provider, label, help) {
       class: 'btn small', type: 'button',
       onClick: async () => {
         toast('Testing…');
-        try { toast((await ai.testKey(provider, device.aiKey(provider))) ? `${label} key works ✓` : 'Unclear answer from the AI'); } catch (err) { toast(err.message); }
+        try { toast((await ai.testKey(provider, aiKeyFor(provider))) ? `${label} key works ✓` : 'Unclear answer from the AI'); } catch (err) { toast(err.message); }
       },
     }, 'Test') : null,
     has ? h('button', {
       class: 'btn small', type: 'button',
-      onClick: () => { if (confirm(`Remove the ${label} key from this device?`)) { device.setAiKey(provider, ''); render(); } },
+      onClick: () => {
+        if (!confirm(`Remove the ${label} key from ALL your devices?`)) return;
+        device.setAiKey(provider, '');
+        store.dispatch('setAiKey', { provider, key: '' });
+        render();
+      },
     }, 'Remove') : null),
   h('p', { class: 'muted small' }, help));
 }
@@ -799,7 +828,8 @@ async function downloadBackup() {
   try {
     await store.loadAllHistory();
     const today = todayIndia();
-    const backup = { app: 'daily-projects', madeAt: new Date().toISOString(), data: store.view.data, history: store.view.history };
+    const { secrets, ...dataWithoutKeys } = store.view.data; // AI keys are left out of the backup file
+    const backup = { app: 'daily-projects', madeAt: new Date().toISOString(), data: dataWithoutKeys, history: store.view.history };
     const blob = new Blob([JSON.stringify(backup, null, 1)], { type: 'application/octet-stream' });
     const url = URL.createObjectURL(blob);
     const a = h('a', { href: url, download: `daily-projects-backup-${today}.json` });
@@ -840,8 +870,8 @@ function renderSettings() {
             onChange: () => store.dispatch('setAiProvider', { provider: x }),
           }), x === 'claude' ? ' Claude Haiku (main)' : ' Gemini Flash (backup)'))),
       h('p', null, `AI uses today: ${usage} / ${AI_DAILY_LIMIT}`),
-      keyForm('claude', 'Claude', 'From console.anthropic.com → API keys. Saved only in this browser.'),
-      keyForm('gemini', 'Gemini', 'Optional. From aistudio.google.com → Get API key. On the free plan Google may read the text.')),
+      keyForm('claude', 'Claude', 'From console.anthropic.com → API keys. Saved in your private data, so all your devices use it.'),
+      keyForm('gemini', 'Gemini', 'Optional backup. From aistudio.google.com → Get API key. Shared with all your devices. On the free plan Google may read the text.')),
     h('section', { class: 'block' }, h('h3', null, 'Backup'),
       h('p', { class: 'muted' }, 'Every save is kept as a version on GitHub. You can also download a copy.'),
       h('button', { class: 'btn', onClick: downloadBackup }, 'Download backup')),
@@ -1282,7 +1312,7 @@ function start() {
     render(); // put ticked boxes and menus back to the real data
   });
   render();
-  store.init().then(() => { render(); markShownOpened(); makeBrief(); recordPastScores(); });
+  store.init().then(() => { render(); shareLocalKeys(); markShownOpened(); makeBrief(); recordPastScores(); });
   if (started) return;
   started = true;
   let shownDay = todayIndia();
@@ -1290,7 +1320,11 @@ function start() {
     if (document.visibilityState === 'visible') doRefresh(false);
     if (todayIndia() !== shownDay) { shownDay = todayIndia(); resetRedOrder(); render(); markShownOpened(); recordPastScores(); } // midnight: every dot resets
   }, REFRESH_MS);
-  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') doRefresh(false); });
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') doRefresh(false);
+    else saveTypedText();
+  });
+  window.addEventListener('pagehide', saveTypedText);
   window.addEventListener('online', () => {
     if (store.status !== 'offline') return;
     store.init().then(() => { if (store.pending.length) store.save(); else if (store.status !== 'auth') store.setStatus('saved'); });
