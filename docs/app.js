@@ -103,7 +103,12 @@ const ctx = {
   goSettings: () => go('settings'),
   draftFollowUp: (p, s) => draftFollowUp(p, s),
   openSummary: () => openSummary(),
-  openPerson: (id) => { go('people'); ctx.selectPerson(id); },
+  openPerson: (id) => { pushNav(); go('people'); ctx.selectPerson(id); },
+  goBack: () => goBack(),
+  openInList: (id) => { select(id); const row = root.querySelector(`.prow[data-id="${CSS.escape(id)}"]`); if (row) row.scrollIntoView({ block: 'nearest' }); },
+  canGoBack: () => !!(ui.navStack && ui.navStack.length),
+  neighbourProject: (step) => neighbourProject(step),
+  neighbourPerson: (step) => neighbourPerson(step),
   aiBreakdown: (p, goal) => runAi(p, 'breakdown', goal),
   hasAiKey: () => !!(store && aiReady().key),
   toggleOk: (p) => toggleOk(p),
@@ -115,6 +120,7 @@ const ctx = {
   openProject: (id) => {
     const p = store.view.data.projects.find((x) => x.id === id);
     if (!p) return;
+    pushNav();
     ui.view = p.state === 'active' ? 'all' : p.state; // 'paused' or 'finished'
     ui.search = '';
     rememberUi();
@@ -491,6 +497,12 @@ function renderMenu() {
       item('paused', 'Paused', count((p) => p.state === 'paused')),
       item('finished', 'Finished', count((p) => p.state === 'finished')),
       item('people', 'People', (data.people || []).length),
+      peopleByFollowUp(data).filter((x) => x.st.colour !== 'green').slice(0, 6).map(({ person, st }) => h('li', { key: 'mp-' + person.id },
+        h('button', {
+          class: 'menu-item menu-person' + (ui.view === 'people' && ui.person === person.id ? ' current' : ''),
+          title: st.waiting ? `Waiting ${st.maxWait} day${st.maxWait === 1 ? '' : 's'}` : `${st.open} to discuss`,
+          onClick: () => { ui.menuOpen = false; ctx.openPerson(person.id); },
+        }, h('span', null, h('span', { class: `dot ${st.colour}` }), ` ${person.name}`), h('span', { class: 'count' }, String(st.open))))),
       item('diary', 'Diary'),
       item('settings', 'Settings')),
     h('button', { class: 'keys-hint', onClick: () => { ui.showKeys = true; ui.menuOpen = false; render(); } }, 'Keyboard shortcuts: press ?'));
@@ -824,6 +836,7 @@ function renderListColumn() {
     h('button', { class: 'icon menu-btn', 'aria-label': 'Menu', onClick: () => { ui.menuOpen = true; render(); } }, '☰'),
     h('h2', null, viewTitle()),
     statusText(),
+    h('button', { class: 'icon', title: 'Jump to a project, person or page (Ctrl+K)', 'aria-label': 'Jump', onClick: openJump }, '🔍'),
     h('button', { class: 'icon', title: 'Get latest', 'aria-label': 'Refresh', onClick: () => doRefresh(true) }, '↻'));
   const mobileSearch = h('input', {
     class: 'search mobile-only', type: 'search', placeholder: withKey('Search…', '/'), value: ui.search, key: 'search-mobile', 'aria-label': 'Search',
@@ -1261,10 +1274,154 @@ function renderRound() {
         btn('skip', 'Skip →', 'n'))));
 }
 
+// ---------------------------------------------------------------- navigation: back, next / previous
+
+function pushNav() {
+  const here = { view: ui.view, selected: ui.selected, person: ui.person };
+  const stack = (ui.navStack ||= []);
+  const last = stack[stack.length - 1];
+  if (!last || last.view !== here.view || last.selected !== here.selected || last.person !== here.person) stack.push(here);
+  if (stack.length > 20) stack.shift();
+}
+
+function goBack() {
+  const prev = ui.navStack && ui.navStack.pop();
+  if (!prev) return;
+  ui.round = null;
+  ui.view = prev.view;
+  ui.selected = prev.selected;
+  ui.person = prev.person;
+  ui.search = '';
+  ui.mobile = 'detail';
+  resetRedOrder();
+  rememberUi();
+  render();
+}
+
+/** Next / previous project in the tab you are in (Today, All, a group, Paused…). */
+function neighbourProject(step) {
+  const list = currentList();
+  if (!list.length || !ui.selected) return null;
+  const i = list.findIndex((p) => p.id === ui.selected);
+  if (i < 0) return null;
+  return list[i + step] || null;
+}
+
+function goProject(step) {
+  const p = neighbourProject(step);
+  if (!p) { toast(step > 0 ? 'This is the last project in this list' : 'This is the first project in this list', 1500); return; }
+  select(p.id);
+  const row = root.querySelector(`.prow[data-id="${CSS.escape(p.id)}"]`);
+  if (row) row.scrollIntoView({ block: 'nearest' });
+}
+
+/** Next / previous person who has open work (people with nothing pending are skipped). */
+function neighbourPerson(step) {
+  const list = peopleByFollowUp(store.view.data).filter((x) => x.st.open > 0).map((x) => x.person);
+  if (!list.length) return null;
+  const i = list.findIndex((p) => p.id === ui.person);
+  if (i < 0) return list[step > 0 ? 0 : list.length - 1];
+  return list[i + step] || null;
+}
+
+function goPerson(step) {
+  const p = neighbourPerson(step);
+  if (!p) { toast(step > 0 ? 'No more people with open work' : 'This is the first person', 1500); return; }
+  ctx.selectPerson(p.id);
+}
+
+/** Swipe left / right on the phone = next / previous (project, or person on the People page). */
+function installSwipe() {
+  let x0 = null;
+  let y0 = null;
+  document.addEventListener('touchstart', (e) => {
+    const t = e.target;
+    if (!t.closest || !t.closest('#detail') || t.closest('input, textarea, select, .sortable-steps')) { x0 = null; return; }
+    x0 = e.touches[0].clientX; y0 = e.touches[0].clientY;
+  }, { passive: true });
+  document.addEventListener('touchend', (e) => {
+    if (x0 === null) return;
+    const dx = e.changedTouches[0].clientX - x0;
+    const dy = e.changedTouches[0].clientY - y0;
+    x0 = null;
+    if (Math.abs(dx) < 70 || Math.abs(dy) > 50) return;
+    const step = dx < 0 ? 1 : -1; // swipe left = next
+    if (ui.round) return;
+    if (ui.view === 'people' && !ui.search) goPerson(step);
+    else if (ui.selected) goProject(step);
+  }, { passive: true });
+}
+
+// ---------------------------------------------------------------- quick jump (Ctrl+K)
+
+function jumpItems() {
+  const { data } = store.view;
+  const today = todayIndia();
+  const pages = [
+    ['Today', () => go('today')], ['All projects', () => go('all')], ['Dashboard', () => go('dashboard')],
+    ['People', () => go('people')], ['Diary', () => go('diary')], ['Paused', () => go('paused')],
+    ['Finished', () => go('finished')], ['Settings', () => go('settings')], ['Daily round', () => { go('today'); startRound(); }],
+    ["Today's summary", () => openSummary()], ['New project', () => { go('today'); ui.adding = true; render(); focusKey('new-name'); }],
+    ...data.groups.map((g) => [`Group: ${g.name}`, () => go('group:' + g.id)]),
+  ].map(([label, run]) => ({ kind: 'page', label, run }));
+  const projects = data.projects.map((p) => ({
+    kind: 'project', label: p.name, dot: dotColour(p, today), sub: p.state !== 'active' ? p.state : (nextStep(p, today) || {}).text || '',
+    run: () => ctx.openProject(p.id),
+  }));
+  const people = peopleByFollowUp(data).map(({ person, st }) => ({
+    kind: 'person', label: person.name, dot: st.colour, sub: st.open ? `${st.open} open` : 'nothing open',
+    run: () => ctx.openPerson(person.id),
+  }));
+  return [...projects, ...people, ...pages];
+}
+
+function openJump() {
+  if (!store || !store.view) return;
+  const v = document.getElementById('viewer');
+  v.hidden = false;
+  v.classList.add('sheet-mode');
+  const all = jumpItems();
+  let shown = [];
+  let index = 0;
+  const list = h('ul', { class: 'jump-list', role: 'listbox' });
+  const input = h('input', { class: 'jump-input', placeholder: 'Type a project, person or page…', autocomplete: 'off', 'aria-label': 'Jump to' });
+  const run = (it) => { closeSheet(); it.run(); };
+  const draw = () => {
+    const q = input.value.trim().toLowerCase();
+    shown = (q ? all.filter((it) => it.label.toLowerCase().split(/\s+/).some((w) => w.startsWith(q)) || it.label.toLowerCase().includes(q)) : all).slice(0, 12);
+    if (index >= shown.length) index = 0;
+    list.replaceChildren(...shown.map((it, i) => h('li', null, h('button', {
+      class: 'jump-item' + (i === index ? ' on' : ''), onClick: () => run(it),
+    },
+    it.dot ? h('span', { class: `dot ${it.dot}` }) : h('span', { class: 'jump-kind' }, '→'),
+    h('span', { class: 'jump-label' }, it.label),
+    h('span', { class: 'muted small' }, it.kind === 'page' ? 'page' : it.sub)))));
+    if (!shown.length) list.replaceChildren(h('li', { class: 'muted small' }, 'Nothing found'));
+  };
+  input.addEventListener('input', () => { index = 0; draw(); });
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown') { index = Math.min(shown.length - 1, index + 1); draw(); e.preventDefault(); }
+    else if (e.key === 'ArrowUp') { index = Math.max(0, index - 1); draw(); e.preventDefault(); }
+    else if (e.key === 'Enter') { e.preventDefault(); if (shown[index]) run(shown[index]); }
+    else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeSheet(); }
+    else return;
+    e.stopPropagation();
+  });
+  v.replaceChildren(h('div', { class: 'sheet jump' },
+    h('div', { class: 'sheet-head' }, h('strong', null, 'Jump to'), h('button', { class: 'icon', 'aria-label': 'Close', onClick: closeSheet }, '✕')),
+    input, list,
+    h('p', { class: 'muted small' }, '↓ ↑ to choose · Enter to open · Esc to close')));
+  draw();
+  setTimeout(() => input.focus(), 30);
+}
+
 // ---------------------------------------------------------------- keyboard
 
 const KEYS = [
   ['↓  ↑', 'Next / previous project'],
+  ['←  →', 'Previous / next project (or person on People)'],
+  ['⌫', 'Back to where you came from'],
+  ['Ctrl K', 'Jump to any project, person or page'],
   ['x', 'Tick the next step of the open project'],
   ['o', 'OK for today (or undo)'],
   ['g', 'Start the daily round (then x s w o c n)'],
@@ -1337,6 +1494,7 @@ function selectedProject() {
 }
 
 function onKey(e) {
+  if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) { e.preventDefault(); openJump(); return; }
   if (e.metaKey || e.ctrlKey || e.altKey) return; // leave browser shortcuts alone
   if (e.key === 'Escape') {
     const viewer = document.getElementById('viewer');
@@ -1372,7 +1530,14 @@ function onKey(e) {
   }
   const p = selectedProject();
   let handled = true;
-  if (k === 'ArrowDown' || k === 'j') moveSelection(1);
+  if (k === 'ArrowRight' || k === 'ArrowLeft') {
+    const step = k === 'ArrowRight' ? 1 : -1;
+    if (ui.view === 'people' && !ui.search) goPerson(step);
+    else if (ui.selected && !['diary', 'settings', 'dashboard'].includes(ui.view)) goProject(step);
+    else handled = false;
+  } else if (k === 'Backspace') {
+    if (ui.navStack && ui.navStack.length) goBack(); else handled = false;
+  } else if (k === 'ArrowDown' || k === 'j') moveSelection(1);
   else if (k === 'ArrowUp' || k === 'k') moveSelection(-1);
   else if (ui.view === 'people' && 'xswoi'.includes(k)) handled = false; // project keys do nothing on People
   else if (k === 'i') {
@@ -1470,6 +1635,7 @@ function start() {
 }
 
 installEvents(document.body);
+installSwipe();
 installMentions(() => ctx);
 if (isMock) document.title = 'Daily Projects (test mode)';
 start();

@@ -1,7 +1,7 @@
 // The right column: everything about one project, all editable in place.
 
 import { h, fmtDay, fmtTime, fmtSize, keyHint, withKey, HAS_KEYBOARD } from './dom.js';
-import { dotColour, todayIndia, isOverdue, indiaDate, waitingDays, lastWorkDate, nextStep } from '../rules.js';
+import { dotColour, todayIndia, isOverdue, indiaDate, waitingDays, lastWorkDate, nextStep, stepLinkedTo, personStatus } from '../rules.js';
 import { WAIT_RED_DAYS } from '../config.js';
 import { newId, PRIORITIES, cleanUrl } from '../ops.js';
 import { uploadFiles, openFile, uploadBlob } from './files.js';
@@ -382,6 +382,38 @@ function notesBox(ctx, p) {
     h('div', { class: 'save-row', key: 'notes-sign-' + p.id }, sign));
 }
 
+/** ← Back · ‹ previous · next › (in the list you are in). Keys: ⌫, ← → ; phone: swipe. */
+function navBar(ctx, p) {
+  const prev = ctx.neighbourProject(-1);
+  const next = ctx.neighbourProject(1);
+  if (!prev && !next && !ctx.canGoBack()) return null;
+  return h('div', { class: 'nav-bar', key: 'nav-' + p.id },
+    ctx.canGoBack() ? h('button', { class: 'btn small', title: 'Back to where you came from (Backspace)', onClick: () => ctx.goBack() }, '← Back') : h('span'),
+    h('div', { class: 'nav-pn' },
+      h('button', { class: 'btn small', disabled: prev ? undefined : true, title: prev ? `Previous: ${prev.name} (←)` : 'First in this list', onClick: () => prev && ctx.openInList(prev.id) }, '‹ Prev'),
+      h('button', { class: 'btn small', disabled: next ? undefined : true, title: next ? `Next: ${next.name} (→)` : 'Last in this list', onClick: () => next && ctx.openInList(next.id) }, 'Next ›')));
+}
+
+/** Everyone linked to this project's open steps; tap a name to see all their pending work. */
+function peopleChips(ctx, p) {
+  const data = ctx.store.view.data;
+  const people = data.people || [];
+  if (!people.length) return null;
+  const counts = new Map();
+  for (const s of p.steps) {
+    if (s.done) continue;
+    for (const person of people) if (stepLinkedTo(s, person, people)) counts.set(person.id, (counts.get(person.id) || 0) + 1);
+  }
+  if (!counts.size) return null;
+  return h('div', { class: 'people-chips', key: 'pc-' + p.id },
+    [...counts.entries()].map(([id, n]) => {
+      const person = people.find((x) => x.id === id);
+      const st = personStatus(data, person);
+      return h('button', { class: 'person-chip', key: 'pcc-' + id, title: `See all pending work with ${person.name}`, onClick: () => ctx.openPerson(id) },
+        h('span', { class: `dot ${st.colour}` }), `👤 ${person.name}`, h('span', { class: 'count-pill' }, String(n)));
+    }));
+}
+
 function section(title, ...children) {
   return h('section', { class: 'block' }, h('h3', null, title), ...children);
 }
@@ -487,7 +519,9 @@ export function renderDetail(ctx) {
       autoField('input', { class: 'title-input', value: p.name, 'aria-label': 'Project name', key: 'name-' + p.id },
         (v) => store.dispatch('setProjectField', { projectId: p.id, field: 'name', value: v })),
       h('div', { class: 'state-buttons' }, stateButtons(ctx, p))),
+    navBar(ctx, p),
     metaLine(ctx, p, today),
+    peopleChips(ctx, p),
     p.state !== 'active' ? h('p', { class: 'banner' }, p.state === 'paused' ? 'This project is paused. It is hidden from Today.' : 'This project is finished.') : null,
 
     section(stepsTitle(),

@@ -73,6 +73,15 @@ Also: each red/yellow row has a one-tap **✓ OK** (or **Chased** when waiting),
 
 ---
 
+## Moving around quickly
+
+- **Jump anywhere:** press **Ctrl+K** (Mac: **⌘K**) or tap **🔍**, type a few letters of a project, person or page, press **Enter**.
+- **Next / previous project** in the list you are in (Today, All, Acton, …): **‹ Prev · Next ›** at the top of a project, keys **← →**, or **swipe left / right** on the iPhone.
+- **People:** the people you are waiting on show under **People** in the left menu. Inside a project, tap **👤 Name** to see all your pending work with that person. On a person's page, **‹ ›** (or **← →**) goes to the next person with open work.
+- **← Back** (or **Backspace**) returns to where you came from.
+
+---
+
 ## People
 
 - **People** in the left menu: add names (or type `@` and a new name in any step).
