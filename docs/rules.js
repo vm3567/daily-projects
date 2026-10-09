@@ -93,13 +93,18 @@ export function nextStep(project, today = todayIndia(), opts = {}) {
 
 export const REPEATS = ['daily', 'weekly', 'monthly'];
 
-/** Next date for a repeating step, after the day it was done. Keeps the weekday / day of month of its date. */
-export function nextRepeatDate(repeat, anchor, doneDay) {
+/**
+ * Next date for a repeating step, after the day it was done. Keeps the weekday / day of month of its date.
+ * `dayOfMonth` (monthly) is the step's own day, so "the 31st" stays the 31st after a short month (28 Feb → 31 Mar).
+ */
+export function nextRepeatDate(repeat, anchor, doneDay, dayOfMonth = null) {
+  const keepDay = dayOfMonth || Number((anchor || doneDay).slice(8, 10));
   const step = (d) => {
     if (repeat === 'daily') return addDays(d, 1);
     if (repeat === 'weekly') return addDays(d, 7);
     // monthly: same day next month (31st → last day of a shorter month)
-    const [y, m, day] = d.split('-').map(Number);
+    const [y, m] = d.split('-').map(Number);
+    const day = keepDay;
     const ny = m === 12 ? y + 1 : y;
     const nm = m === 12 ? 1 : m + 1;
     const last = new Date(Date.UTC(ny, nm, 0)).getUTCDate();
@@ -152,6 +157,26 @@ export function mentionedPeople(text, people) {
     }
   }
   return found;
+}
+
+/**
+ * Rewrite every "@Name" in a text the same way mentionedPeople reads it (longest name wins):
+ * replace(person, matchedText) returns what to put instead of "@" + matchedText.
+ */
+export function replaceMentions(text, people, replace) {
+  if (!text || text.indexOf('@') < 0) return text || '';
+  const sorted = [...(people || [])].sort((a, b) => b.name.length - a.name.length);
+  const lower = text.toLowerCase();
+  let out = '';
+  let i = 0;
+  while (i < text.length) {
+    const at = text.indexOf('@', i);
+    if (at < 0) { out += text.slice(i); break; }
+    out += text.slice(i, at);
+    const hit = sorted.find((p) => lower.startsWith(p.name.toLowerCase(), at + 1) && !WORD_CHAR.test(text.charAt(at + 1 + p.name.length)));
+    if (hit) { out += replace(hit, text.substr(at + 1, hit.name.length)); i = at + 1 + hit.name.length; } else { out += '@'; i = at + 1; }
+  }
+  return out;
 }
 
 /** Is this step linked to the person (by @name in its text or note, or by "Waiting on")? */
@@ -215,10 +240,12 @@ export function personStatus(data, person, today = todayIndia()) {
  * How many projects were green on a past day, worked out from the saved dates and the history.
  * Counts projects that existed and were active that day.
  */
+const NOT_WORK = new Set(['created', 'snoozed', 'woke']); // these history lines are not work on the project
+
 export function dayScore(data, history, day) {
   const busy = new Set();
   for (const e of (history[monthOf(day)] || [])) {
-    if (e.projectId && indiaDate(e.at) === day && e.kind !== 'created') busy.add(e.projectId);
+    if (e.projectId && indiaDate(e.at) === day && !NOT_WORK.has(e.kind)) busy.add(e.projectId);
   }
   let total = 0;
   let green = 0;

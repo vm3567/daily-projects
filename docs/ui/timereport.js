@@ -142,8 +142,10 @@ export async function fullReportPng({ title, period, rows, pcts, work, tagColour
   const doneCount = work.reduce((n, w) => n + w.items.length, 0);
   g.fillText(`Work done (${doneCount} step${doneCount === 1 ? '' : 's'})`, x, 220);
   y = 275;
-  const standRows = statuses.slice(0, 6);
-  const standTop = standRows.length ? H - 60 - standRows.length * 34 - 50 : H;
+  const standRows = statuses.slice(0, statuses.length > 6 ? 5 : 6);
+  const standMore = statuses.length - standRows.length; // shown as "+ N more" so nothing is silently left out
+  const standLines = standRows.length + (standMore ? 1 : 0);
+  const standTop = standLines ? H - 60 - standLines * 34 - 50 : H;
   const maxY = Math.min(H - 70, standTop - 20);
   let hidden = 0;
   for (const w of work) {
@@ -152,7 +154,8 @@ export async function fullReportPng({ title, period, rows, pcts, work, tagColour
     g.fillStyle = '#0f172a'; g.font = `bold 28px ${FONT}`; g.fillText(fit(g, `${w.name} (${w.items.length})`, 780), x + 34, y);
     y += 40;
     for (const it of w.items) {
-      if (y > maxY) { hidden++; continue; }
+      if (y > maxY - 34) { hidden++; continue; } // keep a line free for "+ N more steps"
+
       g.fillStyle = '#334155'; g.font = `24px ${FONT}`;
       g.fillText(fit(g, `•  ${it.text}`, 600), x + 34, y);
       g.fillStyle = '#94a3b8'; g.font = `20px ${FONT}`;
@@ -162,7 +165,7 @@ export async function fullReportPng({ title, period, rows, pcts, work, tagColour
     y += 12;
   }
   if (!doneCount) { g.fillStyle = '#94a3b8'; g.font = `24px ${FONT}`; g.fillText('No steps finished in this period.', x, y); }
-  if (hidden) { g.fillStyle = '#64748b'; g.font = `22px ${FONT}`; g.fillText(`+ ${hidden} more steps`, x + 34, Math.min(y, H - 40)); }
+  if (hidden) { g.fillStyle = '#64748b'; g.font = `22px ${FONT}`; g.fillText(`+ ${hidden} more steps`, x + 34, Math.min(y, maxY + 4)); }
   if (standRows.length) { // where things stand: one line per project
     g.strokeStyle = '#e2e8f0'; g.beginPath(); g.moveTo(x, standTop - 4); g.lineTo(W - 60, standTop - 4); g.stroke();
     g.fillStyle = '#0f172a'; g.font = `bold 28px ${FONT}`; g.fillText('Where things stand', x, standTop + 32);
@@ -176,6 +179,7 @@ export async function fullReportPng({ title, period, rows, pcts, work, tagColour
       g.fillText(fit(g, `— ${s.status}`, W - 60 - (x + nw + 12)), x + nw + 12, sy);
       sy += 34;
     }
+    if (standMore) { g.fillStyle = '#64748b'; g.font = `22px ${FONT}`; g.fillText(`+ ${standMore} more projects (see the Time report page)`, x, sy); }
   }
   g.fillStyle = '#94a3b8'; g.font = `22px ${FONT}`; g.fillText('Daily Projects', 70, H - 30);
   return new Promise((res) => c.toBlob(res, 'image/png'));
@@ -225,6 +229,7 @@ export function renderTimeReport(ctx) {
   const period = from === to ? fmtDate(from) : `${fmtDate(from)} – ${fmtDate(to)}`;
   const title = `${group.name} — time by ${tr.by === 'tag' ? 'tag' : 'project'}`;
   const set = (k, v) => {
+    if (k === 'preset' && v === 'custom') tr.custom = { from, to }; // start from the dates on screen, so changing one box works
     tr[k] = v;
     device.setReport({ groupId: tr.groupId, preset: tr.preset, by: tr.by, mode: tr.mode }); // opens the same way next time
     ctx.render();
@@ -276,8 +281,8 @@ export function renderTimeReport(ctx) {
         h('option', { value: 'thisMonth' }, 'This month'), h('option', { value: 'lastMonth' }, 'Last month'),
         h('option', { value: 'custom' }, 'Choose dates…'))),
       tr.preset === 'custom' ? h('span', { class: 'row' },
-        h('input', { type: 'date', value: tr.custom.from || from, onChange: (e, el) => { tr.custom.from = el.value; ctx.render(); } }), '→',
-        h('input', { type: 'date', value: tr.custom.to || to, onChange: (e, el) => { tr.custom.to = el.value; ctx.render(); } })) : null,
+        h('input', { type: 'date', value: tr.custom.from || from, onChange: (e, el) => { tr.custom = { from: el.value || from, to: tr.custom.to || to }; ctx.render(); } }), '→',
+        h('input', { type: 'date', value: tr.custom.to || to, onChange: (e, el) => { tr.custom = { from: tr.custom.from || from, to: el.value || to }; ctx.render(); } })) : null,
       seg('by', [['tag', 'By tag'], ['project', 'By project']]),
       seg('mode', [['pct', '%'], ['hours', 'Hours']])),
     h('section', { class: 'dash-card report-card' },

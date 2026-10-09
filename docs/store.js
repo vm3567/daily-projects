@@ -35,6 +35,17 @@ export class Store extends EventTarget {
     this.message = '';
     this.saving = false;
     this.saveTimer = null;
+    this.sentIds = new Set(); // ops this tab has saved (so they are never put back in the shared queue)
+    // Another tab (or the home-screen app) changed the waiting list: take its version, so neither tab wipes the other's changes.
+    if (typeof window !== 'undefined' && window.addEventListener) {
+      window.addEventListener('storage', (e) => {
+        if (e.key !== PENDING_KEY || !this.base) return;
+        this.pending = readPending().filter((o) => !this.sentIds.has(o.id));
+        this.recompute();
+        this.emit('change', { reason: 'other-tab' });
+        if (this.pending.length && !this.saving) this.scheduleSave();
+      });
+    }
   }
 
   // ---------- events ----------
@@ -52,8 +63,14 @@ export class Store extends EventTarget {
     else this.setStatus('error', e.message || String(e));
   }
 
+  /** Write the waiting list, MERGED with what other tabs have stored (one shared queue on this device). */
   persistPending() {
-    try { localStorage.setItem(PENDING_KEY, JSON.stringify(this.pending)); } catch { /* storage full or blocked */ }
+    try {
+      const mine = new Set(this.pending.map((o) => o.id));
+      const others = readPending().filter((o) => !mine.has(o.id) && !this.sentIds.has(o.id));
+      const all = [...others, ...this.pending].sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
+      localStorage.setItem(PENDING_KEY, JSON.stringify(all));
+    } catch { /* storage full or blocked */ }
   }
 
   // ---------- loading ----------
@@ -98,8 +115,14 @@ export class Store extends EventTarget {
     if (!this.base) return;
     try {
       const month = monthOf(todayIndia());
+      // this month, plus any month only saved from this device ('local' = not downloadable by sha yet)
+      const history = { [month]: this.base.history[month] || [] };
+      for (const [path, sha] of this.base.entries) {
+        const m = /^history\/(\d{4}-\d{2})\.json$/.exec(path);
+        if (m && sha === 'local' && this.base.history[m[1]]) history[m[1]] = this.base.history[m[1]];
+      }
       const snap = {
-        at: new Date().toISOString(), data: this.base.data, history: { [month]: this.base.history[month] || [] },
+        at: new Date().toISOString(), data: this.base.data, history,
         commit: this.base.commit, tree: this.base.tree, entries: [...this.base.entries],
       };
       localStorage.setItem(SNAPSHOT_KEY, JSON.stringify(snap));
@@ -247,6 +270,7 @@ export class Store extends EventTarget {
         return;
       }
       const sent = new Set(ops.map((o) => o.id));
+      for (const id of sent) this.sentIds.add(id);
       this.pending = this.pending.filter((o) => !sent.has(o.id));
       this.persistPending();
       this.recompute();

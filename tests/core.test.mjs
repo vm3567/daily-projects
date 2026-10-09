@@ -471,3 +471,79 @@ test('inbox: capture, turn into a step or a new project, delete', () => {
   assert.ok(applyOp(s, op('removeInbox', { itemId: 'i3' }, '2026-10-03')));
   assert.deepEqual(s.data.inbox, []);
 });
+
+test('review fixes: timer + pause keeps both history lines; undo removes both', async () => {
+  const s = withProject('2026-10-01');
+  s.data.groups.find((g) => g.id === 'g2').timer = true;
+  applyOp(s, op('startTimer', { projectId: 'p1' }, '2026-10-05', '10:00:00'));
+  const pause = op('pause', { projectId: 'p1' }, '2026-10-05', '11:00:00');
+  applyOp(s, pause);
+  const kinds = (s.history['2026-10'] || []).map((e) => e.kind);
+  assert.ok(kinds.includes('time_logged') && kinds.includes('paused'), kinds.join());
+  applyOp(s, op('restoreProject', { project: { ...s.data.projects[0], state: 'active' }, undoOpId: pause.id }, '2026-10-05', '11:01:00'));
+  const after = (s.history['2026-10'] || []).map((e) => e.kind);
+  assert.ok(!after.includes('paused') && !after.includes('time_logged'));
+});
+
+test('review fixes: empty status is not a change; addTime replay is not doubled', () => {
+  const s = withProject('2026-10-01');
+  assert.equal(applyOp(s, op('setProjectField', { projectId: 'p1', field: 'status', value: '' }, '2026-10-05')), false);
+  assert.equal(s.data.projects[0].lastActivityDate, '2026-10-01', 'not counted as work');
+  const t = op('addTime', { projectId: 'p1', minutes: 30 }, '2026-10-05');
+  assert.ok(applyOp(s, t));
+  assert.equal(applyOp(s, t), false);
+  assert.equal(s.data.projects[0].timeLogs.length, 1);
+});
+
+test('review fixes: monthly repeat on the 31st stays on the 31st (last day in short months)', () => {
+  const s = withProject('2026-01-01');
+  applyOp(s, op('setStepField', { projectId: 'p1', stepId: 's1', field: 'repeat', value: 'monthly' }, '2026-01-01'));
+  applyOp(s, op('setStepField', { projectId: 'p1', stepId: 's1', field: 'dueDate', value: '2026-01-31' }, '2026-01-01'));
+  const t1 = op('tickStep', { projectId: 'p1', stepId: 's1' }, '2026-01-31');
+  applyOp(s, t1);
+  const c1 = s.data.projects[0].steps.find((x) => x.id === t1.id + 'r');
+  assert.equal(c1.dueDate, '2026-02-28');
+  const t2 = op('tickStep', { projectId: 'p1', stepId: c1.id }, '2026-02-28');
+  applyOp(s, t2);
+  assert.equal(s.data.projects[0].steps.find((x) => x.id === t2.id + 'r').dueDate, '2026-03-31');
+});
+
+test('review fixes: wake is not work in past scores; unpause ends a snooze', async () => {
+  const { dayScore, isSnoozed } = await import('../docs/rules.js');
+  const s = withProject('2026-10-01');
+  applyOp(s, op('snooze', { projectId: 'p1', days: 10 }, '2026-10-02'));
+  applyOp(s, op('wake', { projectId: 'p1' }, '2026-10-03'));
+  assert.equal(dayScore(s.data, s.history, '2026-10-03').green, 0);
+  applyOp(s, op('snooze', { projectId: 'p1', days: 10 }, '2026-10-04'));
+  applyOp(s, op('pause', { projectId: 'p1' }, '2026-10-04'));
+  applyOp(s, op('unpause', { projectId: 'p1' }, '2026-10-06'));
+  assert.ok(!isSnoozed(s.data.projects[0], '2026-10-06'));
+});
+
+test('review fixes: long inbox text keeps everything; inbox undo puts the item back', () => {
+  const s = withProject('2026-10-01');
+  const long = 'Idea '.repeat(60).trim();
+  applyOp(s, op('addInbox', { itemId: 'i1', text: long }, '2026-10-02'));
+  applyOp(s, op('addInbox', { itemId: 'i2', text: 'Ask Ravi' }, '2026-10-02'));
+  applyOp(s, op('inboxToProject', { itemId: 'i1', projectId: 'pn', groupId: 'g1' }, '2026-10-03'));
+  const pn = s.data.projects.find((x) => x.id === 'pn');
+  assert.ok(pn.name.length <= 120);
+  assert.equal(pn.notes, long);
+  const before = clone(s.data.projects.find((x) => x.id === 'p1'));
+  const move = op('inboxToStep', { itemId: 'i2', projectId: 'p1', stepId: 'sx' }, '2026-10-03');
+  applyOp(s, move);
+  assert.ok(applyOp(s, op('inboxUndo', { item: { id: 'i2', text: 'Ask Ravi', createdAt: 'x' }, index: 0, undoOpId: move.id, project: before }, '2026-10-03')));
+  assert.deepEqual(s.data.inbox.map((x) => x.id), ['i2']);
+  assert.ok(!s.data.projects.find((x) => x.id === 'p1').steps.some((x) => x.id === 'sx'));
+});
+
+test('review fixes: a removed AI key is remembered as removed', () => {
+  const s = fresh();
+  applyOp(s, op('setAiKey', { provider: 'claude', key: 'k1' }, '2026-10-01'));
+  applyOp(s, op('setAiKey', { provider: 'claude', key: '' }, '2026-10-02'));
+  assert.equal(s.data.secrets.claude, undefined);
+  assert.equal(s.data.secrets.removed.claude, true);
+  applyOp(s, op('setAiKey', { provider: 'claude', key: 'k2' }, '2026-10-03'));
+  assert.equal(s.data.secrets.claude, 'k2');
+  assert.ok(!s.data.secrets.removed.claude);
+});

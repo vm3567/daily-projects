@@ -172,7 +172,11 @@ const handlers = {
     let value = a.value;
     if (a.field === 'name') value = cleanText(value, 200).trim() || p.name;
     if (a.field === 'notes') value = cleanText(value, 50000);
-    if (a.field === 'status') { value = cleanText(value, 200).replace(/\s+/g, ' ').trim(); if ((p.status || '') !== value) p.statusAt = op.at; }
+    if (a.field === 'status') {
+      value = cleanText(value, 200).replace(/\s+/g, ' ').trim();
+      if ((p.status || '') === value) return false; // leaving the empty box is not a change (and not work)
+      p.statusAt = op.at;
+    }
     if (a.field === 'priority' && !PRIORITIES.includes(value)) return false;
     if (a.field === 'deadline') value = cleanDate(value);
     if (a.field === 'groupId' && !state.data.groups.some((g) => g.id === value)) return false;
@@ -322,7 +326,7 @@ const handlers = {
     const i = list.findIndex((x) => x.id === snap.id);
     if (i >= 0) list[i] = clone(snap);
     else list.splice(Math.min(Math.max(0, a.index ?? 0), list.length), 0, clone(snap));
-    const undone = [a.undoOpId, ...(Array.isArray(a.undoOpIds) ? a.undoOpIds : [])].filter(Boolean);
+    const undone = [a.undoOpId, ...(Array.isArray(a.undoOpIds) ? a.undoOpIds : [])].filter(Boolean).flatMap((id) => [id, id + 't']);
     for (const id of undone) {
       for (const events of Object.values(state.history)) {
         const k = events.findIndex((e) => e.id === id);
@@ -389,13 +393,15 @@ const handlers = {
     if (s.repeat) {
       // A repeating step comes back: a fresh copy, due on the next date (same id on every replay).
       const doneDay = indiaDate(op.at);
-      const due = nextRepeatDate(s.repeat, s.dueDate, doneDay);
+      const repeatDay = s.repeat === 'monthly' ? (s.repeatDay || (s.dueDate ? Number(s.dueDate.slice(8, 10)) : Number(doneDay.slice(8, 10)))) : null;
+      const due = nextRepeatDate(s.repeat, s.dueDate, doneDay, repeatDay);
       const copyId = op.id + 'r';
       s.spawnedCopy = copyId;
       if (!p.steps.some((x) => x.id === copyId)) {
         p.steps.push({
           id: copyId, text: s.text, done: false, doneAt: null, dueDate: due, snoozedUntil: due,
           note: s.note || '', waiting: false, waitingOn: '', repeat: s.repeat, createdAt: op.at, updatedAt: op.at,
+          ...(repeatDay ? { repeatDay } : {}),
         });
       }
     }
@@ -607,6 +613,33 @@ const handlers = {
     return true;
   },
 
+  /**
+   * Undo for the Inbox (one change): the item goes back in its place, and the step / project it became is taken back.
+   * a = { item: {id, text, createdAt}, index, undoOpId, project?: snapshot to restore, projectIndex?, removeProjectId? }
+   */
+  inboxUndo(state, op, a) {
+    const it = a.item;
+    if (!it || !it.id) return false;
+    const inbox = (state.data.inbox ||= []);
+    const list = state.data.projects;
+    if (a.removeProjectId) {
+      const i = list.findIndex((p) => p.id === a.removeProjectId);
+      if (i >= 0) list.splice(i, 1);
+    } else if (a.project && a.project.id) {
+      const i = list.findIndex((p) => p.id === a.project.id);
+      if (i >= 0) list[i] = clone(a.project);
+    }
+    if (a.undoOpId) for (const events of Object.values(state.history)) {
+      const k = events.findIndex((e) => e.id === a.undoOpId);
+      if (k >= 0) events.splice(k, 1);
+    }
+    if (!inbox.some((x) => x.id === it.id)) {
+      const text = cleanText(it.text, 1000).trim();
+      if (text) inbox.splice(Math.min(Math.max(0, a.index ?? inbox.length), inbox.length), 0, { id: it.id, text, createdAt: it.createdAt || op.at });
+    }
+    return true;
+  },
+
   /** Inbox item → a step in a project (one change, so it can't be half done). */
   inboxToStep(state, op, a) {
     const inbox = state.data.inbox || [];
@@ -620,7 +653,10 @@ const handlers = {
   inboxToProject(state, op, a) {
     const inbox = state.data.inbox || [];
     const item = inbox.find((x) => x.id === a.itemId);
-    if (!item || !handlers.createProject(state, op, { projectId: a.projectId, name: item.text, groupId: a.groupId })) return false;
+    const long = item && item.text.length > 120;
+    const name = long ? item.text.slice(0, 117).replace(/\s+\S*$/, '') + '…' : item && item.text;
+    if (!item || !handlers.createProject(state, op, { projectId: a.projectId, name, groupId: a.groupId })) return false;
+    if (long) findProject(state.data, a.projectId).notes = item.text; // nothing is cut off: the full text goes into the notes
     inbox.splice(inbox.indexOf(item), 1);
     return true;
   },
@@ -693,9 +729,12 @@ const handlers = {
     if (a.provider !== 'claude' && a.provider !== 'gemini') return false;
     const secrets = (state.data.secrets ||= {});
     const key = String(a.key || '').trim().slice(0, 300);
-    if ((secrets[a.provider] || '') === key) return false;
-    if (key) secrets[a.provider] = key;
-    else delete secrets[a.provider];
+    const removed = (secrets.removed ||= {});
+    if ((secrets[a.provider] || '') === key && (key || removed[a.provider])) return false;
+    if (key) { secrets[a.provider] = key; delete removed[a.provider]; } else {
+      delete secrets[a.provider];
+      removed[a.provider] = true; // remembered, so an old copy on another device is never uploaded again
+    }
     return true;
   },
 
@@ -726,6 +765,7 @@ const handlers = {
     const p = findProject(state.data, a.projectId);
     const minutes = Math.round(Number(a.minutes));
     if (!p || !(minutes > 0) || minutes > 24 * 60) return false;
+    if ((p.timeLogs || []).some((l) => l.id === op.id)) return false; // replayed after a clash: already added
     const day = cleanDate(a.day) || indiaDate(op.at);
     const start = a.day ? new Date(`${day}T12:00:00+05:30`).toISOString() : new Date(Date.parse(op.at) - minutes * 60000).toISOString();
     (p.timeLogs ||= []).push({ id: op.id, start, minutes, manual: true });
@@ -802,7 +842,8 @@ function closeTimer(state, op, endIso) {
   if (capped) minutes = TIMER_MAX_MINUTES;
   (p.timeLogs ||= []).push({ id: t.id, start: t.start, minutes, ...(capped ? { capped: true } : {}) });
   touch(p, op);
-  addEvent(state, op, p, 'time_logged', `${minutes} min${capped ? ' (cut to 10 h)' : ''}`);
+  // its own event id: a Pause / Finish in the same change also writes a history line with op.id
+  addEvent(state, { ...op, id: op.id + 't' }, p, 'time_logged', `${minutes} min${capped ? ' (cut to 10 h)' : ''}`);
 }
 
 function setState(state, op, a, from, to, kind) {
@@ -811,7 +852,10 @@ function setState(state, op, a, from, to, kind) {
   if (to !== 'active' && state.data.timer && state.data.timer.projectId === p.id) closeTimer(state, op, op.at);
   p.state = to;
   p.stateChangedAt = op.at;
-  if (to === 'active') p.activeSince = indiaDate(op.at);
+  if (to === 'active') {
+    p.activeSince = indiaDate(op.at);
+    if (p.snoozedUntil && p.snoozedUntil > indiaDate(op.at)) p.snoozedUntil = indiaDate(op.at); // back on Today now
+  }
   touch(p, op);
   addEvent(state, op, p, kind, p.name);
   return true;

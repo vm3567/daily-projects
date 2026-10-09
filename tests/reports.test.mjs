@@ -135,3 +135,13 @@ test('work done by tag for the owner report', async () => {
   assert.equal(out[0].items[1].text, 'Replace element with Ravi');
   assert.equal(workDoneByTag(s.data, s.history, acton.id, '2026-10-04', '2026-10-04').length, 1, 'date range respected');
 });
+
+test('pending list: a longer name that starts with the person\'s name is kept whole', async () => {
+  const { personMessageText } = await import('../docs/reports.js');
+  const data = { people: [{ id: 'a', name: 'Ravi Kumar' }, { id: 'b', name: 'Ravi Kumar Sharma' }], projects: [{ id: 'p', name: 'P', state: 'active', steps: [
+    { id: 's', text: 'Get sign-off from @Ravi Kumar Sharma', done: false, waiting: true, waitingOn: 'Ravi Kumar' },
+    { id: 't', text: 'Tell @Ravi Kumar the size', done: false }] }] };
+  const text = personMessageText(data, data.people[0], '2026-10-12');
+  assert.match(text, /Get sign-off from Ravi Kumar Sharma \(P\)/);
+  assert.match(text, /Tell the size \(P\)/);
+});

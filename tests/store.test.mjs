@@ -188,3 +188,28 @@ test('opens without internet from the copy on the device, then syncs when back o
   assert.ok(p.steps.find((x) => x.id === 's9'), "phone's step kept");
   assert.equal(s.status, 'saved');
 });
+
+test('two tabs on one device: neither wipes the other\'s waiting changes', async () => {
+  const repo = await freshRepoWithProject();
+  localStorage.clear();
+  const tabA = await device(repo.s);
+  const tabB = await device(repo.s);
+  stop(tabA); stop(tabB);
+  tabA.dispatch('addStep', { projectId: 'p1', stepId: 'a1', text: 'From tab A' });
+  tabB.dispatch('addStep', { projectId: 'p1', stepId: 'b1', text: 'From tab B' });
+  stop(tabA); stop(tabB);
+  const stored = JSON.parse(localStorage.getItem('dp.pending')).map((o) => o.args.stepId);
+  assert.ok(stored.includes('a1') && stored.includes('b1'), stored.join());
+});
+
+test('the offline copy keeps a history month that was only saved from this device', async () => {
+  localStorage.clear();
+  const s = new Store(new MemRepo());
+  await s.init();
+  s.base.history['2020-01'] = [{ id: 'x', kind: 'note_added', at: '2020-01-05T00:00:00Z' }];
+  s.base.entries.set('history/2020-01.json', 'local');
+  s.saveSnapshot();
+  const snap = JSON.parse(localStorage.getItem('dp.snapshot'));
+  assert.equal(snap.history['2020-01'].length, 1);
+  stop(s);
+});

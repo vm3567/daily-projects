@@ -18,6 +18,8 @@ const HISTORY_WORDS = {
   step_deleted: 'Step deleted', note_added: 'Work note', note_edited: 'Work note changed', note_deleted: 'Work note deleted',
   paused: 'Paused', unpaused: 'Unpaused', finished: 'Finished', reopened: 'Reopened',
   file_added: 'File added', file_removed: 'File removed', deleted: 'Deleted', reviewed: 'OK for today',
+  snoozed: 'Snoozed', woke: 'Woken up', time_added: 'Time added', time_logged: 'Time logged',
+  group_added: 'Group added', group_renamed: 'Group renamed', group_deleted: 'Group deleted',
 };
 
 /** Text box that saves on its own: after a short pause in typing, and when leaving the box. */
@@ -35,6 +37,22 @@ function autoField(tag, props, onSave, onEnter = null) {
 
 function updateState(ui, p) {
   return ((ui.update ||= {})[p.id] ||= { note: '', next: '' });
+}
+
+/** Upload photos for the write box. Counts uploads in progress, so Save can wait for them. */
+async function addUpdatePhotos(ctx, p, files) {
+  const u = updateState(ctx.ui, p);
+  u.uploading = (u.uploading || 0) + files.length;
+  ctx.render();
+  for (const f of files) {
+    try {
+      const up = await uploadBlob(ctx, f);
+      if (up) (u.photos ||= []).push(up);
+    } finally {
+      u.uploading = Math.max(0, (u.uploading || 1) - 1);
+      ctx.render();
+    }
+  }
 }
 
 /** Put the cursor in Today's update ("What did you do on this step?"). */
@@ -241,7 +259,7 @@ function filesBlock(ctx, p) {
     class: 'dropzone',
     onDragover: (e, el) => { e.preventDefault(); el.classList.add('over'); },
     onDragleave: (e, el) => el.classList.remove('over'),
-    onDrop: (e, el) => { e.preventDefault(); el.classList.remove('over'); uploadFiles(ctx, p.id, [...e.dataTransfer.files]); },
+    onDrop: (e, el) => { e.preventDefault(); el.classList.remove('over'); ctx.ui.dropOver = false; ctx.render(); uploadFiles(ctx, p.id, [...e.dataTransfer.files]); },
   },
   h('ul', { class: 'plain' }, p.files.map((f) => h('li', { key: 'f-' + f.id, class: 'row' },
     h('button', { class: 'link', onClick: () => openFile(ctx, f) }, f.name),
@@ -310,6 +328,7 @@ function updateBox(ctx, p) {
     const next = f.next ? f.next.value.trim() : '';
     const tick = !!(due && done);
     const photos = u.photos || [];
+    if (u.uploading) { ctx.toast('A photo is still uploading — save again in a moment', 2500); return; }
     if (!text && !tick && !next && !photos.length) return;
     const steps = [];
     const noteId = newId();
@@ -328,12 +347,7 @@ function updateBox(ctx, p) {
       if (tick && !next) ctx.afterTick(p.id, 'detail', result.undo); // keeps the Undo button
     }
   };
-  const addPhotos = async (files) => {
-    for (const f of files) {
-      const up = await uploadBlob(ctx, f);
-      if (up) { (u.photos ||= []).push(up); ctx.render(); }
-    }
-  };
+  const addPhotos = (files) => addUpdatePhotos(ctx, p, files);
   if (p.state !== 'active') return { stepId: null, box: null };
   const box = h('form', {
     class: 'update-form' + (due ? ' in-step' : ' loose'), key: 'update-' + p.id,
@@ -360,6 +374,7 @@ function updateBox(ctx, p) {
     onInput: (e, el) => { u.next = el.value; },
     placeholder: 'Next step (optional)',
   }),
+  u.uploading ? h('div', { class: 'muted small' }, `📷 Uploading ${u.uploading} photo${u.uploading > 1 ? 's' : ''}…`) : null,
   (u.photos || []).length ? h('div', { class: 'photo-chips' }, u.photos.map((ph, i) => h('span', { class: 'tag photo', key: 'ph-' + ph.fileId },
     `📷 ${ph.name}`, h('button', { class: 'icon tiny-x', type: 'button', 'aria-label': 'Remove photo', onClick: () => { u.photos.splice(i, 1); ctx.render(); } }, '✕')))) : null,
   h('div', { class: 'row' },
@@ -699,9 +714,8 @@ export function renderDetail(ctx) {
       const others = files.filter((f) => !f.type.startsWith('image/'));
       ctx.render();
       if (photos.length) {
-        const u = updateState(ui, p);
-        for (const f of photos) { const up = await uploadBlob(ctx, f); if (up) { (u.photos ||= []).push(up); ctx.render(); } }
         focusUpdate(p);
+        await addUpdatePhotos(ctx, p, photos);
       }
       if (others.length) { opened.files = true; await uploadFiles(ctx, p.id, others); ctx.render(); }
     },

@@ -20,7 +20,7 @@ import { existsSync, readFileSync, writeFileSync, readdirSync, mkdirSync } from 
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { applyOps, makeOp, newId, emptyData } from '../docs/ops.js';
-import { dotColour, nextStep, todayIndia, isOverdue, colourCounts } from '../docs/rules.js';
+import { dotColour, nextStep, todayIndia, isOverdue, colourCounts, isSnoozed, awakeProjects } from '../docs/rules.js';
 import { DATA_OWNER, DATA_REPO } from '../docs/config.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -105,7 +105,9 @@ function line(p, today) {
   const ns = nextStep(p);
   const c = dotColour(p, today);
   const bits = [
-    `${c.toUpperCase().padEnd(6)} ${p.name} [${p.id}]`,
+    `${(isSnoozed(p, today) ? 'SNOOZE' : c.toUpperCase()).padEnd(6)} ${p.name} [${p.id}]`,
+    isSnoozed(p, today) ? `snoozed until ${p.snoozedUntil}` : null,
+    p.status ? `status: ${p.status}` : null,
     `group: ${p.groupName}`,
     `priority: ${p.priority}`,
     p.deadline ? `target date: ${p.deadline}${isOverdue(p, today) ? ' (PASSED)' : ''}` : null,
@@ -145,8 +147,11 @@ try {
       withGroups(data);
       const c = colourCounts(data, today);
       const active = data.projects.filter((p) => p.state === 'active');
-      console.log(`Today ${today}: ${active.length} active projects — ${c.red} red (not looked at), ${c.yellow} yellow (opened), ${c.green} green (done for today).`);
+      const awake = awakeProjects(data, today);
+      const snoozed = active.length - awake.length;
+      console.log(`Today ${today}: ${awake.length} active projects — ${c.red} red (not looked at), ${c.yellow} yellow (opened), ${c.green} green (done for today).${snoozed ? ` ${snoozed} snoozed.` : ''}`);
       console.log(`Paused: ${data.projects.filter((p) => p.state === 'paused').length}. Finished: ${data.projects.filter((p) => p.state === 'finished').length}.`);
+      if ((data.inbox || []).length) console.log(`Inbox: ${data.inbox.length} item(s) to sort — ${data.inbox.map((x) => x.text).join(' · ')}`);
       for (const p of sorted(active, today)) console.log('  ' + line(p, today));
       break;
     }
@@ -155,7 +160,7 @@ try {
       const { data } = readState();
       withGroups(data);
       let list = data.projects.filter((p) => p.state === 'active');
-      if (args.includes('--today')) list = list.filter((p) => dotColour(p, today) !== 'green');
+      if (args.includes('--today')) list = list.filter((p) => ['red', 'yellow'].includes(dotColour(p, today))); // not green, not snoozed
       if (!list.length) console.log(args.includes('--today') ? 'All active projects are green today.' : 'No active projects.');
       for (const p of sorted(list, today)) console.log(line(p, today));
       break;
@@ -166,7 +171,8 @@ try {
       withGroups(data);
       const p = findProject(data, args.join(' '));
       console.log(line(p, today));
-      console.log(`State: ${p.state}`);
+      console.log(`State: ${p.state}${isSnoozed(p, today) ? ` (snoozed until ${p.snoozedUntil})` : ''}`);
+      if (p.status) console.log(`Status: ${p.status}`);
       if (p.notes) console.log(`Notes: ${p.notes}`);
       console.log('Open steps:');
       for (const s of p.steps.filter((x) => !x.done)) {

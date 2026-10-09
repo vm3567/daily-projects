@@ -81,10 +81,12 @@ export async function uploadFiles(ctx, projectId, fileList) {
 }
 
 let currentUrl = null;
+let openSeq = 0; // each open gets a number; a slow earlier download must not replace a newer one
 
 export function closeViewer() {
   const v = document.getElementById('viewer');
   v.hidden = true;
+  openSeq++; // a file still downloading will not pop up later
   v.classList.remove('sheet-mode');
   v.replaceChildren();
   if (currentUrl) URL.revokeObjectURL(currentUrl);
@@ -99,8 +101,10 @@ export async function openFile(ctx, file) {
   const close = h('button', { class: 'btn', onClick: closeViewer }, 'Close');
   v.replaceChildren(h('div', { class: 'viewer-bar' }, h('strong', { class: 'viewer-name' }, file.name), close),
     h('div', { class: 'viewer-body' }, h('p', { class: 'muted' }, 'Loading…')));
+  const my = ++openSeq;
   try {
     const bytes = await ctx.store.repo.blobBytes(file.sha);
+    if (my !== openSeq || v.hidden) return; // closed, or another file was opened meanwhile
     const type = viewableType(file.name);
     const blob = new Blob([bytes], { type: type || 'application/octet-stream' });
     currentUrl = URL.createObjectURL(blob);
@@ -117,6 +121,7 @@ export async function openFile(ctx, file) {
     v.replaceChildren(h('div', { class: 'viewer-bar' }, h('strong', { class: 'viewer-name' }, file.name), download, close),
       h('div', { class: 'viewer-body' }, body));
   } catch (e) {
+    if (my !== openSeq || v.hidden) return;
     v.replaceChildren(h('div', { class: 'viewer-bar' }, h('strong', null, file.name), close),
       h('div', { class: 'viewer-body' }, h('p', null, `Could not open the file: ${e.message}`)));
   }

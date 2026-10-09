@@ -1,7 +1,7 @@
 // Pure logic behind search, the Diary, Today's summary and the backup file.
 // No screen code here, so it is covered by automatic tests (tests/reports.test.mjs).
 
-import { indiaDate, monthOf, nextStep, personStatus, minutesBetween, fmtMinutes, personSteps, waitingDays } from './rules.js';
+import { indiaDate, monthOf, nextStep, personStatus, minutesBetween, fmtMinutes, personSteps, waitingDays, replaceMentions } from './rules.js';
 
 /** Search: project name, notes, steps (text, note, waiting on) and work notes. `q` is lower-case. */
 export function projectMatches(p, q) {
@@ -103,9 +103,8 @@ export function personMessageText(data, person, today) {
   const { waiting, discuss } = personSteps(data, person, { openOnly: true });
   const first = person.name.split(/\s+/)[0];
   // The message goes TO this person, so their own "@Name" is taken out; other "@Names" just lose the "@".
-  const esc = person.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const own = new RegExp(`\\s*@${esc}(?![\\p{L}\\p{N}_])`, 'giu');
-  const plain = (t) => t.replace(own, ' ')
+  // (matched like the app matches "@names": the longest name wins, so "@Ravi Kumar Sharma" is not cut to "Sharma")
+  const plain = (t) => replaceMentions(t, data.people, (who, written) => (who.id === person.id ? ' ' : written))
     .replace(/@(\S)/g, '$1')
     .replace(/\s+(to|with|for|from|by|and|ask|tell)\s*$/i, '') // a word left dangling at the end ("... with")
     .replace(/\s{2,}/g, ' ')

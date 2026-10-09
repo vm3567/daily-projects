@@ -34,7 +34,10 @@ async function networkFirst(req, url) {
     if (res.ok) cache.put(key, res.clone());
     return res;
   });
-  const timeout = new Promise((resolve) => setTimeout(resolve, WAIT_MS, null));
+  // Only the page itself falls back after 3 s on a weak signal. The code files wait for the network and use the
+  // device copy only when there is no internet — so a new page never runs with half old, half new code.
+  const isPage = url.pathname.endsWith('/') || url.pathname.endsWith('.html');
+  const timeout = new Promise((resolve) => setTimeout(resolve, isPage ? WAIT_MS : 60000, null));
   try {
     const res = await Promise.race([fromNetwork, timeout]);
     if (res) return res;

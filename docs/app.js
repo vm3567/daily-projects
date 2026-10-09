@@ -142,17 +142,22 @@ const ctx = {
 
 /** AI key: the one shared through my private data (newest, same on every device), else one saved only here. */
 function aiKeyFor(provider) {
-  const shared = store && store.view && store.view.data.secrets && store.view.data.secrets[provider];
-  return shared || device.aiKey(provider) || '';
+  const secrets = (store && store.view && store.view.data.secrets) || {};
+  if (secrets[provider]) return secrets[provider];
+  if (secrets.removed && secrets.removed[provider]) return ''; // removed in Settings: an old copy on this device is not used
+  return device.aiKey(provider) || '';
 }
 
 /** Keys saved only on this device (from before keys were shared) are uploaded once, so other devices get them. */
 function shareLocalKeys() {
   if (!store || !store.canEdit()) return;
   const shared = store.view.data.secrets || {};
+  const removed = shared.removed || {};
   for (const provider of ['claude', 'gemini']) {
     const local = device.aiKey(provider);
-    if (local && !shared[provider]) store.dispatch('setAiKey', { provider, key: local }); // never overwrite a shared key
+    if (!local) continue;
+    if (shared[provider] || removed[provider]) { device.setAiKey(provider, ''); continue; } // shared one wins; a removed key stays removed
+    if (store.dispatch('setAiKey', { provider, key: local })) device.setAiKey(provider, ''); // moved into the shared data once
   }
 }
 
@@ -377,6 +382,7 @@ function viewTitle() {
 
 function go(view) {
   ui.view = view;
+  ui.rowMenu = null;
   ui.round = null;
   resetRedOrder();
   ui.search = '';
@@ -448,6 +454,7 @@ function toggleOk(p) {
 
 function select(id) {
   ui.round = null; // opening a project leaves the daily round
+  ui.rowMenu = null;
   const list = currentList();
   const at = list.findIndex((x) => x.id === id);
   if (at >= 0) ui.listIndex = at; // remembered, so ↓ ↑ keep your place if this row folds away
@@ -721,6 +728,7 @@ function followUpRow() {
 
 function openCapture() {
   ui.capture = true;
+  ui.rowMenu = null;
   ui.menuOpen = false;
   render();
   focusKey('capture-input');
@@ -764,11 +772,31 @@ function inboxSuggestions(text) {
     .filter((x) => x.score > 0).sort((a, b) => b.score - a.score).slice(0, 3).map((x) => x.p);
 }
 
+/** An Inbox change (send to a project, or delete) with an Undo that puts the item back. */
+function inboxAct(type, args, item, message) {
+  const inbox = store.view.data.inbox || [];
+  const index = inbox.findIndex((x) => x.id === item.id);
+  const saved = { id: item.id, text: item.text, createdAt: item.createdAt };
+  const before = args.projectId && type === 'inboxToStep' ? store.view.data.projects.find((p) => p.id === args.projectId) : null;
+  const snapshot = before ? clone(before) : null;
+  const op = store.dispatch(type, args);
+  if (!op) return null;
+  const undo = () => {
+    const ok = store.dispatch('inboxUndo', {
+      item: saved, index, undoOpId: op.id, undoMonth: opMonth(op),
+      ...(type === 'inboxToProject' ? { removeProjectId: args.projectId } : snapshot ? { project: snapshot } : {}),
+    });
+    if (ok) toast('Undone — back in the Inbox', 1800);
+  };
+  toast(message, 6000, undo);
+  return { op, undo };
+}
+
 function renderInbox() {
   const { data } = store.view;
   const items = data.inbox || [];
   const projects = awakeProjects(data, todayIndia()).slice().sort((a, b) => a.name.localeCompare(b.name));
-  const toStep = (item, p) => act('inboxToStep', { itemId: item.id, projectId: p.id, stepId: newId() }, `Added to ${p.name}: ${item.text}`);
+  const toStep = (item, p) => inboxAct('inboxToStep', { itemId: item.id, projectId: p.id, stepId: newId() }, item, `Added to ${p.name}: ${item.text}`);
   return h('div', { class: 'inbox' },
     h('div', { class: 'row inbox-top' },
       h('button', { class: 'btn primary', onClick: openCapture }, '📥 Capture', keyHint('Q')),
@@ -787,7 +815,7 @@ function renderInbox() {
               if (v.startsWith('new:')) {
                 const groupId = v.slice(4);
                 const projectId = newId();
-                if (act('inboxToProject', { itemId: item.id, projectId, groupId }, `New project: ${item.text}`)) render();
+                if (inboxAct('inboxToProject', { itemId: item.id, projectId, groupId }, item, `New project: ${item.text}`)) render();
               } else {
                 const p = data.projects.find((x) => x.id === v);
                 if (p) toStep(item, p);
@@ -797,7 +825,7 @@ function renderInbox() {
           h('option', { value: '' }, 'Send to project…'),
           projects.map((p) => h('option', { value: p.id }, p.name)),
           data.groups.map((g) => h('option', { value: 'new:' + g.id }, `+ New project in ${g.name}`))),
-          h('button', { class: 'icon', title: 'Delete', 'aria-label': 'Delete', onClick: () => act('removeInbox', { itemId: item.id }, 'Removed from Inbox') }, '🗑')));
+          h('button', { class: 'icon', title: 'Delete', 'aria-label': 'Delete', onClick: () => inboxAct('removeInbox', { itemId: item.id }, item, 'Removed from Inbox') }, '🗑')));
     })) : h('p', { class: 'empty-list' }, 'Inbox is empty. Press Q anywhere (or 📥 at the top) to write something down fast.'));
 }
 
@@ -1096,7 +1124,6 @@ function keyForm(provider, label, help) {
       const input = e.target.elements.key;
       const v = input.value.trim();
       if (!v) return;
-      device.setAiKey(provider, v);
       store.dispatch('setAiKey', { provider, key: v }); // shared with all my devices (private data)
       input.value = '';
       toast(`${label} key saved — it now works on all your devices`);
@@ -1525,6 +1552,7 @@ function goBack() {
   const prev = ui.navStack && ui.navStack.pop();
   if (!prev) return;
   ui.round = null;
+  ui.rowMenu = null;
   ui.view = prev.view;
   ui.selected = prev.selected;
   ui.person = prev.person;
@@ -1770,6 +1798,7 @@ function onKey(e) {
   }
   if (isTyping(document.activeElement)) return;
   if (!store || !store.view || !document.getElementById('keyscreen').hidden) return;
+  if (!document.getElementById('viewer').hidden || ui.capture) return; // a photo / message is open on top: keys must not act on the page behind
   const isArrow = e.key === 'ArrowDown' || e.key === 'ArrowUp';
   if (e.repeat && !isArrow && e.key !== 'j' && e.key !== 'k') return; // holding x / o / r must not repeat
   const focused = document.activeElement;
@@ -1826,7 +1855,7 @@ function onKey(e) {
     if (!p) { toast('Pick a project first (↓ ↑).'); return; }
     ui.mobile = 'detail'; render(); focusKey('wn-' + p.id);
   } else if (k === 'n') {
-    if (ui.view === 'diary' || ui.view === 'settings' || ui.view === 'paused' || ui.view === 'finished') ui.view = 'today';
+    if (!(ui.view === 'today' || ui.view === 'all' || ui.view.startsWith('group:'))) ui.view = 'today'; // the form is only on project lists
     ui.search = ''; ui.adding = true; ui.mobile = 'list'; render(); focusKey('new-name');
   } else if (k === 'q') {
     openCapture();
