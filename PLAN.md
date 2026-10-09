@@ -51,8 +51,8 @@ Version: 5.
 | 22 | Step details | Step text (required), plus optional due date, small note, "waiting on whom" |
 | 23 | List order | My own order. I drag projects up and down. |
 | 24 | Backup | Every save is kept as a version on GitHub, forever. Plus a "Download backup" button. |
-| 25 | Red rule | Red when there was no activity for 2+ days, OR the target date has passed |
-| 26 | Green rule | Green when I do ANY activity on the project today (add or tick a step, note, link, file, edit). Changed on 9 Oct. |
+| 25 | Red rule | DAILY: every project turns red at 12 midnight India time (not looked at today). A passed target date shows "Overdue" in red text. Changed 9 Oct. |
+| 26 | Green / yellow | Yellow = opened today. Green = any change today, or the "✓ OK for today" button. A grey "No real work for N days" note shows after 3+ days without a real change (OK does not count). Changed 9 Oct. |
 | 27 | Files | Upload copies of files into the project (saved in the private data repository) |
 | 28 | Search | One search box. Searches project names, steps, notes. |
 | 29 | AI jobs | Break a project into steps, suggest the next step, Morning plan, Weekly review |
@@ -142,9 +142,9 @@ A phone is too narrow for 3 columns. So the same page shows one column at a time
 
 | Colour | Meaning |
 |--------|---------|
-| Green | I did any activity on the project today |
-| Orange | No activity today, but some yesterday |
-| Red | No activity for 2 or more days, OR the target date has passed |
+| Green | I changed something today, or pressed "OK for today" |
+| Yellow | I opened it today, nothing done yet |
+| Red | Not looked at today (every project resets to red at midnight) |
 | Grey | Paused or finished (not on Today) |
 
 - A brand-new project starts orange. It turns red after 2 days with no step ticked.

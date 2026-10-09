@@ -99,7 +99,7 @@ function findProject(data, query) {
   throw new Error(`Several projects match "${query}": ${hits.map((p) => `${p.name} [${p.id}]`).join(', ')}`);
 }
 
-const ORDER = { red: 0, orange: 1, green: 2, grey: 3 };
+const ORDER = { red: 0, yellow: 1, green: 2, grey: 3 };
 
 function line(p, today) {
   const ns = nextStep(p);
@@ -145,7 +145,7 @@ try {
       withGroups(data);
       const c = colourCounts(data, today);
       const active = data.projects.filter((p) => p.state === 'active');
-      console.log(`Today ${today}: ${active.length} active projects — ${c.red} red, ${c.orange} orange, ${c.green} green.`);
+      console.log(`Today ${today}: ${active.length} active projects — ${c.red} red (not looked at), ${c.yellow} yellow (opened), ${c.green} green (done for today).`);
       console.log(`Paused: ${data.projects.filter((p) => p.state === 'paused').length}. Finished: ${data.projects.filter((p) => p.state === 'finished').length}.`);
       for (const p of sorted(active, today)) console.log('  ' + line(p, today));
       break;

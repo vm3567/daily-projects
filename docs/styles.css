@@ -396,3 +396,9 @@ kbd {
 .person-chip .dot { width: 8px; height: 8px; }
 .count-pill { margin-left: 6px; font-size: 11px; background: var(--panel); border: 1px solid var(--line); border-radius: 99px; padding: 0 6px; color: var(--muted); font-weight: 500; }
 .people-list .prow-btn .dot { margin-top: 0; }
+
+/* ---------- daily dots (v7) ---------- */
+.dot.yellow { background: #eab308; }
+.tag.stale { color: #6b7280; background: #f3f4f6; border-color: #e5e7eb; }
+.ok-btn { color: #15803d; border-color: #bbf7d0; background: #f0fdf4; }
+.ok-btn:hover { background: #dcfce7; }

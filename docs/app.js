@@ -9,8 +9,8 @@ import { Store } from './store.js';
 import { GitHubRepo } from './github.js';
 import { MockRepo } from './mockrepo.js';
 import { device } from './device.js';
-import { DATA_OWNER, DATA_REPO, DATA_BRANCH, REFRESH_MS, AI_DAILY_LIMIT, BRIEF_CLAIM_MINUTES, WAIT_RED_DAYS } from './config.js';
-import { dotColour, nextStep, todayIndia, isSundayIndia, colourCounts, isOverdue, indiaDate, waitingDays } from './rules.js';
+import { DATA_OWNER, DATA_REPO, DATA_BRANCH, REFRESH_MS, AI_DAILY_LIMIT, BRIEF_CLAIM_MINUTES, WAIT_RED_DAYS, NO_WORK_NOTE_DAYS } from './config.js';
+import { dotColour, nextStep, todayIndia, isSundayIndia, colourCounts, isOverdue, indiaDate, waitingDays, daysWithoutWork } from './rules.js';
 import { newId } from './ops.js';
 import * as ai from './ai.js';
 
@@ -58,6 +58,7 @@ const ctx = {
   aiSuggest: (p) => runAi(p, 'next'),
   aiBreakdown: (p, goal) => runAi(p, 'breakdown', goal),
   hasAiKey: () => !!(store && aiReady().key),
+  toggleOk: (p) => toggleOk(p),
   selectPerson: (id) => { ui.person = id; ui.mobile = 'detail'; render(); const d = document.getElementById('detail'); if (d) d.scrollTop = 0; },
   openProject: (id) => {
     const p = store.view.data.projects.find((x) => x.id === id);
@@ -180,11 +181,36 @@ function viewTitle() {
 
 function go(view) {
   ui.view = view;
+  resetRedOrder();
   ui.search = '';
   ui.menuOpen = false;
   ui.mobile = 'list';
   rememberUi();
   render();
+}
+
+/** First open of the day turns a red dot yellow. */
+function markOpened(id) {
+  const p = store && store.view && store.view.data.projects.find((x) => x.id === id);
+  if (!p || p.state !== 'active' || p.lastOpenedDate === todayIndia() || dotColour(p) === 'green') return;
+  if (store.canEdit()) store.dispatch('markOpened', { projectId: id });
+}
+
+/** The project in the right column counts as opened, if that column is on screen. */
+function markShownOpened() {
+  if (!ui.selected || (ui.view === 'people' && !ui.search)) return;
+  const detail = document.getElementById('detail');
+  if (detail && detail.offsetParent !== null) { markOpened(ui.selected); }
+}
+
+/** "OK for today" (or undo it). */
+function toggleOk(p) {
+  const today = todayIndia();
+  if (p.okDate === today) {
+    store.dispatch('undoOkForToday', { projectId: p.id });
+    return;
+  }
+  if (store.dispatch('okForToday', { projectId: p.id })) toast(`✓ ${p.name}: OK for today`, 2500);
 }
 
 function select(id) {
@@ -200,8 +226,10 @@ function select(id) {
   }
   ui.mobile = 'detail';
   rememberUi();
+  markOpened(id);
   render();
-  document.getElementById('detail').scrollTop = 0;
+  const d = document.getElementById('detail');
+  if (d) d.scrollTop = 0;
 }
 
 // ---------------------------------------------------------------- menu
@@ -227,7 +255,7 @@ function renderMenu() {
       item('today', 'Today', active.length),
       h('li', { class: 'menu-dots', key: 'dots' },
         h('span', { class: 'dot red' }), String(counts.red), ' ',
-        h('span', { class: 'dot orange' }), String(counts.orange), ' ',
+        h('span', { class: 'dot yellow' }), String(counts.yellow), ' ',
         h('span', { class: 'dot green' }), String(counts.green)),
       item('all', 'All projects', active.length),
       h('li', { class: 'menu-head', key: 'groups-head' }, 'Groups'),
@@ -328,8 +356,16 @@ function projectRow(p, today) {
           ns && ns.waiting ? waitingTag(ns) : null,
           p.deadline
             ? h('span', { class: 'tag' + (isOverdue(p, today) ? ' late' : '') }, isOverdue(p, today) ? `Overdue · ${fmtDay(p.deadline)}` : `Target ${fmtDay(p.deadline)}`)
-            : null))),
+            : null,
+          noWorkTag(p, today)))),
     canDrag() ? h('span', { class: 'grip', 'aria-hidden': 'true', title: 'Drag to reorder' }, '⋮⋮') : null);
+}
+
+/** "No real work for 6 days" — so nothing hides behind "OK for today". */
+function noWorkTag(p, today) {
+  if (p.state !== 'active') return null;
+  const d = daysWithoutWork(p, today);
+  return d >= NO_WORK_NOTE_DAYS ? h('span', { class: 'tag stale' }, `No real work for ${d} days`) : null;
 }
 
 /** "Waiting: Ravi · 4d" — red once it is time to chase. */
@@ -366,12 +402,26 @@ function quickTick(p, step, el) {
   toast(next ? `✓ ${step.text}. Next: ${next.text}` : `✓ ${step.text}. Add the next step for "${p.name}".`, 4500);
 }
 
-const COLOUR_ORDER = { red: 0, orange: 1, green: 2, grey: 3 };
+const COLOUR_ORDER = { red: 0, yellow: 1, green: 2, grey: 3 };
 const PRIORITY_ORDER = { high: 0, medium: 1, low: 2 };
 
-/** "Red first": red, then orange, then green; high priority first within each; else my order. */
+/** "Red first": red, then yellow, then green; high priority first within each; else my order. */
+let redOrder = null; // fixed "Red first" order, so rows do not jump while you open and tick them
+
+function resetRedOrder() { redOrder = null; }
+
 function sortForView(list, today) {
   if (ui.sort !== 'red' || ui.search) return list;
+  const ids = list.map((p) => p.id);
+  if (redOrder && redOrder.view === ui.view && ids.length === redOrder.ids.length && ids.every((id) => redOrder.pos.has(id))) {
+    return [...list].sort((a, b) => redOrder.pos.get(a.id) - redOrder.pos.get(b.id));
+  }
+  const sorted = computeRedFirst(list, today);
+  redOrder = { view: ui.view, ids: sorted.map((p) => p.id), pos: new Map(sorted.map((p, i) => [p.id, i])) };
+  return sorted;
+}
+
+function computeRedFirst(list, today) {
   return list
     .map((p, i) => ({ p, i, c: COLOUR_ORDER[dotColour(p, today)], r: PRIORITY_ORDER[p.priority] ?? 1 }))
     .sort((a, b) => a.c - b.c || a.r - b.r || a.i - b.i)
@@ -381,7 +431,7 @@ function sortForView(list, today) {
 function sortSwitch() {
   const opt = (value, label) => h('button', {
     class: 'seg' + (ui.sort === value ? ' on' : ''), 'aria-pressed': String(ui.sort === value),
-    onClick: () => { ui.sort = value; rememberUi(); render(); },
+    onClick: () => { ui.sort = value; resetRedOrder(); rememberUi(); render(); },
   }, label);
   return h('div', { class: 'segmented', role: 'group', 'aria-label': 'Order' }, opt('mine', 'My order'), opt('red', 'Red first'));
 }
@@ -483,8 +533,8 @@ function renderDiary() {
     return p ? p.name : `${e.projectName || ''} (deleted project)`;
   };
   for (const e of Object.values(history).flat()) {
-    if (!['step_ticked', 'paused', 'unpaused', 'finished', 'reopened'].includes(e.kind)) continue;
-    const words = { step_ticked: '✓', paused: 'Paused', unpaused: 'Unpaused', finished: 'Finished', reopened: 'Reopened' }[e.kind];
+    if (!['step_ticked', 'paused', 'unpaused', 'finished', 'reopened', 'reviewed'].includes(e.kind)) continue;
+    const words = { step_ticked: '✓', paused: 'Paused', unpaused: 'Unpaused', finished: 'Finished', reopened: 'Reopened', reviewed: 'Reviewed — nothing today' }[e.kind];
     add(indiaDate(e.at), { at: e.at, projectId: e.projectId, text: `${words} ${e.kind === 'step_ticked' ? e.detail : ''}`.trim(), name: nameOf(e) });
   }
   // Work notes come from the projects (so edits and deletes show correctly)...
@@ -712,6 +762,7 @@ function render() {
 const KEYS = [
   ['↓  ↑', 'Next / previous project'],
   ['x', 'Tick the next step of the open project'],
+  ['o', 'OK for today (or undo)'],
   ['a', 'Type a new step'],
   ['w', 'Type in "What did you do today?"'],
   ['n', 'New project'],
@@ -786,12 +837,21 @@ function onKey(e) {
   }
   if (isTyping(document.activeElement)) return;
   if (!store || !store.view || !document.getElementById('keyscreen').hidden) return;
+  const isArrow = e.key === 'ArrowDown' || e.key === 'ArrowUp';
+  if (e.repeat && !isArrow && e.key !== 'j' && e.key !== 'k') return; // holding x / o / r must not repeat
+  const focused = document.activeElement;
+  if (isArrow && focused && (focused.type === 'radio' || focused.nodeName === 'SUMMARY')) return;
+  if (isArrow && (ui.view === 'diary' || ui.view === 'settings') && !ui.search) return; // let the page scroll
   const p = selectedProject();
   const k = e.key;
   let handled = true;
   if (k === 'ArrowDown' || k === 'j') moveSelection(1);
   else if (k === 'ArrowUp' || k === 'k') moveSelection(-1);
-  else if (ui.view === 'people' && 'xaw'.includes(k)) handled = false; // project keys do nothing on People
+  else if (ui.view === 'people' && 'xawo'.includes(k)) handled = false; // project keys do nothing on People
+  else if (k === 'o') {
+    if (p && p.state === 'active') toggleOk(p);
+    else toast('Pick an active project first (↓ ↑).');
+  }
   else if (k === 'x') {
     const ns = p && p.state === 'active' && nextStep(p);
     if (ns) {
@@ -814,7 +874,7 @@ function onKey(e) {
     const box = [...root.querySelectorAll('input.search')].find((el) => el.offsetParent !== null);
     if (box) box.focus();
   } else if (k === 'r') {
-    ui.sort = ui.sort === 'red' ? 'mine' : 'red'; rememberUi(); render();
+    ui.sort = ui.sort === 'red' ? 'mine' : 'red'; resetRedOrder(); rememberUi(); render();
     toast(ui.sort === 'red' ? 'Red first' : 'My order', 1500);
   } else if (k === 't') go('today');
   else if (k === 'd') go('diary');
@@ -853,10 +913,14 @@ function start() {
     render(); // put ticked boxes and menus back to the real data
   });
   render();
-  store.init().then(() => { render(); makeBrief(); });
+  store.init().then(() => { render(); markShownOpened(); makeBrief(); });
   if (started) return;
   started = true;
-  setInterval(() => { if (document.visibilityState === 'visible') doRefresh(false); }, REFRESH_MS);
+  let shownDay = todayIndia();
+  setInterval(() => {
+    if (document.visibilityState === 'visible') doRefresh(false);
+    if (todayIndia() !== shownDay) { shownDay = todayIndia(); resetRedOrder(); render(); markShownOpened(); } // midnight: every dot resets
+  }, REFRESH_MS);
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') doRefresh(false); });
   window.addEventListener('online', () => {
     if (store.status !== 'offline') return;

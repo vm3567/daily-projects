@@ -93,7 +93,6 @@ export function renderPerson(ctx) {
     for (const n of p.workNotes) if (mentionedPeople(n.text, people).has(person.id)) notes.push({ project: p, note: n });
   }
   notes.sort((a, b) => (a.note.createdAt < b.note.createdAt ? 1 : -1));
-  let timer = null;
   const first = person.name.split(/\s+/)[0];
 
   return h('div', { class: 'detail-inner', key: 'person-' + person.id },
@@ -103,11 +102,11 @@ export function renderPerson(ctx) {
       h('span', { class: 'avatar big' }, initials(person.name)),
       h('input', {
         class: 'title-input', value: person.name, 'aria-label': 'Name', key: 'person-name-' + person.id,
-        onInput: (e, el) => {
-          clearTimeout(timer);
-          timer = setTimeout(() => { if (el.value.trim()) store.dispatch('renamePerson', { personId: person.id, name: el.value }); }, 900);
+        // Saved only when leaving the box: a rename rewrites every @name, so half-typed names must not be saved.
+        onChange: (e, el) => {
+          if (!el.value.trim()) { el.value = person.name; return; }
+          if (!store.dispatch('renamePerson', { personId: person.id, name: el.value })) el.value = person.name;
         },
-        onChange: (e, el) => { clearTimeout(timer); if (el.value.trim()) store.dispatch('renamePerson', { personId: person.id, name: el.value }); },
         onKeydown: (e, el) => { if (e.key === 'Enter') { e.preventDefault(); el.blur(); } },
       }),
       h('div', { class: 'state-buttons' },

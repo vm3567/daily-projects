@@ -2,18 +2,18 @@
 // See PLAN.md sections 3, 6-9, 11, 13, 15.
 
 import { h, fmtDay, fmtTime, fmtSize } from './dom.js';
-import { dotColour, todayIndia, isOverdue, indiaDate, waitingDays } from '../rules.js';
+import { dotColour, todayIndia, isOverdue, indiaDate, waitingDays, lastWorkDate } from '../rules.js';
 import { WAIT_RED_DAYS } from '../config.js';
 import { newId, PRIORITIES, cleanUrl } from '../ops.js';
 import { uploadFiles, openFile } from './files.js';
 
-const COLOUR_WORD = { green: 'Done today', orange: 'Not yet today', red: 'Needs you', grey: '' };
+const COLOUR_WORD = { green: 'Done for today', yellow: 'Opened today', red: 'Not looked at today', grey: 'Paused or finished' };
 const HISTORY_WORDS = {
   created: 'Project created', edited: 'Changed', renamed: 'Renamed', group_changed: 'Moved to group',
   step_added: 'Step added', step_edited: 'Step changed', step_ticked: 'Step done', step_unticked: 'Step un-ticked',
   step_deleted: 'Step deleted', note_added: 'Work note', note_edited: 'Work note changed', note_deleted: 'Work note deleted',
   paused: 'Paused', unpaused: 'Unpaused', finished: 'Finished', reopened: 'Reopened',
-  file_added: 'File added', file_removed: 'File removed', deleted: 'Deleted',
+  file_added: 'File added', file_removed: 'File removed', deleted: 'Deleted', reviewed: 'OK for today',
 };
 
 /** Text box that saves on its own: after a short pause in typing, and when leaving the box. */
@@ -224,7 +224,12 @@ function section(title, ...children) {
 function stateButtons(ctx, p) {
   const { store, ui } = ctx;
   if (p.state === 'active') {
+    const today = todayIndia();
+    const green = dotColour(p, today) === 'green';
+    const okOnly = p.okDate === today && lastWorkDate(p) !== today;
     return [
+      !green ? h('button', { class: 'btn ok-btn', title: 'Looked at it, no more work today (key: o)', onClick: () => ctx.toggleOk(p) }, '✓ OK for today') : null,
+      okOnly ? h('button', { class: 'btn small', title: 'Undo OK for today', onClick: () => ctx.toggleOk(p) }, 'Undo OK') : null,
       h('button', { class: 'btn', onClick: () => store.dispatch('pause', { projectId: p.id }) }, 'Pause'),
       h('button', {
         class: 'btn',
@@ -299,6 +304,7 @@ export function renderDetail(ctx) {
     files: opened.files || p.files.length > 0,
     history: !!opened.history,
   };
+  for (const name of Object.keys(show)) if (show[name]) opened[name] = true; // keep it open even if emptied
   const openPart = (name) => { opened[name] = true; ctx.render(); };
   const chip = (name, label) => (show[name] ? null : h('button', { class: 'chip', onClick: () => openPart(name) }, label));
   const notesShown = ui.notesLimit || 3;

@@ -23,8 +23,8 @@ Run it from the Task folder. Always use the project id (in [brackets]) once you 
 
 ## Steps
 
-1. Run `summary`. Tell the user in one line: how many projects are red, orange and green.
-2. Take the projects in the order shown (red first, then orange, then green). Skip green ones unless the user asks.
+1. Run `summary`. Tell the user in one line: how many projects are red, yellow and green.
+2. Take the projects in the order shown (red first, then yellow, then green). Skip green ones unless the user asks.
 3. For each project, run `show` and present it briefly:
    - Name and colour.
    - Next step (and if it is waiting, on whom).

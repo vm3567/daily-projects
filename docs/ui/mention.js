@@ -9,6 +9,7 @@ import { newId } from '../ops.js';
 const MAX_ITEMS = 6;
 let state = null; // { el, start, end, items, index, plain }
 let getCtx = null;
+let quiet = false; // true while choose() sends its own input event
 
 function box() {
   return document.getElementById('mention');
@@ -45,11 +46,13 @@ function matches(people, query) {
 }
 
 function update(el) {
+  if (quiet) return;
   if (!el || !el.dataset || !el.dataset.mention || !getCtx) { if (state) close(); return; }
   const ctx = getCtx();
   if (!ctx.store || !ctx.store.view) return;
   const found = findQuery(el);
   if (!found) { close(); return; }
+  if (!found.plain && /\s$/.test(found.query)) { close(); return; } // a name was finished with a space
   const people = ctx.store.view.data.people || [];
   const items = matches(people, found.query).map((p) => ({ name: p.name }));
   const q = found.query.trim();
@@ -72,10 +75,15 @@ function draw() {
   }, it.isNew ? `+ Add "${it.name}" as a new person` : state.plain ? it.name : `@${it.name}`)));
   const r = state.el.getBoundingClientRect();
   b.hidden = false;
+  // On iPhone the keyboard shrinks the *visual* viewport, not window.innerHeight.
+  const vv = window.visualViewport;
+  const viewTop = vv ? vv.offsetTop : 0;
+  const viewBottom = vv ? vv.offsetTop + vv.height : window.innerHeight;
+  const viewWidth = vv ? vv.width : window.innerWidth;
   const below = r.bottom + 4;
   const height = b.offsetHeight;
-  b.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - b.offsetWidth - 8))}px`;
-  b.style.top = `${below + height > window.innerHeight - 8 ? Math.max(8, r.top - height - 4) : below}px`;
+  b.style.left = `${Math.max(8, Math.min(r.left, viewWidth - b.offsetWidth - 8))}px`;
+  b.style.top = `${below + height > viewBottom - 8 ? Math.max(viewTop + 8, r.top - height - 4) : below}px`;
 }
 
 function choose(i) {
@@ -93,8 +101,13 @@ function choose(i) {
   close();
   el.focus();
   try { el.setSelectionRange(caret, caret); } catch { /* some inputs do not allow it */ }
-  el.dispatchEvent(new Event('input', { bubbles: true }));
-  if (plain) el.dispatchEvent(new Event('change', { bubbles: true }));
+  quiet = true;
+  try {
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    if (plain) el.dispatchEvent(new Event('change', { bubbles: true }));
+  } finally {
+    quiet = false;
+  }
 }
 
 function onKeyDown(e) {
@@ -121,5 +134,9 @@ export function installMentions(ctxGetter) {
     setTimeout(() => { if (state && document.activeElement !== state.el) close(); }, 200);
   }, true);
   window.addEventListener('resize', () => { if (state) close(); });
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener('resize', () => { if (state) draw(); });
+    window.visualViewport.addEventListener('scroll', () => { if (state) draw(); });
+  }
   document.addEventListener('scroll', () => { if (state) draw(); }, true);
 }

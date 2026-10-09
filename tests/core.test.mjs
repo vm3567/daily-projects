@@ -23,40 +23,45 @@ test('India date is used, not UTC', () => {
   assert.equal(daysBetween('2026-10-01', '2026-10-03'), 2);
 });
 
-test('dot colours: any activity today is green', () => {
+test('daily dots: red each new day, yellow when opened, green after a change or OK', async () => {
+  const { daysWithoutWork } = await import('../docs/rules.js');
   const s = withProject('2026-10-01');
   const p = s.data.projects[0];
   assert.equal(dotColour(p, '2026-10-01'), 'green'); // created + steps added today
-  assert.equal(dotColour(p, '2026-10-02'), 'orange');
-  assert.equal(dotColour(p, '2026-10-03'), 'red'); // 2 days, nothing done
-  applyOp(s, op('addWorkNote', { projectId: 'p1', noteId: 'n1', text: 'Called Ravi' }, '2026-10-03'));
-  assert.equal(dotColour(p, '2026-10-03'), 'green', 'a note counts');
-  applyOp(s, op('addStep', { projectId: 'p1', stepId: 's9', text: 'New step' }, '2026-10-05'));
-  assert.equal(dotColour(p, '2026-10-05'), 'green', 'adding a step counts');
-  applyOp(s, op('tickStep', { projectId: 'p1', stepId: 's1' }, '2026-10-06'));
-  assert.equal(dotColour(p, '2026-10-06'), 'green', 'ticking counts');
-  assert.equal(dotColour(p, '2026-10-07'), 'orange');
-  assert.equal(dotColour(p, '2026-10-08'), 'red');
-  // a passed target date is red even after activity today
-  applyOp(s, op('setProjectField', { projectId: 'p1', field: 'deadline', value: '2026-10-07' }, '2026-10-08'));
-  assert.equal(dotColour(p, '2026-10-08'), 'red');
+  assert.equal(dotColour(p, '2026-10-02'), 'red', 'resets at midnight');
+  applyOp(s, op('markOpened', { projectId: 'p1' }, '2026-10-02'));
+  assert.equal(dotColour(p, '2026-10-02'), 'yellow', 'opened');
+  assert.equal(applyOp(s, op('markOpened', { projectId: 'p1' }, '2026-10-02', '11:00:00')), false, 'once a day');
+  applyOp(s, op('addWorkNote', { projectId: 'p1', noteId: 'n1', text: 'Called Ravi' }, '2026-10-02'));
+  assert.equal(dotColour(p, '2026-10-02'), 'green', 'a change');
+  assert.equal(dotColour(p, '2026-10-03'), 'red');
+  applyOp(s, op('okForToday', { projectId: 'p1' }, '2026-10-03'));
+  assert.equal(dotColour(p, '2026-10-03'), 'green', 'OK for today');
+  assert.ok(s.history['2026-10'].some((e) => e.kind === 'reviewed'));
+  applyOp(s, op('undoOkForToday', { projectId: 'p1' }, '2026-10-03', '11:00:00'));
+  assert.equal(dotColour(p, '2026-10-03'), 'yellow', 'undo OK goes back to opened');
+  // OK does not count as real work
+  applyOp(s, op('okForToday', { projectId: 'p1' }, '2026-10-06'));
+  assert.equal(daysWithoutWork(p, '2026-10-06'), 4);
+  // a passed target date no longer forces red (it shows as "Overdue" instead)
+  applyOp(s, op('setProjectField', { projectId: 'p1', field: 'deadline', value: '2026-10-05' }, '2026-10-07'));
+  assert.equal(dotColour(p, '2026-10-07'), 'green');
 });
 
 test('old data without lastActivityDate still works (uses lastTickDate)', () => {
   const p = { state: 'active', deadline: null, lastTickDate: '2026-10-05', activeSince: '2026-10-01' };
   assert.equal(dotColour(p, '2026-10-05'), 'green');
-  assert.equal(dotColour(p, '2026-10-06'), 'orange');
-  assert.equal(dotColour(p, '2026-10-07'), 'red');
+  assert.equal(dotColour(p, '2026-10-06'), 'red');
 });
 
-test('pause hides the dot; unpause restarts the count', () => {
+test('paused is grey; opening a paused project does not mark it', () => {
   const s = withProject('2026-10-01');
   const p = s.data.projects[0];
   applyOp(s, op('pause', { projectId: 'p1' }, '2026-10-05'));
   assert.equal(dotColour(p, '2026-10-20'), 'grey');
+  assert.equal(applyOp(s, op('markOpened', { projectId: 'p1' }, '2026-10-20')), false);
   applyOp(s, op('unpause', { projectId: 'p1' }, '2026-10-20'));
-  assert.equal(dotColour(p, '2026-10-20'), 'green');
-  assert.equal(dotColour(p, '2026-10-21'), 'orange');
+  assert.equal(dotColour(p, '2026-10-20'), 'green', 'unpausing is a change');
 });
 
 test('replay on fresh data: both devices\' changes survive, deleted items stay deleted', () => {
@@ -199,4 +204,15 @@ test('people follow-up colours: waiting 2+ days is red, discuss is orange, nothi
   assert.equal(personStatus(s.data, ravi, '2026-10-03').colour, 'red', '2 days waiting = chase');
   applyOp(s, op('tickStep', { projectId: 'p1', stepId: 's2' }, '2026-10-03'));
   assert.equal(personStatus(s.data, ravi, '2026-10-03').colour, 'green', 'done = green');
+});
+
+test('rename does not touch a longer name of someone else, and keeps "$" as typed', () => {
+  const s = withProject();
+  applyOp(s, op('addPerson', { personId: 'r', name: 'Ravi' }, '2026-10-02'));
+  applyOp(s, op('addPerson', { personId: 'k', name: 'Ravi Kumar' }, '2026-10-02'));
+  applyOp(s, op('setStepField', { projectId: 'p1', stepId: 's1', field: 'text', value: 'Ask @Ravi Kumar and @Ravi' }, '2026-10-02'));
+  applyOp(s, op('renamePerson', { personId: 'r', name: 'Ravindra' }, '2026-10-03'));
+  assert.equal(s.data.projects[0].steps.find((x) => x.id === 's1').text, 'Ask @Ravi Kumar and @Ravindra');
+  applyOp(s, op('renamePerson', { personId: 'r', name: 'Mr $1 Ravi' }, '2026-10-03'));
+  assert.equal(s.data.projects[0].steps.find((x) => x.id === 's1').text, 'Ask @Ravi Kumar and @Mr $1 Ravi');
 });

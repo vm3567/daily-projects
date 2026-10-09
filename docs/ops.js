@@ -207,6 +207,33 @@ const handlers = {
     return true;
   },
 
+  /** First open of the day: dot turns yellow. Not counted as work, no history line. */
+  markOpened(state, op, a) {
+    const p = findProject(state.data, a.projectId);
+    const day = indiaDate(op.at);
+    if (!p || p.state !== 'active' || p.lastOpenedDate === day) return false;
+    p.lastOpenedDate = day;
+    return true;
+  },
+
+  /** "OK for today": looked at it, no more work today. Dot turns green; real-work count is unchanged. */
+  okForToday(state, op, a) {
+    const p = findProject(state.data, a.projectId);
+    const day = indiaDate(op.at);
+    if (!p || p.state !== 'active' || p.okDate === day) return false;
+    p.okDate = day;
+    p.lastOpenedDate = day;
+    addEvent(state, op, p, 'reviewed', 'Reviewed — nothing today');
+    return true;
+  },
+
+  undoOkForToday(state, op, a) {
+    const p = findProject(state.data, a.projectId);
+    if (!p || p.okDate !== indiaDate(op.at)) return false;
+    p.okDate = null;
+    return true;
+  },
+
   moveProject(state, op, a) {
     return moveInList(state.data.projects, a.projectId, a.afterId, a.beforeId);
   },
@@ -417,8 +444,16 @@ const handlers = {
     if (people.some((x) => x.id !== person.id && x.name.toLowerCase() === name.toLowerCase())) return false;
     const old = person.name;
     // Change "@Old Name" to "@New Name" everywhere, so the links stay.
+    // Skip places where a LONGER name of someone else matches (e.g. "@Ravi Kumar" when renaming "Ravi").
+    const longer = people.filter((x) => x.id !== person.id && x.name.length > old.length
+      && x.name.toLowerCase().startsWith(old.toLowerCase())).map((x) => x.name.toLowerCase());
     const re = new RegExp('@' + old.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(?![\\p{L}\\p{N}_])', 'giu');
-    const fix = (t) => (typeof t === 'string' ? t.replace(re, '@' + name) : t);
+    const wordChar = /[\p{L}\p{N}_]/u;
+    const fix = (t) => (typeof t !== 'string' ? t : t.replace(re, (match, offset) => {
+      const rest = t.slice(offset + 1).toLowerCase();
+      const isLonger = longer.some((n) => rest.startsWith(n) && !wordChar.test(t.charAt(offset + 1 + n.length)));
+      return isLonger ? match : '@' + name; // function replacer: "$" in a name is kept as typed
+    }));
     for (const p of state.data.projects) {
       p.notes = fix(p.notes);
       for (const s of p.steps) {

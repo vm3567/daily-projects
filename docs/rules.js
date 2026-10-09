@@ -46,19 +46,29 @@ export function laterDate(a, b) {
 }
 
 /**
- * Dot colour for a project: 'green' | 'orange' | 'red' | 'grey'.
- * See PLAN.md section 5 and section 25 "Dot colour".
+ * Daily dot colour for a project (resets every midnight, India time):
+ *   red    = not looked at today
+ *   yellow = opened today, nothing done yet
+ *   green  = changed something today, or pressed "OK for today"
+ *   grey   = paused or finished
+ * See PLAN.md section 5.
  */
 export function dotColour(project, today = todayIndia()) {
   if (project.state !== 'active') return 'grey';
-  if (project.deadline && project.deadline < today) return 'red';
-  // Any activity counts (adding or ticking a step, a note, a link, a file, an edit).
-  // Older data only has lastTickDate, so both are read.
-  const last = laterDate(project.lastActivityDate, project.lastTickDate);
-  if (last === today) return 'green';
-  const ref = laterDate(last, project.activeSince);
-  if (ref && daysBetween(ref, today) < 2) return 'orange';
+  if (lastWorkDate(project) === today || project.okDate === today) return 'green';
+  if (project.lastOpenedDate === today) return 'yellow';
   return 'red';
+}
+
+/** Last day with a real change (older data only has lastTickDate, so both are read). */
+export function lastWorkDate(project) {
+  return laterDate(project.lastActivityDate, project.lastTickDate);
+}
+
+/** Days since the last real change ("OK for today" does not count). */
+export function daysWithoutWork(project, today = todayIndia()) {
+  const since = lastWorkDate(project) || project.activeSince || (project.createdAt ? indiaDate(project.createdAt) : today);
+  return Math.max(0, daysBetween(since, today));
 }
 
 export function isOverdue(project, today = todayIndia()) {
@@ -76,7 +86,7 @@ export function activeProjects(data) {
 
 /** Counts of dot colours for active projects. */
 export function colourCounts(data, today = todayIndia()) {
-  const counts = { green: 0, orange: 0, red: 0 };
+  const counts = { green: 0, yellow: 0, red: 0 };
   for (const p of activeProjects(data)) counts[dotColour(p, today)]++;
   return counts;
 }
