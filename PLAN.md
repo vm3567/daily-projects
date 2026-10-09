@@ -69,6 +69,7 @@ Version: 5.
 | 40 | Follow-up | Each person gets a dot: red = waiting on them 2+ days (or a linked step's date passed) → contact now; orange = something open; green = nothing open. Today shows a "Follow up today" row (red and orange names). Waiting steps show "Waiting: Name · Nd". |
 | 41 | Fewer clicks | (1) Daily round: one project at a time, red first; each action (✓ step done, + add step, ✎ note, Chased, ✓ OK, Skip) saves and jumps to the next project. Keys g, then x s w c o n. (2) ✓ OK / Chased button on each list row. (3) Green projects fold into "Done today (n)" on Today. (4) Ticking the last step asks "What's next?". (5) Chased: notes the follow-up and restarts the waiting count. |
 | 42 | Undo, repeat, streak | Undo button on the message after tick / OK / chased / delete step or note / pause / finish / delete project (puts the project back exactly). Repeating steps: Every day / week / month in the step's ⋯; ticking makes a copy that comes back on the next date. Streak "🔥 N days all green" on Today and a 7-day bar chart in the Diary. Step and note deletes no longer ask "Are you sure?" (Undo instead). |
+| 43 | AI steps | One "✨ AI steps" button (key i) in each project: reads title, notes, steps and work notes, suggests 3–7 next steps in order (top = next). Untick, ✕ remove or edit any, then "Add N steps". Uses the chosen AI; if it fails, tries the other key. List rows no longer show the target date (only "Overdue"). |
 
 ---
 

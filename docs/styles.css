@@ -485,3 +485,14 @@ kbd.hint {
 .segmented kbd.hint { align-self: center; margin: 0 6px; }
 .h3-hint { text-transform: none; letter-spacing: 0; font-weight: 400; color: #9aa3af; font-size: 12px; }
 .h3-hint kbd.hint { margin-left: 3px; margin-right: 3px; }
+
+/* ---------- AI steps panel (v12) ---------- */
+.ai-list { list-style: none; padding: 0; margin: 8px 0 10px; counter-reset: ai; }
+.ai-list li { display: flex; align-items: center; gap: 8px; padding: 3px 0; counter-increment: ai; }
+.ai-list li::before { content: counter(ai) "."; color: var(--muted); font-size: 12px; width: 16px; text-align: right; }
+.ai-list li.off .ai-text { color: var(--muted); text-decoration: line-through; }
+.ai-list input[type=checkbox] { width: 18px; height: 18px; accent-color: var(--brand); flex: none; }
+.ai-text { flex: 1; min-width: 0; border-color: transparent; background: transparent; }
+.ai-text:hover, .ai-text:focus { border-color: var(--line); background: #fff; }
+.next-tag { color: #1e40af; background: var(--brand-soft); border-color: #c7d7fb; }
+.btn[disabled] { opacity: .5; cursor: default; }

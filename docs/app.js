@@ -41,8 +41,9 @@ let toastTimer = null;
 /** Message at the bottom. With `undo`, it shows an Undo button and stays a little longer. */
 function toast(text, ms = 3500, undo = null) {
   const t = document.getElementById('toast');
-  t.replaceChildren(h('span', null, text),
-    undo ? h('button', { class: 'toast-undo', onClick: () => { t.hidden = true; undo(); } }, 'Undo') : null);
+  const parts = [h('span', null, text)];
+  if (undo) parts.push(h('button', { class: 'toast-undo', onClick: () => { t.hidden = true; undo(); } }, 'Undo'));
+  t.replaceChildren(...parts); // (replaceChildren would print "null" for an empty slot)
   t.hidden = false;
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => { t.hidden = true; }, undo ? Math.max(ms, 6000) : ms);
@@ -76,6 +77,8 @@ const ctx = {
   toast,
   render: () => render(),
   aiSuggest: (p) => runAi(p, 'next'),
+  aiSteps: (p) => runSuggest(p),
+  goSettings: () => go('settings'),
   aiBreakdown: (p, goal) => runAi(p, 'breakdown', goal),
   hasAiKey: () => !!(store && aiReady().key),
   toggleOk: (p) => toggleOk(p),
@@ -108,6 +111,7 @@ function useAi() {
 }
 
 async function runAi(p, mode, goal = '') {
+  if (mode === 'suggest') { await runSuggest(p); return; }
   const { provider, key } = aiReady();
   if (!key) { ui.ai = { projectId: p.id, mode, state: 'error', error: 'Add an AI key in Settings.' }; render(); return; }
   if (!useAi()) { ui.ai = { projectId: p.id, mode, state: 'error', error: 'Daily AI limit reached — try tomorrow.' }; render(); return; }
@@ -126,6 +130,27 @@ async function runAi(p, mode, goal = '') {
 
 function claimIsFresh(b) {
   return b.status === 'pending' && (Date.now() - Date.parse(b.claimedAt)) / 60000 < BRIEF_CLAIM_MINUTES;
+}
+
+/** ✨ AI steps: read the project and suggest the next steps, in order. Tries the other AI if one fails. */
+async function runSuggest(p) {
+  const chosen = store.view.data.settings.aiProvider || 'claude';
+  const order = [chosen, chosen === 'claude' ? 'gemini' : 'claude'].filter((x) => device.aiKey(x));
+  if (!order.length) { ui.ai = { projectId: p.id, mode: 'suggest', state: 'nokey' }; render(); return; }
+  if (!useAi()) { ui.ai = { projectId: p.id, mode: 'suggest', state: 'error', error: 'Daily AI limit reached — try tomorrow.' }; render(); return; }
+  ui.ai = { projectId: p.id, mode: 'suggest', state: 'busy' };
+  render();
+  let lastError = null;
+  for (const provider of order) {
+    try {
+      const steps = await ai.suggestSteps(provider, device.aiKey(provider), p);
+      ui.ai = { projectId: p.id, mode: 'suggest', state: 'list', steps, picked: steps.map(() => true), provider };
+      render();
+      return;
+    } catch (e) { lastError = e; }
+  }
+  ui.ai = { projectId: p.id, mode: 'suggest', state: 'error', error: lastError ? lastError.message : 'The AI did not answer.' };
+  render();
 }
 
 function briefKind() {
@@ -413,9 +438,7 @@ function projectRow(p, today) {
         h('span', { class: 'prow-next' + (ns ? '' : ' warn') }, ns ? `Next: ${ns.text}` : 'No next step — add one',
           ns && ns.waiting ? waitingTag(ns) : null,
           ns && ns.snoozedUntil && ns.snoozedUntil > today ? h('span', { class: 'tag repeat' }, `↻ from ${fmtDay(ns.snoozedUntil)}`) : null,
-          p.deadline
-            ? h('span', { class: 'tag' + (isOverdue(p, today) ? ' late' : '') }, isOverdue(p, today) ? `Overdue · ${fmtDay(p.deadline)}` : `Target ${fmtDay(p.deadline)}`)
-            : null,
+          isOverdue(p, today) ? h('span', { class: 'tag late' }, `Overdue · ${fmtDay(p.deadline)}`) : null,
           noWorkTag(p, today)))),
     rowAction(p, due, colour),
     canDrag() ? h('span', { class: 'grip', 'aria-hidden': 'true', title: 'Drag to reorder' }, '⋮⋮') : null,
@@ -1088,6 +1111,7 @@ const KEYS = [
   ['g', 'Start the daily round (then x s w o c n)'],
   ['s', 'Type a new step'],
   ['w', 'Type in "What did you do today?"'],
+  ['i', '✨ AI: suggest the next steps'],
   ['n', 'New project'],
   ['/', 'Search'],
   ['r', 'Switch "My order" / "Red first"'],
@@ -1185,7 +1209,11 @@ function onKey(e) {
   let handled = true;
   if (k === 'ArrowDown' || k === 'j') moveSelection(1);
   else if (k === 'ArrowUp' || k === 'k') moveSelection(-1);
-  else if (ui.view === 'people' && 'xswo'.includes(k)) handled = false; // project keys do nothing on People
+  else if (ui.view === 'people' && 'xswoi'.includes(k)) handled = false; // project keys do nothing on People
+  else if (k === 'i') {
+    if (p && p.state === 'active') { ui.mobile = 'detail'; runSuggest(p); }
+    else toast('Pick a project first (↓ ↑).');
+  }
   else if (k === 'o') {
     if (p && p.state === 'active') toggleOk(p);
     else toast('Pick an active project first (↓ ↑).');

@@ -133,6 +133,20 @@ function projectSummaryLine(p, today) {
   return parts.filter(Boolean).join(' | ');
 }
 
+/** ✨ AI steps: the next steps in order (first = the very next one), 3 to 7 of them. */
+export async function suggestSteps(provider, key, project) {
+  const today = todayIndia();
+  const r = await ask(provider, key,
+    'You help a busy person move a project forward. Read the project title, notes, open steps, done steps and work notes. '
+    + 'Suggest the next steps IN ORDER, starting with the very next one to do. Each step is one small, clear action '
+    + '(start with a verb, max 12 words). Do not repeat open or done steps. Give 3 to 7 steps. '
+    + `${STYLE} Format: {"steps": ["first next step", "then this", "..."]}`,
+    describeProject(project, today));
+  const steps = strings(r.steps, 7);
+  if (!steps.length) throw new AiError('The AI gave no steps. Try again.');
+  return steps;
+}
+
 /** Morning plan: the 5 most important things for today. Returns { items: [{projectId, text}] }. */
 export async function morningPlan(provider, key, data) {
   const today = todayIndia();
