@@ -1,7 +1,7 @@
 // The right column: everything about one project, all editable in place.
 // See PLAN.md sections 3, 6-9, 11, 13, 15.
 
-import { h, fmtDay, fmtTime, fmtSize } from './dom.js';
+import { h, fmtDay, fmtTime, fmtSize, keyHint, withKey, HAS_KEYBOARD } from './dom.js';
 import { dotColour, todayIndia, isOverdue, indiaDate, waitingDays, lastWorkDate } from '../rules.js';
 import { WAIT_RED_DAYS } from '../config.js';
 import { newId, PRIORITIES, cleanUrl } from '../ops.js';
@@ -239,6 +239,11 @@ function section(title, ...children) {
   return h('section', { class: 'block' }, h('h3', null, title), ...children);
 }
 
+/** "Steps  ·  X ticks the next one" — the key shown where it is used (computer only). */
+function stepsTitle() {
+  return HAS_KEYBOARD ? h('span', null, 'Steps', h('span', { class: 'h3-hint' }, ' · press ', h('kbd', { class: 'hint' }, 'X'), ' to tick the next one')) : 'Steps';
+}
+
 /** Pause / Finish (or Unpause / Reopen / Delete) — always visible at the top. */
 function stateButtons(ctx, p) {
   const { store, ui } = ctx;
@@ -247,7 +252,7 @@ function stateButtons(ctx, p) {
     const green = dotColour(p, today) === 'green';
     const okOnly = p.okDate === today && lastWorkDate(p) !== today;
     return [
-      !green ? h('button', { class: 'btn ok-btn', title: 'Looked at it, no more work today (key: o)', onClick: () => ctx.toggleOk(p) }, '✓ OK for today') : null,
+      !green ? h('button', { class: 'btn ok-btn', title: 'Looked at it, no more work today (key: o)', onClick: () => ctx.toggleOk(p) }, '✓ OK for today', keyHint('O')) : null,
       okOnly ? h('button', { class: 'btn small', title: 'Undo OK for today', onClick: () => ctx.toggleOk(p) }, 'Undo OK') : null,
       h('button', { class: 'btn', onClick: () => ctx.act('pause', { projectId: p.id }, `Paused: ${p.name}`) }, 'Pause'),
       h('button', {
@@ -338,7 +343,7 @@ export function renderDetail(ctx) {
     metaLine(ctx, p, today),
     p.state !== 'active' ? h('p', { class: 'banner' }, p.state === 'paused' ? 'This project is paused. It is hidden from Today.' : 'This project is finished.') : null,
 
-    section('Steps',
+    section(stepsTitle(),
       h('ul', { class: 'steps sortable-steps', key: 'steps-' + p.id, 'data-project': p.id },
         openSteps.map((s) => stepRow(ctx, p, s))),
       openSteps.length ? null : h('p', { class: 'warn' }, 'No next step — add one'),
@@ -353,7 +358,7 @@ export function renderDetail(ctx) {
           input.focus();
         },
       },
-      h('input', { name: 'text', placeholder: openSteps.length ? '+ Add step (type @ for a person)' : `What's next for "${p.name}"?`, key: 'add-step-' + p.id, enterkeyhint: 'enter', 'data-mention': '1', autocomplete: 'off' }),
+      h('input', { name: 'text', placeholder: withKey(openSteps.length ? '+ Add step (type @ for a person)' : `What's next for "${p.name}"?`, 'S'), key: 'add-step-' + p.id, enterkeyhint: 'enter', 'data-mention': '1', autocomplete: 'off' }),
       ctx.hasAiKey() ? h('button', {
         class: 'btn ai small', type: 'button', title: 'AI helper', 'aria-label': 'AI helper',
         onClick: () => { ui.ai = ui.ai && ui.ai.projectId === p.id ? null : { projectId: p.id, mode: 'choose', state: 'choose' }; ctx.render(); },
@@ -374,7 +379,7 @@ export function renderDetail(ctx) {
           if (store.dispatch('addWorkNote', { projectId: p.id, noteId: newId(), text })) { input.value = ''; ctx.toast('Note saved'); }
         },
       },
-      h('input', { name: 'note', placeholder: 'A short note, then press Enter', key: 'wn-' + p.id, enterkeyhint: 'done', 'data-mention': '1', autocomplete: 'off' })),
+      h('input', { name: 'note', placeholder: withKey('A short note, then press Enter', 'W'), key: 'wn-' + p.id, enterkeyhint: 'done', 'data-mention': '1', autocomplete: 'off' })),
       h('ul', { class: 'notes' }, p.workNotes.slice(0, notesShown).map((n) => h('li', { key: 'n-' + n.id },
         h('span', { class: 'muted small' }, `${fmtDay(indiaDate(n.createdAt))} ${fmtTime(n.createdAt)}`),
         autoField('input', { value: n.text, 'aria-label': 'Work note', key: 'nt-' + n.id, 'data-mention': '1' },

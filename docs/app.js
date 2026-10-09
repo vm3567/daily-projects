@@ -1,6 +1,6 @@
 // Daily Projects — main app: start-up, menu, project list, Today box, Diary, Settings, key screen.
 
-import { h, morph, installEvents, fmtDay, fmtLongDay, fmtTime } from './ui/dom.js';
+import { h, morph, installEvents, fmtDay, fmtLongDay, fmtTime, keyHint, withKey } from './ui/dom.js';
 import { renderDetail } from './ui/detail.js';
 import { renderPeopleList, renderPerson, peopleByFollowUp } from './ui/people.js';
 import { installMentions } from './ui/mention.js';
@@ -289,9 +289,10 @@ function renderMenu() {
   const { data } = store.view;
   const active = data.projects.filter((p) => p.state === 'active');
   const count = (f) => data.projects.filter(f).length;
+  const MENU_KEYS = { today: 'T', people: 'P', diary: 'D' };
   const item = (view, label, n, extra) => h('li', { key: 'm-' + view },
     h('button', { class: 'menu-item' + (ui.view === view && !ui.search ? ' current' : ''), onClick: () => go(view) },
-      h('span', null, label), n !== undefined ? h('span', { class: 'count' }, String(n)) : null),
+      h('span', null, label, MENU_KEYS[view] ? keyHint(MENU_KEYS[view]) : null), n !== undefined ? h('span', { class: 'count' }, String(n)) : null),
     extra || null);
   const today = todayIndia();
   const counts = colourCounts(data, today);
@@ -299,7 +300,7 @@ function renderMenu() {
   return h('nav', { class: 'menu-inner' },
     h('div', { class: 'brand' }, h('img', { src: 'icons/icon-192.png', alt: '', width: 28, height: 28 }), h('span', null, 'Daily Projects')),
     h('input', {
-      class: 'search', type: 'search', placeholder: 'Search…', value: ui.search, key: 'search-desktop', 'aria-label': 'Search',
+      class: 'search', type: 'search', placeholder: withKey('Search…', '/'), value: ui.search, key: 'search-desktop', 'aria-label': 'Search',
       onInput: (e, el) => { ui.search = el.value; render(); },
     }),
     h('ul', { class: 'menu-list' },
@@ -551,7 +552,7 @@ function sortSwitch() {
     class: 'seg' + (ui.sort === value ? ' on' : ''), 'aria-pressed': String(ui.sort === value),
     onClick: () => { ui.sort = value; resetRedOrder(); rememberUi(); render(); },
   }, label);
-  return h('div', { class: 'segmented', role: 'group', 'aria-label': 'Order' }, opt('mine', 'My order'), opt('red', 'Red first'));
+  return h('div', { class: 'segmented', role: 'group', 'aria-label': 'Order (key R)' }, opt('mine', 'My order'), opt('red', 'Red first'), keyHint('R'));
 }
 
 function streakBadge() {
@@ -594,14 +595,14 @@ function progressLine(today) {
         h('strong', null, `${done} of ${active.length}`), done === active.length ? ' done today — all green! 🎉' : ' done today',
         streakBadge()),
       done < active.length && !ui.round
-        ? h('button', { class: 'btn primary small round-start', title: 'One project at a time (key: g)', onClick: startRound }, '▶ Daily round')
+        ? h('button', { class: 'btn primary small round-start', title: 'One project at a time (key: g)', onClick: startRound }, '▶ Daily round', keyHint('G'))
         : null),
     bar);
 }
 
 function newProjectForm() {
   if (!ui.adding) {
-    return h('button', { class: 'btn primary new-project', onClick: () => { ui.adding = true; render(); focusKey('new-name'); } }, '+ New project');
+    return h('button', { class: 'btn primary new-project', onClick: () => { ui.adding = true; render(); focusKey('new-name'); } }, '+ New project', keyHint('N'));
   }
   const defaultGroup = ui.view.startsWith('group:') ? ui.view.slice(6) : store.view.data.groups[0]?.id;
   return h('form', {
@@ -644,7 +645,7 @@ function renderListColumn() {
     statusText(),
     h('button', { class: 'icon', title: 'Get latest', 'aria-label': 'Refresh', onClick: () => doRefresh(true) }, '↻'));
   const mobileSearch = h('input', {
-    class: 'search mobile-only', type: 'search', placeholder: 'Search…', value: ui.search, key: 'search-mobile', 'aria-label': 'Search',
+    class: 'search mobile-only', type: 'search', placeholder: withKey('Search…', '/'), value: ui.search, key: 'search-mobile', 'aria-label': 'Search',
     onInput: (e, el) => { ui.search = el.value; render(); },
   });
 
@@ -1071,11 +1072,11 @@ function renderRound() {
       h('button', { class: 'btn', type: 'button', onClick: () => { ui.round.mode = null; render(); } }, 'Cancel')) : null,
       mode ? null : h('div', { class: 'round-actions' },
         due ? btn('done', '✓ Step done', 'x', 'primary') : btn('done', '+ What\'s next?', 'x', 'primary'),
-        btn('add', '+ Add step', 'a'),
+        btn('add', '+ Add step', 's'),
         btn('note', '✎ Note', 'w'),
         due && due.waiting ? btn('chase', 'Chased', 'c') : null,
         btn('ok', '✓ OK for today', 'o', 'ok-btn'),
-        btn('skip', 'Skip →', 's'))));
+        btn('skip', 'Skip →', 'n'))));
 }
 
 // ---------------------------------------------------------------- keyboard
@@ -1084,8 +1085,8 @@ const KEYS = [
   ['↓  ↑', 'Next / previous project'],
   ['x', 'Tick the next step of the open project'],
   ['o', 'OK for today (or undo)'],
-  ['g', 'Start the daily round (then x a w o c s)'],
-  ['a', 'Type a new step'],
+  ['g', 'Start the daily round (then x s w o c n)'],
+  ['s', 'Type a new step'],
   ['w', 'Type in "What did you do today?"'],
   ['n', 'New project'],
   ['/', 'Search'],
@@ -1175,7 +1176,7 @@ function onKey(e) {
   if (isArrow && (ui.view === 'diary' || ui.view === 'settings') && !ui.search) return; // let the page scroll
   const k = e.key;
   if (ui.round) {
-    const map = { x: 'done', a: 'add', w: 'note', o: 'ok', c: 'chase', s: 'skip', ArrowRight: 'skip' };
+    const map = { x: 'done', s: 'add', w: 'note', o: 'ok', c: 'chase', n: 'skip', ArrowRight: 'skip' };
     if (map[k] && !ui.round.done) { e.preventDefault(); roundAct(map[k]); return; }
     if (k === '?') { ui.showKeys = !ui.showKeys; render(); e.preventDefault(); }
     return; // other keys do nothing during the round
@@ -1184,7 +1185,7 @@ function onKey(e) {
   let handled = true;
   if (k === 'ArrowDown' || k === 'j') moveSelection(1);
   else if (k === 'ArrowUp' || k === 'k') moveSelection(-1);
-  else if (ui.view === 'people' && 'xawo'.includes(k)) handled = false; // project keys do nothing on People
+  else if (ui.view === 'people' && 'xswo'.includes(k)) handled = false; // project keys do nothing on People
   else if (k === 'o') {
     if (p && p.state === 'active') toggleOk(p);
     else toast('Pick an active project first (↓ ↑).');
@@ -1199,8 +1200,8 @@ function onKey(e) {
         if (nn) toast(`✓ ${ns.text}. Next: ${nn.text}`, 4500, done.undo);
         else afterTick(p.id, 'detail', done.undo);
       }
-    } else toast(p ? 'No step to tick. Press "a" to add one.' : 'Pick a project first (↓ ↑).');
-  } else if (k === 'a') {
+    } else toast(p ? 'No step to tick. Press "s" to add one.' : 'Pick a project first (↓ ↑).');
+  } else if (k === 's') {
     if (!p) { toast('Pick a project first (↓ ↑).'); return; }
     ui.mobile = 'detail'; render(); focusKey('add-step-' + p.id);
   } else if (k === 'w') {

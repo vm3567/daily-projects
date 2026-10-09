@@ -474,3 +474,14 @@ kbd {
 .week-num { font-size: 11.5px; color: var(--muted); margin-top: 4px; }
 .week-label { font-size: 12px; }
 .week-label.today { font-weight: 700; color: var(--brand); }
+
+/* ---------- key letters shown where they are used (v11) ---------- */
+kbd.hint {
+  margin-left: 7px; min-width: 18px; padding: 0 5px; font-size: 11px; line-height: 17px;
+  background: rgba(15,23,42,.06); border: 1px solid rgba(15,23,42,.12); border-bottom-width: 1px; color: inherit; opacity: .75;
+}
+.btn.primary kbd.hint, .seg.on kbd.hint { background: rgba(255,255,255,.22); border-color: rgba(255,255,255,.45); }
+.menu-item kbd.hint { opacity: .55; }
+.segmented kbd.hint { align-self: center; margin: 0 6px; }
+.h3-hint { text-transform: none; letter-spacing: 0; font-weight: 400; color: #9aa3af; font-size: 12px; }
+.h3-hint kbd.hint { margin-left: 3px; margin-right: 3px; }

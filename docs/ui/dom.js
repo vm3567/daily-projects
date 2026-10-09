@@ -151,3 +151,16 @@ export function fmtLongDay(date) {
 export function fmtTime(iso) {
   return timeFmt.format(new Date(iso));
 }
+
+/** True on a computer (mouse + keyboard); false on phones and tablets. */
+export const HAS_KEYBOARD = typeof matchMedia === 'function' && matchMedia('(hover: hover) and (pointer: fine)').matches;
+
+/** A small key letter shown on a button, e.g. [N]. Nothing on phones. */
+export function keyHint(letter) {
+  return HAS_KEYBOARD ? h('kbd', { class: 'hint', 'aria-hidden': 'true' }, letter) : null;
+}
+
+/** Placeholder text with its key, e.g. "Search… (/)". Plain text on phones. */
+export function withKey(text, letter) {
+  return HAS_KEYBOARD ? `${text}  (press ${letter})` : text;
+}
