@@ -1,7 +1,7 @@
 // The right column: everything about one project, all editable in place.
 
 import { h, fmtDay, fmtTime, fmtSize, keyHint, withKey, HAS_KEYBOARD } from './dom.js';
-import { dotColour, todayIndia, isOverdue, indiaDate, waitingDays, lastWorkDate, nextStep, stepLinkedTo, personStatus } from '../rules.js';
+import { dotColour, todayIndia, isOverdue, indiaDate, waitingDays, lastWorkDate, nextStep, stepLinkedTo, personStatus, minutesBetween, fmtMinutes, weekStart } from '../rules.js';
 import { WAIT_RED_DAYS } from '../config.js';
 import { newId, PRIORITIES, cleanUrl } from '../ops.js';
 import { uploadFiles, openFile, uploadBlob } from './files.js';
@@ -408,6 +408,43 @@ function notesBox(ctx, p) {
     h('div', { class: 'save-row', key: 'notes-sign-' + p.id }, sign));
 }
 
+/** ⏱ Today 1h 20m · This week 4h · Total 12h  · + Add time · entries */
+function timeLine(ctx, p, today) {
+  const { store, ui } = ctx;
+  const timer = store.view.data.timer;
+  const logs = p.timeLogs || [];
+  if (!logs.length && !(timer && timer.projectId === p.id)) {
+    return h('div', { class: 'time-line', key: 'time-' + p.id },
+      h('button', { class: 'link small', onClick: () => addTimePrompt(ctx, p) }, '⏱ + Add time'));
+  }
+  const total = minutesBetween(p, '0000-01-01', today, timer);
+  const parts = [
+    `Today ${fmtMinutes(minutesBetween(p, today, today, timer))}`,
+    `This week ${fmtMinutes(minutesBetween(p, weekStart(today), today, timer))}`,
+    `Total ${fmtMinutes(total)}`,
+  ];
+  const open = ui.showTime === p.id;
+  return h('div', { class: 'time-line', key: 'time-' + p.id },
+    h('span', null, `⏱ ${parts.join(' · ')}`),
+    h('button', { class: 'link small', onClick: () => addTimePrompt(ctx, p) }, '+ Add time'),
+    logs.length ? h('button', { class: 'link small', onClick: () => { ui.showTime = open ? null : p.id; ctx.render(); } }, open ? 'Hide entries' : 'Entries') : null,
+    open ? h('ul', { class: 'time-entries' }, [...logs].sort((a, b) => (a.start < b.start ? 1 : -1)).slice(0, 15).map((t) => h('li', { key: 'tl-' + t.id },
+      h('span', null, `${fmtDay(indiaDate(t.start))} ${t.manual ? '' : fmtTime(t.start)}`),
+      h('strong', null, fmtMinutes(t.minutes)),
+      t.manual ? h('span', { class: 'muted small' }, 'added') : null,
+      t.capped ? h('span', { class: 'tag late' }, 'cut to 10 h') : null,
+      h('button', { class: 'icon', title: 'Remove this entry', onClick: () => ctx.act('removeTime', { projectId: p.id, logId: t.id }, `Removed ${fmtMinutes(t.minutes)}`) }, '🗑')))) : null);
+}
+
+function addTimePrompt(ctx, p) {
+  const v = prompt(`Add time to "${p.name}" (worked today, not timed).\n\nMinutes, or hours like 1.5h:`, '30');
+  if (v === null) return;
+  const txt = v.trim().toLowerCase();
+  const minutes = txt.endsWith('h') ? Math.round(parseFloat(txt) * 60) : Math.round(parseFloat(txt));
+  if (!(minutes > 0)) { ctx.toast('Type a number of minutes, like 45, or hours like 1.5h'); return; }
+  ctx.act('addTime', { projectId: p.id, minutes }, `⏱ Added ${fmtMinutes(minutes)} to ${p.name}`);
+}
+
 /** ← Back · ‹ previous · next › (in the list you are in). Keys: ⌫, ← → ; phone: swipe. */
 function navBar(ctx, p) {
   const prev = ctx.neighbourProject(-1);
@@ -456,7 +493,12 @@ function stateButtons(ctx, p) {
     const today = todayIndia();
     const green = dotColour(p, today) === 'green';
     const okOnly = p.okDate === today && lastWorkDate(p) !== today;
+    const t = store.view.data.timer;
+    const running = t && t.projectId === p.id;
     return [
+      running
+        ? h('button', { class: 'btn timer-on', title: 'Stop the timer', onClick: () => ctx.stopTimer() }, `⏸ ${ctx.clockText(t.start)}`)
+        : h('button', { class: 'btn', title: 'Start timing your work on this project', onClick: () => ctx.startTimer(p) }, '▶ Start'),
       !green ? h('button', { class: 'btn ok-btn', title: 'Looked at it, no more work today (key: o)', onClick: () => ctx.toggleOk(p) }, '✓ OK for today', keyHint('O')) : null,
       okOnly ? h('button', { class: 'btn small', title: 'Undo OK for today', onClick: () => ctx.toggleOk(p) }, 'Undo OK') : null,
       h('button', { class: 'btn', onClick: () => ctx.act('pause', { projectId: p.id }, `Paused: ${p.name}`) }, 'Pause'),
@@ -547,6 +589,7 @@ export function renderDetail(ctx) {
       h('div', { class: 'state-buttons' }, stateButtons(ctx, p))),
     navBar(ctx, p),
     metaLine(ctx, p, today),
+    timeLine(ctx, p, today),
     peopleChips(ctx, p),
     p.state !== 'active' ? h('p', { class: 'banner' }, p.state === 'paused' ? 'This project is paused. It is hidden from Today.' : 'This project is finished.') : null,
 

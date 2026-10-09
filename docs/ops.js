@@ -589,6 +589,48 @@ const handlers = {
     return true;
   },
 
+  // ---------- Time log ----------
+  // One timer at a time (data.timer). Starting another project stops the running one first.
+
+  startTimer(state, op, a) {
+    const p = findProject(state.data, a.projectId);
+    if (!p || p.state !== 'active') return false;
+    const t = state.data.timer;
+    if (t && t.projectId === p.id) return false; // already running here
+    if (t) closeTimer(state, op, op.at);
+    state.data.timer = { projectId: p.id, start: op.at, id: op.id };
+    touch(p, op);
+    return true;
+  },
+
+  stopTimer(state, op) {
+    if (!state.data.timer) return false;
+    closeTimer(state, op, op.at);
+    return true;
+  },
+
+  /** Time worked but not timed: minutes on a day (default today). */
+  addTime(state, op, a) {
+    const p = findProject(state.data, a.projectId);
+    const minutes = Math.round(Number(a.minutes));
+    if (!p || !(minutes > 0) || minutes > 24 * 60) return false;
+    const day = cleanDate(a.day) || indiaDate(op.at);
+    const start = a.day ? new Date(`${day}T12:00:00+05:30`).toISOString() : new Date(Date.parse(op.at) - minutes * 60000).toISOString();
+    (p.timeLogs ||= []).push({ id: op.id, start, minutes, manual: true });
+    touch(p, op);
+    addEvent(state, op, p, 'time_added', `${minutes} min`);
+    return true;
+  },
+
+  removeTime(state, op, a) {
+    const p = findProject(state.data, a.projectId);
+    const i = p && p.timeLogs ? p.timeLogs.findIndex((x) => x.id === a.logId) : -1;
+    if (i < 0) return false;
+    p.timeLogs.splice(i, 1);
+    touch(p, op);
+    return true;
+  },
+
   // ---------- Settings and AI ----------
   setAiProvider(state, op, a) {
     if (a.provider !== 'claude' && a.provider !== 'gemini') return false;
@@ -626,9 +668,28 @@ const handlers = {
   },
 };
 
+export const TIMER_MAX_MINUTES = 10 * 60; // a timer left running is cut to 10 hours
+
+/** Stop the running timer at `endIso` and log the time on its project. */
+function closeTimer(state, op, endIso) {
+  const t = state.data.timer;
+  state.data.timer = null;
+  if (!t) return;
+  const p = findProject(state.data, t.projectId);
+  if (!p) return;
+  let minutes = Math.round((Date.parse(endIso) - Date.parse(t.start)) / 60000);
+  if (!(minutes > 0)) return; // under a minute: nothing to log
+  const capped = minutes > TIMER_MAX_MINUTES;
+  if (capped) minutes = TIMER_MAX_MINUTES;
+  (p.timeLogs ||= []).push({ id: t.id, start: t.start, minutes, ...(capped ? { capped: true } : {}) });
+  touch(p, op);
+  addEvent(state, op, p, 'time_logged', `${minutes} min${capped ? ' (cut to 10 h)' : ''}`);
+}
+
 function setState(state, op, a, from, to, kind) {
   const p = findProject(state.data, a.projectId);
   if (!p || p.state !== from) return false;
+  if (to !== 'active' && state.data.timer && state.data.timer.projectId === p.id) closeTimer(state, op, op.at);
   p.state = to;
   p.stateChangedAt = op.at;
   if (to === 'active') p.activeSince = indiaDate(op.at);

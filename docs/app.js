@@ -12,7 +12,7 @@ import { GitHubRepo } from './github.js';
 import { MockRepo } from './mockrepo.js';
 import { device } from './device.js';
 import { DATA_OWNER, DATA_REPO, DATA_BRANCH, REFRESH_MS, AI_DAILY_LIMIT, BRIEF_CLAIM_MINUTES, WAIT_RED_DAYS, NO_WORK_NOTE_DAYS } from './config.js';
-import { dotColour, nextStep, todayIndia, isSundayIndia, colourCounts, isOverdue, indiaDate, waitingDays, daysWithoutWork, dayScore, greenStreak, addDays, monthOf } from './rules.js';
+import { dotColour, nextStep, todayIndia, isSundayIndia, colourCounts, isOverdue, indiaDate, waitingDays, daysWithoutWork, dayScore, greenStreak, addDays, monthOf, fmtMinutes } from './rules.js';
 import { newId, clone, opMonth } from './ops.js';
 import * as ai from './ai.js';
 
@@ -112,6 +112,9 @@ const ctx = {
   aiBreakdown: (p, goal) => runAi(p, 'breakdown', goal),
   hasAiKey: () => !!(store && aiReady().key),
   toggleOk: (p) => toggleOk(p),
+  startTimer: (p) => startTimer(p),
+  stopTimer: () => stopTimer(),
+  clockText: (iso) => clockText(iso),
   act: (type, args, message) => act(type, args, message),
   actMany: (projectId, steps, message) => actMany(projectId, steps, message),
   chase: (p, s) => chase(p, s),
@@ -843,10 +846,10 @@ function renderListColumn() {
     onInput: (e, el) => { ui.search = el.value; clearTimeout(searchTimer); searchTimer = setTimeout(render, 120); },
   });
 
-  if (ui.view === 'diary' && !ui.search) return h('div', { class: 'col-inner' }, head, renderDiary());
-  if (ui.view === 'settings' && !ui.search) return h('div', { class: 'col-inner' }, head, renderSettings());
-  if (ui.view === 'dashboard' && !ui.search) return h('div', { class: 'col-inner' }, head, renderDashboard(ctx));
-  if (ui.view === 'people' && !ui.search) return h('div', { class: 'col-inner' }, head, renderPeopleList(ctx));
+  if (ui.view === 'diary' && !ui.search) return h('div', { class: 'col-inner' }, head, timerStrip(), renderDiary());
+  if (ui.view === 'settings' && !ui.search) return h('div', { class: 'col-inner' }, head, timerStrip(), renderSettings());
+  if (ui.view === 'dashboard' && !ui.search) return h('div', { class: 'col-inner' }, head, timerStrip(), renderDashboard(ctx));
+  if (ui.view === 'people' && !ui.search) return h('div', { class: 'col-inner' }, head, timerStrip(), renderPeopleList(ctx));
 
   const list = sortForView(visibleProjects(), today);
   const showSort = !ui.search && ui.view !== 'paused' && ui.view !== 'finished' && list.length > 1;
@@ -855,6 +858,7 @@ function renderListColumn() {
       : 'No projects yet. Add your first one with "+ New project".') : null;
   return h('div', { class: 'col-inner' },
     head,
+    timerStrip(),
     mobileSearch,
     ui.view === 'today' && !ui.search ? celebration() : null,
     ui.view === 'today' && !ui.search ? progressLine(today) : null,
@@ -1274,6 +1278,40 @@ function renderRound() {
         btn('skip', 'Skip →', 'n'))));
 }
 
+// ---------------------------------------------------------------- time log
+
+/** "0:23" style clock for the running timer. */
+function clockText(startIso) {
+  const m = Math.max(0, Math.floor((Date.now() - Date.parse(startIso)) / 60000));
+  return `${Math.floor(m / 60)}:${String(m % 60).padStart(2, '0')}`;
+}
+
+function startTimer(p) {
+  const running = store.view.data.timer;
+  const other = running && running.projectId !== p.id && store.view.data.projects.find((x) => x.id === running.projectId);
+  if (store.dispatch('startTimer', { projectId: p.id })) toast(other ? `⏱ Started ${p.name} (stopped ${other.name})` : `⏱ Started: ${p.name}`, 2500);
+}
+
+function stopTimer() {
+  const t = store.view.data.timer;
+  if (!t) return;
+  const p = store.view.data.projects.find((x) => x.id === t.projectId);
+  const mins = Math.round((Date.now() - Date.parse(t.start)) / 60000);
+  if (store.dispatch('stopTimer', {})) toast(mins >= 1 ? `⏸ ${p ? p.name : 'Timer'}: ${fmtMinutes(Math.min(mins, 600))} logged` : 'Timer stopped (under a minute, not logged)', 3000);
+}
+
+/** The running timer, shown at the top of every screen so it is never forgotten. */
+function timerStrip() {
+  const t = store && store.view && store.view.data.timer;
+  if (!t) return null;
+  const p = store.view.data.projects.find((x) => x.id === t.projectId);
+  return h('div', { class: 'timer-strip', key: 'timer-strip' },
+    h('span', { class: 'timer-dot' }),
+    h('button', { class: 'link timer-name', onClick: () => p && ctx.openProject(p.id) }, p ? p.name : 'Timer'),
+    h('span', { class: 'timer-clock' }, clockText(t.start)),
+    h('button', { class: 'btn small', onClick: stopTimer }, '⏸ Stop'));
+}
+
 // ---------------------------------------------------------------- navigation: back, next / previous
 
 function pushNav() {
@@ -1616,6 +1654,7 @@ function start() {
   store.init().then(() => { render(); shareLocalKeys(); markShownOpened(); makeBrief(); recordPastScores(); });
   if (started) return;
   started = true;
+  setInterval(() => { if (store && store.view && store.view.data.timer && document.visibilityState === 'visible') render(); }, 20000);
   let shownDay = todayIndia();
   setInterval(() => {
     if (document.visibilityState === 'visible') doRefresh(false);

@@ -234,3 +234,32 @@ export function greenStreak(scores, todayScore, today = todayIndia()) {
   }
   return n;
 }
+
+// ---------- Time log ----------
+
+/** Minutes logged on a project between two India dates (inclusive). Counts a running timer too. */
+export function minutesBetween(project, fromDay, toDay, timer = null, now = new Date()) {
+  let m = 0;
+  for (const t of project.timeLogs || []) {
+    const d = indiaDate(t.start);
+    if (d >= fromDay && d <= toDay) m += t.minutes;
+  }
+  if (timer && timer.projectId === project.id) {
+    const d = indiaDate(timer.start);
+    if (d >= fromDay && d <= toDay) m += Math.max(0, Math.min(600, Math.round((now - Date.parse(timer.start)) / 60000)));
+  }
+  return m;
+}
+
+/** "1h 20m", "45m", "0m". */
+export function fmtMinutes(m) {
+  const h = Math.floor(m / 60);
+  const r = Math.round(m % 60);
+  return h ? (r ? `${h}h ${r}m` : `${h}h`) : `${r}m`;
+}
+
+/** Monday of the India week that contains `day`. */
+export function weekStart(day) {
+  const dow = (new Date(day + 'T00:00:00Z').getUTCDay() + 6) % 7; // Monday = 0
+  return addDays(day, -dow);
+}

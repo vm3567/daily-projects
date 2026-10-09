@@ -615,3 +615,19 @@ kbd.hint {
 /* ---------- update about any step (v19) ---------- */
 .about-pick { margin-left: auto; font-size: 12.5px; color: #475569; display: inline-flex; align-items: center; gap: 4px; }
 .about-select { max-width: 220px; padding: 3px 6px; font-size: 12.5px; }
+
+/* ---------- time log (v20) ---------- */
+.timer-strip { display: flex; align-items: center; gap: 8px; margin: 10px 14px 0; padding: 8px 12px; border-radius: 10px; background: #fef2f2; border: 1px solid #fecaca; }
+.timer-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--red); animation: blink 1.6s infinite; flex: none; }
+@keyframes blink { 50% { opacity: .25; } }
+.timer-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; color: #991b1b; }
+.timer-clock { font-variant-numeric: tabular-nums; font-weight: 700; color: #991b1b; }
+.btn.timer-on { color: #991b1b; border-color: #fecaca; background: #fef2f2; font-variant-numeric: tabular-nums; }
+.time-line { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 0 0 8px 24px; font-size: 13px; color: #475569; }
+.time-entries { flex: 1 1 100%; }
+.time-entries li { display: flex; align-items: center; gap: 10px; padding: 3px 0; }
+@media (prefers-reduced-motion: reduce) { .timer-dot { animation: none; } }
+.time-total strong { font-size: 26px; }
+.time-groups { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 8px; }
+.dash-bars li span.muted { white-space: nowrap; }
+.dash-bars li { grid-template-columns: minmax(0, 1.2fr) 1fr 52px; }

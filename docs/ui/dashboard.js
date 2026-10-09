@@ -1,7 +1,7 @@
 // Dashboard: streaks, green days calendar, this week's numbers, what needs attention.
 
 import { h, fmtDay } from './dom.js';
-import { dotColour, dayScore, todayIndia, addDays, monthOf, daysWithoutWork, isOverdue, indiaDate, initials } from '../rules.js';
+import { dotColour, dayScore, todayIndia, addDays, monthOf, daysWithoutWork, isOverdue, indiaDate, initials, minutesBetween, fmtMinutes, weekStart as mondayOf } from '../rules.js';
 import { peopleByFollowUp } from './people.js';
 import { NO_WORK_NOTE_DAYS } from '../config.js';
 
@@ -119,6 +119,18 @@ export function renderDashboard(ctx) {
   // 4. Finished projects shelf
   const shelf = data.projects.filter((p) => p.state === 'finished').sort((a, b) => (a.stateChangedAt < b.stateChangedAt ? 1 : -1));
 
+  // Time this week (Monday to today), by group and by project, and last week's total
+  const wk = mondayOf(today);
+  const lastWkStart = addDays(wk, -7);
+  const lastWkEnd = addDays(wk, -1);
+  const timeRows = data.projects.map((p) => ({ p, m: minutesBetween(p, wk, today, data.timer) })).filter((x) => x.m > 0).sort((a, b) => b.m - a.m);
+  const timeTotal = timeRows.reduce((n, x) => n + x.m, 0);
+  const lastTotal = data.projects.reduce((n, p) => n + minutesBetween(p, lastWkStart, lastWkEnd), 0);
+  const byGroup = new Map();
+  for (const { p, m } of timeRows) byGroup.set(p.groupId, (byGroup.get(p.groupId) || 0) + m);
+  const groupRows = [...byGroup.entries()].map(([gid, m]) => ({ name: (data.groups.find((g) => g.id === gid) || {}).name || 'Other', m })).sort((a, b) => b.m - a.m);
+  const maxTime = timeRows.length ? timeRows[0].m : 1;
+
   // Most worked projects this month
   const monthEvents = (history[monthOf(today)] || []).filter((e) => e.projectId && ['step_ticked', 'note_added', 'step_added'].includes(e.kind));
   const counts = new Map();
@@ -180,6 +192,21 @@ export function renderDashboard(ctx) {
       h('section', { class: 'dash-card' }, h('h3', null, 'This week vs last week'),
         h('ul', { class: 'compare' }, compare.map(([label, now, before]) => h('li', { key: 'cmp-' + label },
           h('span', null, label), h('span', null, h('strong', null, String(now)), ' ', trend(now, before))))))),
+
+    h('section', { class: 'dash-card', key: 'dash-time' },
+      h('h3', null, 'Time this week'),
+      timeTotal ? h('div', null,
+        h('div', { class: 'time-total' }, h('strong', null, fmtMinutes(timeTotal)),
+          lastTotal ? h('span', { class: timeTotal >= lastTotal ? 'up' : 'down' }, timeTotal >= lastTotal ? ` ↑ ${fmtMinutes(timeTotal - lastTotal)} more than last week` : ` ↓ ${fmtMinutes(lastTotal - timeTotal)} less than last week`) : h('span', { class: 'muted small' }, ' since Monday')),
+        h('div', { class: 'time-groups' }, groupRows.map((g) => h('span', { class: 'tag', key: 'tg-' + g.name }, `${g.name}: ${fmtMinutes(g.m)}`))),
+        h('ul', { class: 'dash-bars' }, timeRows.slice(0, 8).map(({ p, m }) => {
+          const fill = h('div', { class: 'dash-bar-fill' });
+          fill.style.width = `${Math.max(6, Math.round((m / maxTime) * 100))}%`; // style object (allowed by the page's safety rules)
+          return h('li', { key: 'tm-' + p.id },
+            h('button', { class: 'link', onClick: () => ctx.openProject(p.id) }, p.name),
+            h('div', { class: 'dash-bar' }, fill), h('span', { class: 'muted small' }, fmtMinutes(m)));
+        })))
+        : h('p', { class: 'muted small' }, 'No time logged this week yet. Press ▶ Start in a project to time your work.')),
 
     h('div', { class: 'dash-grid', key: 'dash-alltime' },
       h('section', { class: 'dash-card' }, h('h3', null, 'All time'),

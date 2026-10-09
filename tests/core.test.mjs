@@ -356,3 +356,38 @@ test('@name matching follows people added or renamed later', async () => {
   people[0].name = 'Ravi Kumar';
   assert.deepEqual([...mentionedPeople('ask @Ravi Kumar', people)], ['a']);
 });
+
+test('time log: start, stop, switching projects, 10-hour cut, manual time, totals', async () => {
+  const { minutesBetween, fmtMinutes, weekStart } = await import('../docs/rules.js');
+  const s = withProject('2026-10-01');
+  applyOp(s, op('createProject', { projectId: 'p2', name: 'B' }, '2026-10-01'));
+  applyOp(s, op('startTimer', { projectId: 'p1' }, '2026-10-05', '09:00:00'));
+  assert.equal(applyOp(s, op('startTimer', { projectId: 'p1' }, '2026-10-05', '09:10:00')), false, 'already running');
+  applyOp(s, op('startTimer', { projectId: 'p2' }, '2026-10-05', '09:45:00')); // stops p1 first
+  applyOp(s, op('stopTimer', {}, '2026-10-05', '10:15:00'));
+  const p1 = s.data.projects.find((p) => p.id === 'p1');
+  const p2 = s.data.projects.find((p) => p.id === 'p2');
+  assert.equal(p1.timeLogs[0].minutes, 45);
+  assert.equal(p2.timeLogs[0].minutes, 30);
+  assert.equal(s.data.timer, null);
+  // forgotten timer is cut to 10 hours
+  applyOp(s, op('startTimer', { projectId: 'p1' }, '2026-10-06', '08:00:00'));
+  applyOp(s, op('stopTimer', {}, '2026-10-07', '08:00:00'));
+  assert.equal(p1.timeLogs[1].minutes, 600);
+  assert.ok(p1.timeLogs[1].capped);
+  // manual time
+  applyOp(s, op('addTime', { projectId: 'p1', minutes: 90 }, '2026-10-07', '18:00:00'));
+  assert.equal(minutesBetween(p1, '2026-10-05', '2026-10-05'), 45);
+  assert.equal(minutesBetween(p1, '2026-10-01', '2026-10-31'), 45 + 600 + 90);
+  assert.equal(fmtMinutes(135), '2h 15m');
+  assert.equal(fmtMinutes(45), '45m');
+  assert.equal(weekStart('2026-10-09'), '2026-10-05', 'Friday 9 Oct is in the week of Monday 5 Oct');
+  // pausing a project stops its timer
+  applyOp(s, op('startTimer', { projectId: 'p2' }, '2026-10-08', '09:00:00'));
+  applyOp(s, op('pause', { projectId: 'p2' }, '2026-10-08', '09:20:00'));
+  assert.equal(s.data.timer, null);
+  assert.equal(p2.timeLogs[1].minutes, 20);
+  // remove an entry
+  applyOp(s, op('removeTime', { projectId: 'p1', logId: p1.timeLogs[2].id }, '2026-10-08'));
+  assert.equal(p1.timeLogs.length, 2);
+});

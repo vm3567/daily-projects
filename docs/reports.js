@@ -1,7 +1,7 @@
 // Pure logic behind search, the Diary, Today's summary and the backup file.
 // No screen code here, so it is covered by automatic tests (tests/reports.test.mjs).
 
-import { indiaDate, monthOf, nextStep, personStatus } from './rules.js';
+import { indiaDate, monthOf, nextStep, personStatus, minutesBetween, fmtMinutes } from './rules.js';
 
 /** Search: project name, notes, steps (text, note, waiting on) and work notes. `q` is lower-case. */
 export function projectMatches(p, q) {
@@ -63,6 +63,8 @@ export function summaryText(data, history, today, dateText) {
   const entry = (pid) => { if (!byProject.has(pid)) byProject.set(pid, { done: [], notes: [] }); return byProject.get(pid); };
   for (const e of events) if (e.kind === 'step_ticked') entry(e.projectId).done.push(e.detail);
   for (const p of data.projects) {
+    const mins = minutesBetween(p, today, today, data.timer);
+    if (mins > 0) entry(p.id).mins = mins;
     for (const n of p.workNotes) {
       if (indiaDate(n.createdAt) !== today) continue;
       const st = n.stepId && p.steps.find((s) => s.id === n.stepId);
@@ -74,9 +76,9 @@ export function summaryText(data, history, today, dateText) {
   const blocks = [];
   for (const [pid, x] of byProject) {
     const p = data.projects.find((q) => q.id === pid);
-    if (!p || (!x.done.length && !x.notes.length)) continue;
+    if (!p || (!x.done.length && !x.notes.length && !x.mins)) continue;
     doneCount += x.done.length;
-    const b = [`• ${p.name}`];
+    const b = [`• ${p.name}${x.mins ? `  (⏱ ${fmtMinutes(x.mins)})` : ''}`];
     for (const d of x.done) b.push(`   ✅ ${d}`);
     for (const n of x.notes) b.push(`   📝 ${n}`);
     const ns = p.state === 'active' && nextStep(p, today, { dueOnly: true });

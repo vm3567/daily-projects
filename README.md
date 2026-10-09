@@ -73,6 +73,15 @@ Also: each red/yellow row has a one-tap **✓ OK** (or **Chased** when waiting),
 
 ---
 
+## Time log
+
+- In a project press **▶ Start** — it becomes **⏸ 0:23**. The running timer also shows at the top of every screen; tap **⏸ Stop** there.
+- Starting another project stops the first one. Pausing or finishing a project stops its timer. A timer left on is cut to 10 hours.
+- Forgot to time it? **+ Add time** (minutes, or hours like 1.5h). **Entries** shows each one with 🗑 (Undo available).
+- Each project shows **Today · This week · Total**. The **Dashboard** shows **Time this week** by group and project, compared with last week. **Today's summary** shows the time per project.
+
+---
+
 ## Updating several steps
 
 - Every open step has a **📝** button: tap it and **Today's update** is about that step ("📝 About: …").
