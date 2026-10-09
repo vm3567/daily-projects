@@ -81,7 +81,7 @@ export class Store extends EventTarget {
     await this.ensureMonths(base, keepMonths);
     this.base = base;
     this.recompute();
-    if (this.status === 'loading' || this.status === 'offline' || this.status === 'auth') this.setStatus('saved');
+    if (['loading', 'offline', 'auth', 'error'].includes(this.status) && !this.saving) this.setStatus(this.pending.length ? 'saving' : 'saved');
     this.emit('change', { reason: 'load' });
   }
 
@@ -114,7 +114,7 @@ export class Store extends EventTarget {
 
   // ---------- changes ----------
   canEdit() {
-    return this.base && this.status !== 'offline' && this.status !== 'auth' && this.status !== 'loading'
+    return !!this.base && this.status !== 'offline' && this.status !== 'auth' && this.status !== 'loading'
       && (typeof navigator === 'undefined' || navigator.onLine !== false);
   }
 
@@ -126,7 +126,7 @@ export class Store extends EventTarget {
     }
     const op = makeOp(type, args);
     const ok = applyOp(this.view, op);
-    if (!ok) return null; // nothing changed
+    if (!ok) { this.emit('change', { reason: 'noop' }); return null; } // redraw so controls show the real data
     this.pending.push(op);
     this.persistPending();
     this.emit('change', { reason: 'edit', op });
@@ -217,7 +217,11 @@ export class Store extends EventTarget {
   async refresh(force = false) {
     if (!this.base) return this.init();
     if (this.pending.length) {
-      if (force) await this.flush();
+      // Waiting changes: try again if the last save failed (or when ↻ is tapped).
+      if (force || ((this.status === 'offline' || this.status === 'error') && !this.saving)) {
+        if (this.status === 'offline') this.setStatus('saving');
+        await this.flush();
+      }
       return;
     }
     if (this.saving) return;

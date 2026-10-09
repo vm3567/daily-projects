@@ -2,7 +2,7 @@
 // See PLAN.md sections 3, 6-9, 11, 13, 15.
 
 import { h, fmtDay, fmtTime, fmtSize } from './dom.js';
-import { dotColour, todayIndia, isOverdue } from '../rules.js';
+import { dotColour, todayIndia, isOverdue, indiaDate } from '../rules.js';
 import { newId, PRIORITIES, cleanUrl } from '../ops.js';
 import { uploadFiles, openFile } from './files.js';
 
@@ -44,7 +44,7 @@ function stepRow(ctx, p, s) {
         onChange: () => store.dispatch(s.done ? 'untickStep' : 'tickStep', { projectId: p.id, stepId: s.id }),
       }),
       s.done
-        ? h('span', { class: 'step-text' }, s.text, h('span', { class: 'muted small' }, ` · ${fmtDay(s.doneAt?.slice(0, 10))}`))
+        ? h('span', { class: 'step-text' }, s.text, h('span', { class: 'muted small' }, ` · ${fmtDay(s.doneAt ? indiaDate(s.doneAt) : '')}`))
         : autoField('input', { class: 'step-text', value: s.text, 'aria-label': 'Step', key: 'st-' + s.id },
           (v) => store.dispatch('setStepField', { projectId: p.id, stepId: s.id, field: 'text', value: v })),
       ...tags,
@@ -130,8 +130,9 @@ function linksBlock(ctx, p) {
             e.preventDefault();
             const f = e.target.elements;
             if (!cleanUrl(f.url.value)) { ctx.toast('Links must start with http:// or https://'); return; }
-            store.dispatch('editLink', { projectId: p.id, linkId: l.id, title: f.title.value, url: f.url.value });
-            ui.editLink = null; ctx.render();
+            if (store.dispatch('editLink', { projectId: p.id, linkId: l.id, title: f.title.value, url: f.url.value })) {
+              ui.editLink = null; ctx.render();
+            }
           },
         },
         h('input', { name: 'title', value: l.title, placeholder: 'Title' }),
@@ -155,8 +156,9 @@ function linksBlock(ctx, p) {
         e.preventDefault();
         const f = e.target.elements;
         if (!cleanUrl(f.url.value)) { ctx.toast('Links must start with http:// or https://'); return; }
-        store.dispatch('addLink', { projectId: p.id, linkId: newId(), title: f.title.value, url: f.url.value });
-        f.title.value = ''; f.url.value = '';
+        if (store.dispatch('addLink', { projectId: p.id, linkId: newId(), title: f.title.value, url: f.url.value })) {
+          f.title.value = ''; f.url.value = '';
+        }
       },
     },
     h('input', { name: 'title', placeholder: 'Link title', key: 'nl-title' }),
@@ -201,7 +203,7 @@ function historyBlock(ctx, p) {
   const older = store.availableMonths().find((m) => !loaded.has(m));
   return h('div', null,
     h('ul', { class: 'history' }, shown.map((e) => h('li', { key: 'h-' + e.id },
-      h('span', { class: 'muted small' }, `${fmtDay(e.at.slice(0, 10))} ${fmtTime(e.at)}`),
+      h('span', { class: 'muted small' }, `${fmtDay(indiaDate(e.at))} ${fmtTime(e.at)}`),
       ' ', h('strong', null, HISTORY_WORDS[e.kind] || e.kind), e.detail ? ` — ${e.detail}` : ''))),
     events.length > shown.length
       ? h('button', { class: 'btn small', onClick: () => { ui.historyLimit = (ui.historyLimit || 30) + 50; ctx.render(); } }, 'Show more')
@@ -307,7 +309,7 @@ export function renderDetail(ctx) {
       h('input', { name: 'note', placeholder: 'A short note, then press Enter', key: 'wn-' + p.id, enterkeyhint: 'done' }),
       h('button', { class: 'btn small', type: 'submit' }, 'Save')),
       h('ul', { class: 'notes' }, p.workNotes.slice(0, ui.notesLimit || 10).map((n) => h('li', { key: 'n-' + n.id },
-        h('span', { class: 'muted small' }, `${fmtDay(n.createdAt.slice(0, 10))} ${fmtTime(n.createdAt)}`),
+        h('span', { class: 'muted small' }, `${fmtDay(indiaDate(n.createdAt))} ${fmtTime(n.createdAt)}`),
         autoField('input', { value: n.text, 'aria-label': 'Work note', key: 'nt-' + n.id },
           (v) => { if (v.trim()) store.dispatch('editWorkNote', { projectId: p.id, noteId: n.id, text: v }); }),
         h('button', {

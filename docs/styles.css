@@ -258,7 +258,7 @@ label.late { color: var(--red); }
     padding-top: env(safe-area-inset-top);
   }
   .menu-open #menu { transform: none; }
-  .menu-open .scrim { display: block; position: fixed; inset: 0; background: rgba(0,0,0,.3); z-index: 20; }
+  .menu-open .scrim { display: block; position: fixed; inset: 0; background: rgba(0,0,0,.3); z-index: 20; cursor: pointer; }
   #menu .search { display: none; }
   .icon.tiny { visibility: visible; }
   .menu-btn { display: inline-block; }

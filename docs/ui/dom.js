@@ -70,8 +70,8 @@ export function morph(from, to) {
   from.__on = to.__on;
   // form values: never touch the box being typed in
   const focused = from === document.activeElement;
-  if ('__value' in to || from.nodeName === 'TEXTAREA' || (from.nodeName === 'INPUT' && !['checkbox', 'radio', 'file', 'button'].includes(from.type))) {
-    const v = to.__value ?? '';
+  if ('__value' in to) { // only boxes the app controls; never wipe a draft the user is typing
+    const v = to.__value;
     if (!focused && from.value !== v) from.value = v;
     from.__value = v;
   }

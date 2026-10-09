@@ -7,8 +7,8 @@ import { Store } from './store.js';
 import { GitHubRepo } from './github.js';
 import { MockRepo } from './mockrepo.js';
 import { device } from './device.js';
-import { DATA_OWNER, DATA_REPO, DATA_BRANCH, REFRESH_MS, AI_DAILY_LIMIT } from './config.js';
-import { dotColour, nextStep, todayIndia, isSundayIndia, colourCounts, isOverdue } from './rules.js';
+import { DATA_OWNER, DATA_REPO, DATA_BRANCH, REFRESH_MS, AI_DAILY_LIMIT, BRIEF_CLAIM_MINUTES } from './config.js';
+import { dotColour, nextStep, todayIndia, isSundayIndia, colourCounts, isOverdue, indiaDate } from './rules.js';
 import { newId } from './ops.js';
 import * as ai from './ai.js';
 
@@ -87,6 +87,10 @@ async function runAi(p, mode, goal = '') {
   render();
 }
 
+function claimIsFresh(b) {
+  return b.status === 'pending' && (Date.now() - Date.parse(b.claimedAt)) / 60000 < BRIEF_CLAIM_MINUTES;
+}
+
 function briefKind() {
   return isSundayIndia() ? 'weekly' : 'morning';
 }
@@ -94,10 +98,11 @@ function briefKind() {
 /** Make today's Morning plan (or Sunday's Weekly review) if no device has made it yet. */
 async function makeBrief(force = false) {
   if (!store || !store.base || ui.brief.busy) return;
+  if (!force && ui.brief.error) return; // after a failure, only retry when ↻ is tapped (saves AI uses)
   const kind = briefKind();
   const today = todayIndia();
   const b = store.view.data.aiBriefs[kind];
-  if (!force && b && b.date === today) return;
+  if (!force && b && b.date === today && (b.status === 'ready' || claimIsFresh(b))) return;
   const { provider, key } = aiReady();
   if (!key) return;
   if (!store.view.data.projects.some((p) => p.state === 'active')) return;
@@ -253,8 +258,8 @@ function renderBrief() {
   const ready = b && b.date === today && b.status === 'ready' && b.content;
   const { key } = aiReady();
   let body;
-  if (ui.brief.busy || (b && b.date === today && b.status === 'pending')) body = h('p', { class: 'muted' }, 'Making today\'s plan…');
-  else if (ui.brief.error) body = h('p', { class: 'error' }, ui.brief.error);
+  if (ui.brief.error && !ui.brief.busy) body = h('p', { class: 'error' }, `${ui.brief.error} Tap ↻ to try again.`);
+  else if (ui.brief.busy || (b && b.date === today && claimIsFresh(b))) body = h('p', { class: 'muted' }, 'Making today\'s plan…');
   else if (!ready) {
     body = h('p', { class: 'muted' }, key
       ? 'No plan yet. Tap ↻ to make one.'
@@ -378,16 +383,16 @@ function renderDiary() {
   for (const e of Object.values(history).flat()) {
     if (!['step_ticked', 'paused', 'unpaused', 'finished', 'reopened'].includes(e.kind)) continue;
     const words = { step_ticked: '✓', paused: 'Paused', unpaused: 'Unpaused', finished: 'Finished', reopened: 'Reopened' }[e.kind];
-    add(e.at.slice(0, 10), { at: e.at, projectId: e.projectId, text: `${words} ${e.kind === 'step_ticked' ? e.detail : ''}`.trim(), name: nameOf(e) });
+    add(indiaDate(e.at), { at: e.at, projectId: e.projectId, text: `${words} ${e.kind === 'step_ticked' ? e.detail : ''}`.trim(), name: nameOf(e) });
   }
   // Work notes come from the projects (so edits and deletes show correctly)...
   for (const p of data.projects) {
-    for (const n of p.workNotes) add(n.createdAt.slice(0, 10), { at: n.createdAt, projectId: p.id, text: `📝 ${n.text}`, name: p.name });
+    for (const n of p.workNotes) add(indiaDate(n.createdAt), { at: n.createdAt, projectId: p.id, text: `📝 ${n.text}`, name: p.name });
   }
   // ...and from history only for deleted projects.
   for (const e of Object.values(history).flat()) {
     if (e.kind === 'note_added' && !exists.has(e.projectId)) {
-      add(e.at.slice(0, 10), { at: e.at, projectId: e.projectId, text: `📝 ${e.detail}`, name: nameOf(e) });
+      add(indiaDate(e.at), { at: e.at, projectId: e.projectId, text: `📝 ${e.detail}`, name: nameOf(e) });
     }
   }
   const days = [...byDay.keys()].sort().reverse();
@@ -565,10 +570,10 @@ function setupSortable() {
         const i = ids.indexOf(id);
         const where = i > 0 ? { afterId: ids[i - 1] } : { beforeId: ids[1] };
         if (isProjects) {
-          if (ui.search) return;
-          store.dispatch('moveProject', { projectId: id, ...where });
+          if (ui.search) { render(); return; }
+          if (!store.dispatch('moveProject', { projectId: id, ...where })) render();
         } else {
-          store.dispatch('moveStep', { projectId: el.dataset.project, stepId: id, ...where });
+          if (!store.dispatch('moveStep', { projectId: el.dataset.project, stepId: id, ...where })) render();
         }
       },
     });
@@ -598,7 +603,7 @@ function render() {
 // ---------------------------------------------------------------- start
 
 async function doRefresh(force) {
-  if (!store) return;
+  if (!store || store.status === 'auth') return;
   await store.refresh(force);
   if (force && store.status === 'saved') toast('Up to date ✓');
   makeBrief();
@@ -613,11 +618,15 @@ function start() {
   store = new Store(repo);
   store.addEventListener('change', () => render());
   store.addEventListener('status', (e) => {
-    if (e.detail.status === 'auth') showKeyScreen('Your GitHub key stopped working. Paste a new one. Your unsaved changes are kept.');
+    // Only build the key screen when it is not already showing, so a pasted key is not wiped.
+    if (e.detail.status === 'auth' && document.getElementById('keyscreen').hidden) {
+      showKeyScreen('Your GitHub key stopped working. Paste a new one. Your unsaved changes are kept.');
+    }
     render();
   });
   store.addEventListener('blocked', (e) => {
     toast(e.detail.status === 'offline' ? 'No connection — changes not saved. Try again when online.' : 'Please wait…');
+    render(); // put ticked boxes and menus back to the real data
   });
   render();
   store.init().then(() => { render(); makeBrief(); });
@@ -625,7 +634,10 @@ function start() {
   started = true;
   setInterval(() => { if (document.visibilityState === 'visible') doRefresh(false); }, REFRESH_MS);
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') doRefresh(false); });
-  window.addEventListener('online', () => { store.setStatus('saving'); store.init().then(() => store.save()); });
+  window.addEventListener('online', () => {
+    if (store.status !== 'offline') return;
+    store.init().then(() => { if (store.pending.length) store.save(); else if (store.status !== 'auth') store.setStatus('saved'); });
+  });
   window.addEventListener('offline', () => store.setStatus('offline', 'No connection'));
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeViewer(); });
 }

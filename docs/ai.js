@@ -3,7 +3,7 @@
 // See PLAN.md section 15 and section 25 "AI".
 
 import { AI_MODELS } from './config.js';
-import { dotColour, nextStep, todayIndia, addDays, isOverdue, daysBetween } from './rules.js';
+import { dotColour, nextStep, todayIndia, addDays, isOverdue, daysBetween, indiaDate } from './rules.js';
 
 export class AiError extends Error {}
 
@@ -94,7 +94,7 @@ function describeProject(p, today) {
   if (open.length) lines.push('Open steps:\n' + open.map((s) => `- ${s.text}${s.waiting ? ` (waiting${s.waitingOn ? ' on ' + s.waitingOn : ''})` : ''}${s.dueDate ? ` (due ${s.dueDate})` : ''}`).join('\n'));
   if (done.length) lines.push('Done steps:\n' + done.map((s) => `- ${s.text}`).join('\n'));
   if (p.notes) lines.push('Notes: ' + p.notes.slice(0, 1500));
-  if (p.workNotes.length) lines.push('Recent work notes:\n' + p.workNotes.slice(0, 5).map((n) => `- ${n.createdAt.slice(0, 10)}: ${n.text}`).join('\n'));
+  if (p.workNotes.length) lines.push('Recent work notes:\n' + p.workNotes.slice(0, 5).map((n) => `- ${indiaDate(n.createdAt)}: ${n.text}`).join('\n'));
   return lines.join('\n');
 }
 
@@ -157,9 +157,9 @@ export async function weeklyReview(provider, key, data, history) {
   const today = todayIndia();
   const from = addDays(today, -7);
   const events = Object.values(history).flat()
-    .filter((e) => e.at.slice(0, 10) >= from && ['step_ticked', 'note_added', 'finished', 'paused', 'created'].includes(e.kind))
+    .filter((e) => indiaDate(e.at) >= from && ['step_ticked', 'note_added', 'finished', 'paused', 'created'].includes(e.kind))
     .slice(-150)
-    .map((e) => `${e.at.slice(0, 10)} ${e.projectName || ''}: ${e.kind.replace('_', ' ')} - ${e.detail}`);
+    .map((e) => `${indiaDate(e.at)} ${e.projectName || ''}: ${e.kind.replace('_', ' ')} - ${e.detail}`);
   const active = data.projects.filter((p) => p.state === 'active');
   const r = await ask(provider, key,
     'You write a short weekly review of a person\'s projects. '

@@ -1,7 +1,7 @@
 # Daily Projects — Plan
 
 Date: 9 Oct 2026
-Status: Plan ready. Not built yet.
+Status: Built (9 Oct 2026). Live at https://vm3567.github.io/daily-projects/
 Version: 5.
 - v1: Mac only.
 - v2: Online with Supabase, on any device + iPhone.
