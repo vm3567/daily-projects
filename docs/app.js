@@ -1592,6 +1592,7 @@ function goProject(step) {
   select(p.id);
   const row = root.querySelector(`.prow[data-id="${CSS.escape(p.id)}"]`);
   if (row) row.scrollIntoView({ block: 'nearest' });
+  followFocus(row);
 }
 
 /** The next project after this one (in the tab you are in) that is not green yet — red first. */
@@ -1759,6 +1760,18 @@ function currentList() {
   return ui.showDoneToday || ui.view !== 'today' ? [...open, ...done] : open;
 }
 
+/**
+ * After a keyboard move: if a list row still holds the browser's focus box (from an earlier click),
+ * move that focus to the row that is now selected, so only one row looks picked.
+ */
+function followFocus(row) {
+  const active = document.activeElement;
+  if (!active || !active.closest || !active.closest('.prow')) return;
+  const btn = row && row.querySelector('.prow-btn');
+  if (btn && btn !== active) btn.focus({ preventScroll: true });
+  else if (!btn) active.blur();
+}
+
 function moveSelection(step) {
   if (ui.view === 'people' && !ui.search) {
     const people = store.view.data.people || [];
@@ -1769,6 +1782,7 @@ function moveSelection(step) {
     ui.mobile = 'list'; render();
     const row = root.querySelector(`.people-list .prow[data-id="${CSS.escape(next.id)}"]`);
     if (row) row.scrollIntoView({ block: 'nearest' });
+    followFocus(row);
     return;
   }
   const list = currentList();
@@ -1787,6 +1801,7 @@ function moveSelection(step) {
   render();
   const row = root.querySelector(`.prow[data-id="${CSS.escape(next.id)}"]`);
   if (row) row.scrollIntoView({ block: 'nearest' });
+  followFocus(row);
 }
 
 function selectedProject() {
