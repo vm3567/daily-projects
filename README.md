@@ -103,6 +103,16 @@ Also: each red/yellow row has a one-tap **✓ OK** (or **Chased** when waiting),
 - When the project turns green, a **Next: …** button opens the next project that still needs you.
 - All notes are listed under **Work notes**, each saying which step it was about.
 
+## How the app looks and feels
+
+- **Opens at once** with the copy kept on your device, then quietly updates (the cloud sign is grey for a moment).
+- **Saved sign:** a green ☁✓ at the top means everything is saved. Grey ☁… means saving. "Offline" shows only when there is no internet.
+- **Rows slide** to their new place when a project turns green or a step is done.
+- **Project page:** Status, Steps (with the write box) and Done are open. Work notes, notes, links, files and history are under **▸ More** (it stays open once you open it).
+- **Messages** are small, in the bottom-right corner.
+- **iPhone:** a bar at the bottom — Today, Inbox, People, More — and bigger buttons.
+- **Remembers where you were:** the same page, project and scroll place when you open the app again.
+
 ## Name, delete and typing help
 
 - **Change a project's name:** click the name at the top (or the ✎ next to it), type, press Enter.

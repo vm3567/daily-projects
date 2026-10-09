@@ -106,7 +106,7 @@ export class Store extends EventTarget {
     this.base = base;
     this.recompute();
     this.saveSnapshot();
-    if (['loading', 'offline', 'auth', 'error'].includes(this.status) && !this.saving) this.setStatus(this.pending.length ? 'saving' : 'saved');
+    if (['loading', 'checking', 'offline', 'auth', 'error'].includes(this.status) && !this.saving) this.setStatus(this.pending.length ? 'saving' : 'saved');
     this.emit('change', { reason: 'load' });
   }
 
@@ -129,15 +129,18 @@ export class Store extends EventTarget {
     } catch { /* storage full: the app still works online */ }
   }
 
-  /** Open from the copy on this device (no internet). Returns true if there was one. */
-  openSnapshot() {
+  /**
+   * Open from the copy on this device. Returns true if there was one.
+   * quiet = at start-up, while the newest data is still coming ("checking"); else = no internet ("offline").
+   */
+  openSnapshot(quiet = false) {
     let snap = null;
     try { snap = JSON.parse(localStorage.getItem(SNAPSHOT_KEY) || 'null'); } catch { snap = null; }
     if (!snap || !snap.data) return false;
     this.base = { data: snap.data, history: snap.history || {}, commit: snap.commit, tree: snap.tree, entries: new Map(snap.entries || []) };
     this.snapshotAt = snap.at;
     this.recompute();
-    this.setStatus('offline', 'No connection');
+    this.setStatus(quiet ? 'checking' : 'offline', quiet ? '' : 'No connection');
     this.emit('change', { reason: 'snapshot' });
     return true;
   }
@@ -205,6 +208,7 @@ export class Store extends EventTarget {
 
   scheduleSave(delay = SAVE_DELAY_MS) {
     clearTimeout(this.saveTimer);
+    if (this.status === 'checking') return; // still getting the newest data: init() saves right after
     this.saveTimer = setTimeout(() => this.save(), delay);
   }
 
@@ -306,6 +310,8 @@ export class Store extends EventTarget {
   }
 
   async init() {
+    // Show the copy kept on this device at once (no "Loading…" wait); the newest data replaces it a moment later.
+    if (!this.base) this.openSnapshot(true);
     try {
       await this.load();
       if (this.pending.length) this.scheduleSave(100);

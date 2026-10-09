@@ -73,7 +73,7 @@ function fakeCtx(state, ui = {}) {
 
 test('project page draws (steps, update box, people, time, links)', () => {
   const s = sampleState();
-  const el = renderDetail(fakeCtx(s, { selected: 'p1', openParts: { history: true }, update: {} }));
+  const el = renderDetail(fakeCtx(s, { selected: 'p1', openParts: { history: true }, update: {}, showMore: true }));
   const text = el.textContent;
   for (const bit of ['Kiln', 'Fire samples', 'Save + done', 'Work notes', 'Status', 'Snooze', 'Ravi', 'Today', 'Spec']) assert.ok(text.includes(bit), bit);
 });
@@ -153,4 +153,12 @@ test('project page: the write box sits inside the next step; snoozed project sho
   const text = renderDetail(fakeCtx(s, { selected: 'p1', update: {} })).textContent;
   assert.ok(text.includes('Snoozed — comes back to Today'));
   assert.ok(text.includes('Wake up now'));
+});
+
+test('project page: notes, links, files and history wait under "More" until opened', () => {
+  const s = sampleState();
+  const text = renderDetail(fakeCtx(s, { selected: 'p1', update: {} })).textContent;
+  assert.ok(text.includes('More'));
+  assert.ok(text.includes('1 work note') && text.includes('1 link'), 'the fold says what is inside');
+  assert.ok(!text.includes('Spec'), 'links are folded away');
 });

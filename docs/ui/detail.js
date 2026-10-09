@@ -411,7 +411,7 @@ function notesLog(ctx, p, notesShown) {
 function statusLine(ctx, p) {
   const { store } = ctx;
   const today = todayIndia();
-  const age = p.status && p.statusAt ? daysBetween(indiaDate(p.statusAt), today) : null;
+  const age = p.status && p.statusAt ? Math.max(0, daysBetween(indiaDate(p.statusAt), today)) : null; // (a clock set wrong never shows a minus)
   const old = age !== null && age >= STATUS_OLD_DAYS;
   return h('div', { class: 'status-line' + (old ? ' old' : '') + (p.status ? '' : ' empty'), key: 'status-' + p.id },
     h('span', { class: 'status-label' }, 'Status'),
@@ -702,7 +702,7 @@ export function renderDetail(ctx) {
     history: !!opened.history,
   };
   for (const name of Object.keys(show)) if (show[name]) opened[name] = true; // keep it open even if emptied
-  const openPart = (name) => { opened[name] = true; ctx.render(); };
+  const openPart = (name) => { opened[name] = true; ui.showMore = true; ctx.render(); };
   const chip = (name, label) => (show[name] ? null : h('button', { class: 'chip', onClick: () => openPart(name) }, label));
   const notesShown = ui.notesLimit || 3;
   const upd = updateBox(ctx, p);
@@ -727,7 +727,7 @@ export function renderDetail(ctx) {
         focusUpdate(p);
         await addUpdatePhotos(ctx, p, photos);
       }
-      if (others.length) { opened.files = true; await uploadFiles(ctx, p.id, others); ctx.render(); }
+      if (others.length) { opened.files = true; ui.showMore = true; await uploadFiles(ctx, p.id, others); ctx.render(); }
     },
   },
     h('div', { class: 'detail-top' },
@@ -780,12 +780,32 @@ export function renderDetail(ctx) {
         ui.showDone && doneSteps.length > (ui.doneLimit || 10)
           ? h('button', { class: 'link small', onClick: () => { ui.doneLimit = (ui.doneLimit || 10) + 30; ctx.render(); } }, `Show older (${doneSteps.length - (ui.doneLimit || 10)})`) : null) : null),
 
-    p.workNotes.length ? section('Work notes', notesLog(ctx, p, notesShown)) : null,
+    // Calm page: work notes, notes, links, files and history wait under "More" (opened once, it stays open).
+    moreFold(ctx, p, [
+      p.workNotes.length ? section('Work notes', notesLog(ctx, p, notesShown)) : null,
+      show.notes ? section('Notes', notesBox(ctx, p)) : null,
+      show.links ? section('Links', linksBlock(ctx, p)) : null,
+      show.files ? section('Files', filesBlock(ctx, p)) : null,
+      show.history ? section('History', historyBlock(ctx, p)) : null,
+      show.notes && show.links && show.files && show.history ? null : h('div', { class: 'chips', key: 'chips-' + p.id },
+        chip('notes', '+ Notes'), chip('links', '+ Link'), chip('files', '+ File'), chip('history', 'History')),
+    ]));
+}
 
-    show.notes ? section('Notes', notesBox(ctx, p)) : null,
-    show.links ? section('Links', linksBlock(ctx, p)) : null,
-    show.files ? section('Files', filesBlock(ctx, p)) : null,
-    show.history ? section('History', historyBlock(ctx, p)) : null,
-    show.notes && show.links && show.files && show.history ? null : h('div', { class: 'chips', key: 'chips-' + p.id },
-      chip('notes', '+ Notes'), chip('links', '+ Link'), chip('files', '+ File'), chip('history', 'History')));
+/** "▸ More — 3 work notes · notes · 2 files": the less-used parts of a project, folded. */
+function moreFold(ctx, p, parts) {
+  const { ui } = ctx;
+  const bits = [
+    p.workNotes.length ? `${p.workNotes.length} work note${p.workNotes.length === 1 ? '' : 's'}` : null,
+    p.notes.trim() ? 'notes' : null,
+    p.links.length ? `${p.links.length} link${p.links.length === 1 ? '' : 's'}` : null,
+    p.files.length ? `${p.files.length} file${p.files.length === 1 ? '' : 's'}` : null,
+  ].filter(Boolean);
+  const open = !!ui.showMore;
+  return h('div', { class: 'more-fold', key: 'more-' + p.id },
+    h('button', {
+      class: 'more-toggle', 'aria-expanded': String(open),
+      onClick: () => { ui.showMore = !open; if (ctx.rememberUi) ctx.rememberUi(); ctx.render(); },
+    }, h('span', { class: 'more-arrow' }, open ? '▾' : '▸'), ' More', bits.length ? h('span', { class: 'muted small' }, ` — ${bits.join(' · ')}`) : h('span', { class: 'muted small' }, ' — notes, links, files, history')),
+    open ? h('div', { class: 'more-body' }, parts) : null);
 }

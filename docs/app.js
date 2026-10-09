@@ -33,6 +33,7 @@ const ui = {
   sort: saved.sort === 'red' ? 'red' : 'mine', // 'mine' = my drag order, 'red' = red first
   adding: false,
   openStep: null,
+  showMore: saved.showMore === true, // project page "More" fold (notes, links, files, history)
   showDone: saved.showDone !== false, // the Done list under the steps is open unless you closed it (remembered)
   ai: null,
   brief: { busy: false, error: '' },
@@ -91,8 +92,39 @@ function act(type, args, message, ms = 4000) {
   return { op, undo };
 }
 
+/** Remember how far the list and the project page were scrolled (when leaving the app). */
+function rememberScroll() {
+  const list = document.getElementById('list');
+  const detail = document.getElementById('detail');
+  device.setUi({
+    ...device.ui(),
+    scroll: { view: ui.view, selected: ui.selected, list: list ? list.scrollTop : 0, detail: detail ? detail.scrollTop : 0, win: window.scrollY || 0 },
+  });
+}
+
+let scrollRestored = false;
+/** First screen with data: open exactly where you left it (same list position, same place in the project). */
+function restoreScrollOnce() {
+  if (scrollRestored || !store || !store.view) return;
+  scrollRestored = true;
+  const s = saved.scroll;
+  setTimeout(() => {
+    const list = document.getElementById('list');
+    const detail = document.getElementById('detail');
+    if (s && s.view === ui.view) {
+      if (list) list.scrollTop = s.list || 0;
+      if (s.win) window.scrollTo(0, s.win);
+      if (detail && s.selected === ui.selected) detail.scrollTop = s.detail || 0;
+    } else if (ui.selected) {
+      const row = root.querySelector(`.prow[data-id="${CSS.escape(ui.selected)}"]`);
+      if (row) row.scrollIntoView({ block: 'center' });
+    }
+  }, 0);
+}
+
 function rememberUi() {
-  device.setUi({ view: ui.view, selected: ui.selected, briefFolded: ui.briefFolded, sort: ui.sort, showDone: ui.showDone });
+  device.setUi({
+    scroll: device.ui().scroll, view: ui.view, selected: ui.selected, briefFolded: ui.briefFolded, sort: ui.sort, showDone: ui.showDone, showMore: ui.showMore });
 }
 
 const ctx = {
@@ -1012,8 +1044,12 @@ function newProjectForm() {
 
 function statusText() {
   const s = store ? store.status : 'loading';
-  if (s === 'saving') return h('span', { class: 'status' }, 'Saving…');
-  if (s === 'saved') return h('span', { class: 'status ok' }, 'Saved ✓');
+  // A steady cloud sign: ✓ when everything is saved. "Saving" only shows if it takes more than a second.
+  if (s === 'saved') return h('span', { class: 'status sync ok', title: 'All your changes are saved', 'aria-label': 'Saved' }, '☁︎✓');
+  if (s === 'saving' || s === 'checking') {
+    return h('span', { class: 'status sync busy', title: s === 'checking' ? 'Getting the newest data…' : 'Saving…', 'aria-label': 'Saving' },
+      '☁︎', h('span', { class: 'sync-dots' }, '…'));
+  }
   if (s === 'offline') {
     const since = store.snapshotAt ? ` · data from ${fmtTime(store.snapshotAt)}` : '';
     return h('span', { class: 'status bad', title: 'Your changes wait on this device and are saved when the internet is back' }, `Offline — ${store.pending.length} waiting${since}`);
@@ -1343,10 +1379,79 @@ function render() {
   h('main', { id: 'list' }, renderListColumn()),
   wide ? null : h('section', { id: 'detail' }, ui.round ? renderRound() : ui.view === 'people' && !ui.search ? renderPerson(ctx) : renderDetail(ctx)),
   ui.showKeys ? keysHelp() : null,
-  ui.capture ? captureBox() : null);
+  ui.capture ? captureBox() : null,
+  tabBar());
+  const moves = takePositions();
   if (root.firstChild && root.firstChild.classList && root.firstChild.classList.contains('layout')) morph(root.firstChild, next);
   else root.replaceChildren(next);
+  playMoves(moves);
+  document.body.classList.toggle('on-detail', ui.mobile === 'detail' || ui.menuOpen); // phone: messages sit lower when the bottom bar is hidden
+  restoreScrollOnce();
   setupSortable();
+}
+
+/** Phone only: a fixed bar at the bottom — Today, Inbox, People, More (the menu). Hidden on the desktop by CSS. */
+function tabBar() {
+  const n = (store.view.data.inbox || []).length;
+  const tab = (view, icon, label, extra = null) => h('button', {
+    class: 'tab' + (ui.view === view && !ui.search && !ui.menuOpen ? ' current' : ''), key: 'tab-' + view, 'aria-label': label,
+    onClick: () => go(view),
+  }, h('span', { class: 'tab-icon', 'aria-hidden': 'true' }, icon), h('span', { class: 'tab-label' }, label), extra);
+  return h('nav', { class: 'tabbar', key: 'tabbar', 'aria-label': 'Main pages' },
+    tab('today', '☀︎', 'Today'),
+    tab('inbox', '📥', 'Inbox', n ? h('span', { class: 'tab-count' }, String(n)) : null),
+    tab('people', '👥', 'People'),
+    h('button', { class: 'tab' + (ui.menuOpen ? ' current' : ''), key: 'tab-more', 'aria-label': 'More pages', onClick: () => { ui.menuOpen = true; render(); } },
+      h('span', { class: 'tab-icon', 'aria-hidden': 'true' }, '☰'), h('span', { class: 'tab-label' }, 'More')));
+}
+
+// ---------------------------------------------------------------- gentle movement
+// Rows that move (a project turning green, a step going to Done) slide to their new place; rows that leave fade out.
+// Only within the same list (same tab, same project) — switching pages never animates.
+
+const REDUCED_MOTION = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+let lastMoveContext = '';
+
+function takePositions() {
+  if (REDUCED_MOTION || !root.firstChild) return null;
+  const context = `${ui.view}|${ui.search}|${ui.selected}|${ui.mobile}`;
+  const same = context === lastMoveContext;
+  lastMoveContext = context;
+  if (!same) return null;
+  const rows = root.querySelectorAll('#list .prow[data-id], #detail .step[data-id]');
+  if (!rows.length || rows.length > 120) return null;
+  const map = new Map();
+  for (const el of rows) {
+    const r = el.getBoundingClientRect();
+    if (r.height) map.set((el.closest('#list') ? 'p:' : 's:') + el.dataset.id, { el, r });
+  }
+  return map;
+}
+
+function playMoves(before) {
+  if (!before || !before.size) return;
+  const now = new Map();
+  for (const el of root.querySelectorAll('#list .prow[data-id], #detail .step[data-id]')) now.set((el.closest('#list') ? 'p:' : 's:') + el.dataset.id, el);
+  for (const [id, { el: oldEl, r }] of before) {
+    const el = now.get(id);
+    if (el) {
+      const n = el.getBoundingClientRect();
+      const dy = r.top - n.top;
+      if (Math.abs(dy) > 2 && Math.abs(dy) < 1200 && el.animate) {
+        el.animate([{ transform: `translateY(${dy}px)` }, { transform: 'none' }], { duration: 220, easing: 'cubic-bezier(.2,.7,.3,1)' });
+      }
+    } else if (!oldEl.isConnected && oldEl.animate && r.top < window.innerHeight && r.bottom > 0) {
+      // the row left this list: a copy fades out where it was
+      const ghost = document.createElement(oldEl.nodeName === 'LI' ? 'ul' : 'div');
+      ghost.className = (id.startsWith('p:') ? 'plist' : 'steps') + ' move-ghost';
+      ghost.appendChild(oldEl);
+      Object.assign(ghost.style, { left: `${r.left}px`, top: `${r.top}px`, width: `${r.width}px` }); // style object (allowed by the page's safety rules)
+      document.body.appendChild(ghost);
+      const a = ghost.animate([{ opacity: 1, transform: 'none' }, { opacity: 0, transform: 'translateY(10px)' }], { duration: 240, easing: 'ease-out' });
+      a.onfinish = () => ghost.remove();
+      setTimeout(() => ghost.remove(), 600);
+    }
+  }
 }
 
 // ---------------------------------------------------------------- daily round
@@ -1944,9 +2049,9 @@ function start() {
   }, REFRESH_MS);
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') doRefresh(false);
-    else saveTypedText();
+    else { saveTypedText(); rememberScroll(); }
   });
-  window.addEventListener('pagehide', saveTypedText);
+  window.addEventListener('pagehide', () => { saveTypedText(); rememberScroll(); });
   window.addEventListener('online', () => {
     if (store.status !== 'offline') return;
     store.init().then(() => { if (store.pending.length) store.save(); else if (store.status !== 'auth') store.setStatus('saved'); });
