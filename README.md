@@ -61,7 +61,7 @@ Open Claude in this folder and type:
 
 | Command | What it does |
 |---------|--------------|
-| `/review` | Goes through your projects one by one, red first. Suggests next steps. Adds them only after you say yes. |
+| `/review-projects` | Goes through your projects one by one, red first. Suggests next steps. Adds them only after you say yes. |
 | `/add` | Add a project or tasks in normal words. Asks before saving. |
 | `/today` | Lists today's red and orange projects. Read only. |
 

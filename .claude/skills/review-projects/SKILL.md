@@ -1,9 +1,9 @@
 ---
-name: review
-description: Go through the user's Daily Projects one by one (red first), talk through each, suggest a solution and next steps, and add them to the tracker only after the user says yes. Use when the user types /review or asks to review their projects.
+name: review-projects
+description: Go through the user's Daily Projects one by one (red first), talk through each, suggest a solution and next steps, and add them to the tracker only after the user says yes. Use when the user types /review-projects or asks to review their projects.
 ---
 
-# /review — go through my projects one by one
+# /review-projects — go through my projects one by one
 
 The user is not a programmer. Use short, plain English. One idea per sentence. No jargon.
 

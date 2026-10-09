@@ -332,7 +332,7 @@ Each project has:
 
 ## 21. Claude review on my Mac (one by one)
 
-When I am at my Mac, I open Claude in the Task folder and type **/review**.
+When I am at my Mac, I open Claude in the Task folder and type **/review-projects**.
 
 1. Claude gets the latest data from GitHub.
 2. Claude shows a short summary: how many projects are red, orange and green.
@@ -358,7 +358,7 @@ How it connects:
 2. Start with the red projects.
 3. For each project, do the next step, tick it, and add the next one.
 4. Write a quick note if useful.
-5. When at the Mac, type **/review** in Claude to talk through stuck projects.
+5. When at the Mac, type **/review-projects** in Claude to talk through stuck projects.
 6. Stop when all dots are green, or as many as possible.
 
 ---
