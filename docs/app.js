@@ -4,6 +4,7 @@ import { h, morph, installEvents, fmtDay, fmtLongDay, fmtTime, keyHint, withKey 
 import { renderDetail } from './ui/detail.js';
 import { renderPeopleList, renderPerson, peopleByFollowUp } from './ui/people.js';
 import { installMentions } from './ui/mention.js';
+import { installAutocorrect, setAutocorrect, autocorrectOn } from './ui/autocorrect.js';
 import { renderDashboard } from './ui/dashboard.js';
 import { renderTimeReport } from './ui/timereport.js';
 import { projectMatches, diaryEntries, backupPayload, summaryText, personMessageText } from './reports.js';
@@ -862,7 +863,12 @@ function rowMenu() {
     p.state === 'active' && groupHasTimer(g || {}) ? item(timing ? '⏹' : '▶', timing ? 'Stop timer' : 'Start timer', () => (timing ? stopTimer() : startTimer(p))) : null,
     p.state === 'active' ? item('⏸', 'Pause project', () => act('pause', { projectId: p.id }, `Paused: ${p.name}`))
       : p.state === 'paused' ? item('▶', 'Unpause project', () => act('unpause', { projectId: p.id }, `Back on Today: ${p.name}`)) : null,
-    item('↗', 'Open', () => select(p.id)));
+    item('↗', 'Open', () => select(p.id)),
+    item('🗑', 'Delete project…', () => {
+      if (!confirm(`Delete "${p.name}"?\n\nYou can press Undo for a few seconds after.`)) return;
+      act('deleteProject', { projectId: p.id }, `Deleted: ${p.name}`, 10000);
+      if (ui.selected === p.id) { ui.selected = null; ui.mobile = 'list'; }
+    }));
   // keep it on the screen (style object: allowed by the page's safety rules)
   el.style.left = Math.max(8, Math.min(m.x, window.innerWidth - 270)) + 'px';
   el.style.top = Math.max(8, Math.min(m.y, window.innerHeight - 330)) + 'px';
@@ -1191,6 +1197,13 @@ function renderSettings() {
             location.reload();
           },
         }, 'Forget this device'))),
+    h('section', { class: 'block' }, h('h3', null, 'Typing'),
+      h('label', { class: 'check' },
+        h('input', {
+          type: 'checkbox', checked: autocorrectOn(),
+          onChange: (e, el) => { setAutocorrect(el.checked); device.setAutocorrect(el.checked); toast(el.checked ? 'Auto-correct is on' : 'Auto-correct is off', 1500); },
+        }), ' Auto-correct common typing mistakes (e.g. "teh" → "the", "becasue" → "because")'),
+      h('p', { class: 'muted small' }, 'Works without AI or internet. Pressing Backspace right after a fix puts your own spelling back. Words starting with @ are never changed.')),
     h('section', { class: 'block' }, h('h3', null, 'AI helper'),
       h('div', { class: 'row' },
         ['claude', 'gemini'].map((x) => h('label', { class: 'check' },
@@ -1934,5 +1947,6 @@ installSwipe();
 // Keep the app's files on the device so it opens without internet (not in test mode on this Mac).
 if ('serviceWorker' in navigator && !isMock) navigator.serviceWorker.register('sw.js').catch(() => {});
 installMentions(() => ctx);
+installAutocorrect(device.autocorrect());
 if (isMock) document.title = 'Daily Projects (test mode)';
 start();

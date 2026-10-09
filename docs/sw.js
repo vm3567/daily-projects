@@ -7,7 +7,7 @@ const CACHE = 'daily-projects-app';
 const FILES = [
   './', 'index.html', 'styles.css', 'manifest.webmanifest',
   'app.js', 'ai.js', 'config.js', 'device.js', 'github.js', 'mockrepo.js', 'ops.js', 'reports.js', 'rules.js', 'store.js',
-  'ui/dashboard.js', 'ui/detail.js', 'ui/dom.js', 'ui/files.js', 'ui/mention.js', 'ui/people.js', 'ui/timereport.js',
+  'ui/autocorrect.js', 'ui/dashboard.js', 'ui/detail.js', 'ui/dom.js', 'ui/files.js', 'ui/mention.js', 'ui/people.js', 'ui/timereport.js',
   'vendor/sortable.min.js', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png',
 ];
 const WAIT_MS = 3000; // weak signal: after 3 s use the copy on the device

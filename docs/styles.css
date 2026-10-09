@@ -746,3 +746,9 @@ kbd.hint {
 .stand .muted { color: #92400e; }
 .detail-top .title-input { flex: 1 1 280px; min-width: 220px; }
 .state-buttons { flex-wrap: wrap; justify-content: flex-end; }
+.edit-title { opacity: .45; font-size: 18px; }
+.detail-top:hover .edit-title, .edit-title:focus { opacity: 1; }
+.title-input { cursor: text; }
+.icon-btn { padding-left: 10px; padding-right: 10px; }
+.danger-soft:hover { background: #fef2f2; border-color: #fecaca; }
+.warn.next-first { margin: 6px 0 4px; font-weight: 600; }

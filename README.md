@@ -103,6 +103,13 @@ Also: each red/yellow row has a one-tap **✓ OK** (or **Chased** when waiting),
 - When the project turns green, a **Next: …** button opens the next project that still needs you.
 - All notes are listed under **Work notes**, each saying which step it was about.
 
+## Name, delete and typing help
+
+- **Change a project's name:** click the name at the top (or the ✎ next to it), type, press Enter.
+- **Delete a project:** 🗑 at the top right of the project (or right-click it in the list → Delete project…). You get a few seconds to press **Undo**.
+- **No next step:** the page asks for the next step first ("What's next?"). The "anything done today" box is below it and is optional.
+- **Auto-correct:** common typing mistakes are fixed when you finish a word ("teh" → "the", "becasue" → "because"). No AI, no internet. **Backspace** right after a fix puts your spelling back. Turn it off in **Settings → Typing**.
+
 ## Status, Snooze and Inbox
 
 - **Status:** one line under the project name on where it stands. It saves by itself, shows in the list, and goes into the owner report ("Where things stand"). After 7 days it turns grey and asks for an update.

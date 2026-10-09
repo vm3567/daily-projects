@@ -356,7 +356,7 @@ function updateBox(ctx, p) {
   due ? null : h('div', { class: 'update-label' },
     u.about === 'project' && openSteps.length
       ? ['📝 About the whole project · ', h('button', { class: 'link small', type: 'button', onClick: () => { u.about = null; ctx.render(); } }, 'back to the next step')]
-      : 'No next step yet — write what you did, and add the next step.'),
+      : '📝 Anything done today on this project? (optional)'),
   h('input', {
     name: 'note', key: 'wn-' + p.id, autocomplete: 'off', enterkeyhint: 'done', 'data-mention': '1', value: u.note,
     placeholder: withKey(due ? 'What did you do on this step today?' : 'What did you do today?', 'W'),
@@ -368,11 +368,6 @@ function updateBox(ctx, p) {
       e.preventDefault();
       addPhotos(files);
     },
-  }),
-  openSteps.length ? null : h('input', {
-    name: 'next', key: 'wn-next-' + p.id, autocomplete: 'off', enterkeyhint: 'done', 'data-mention': '1', value: u.next,
-    onInput: (e, el) => { u.next = el.value; },
-    placeholder: 'Next step (optional)',
   }),
   u.uploading ? h('div', { class: 'muted small' }, `📷 Uploading ${u.uploading} photo${u.uploading > 1 ? 's' : ''}…`) : null,
   (u.photos || []).length ? h('div', { class: 'photo-chips' }, u.photos.map((ph, i) => h('span', { class: 'tag photo', key: 'ph-' + ph.fileId },
@@ -600,12 +595,14 @@ function stateButtons(ctx, p) {
         class: 'btn',
         onClick: () => ctx.act('finish', { projectId: p.id }, `Finished: ${p.name} (moved to Finished)`),
       }, 'Finish'),
+      deleteButton(ctx, p),
     ];
   }
   if (p.state === 'paused') {
     return [
       h('button', { class: 'btn primary', onClick: () => store.dispatch('unpause', { projectId: p.id }) }, 'Unpause'),
       h('button', { class: 'btn', onClick: () => ctx.act('finish', { projectId: p.id }, `Finished: ${p.name} (moved to Finished)`) }, 'Finish'),
+      deleteButton(ctx, p),
     ];
   }
   return [
@@ -619,6 +616,19 @@ function stateButtons(ctx, p) {
       },
     }, 'Delete'),
   ];
+}
+
+/** 🗑 Delete for any project: one question, then an Undo button for a few seconds. */
+function deleteButton(ctx, p) {
+  const { ui } = ctx;
+  return h('button', {
+    class: 'btn icon-btn danger-soft', title: 'Delete this project', 'aria-label': 'Delete this project',
+    onClick: () => {
+      if (!confirm(`Delete "${p.name}"?\n\nYou can press Undo for a few seconds after.`)) return;
+      ctx.act('deleteProject', { projectId: p.id }, `Deleted: ${p.name}`, 10000);
+      ui.selected = null; ui.mobile = 'list'; ctx.render();
+    },
+  }, '🗑');
 }
 
 function metaLine(ctx, p, today) {
@@ -723,8 +733,12 @@ export function renderDetail(ctx) {
     h('div', { class: 'detail-top' },
       h('button', { class: 'icon back', 'aria-label': 'Back to list', onClick: () => { ui.mobile = 'list'; ctx.render(); } }, '←'),
       h('span', { class: `dot ${colour}`, title: COLOUR_WORD[colour] }),
-      autoField('input', { class: 'title-input', value: p.name, 'aria-label': 'Project name', key: 'name-' + p.id },
+      autoField('input', { class: 'title-input', value: p.name, 'aria-label': 'Project name', title: 'Click to change the project name', key: 'name-' + p.id },
         (v) => store.dispatch('setProjectField', { projectId: p.id, field: 'name', value: v })),
+      h('button', {
+        class: 'icon edit-title', title: 'Change the project name', 'aria-label': 'Change the project name',
+        onClick: () => { const n = document.querySelector(`[data-key="name-${p.id}"]`); if (n) { n.focus(); n.select(); } },
+      }, '✎'),
       h('div', { class: 'state-buttons' }, stateButtons(ctx, p))),
     snoozeBar(ctx, p),
     navBar(ctx, p),
@@ -741,8 +755,7 @@ export function renderDetail(ctx) {
           h('span', { class: `dot ${dotColour(np, today)}` }), ` Next: ${np.name} →`)) : null,
       h('ul', { class: 'steps sortable-steps', key: 'steps-' + p.id, 'data-project': p.id },
         openSteps.map((s) => stepRow(ctx, p, s, s.id === upd.stepId ? upd.box : null))),
-      upd.stepId ? null : upd.box,
-      openSteps.length ? null : h('p', { class: 'warn' }, 'No next step — add one'),
+      openSteps.length || p.state !== 'active' ? null : h('p', { class: 'warn next-first' }, '→ No next step yet. Add it first:'),
       h('form', {
         class: 'row add-step',
         onSubmit: (e) => {
@@ -760,6 +773,7 @@ export function renderDetail(ctx) {
         onClick: () => { if (ui.ai && ui.ai.projectId === p.id) { ui.ai = null; ctx.render(); } else ctx.aiSteps(p); },
       }, '✨ AI steps', keyHint('I'))),
       aiPanel(ctx, p),
+      upd.stepId ? null : upd.box, // no open step (or "whole project"): the note box comes AFTER "What's next?"
       doneSteps.length ? h('details', { class: 'done-steps', key: 'done-' + p.id, open: ui.showDone ? true : undefined },
         h('summary', { onClick: (e) => { e.preventDefault(); ui.showDone = !ui.showDone; ctx.render(); } }, `Done (${doneSteps.length})`),
         ui.showDone ? h('ul', { class: 'steps' }, doneSteps.map((s) => stepRow(ctx, p, s))) : null) : null),

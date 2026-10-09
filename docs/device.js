@@ -7,6 +7,7 @@ const KEYS = {
   gemini: 'dp.geminiKey',
   ui: 'dp.ui',
   report: 'dp.report',
+  autocorrect: 'dp.autocorrect',
 };
 
 function get(k) {
@@ -26,6 +27,9 @@ export const device = {
   /** The Time report's last choices (group, period, by, % or hours). */
   report: () => { try { return JSON.parse(get(KEYS.report) || '{}'); } catch { return {}; } },
   setReport: (obj) => set(KEYS.report, JSON.stringify(obj)),
+  /** Auto-correct of common typing mistakes: on unless switched off on this device. */
+  autocorrect: () => get(KEYS.autocorrect) !== 'off',
+  setAutocorrect: (on) => set(KEYS.autocorrect, on ? '' : 'off'),
   /** "Forget this device": remove every key and anything waiting. */
   forgetAll() {
     try {

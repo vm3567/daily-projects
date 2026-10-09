@@ -145,3 +145,15 @@ test('pending list: a longer name that starts with the person\'s name is kept wh
   assert.match(text, /Get sign-off from Ravi Kumar Sharma \(P\)/);
   assert.match(text, /Tell the size \(P\)/);
 });
+
+test('auto-correct: common mistakes fixed, case kept, real words and names left alone', async () => {
+  const { fixWord } = await import('../docs/ui/autocorrect.js');
+  assert.equal(fixWord('teh'), 'the');
+  assert.equal(fixWord('Teh'), 'The');
+  assert.equal(fixWord('becasue'), 'because');
+  assert.equal(fixWord('shoudl'), 'should');
+  assert.equal(fixWord('dont'), "don't");
+  assert.equal(fixWord('i'), 'I');
+  for (const ok of ['the', 'form', 'its', 'lets', 'kiln', 'Ravi', 'id', 'I']) assert.equal(fixWord(ok), null, ok);
+  assert.equal(fixWord('teh2'), null, 'words with numbers are left alone');
+});
