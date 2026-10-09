@@ -400,7 +400,7 @@ Claude does the rest: makes both repositories, turns on GitHub Pages, writes the
 13. Sync between devices and the no-internet message.
 14. Settings and "Download backup".
 15. AI helper: keys (steps 23.4–23.6), Break into steps, Suggest next step, Morning plan, Weekly review, AI switch, daily limit.
-16. Claude commands: /review, /add, /today.
+16. Claude commands: /review-projects, /add, /today.
 17. Full test on the Mac and the iPhone with sample projects (see section 26), then remove the samples.
 
 After each step: push to GitHub, and show it to me to check.
@@ -427,7 +427,7 @@ Task/
     manifest.webmanifest, icons/
     vendor/sortable.min.js  drag-and-drop library, pinned version, saved in the repo
   tools/
-    tracker.mjs             command-line helper Claude uses for /review, /add, /today
+    tracker.mjs             command-line helper Claude uses for /review-projects, /add, /today
   .claude/skills/
     review/, add/, today/   Claude commands
   data/                     (not pushed here) local copy of daily-projects-data
@@ -600,7 +600,7 @@ daily-projects-data/
 19. Two devices opened at the same time make only one Morning plan.
 20. The 50-a-day limit message appears.
 21. Download backup works. Restoring an old version works.
-22. /review, /add and /today work in Claude and ask before changing anything.
+22. /review-projects, /add and /today work in Claude and ask before changing anything.
 23. "Forget this device" clears all keys from that device.
 24. No data or keys are in the public code repository.
 
