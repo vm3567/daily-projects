@@ -2,7 +2,7 @@
 // See PLAN.md sections 3, 6-9, 11, 13, 15.
 
 import { h, fmtDay, fmtTime, fmtSize, keyHint, withKey, HAS_KEYBOARD } from './dom.js';
-import { dotColour, todayIndia, isOverdue, indiaDate, waitingDays, lastWorkDate } from '../rules.js';
+import { dotColour, todayIndia, isOverdue, indiaDate, waitingDays, lastWorkDate, nextStep } from '../rules.js';
 import { WAIT_RED_DAYS } from '../config.js';
 import { newId, PRIORITIES, cleanUrl } from '../ops.js';
 import { uploadFiles, openFile } from './files.js';
@@ -28,6 +28,13 @@ function autoField(tag, props, onSave) {
     onFocusout: (e, el) => save(el),
     onKeydown: tag === 'input' ? (e, el) => { if (e.key === 'Enter') { e.preventDefault(); el.blur(); } } : undefined,
   });
+}
+
+/** Notes written about this step (newest 2), shown under it. */
+function stepNotes(p, s) {
+  const notes = p.workNotes.filter((n) => n.stepId === s.id).slice(0, 2);
+  if (!notes.length) return null;
+  return h('div', { class: 'step-notes' }, notes.map((n) => h('div', { key: 'sn-' + n.id }, `📝 ${fmtDay(indiaDate(n.createdAt))}: ${n.text}`)));
 }
 
 function stepRow(ctx, p, s) {
@@ -67,6 +74,7 @@ function stepRow(ctx, p, s) {
         class: 'icon', title: 'More', 'aria-label': 'More about this step',
         onClick: () => { ui.openStep = open ? null : s.id; ctx.render(); },
       }, open ? '▴' : '⋯')),
+    stepNotes(p, s),
     open ? h('div', { class: 'step-extra' },
       h('label', null, 'Due date ',
         h('input', {
@@ -246,6 +254,76 @@ function historyBlock(ctx, p) {
  * The big Notes box, with its own save sign underneath:
  *   "Typing…" → "Saving…" → "Saved ✓ 2:45 pm" (or "Not saved yet — no connection").
  */
+/**
+ * "Today's update": one box that connects the plan (next step) and the diary (what I did).
+ *   - shows the next step on top
+ *   - what did you do? → a work note, linked to that step
+ *   - [✓ This step is done] → ticks it, and asks "What's next?"
+ *   - one Save (Enter) does all of it, with one Undo
+ */
+function todaysUpdate(ctx, p, notesShown) {
+  const { store, ui } = ctx;
+  const today = todayIndia();
+  const due = p.state === 'active' ? nextStep(p, today, { dueOnly: true }) : null;
+  const u = ((ui.update ||= {})[p.id] ||= { done: false });
+  const save = (form) => {
+    const f = form.elements;
+    const text = f.note.value.trim();
+    const next = f.next ? f.next.value.trim() : '';
+    const tick = !!(due && u.done);
+    if (!text && !tick && !next) return;
+    const steps = [];
+    if (text) steps.push(['addWorkNote', { projectId: p.id, noteId: newId(), text, stepId: due ? due.id : null }]);
+    if (tick) steps.push(['tickStep', { projectId: p.id, stepId: due.id }]);
+    if (next) steps.push(['addStep', { projectId: p.id, stepId: newId(), text: next }]);
+    const bits = [text ? 'note saved' : null, tick ? `✓ ${due.text}` : null, next ? `next: ${next}` : null].filter(Boolean);
+    if (ctx.actMany(p.id, steps, bits.join(' · '))) {
+      f.note.value = '';
+      if (f.next) f.next.value = '';
+      u.done = false;
+      ctx.render();
+      if (tick && !next && !nextStep(store.view.data.projects.find((x) => x.id === p.id) || p, today, { dueOnly: true })) ctx.afterTick(p.id, 'detail');
+    }
+  };
+  const nextBox = !due || u.done;
+  return h('div', { class: 'update' },
+    h('div', { class: 'update-next' + (due ? '' : ' none') },
+      due ? ['→ Next: ', h('strong', null, due.text), due.waiting ? h('span', { class: 'tag waiting' }, due.waitingOn ? `Waiting: ${due.waitingOn}` : 'Waiting') : null]
+        : 'No next step yet — write what you did and add the next step below.'),
+    h('form', {
+      class: 'update-form', key: 'update-' + p.id,
+      onSubmit: (e) => { e.preventDefault(); save(e.target); },
+    },
+    h('input', {
+      name: 'note', key: 'wn-' + p.id, autocomplete: 'off', enterkeyhint: 'done', 'data-mention': '1',
+      placeholder: withKey(due ? 'What did you do on this step?' : 'What did you do today?', 'W'),
+    }),
+    due ? h('label', { class: 'check update-done' },
+      h('input', { type: 'checkbox', checked: u.done, onChange: (e, el) => { u.done = el.checked; ctx.render(); if (el.checked) setTimeout(() => { const n = document.querySelector(`[data-key="wn-next-${p.id}"]`); if (n) n.focus(); }, 30); } }),
+      ' This step is done') : null,
+    nextBox ? h('input', {
+      name: 'next', key: 'wn-next-' + p.id, autocomplete: 'off', enterkeyhint: 'done', 'data-mention': '1',
+      placeholder: due ? "What's next? (optional)" : 'Next step (optional)',
+    }) : null,
+    h('div', { class: 'row' },
+      h('button', { class: 'btn primary small', type: 'submit' }, 'Save update'),
+      h('span', { class: 'muted small' }, 'Enter also saves'))),
+    h('ul', { class: 'notes' }, p.workNotes.slice(0, notesShown).map((n) => {
+      const st = n.stepId && p.steps.find((x) => x.id === n.stepId);
+      return h('li', { key: 'n-' + n.id },
+        h('span', { class: 'muted small' }, `${fmtDay(indiaDate(n.createdAt))} ${fmtTime(n.createdAt)}`),
+        autoField('input', { value: n.text, 'aria-label': 'Work note', key: 'nt-' + n.id, 'data-mention': '1' },
+          (v) => { if (v.trim()) store.dispatch('editWorkNote', { projectId: p.id, noteId: n.id, text: v }); }),
+        st ? h('span', { class: 'tag on-step', title: 'This note is about this step' }, `on: ${st.text}`) : null,
+        h('button', {
+          class: 'icon', title: 'Delete note',
+          onClick: () => ctx.act('deleteWorkNote', { projectId: p.id, noteId: n.id }, 'Note deleted'),
+        }, '🗑'));
+    })),
+    p.workNotes.length > notesShown
+      ? h('button', { class: 'link small', onClick: () => { ui.notesLimit = notesShown + 20; ctx.render(); } }, `Show older notes (${p.workNotes.length - notesShown})`) : null);
+}
+
 const notesTimers = {}; // one save timer per project, kept across screen updates
 
 function notesBox(ctx, p) {
@@ -414,28 +492,7 @@ export function renderDetail(ctx) {
         h('summary', { onClick: (e) => { e.preventDefault(); ui.showDone = !ui.showDone; ctx.render(); } }, `Done (${doneSteps.length})`),
         ui.showDone ? h('ul', { class: 'steps' }, doneSteps.map((s) => stepRow(ctx, p, s))) : null) : null),
 
-    section('What did you do today?',
-      h('form', {
-        class: 'row',
-        onSubmit: (e) => {
-          e.preventDefault();
-          const input = e.target.elements.note;
-          const text = input.value.trim();
-          if (!text) return;
-          if (store.dispatch('addWorkNote', { projectId: p.id, noteId: newId(), text })) { input.value = ''; ctx.toast('Note saved'); }
-        },
-      },
-      h('input', { name: 'note', placeholder: withKey('A short note, then press Enter', 'W'), key: 'wn-' + p.id, enterkeyhint: 'done', 'data-mention': '1', autocomplete: 'off' })),
-      h('ul', { class: 'notes' }, p.workNotes.slice(0, notesShown).map((n) => h('li', { key: 'n-' + n.id },
-        h('span', { class: 'muted small' }, `${fmtDay(indiaDate(n.createdAt))} ${fmtTime(n.createdAt)}`),
-        autoField('input', { value: n.text, 'aria-label': 'Work note', key: 'nt-' + n.id, 'data-mention': '1' },
-          (v) => { if (v.trim()) store.dispatch('editWorkNote', { projectId: p.id, noteId: n.id, text: v }); }),
-        h('button', {
-          class: 'icon', title: 'Delete note',
-          onClick: () => ctx.act('deleteWorkNote', { projectId: p.id, noteId: n.id }, 'Note deleted'),
-        }, '🗑')))),
-      p.workNotes.length > notesShown
-        ? h('button', { class: 'link small', onClick: () => { ui.notesLimit = notesShown + 20; ctx.render(); } }, `Show older notes (${p.workNotes.length - notesShown})`) : null),
+    section("Today's update", todaysUpdate(ctx, p, notesShown)),
 
     show.notes ? section('Notes', notesBox(ctx, p)) : null,
     show.links ? section('Links', linksBlock(ctx, p)) : null,

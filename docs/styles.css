@@ -570,3 +570,14 @@ kbd.hint {
 .trophy { border: 1px solid #bbf7d0; background: #f0fdf4; color: #166534; border-radius: 99px; padding: 4px 11px; font-size: 13px; cursor: pointer; }
 .trophy:hover { background: #dcfce7; }
 .dashboard > .dash-grid { margin-bottom: 14px; }
+
+/* ---------- today's update: plan + diary connected (v16) ---------- */
+.update-next { padding: 8px 12px; border-radius: 10px; background: var(--brand-soft); color: #1e3a8a; margin-bottom: 8px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.update-next.none { background: #fff7ed; color: #9a3412; }
+.update-form { display: flex; flex-direction: column; gap: 8px; }
+.update-form > input { width: 100%; }
+.update-done { font-size: 14px; }
+.update-done input { width: 18px; height: 18px; accent-color: var(--green); }
+.tag.on-step { color: #1e40af; background: var(--brand-soft); border-color: #c7d7fb; max-width: 40%; overflow: hidden; text-overflow: ellipsis; }
+.step-notes { padding: 0 8px 6px 64px; font-size: 12.5px; color: var(--muted); }
+.step.done .step-notes { padding-left: 40px; }

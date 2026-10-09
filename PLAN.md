@@ -72,6 +72,7 @@ Version: 5.
 | 43 | AI steps | One "✨ AI steps" button (key i) in each project: reads title, notes, steps and work notes, suggests 3–7 next steps in order (top = next). Untick, ✕ remove or edit any, then "Add N steps". Uses the chosen AI; if it fails, tries the other key. List rows no longer show the target date (only "Overdue"). |
 | 44 | Notes save sign | Under the big Notes box: "Typing…" → "Saving…" → "Saved ✓ time" (red if no connection). Typed text is also saved when leaving the app or switching tabs. |
 | 45 | Dashboard | Menu → Dashboard (key b): today's green count, current and best all-green streak, all-green days this month, a month calendar of green days (‹ › for other months), last 7 days numbers (steps done, notes, projects worked on), most worked projects this month, projects that need attention (overdue or no real work 3+ days), people to contact, wins this week (the real steps done), this week vs last week, all-time totals, a 🏆 shelf of finished projects, and a 🎉 all-green celebration (also on Today). |
+| 46 | Today's update | "What did you do today?" became "Today's update": shows the next step on top; the note is linked to that step; tick "This step is done" and a "What's next?" box appears; one Save (Enter) saves note + tick + next step with one Undo. Notes show under their step and in the Diary ("on: step"). |
 
 ---
 

@@ -304,3 +304,21 @@ test('undo OK removes the Reviewed line', () => {
   applyOp(s, op('undoOkForToday', { projectId: 'p1' }, '2026-10-02', '10:05:00'));
   assert.ok(!s.history['2026-10'].some((e) => e.id === ok.id));
 });
+
+test("today's update: note linked to the step, tick, next step, one undo for all", () => {
+  const s = withProject('2026-10-01');
+  const before = clone(s.data.projects[0]);
+  const a = op('addWorkNote', { projectId: 'p1', noteId: 'n1', text: 'Called supplier', stepId: 's1' }, '2026-10-02');
+  const b = op('tickStep', { projectId: 'p1', stepId: 's1' }, '2026-10-02', '10:00:01');
+  const c = op('addStep', { projectId: 'p1', stepId: 's9', text: 'Order frit' }, '2026-10-02', '10:00:02');
+  applyOps(s, [a, b, c]);
+  const p = s.data.projects[0];
+  assert.equal(p.workNotes[0].stepId, 's1');
+  assert.ok(p.steps.find((x) => x.id === 's1').done);
+  applyOp(s, op('restoreProject', { project: before, undoOpIds: [a.id, b.id, c.id] }, '2026-10-02', '10:01:00'));
+  assert.equal(s.data.projects[0].workNotes.length, 0);
+  assert.ok(![a.id, b.id, c.id].some((id) => s.history['2026-10'].some((e) => e.id === id)), 'all three history lines removed');
+  // a note for a step that no longer exists is kept, without the link
+  applyOp(s, op('addWorkNote', { projectId: 'p1', noteId: 'n2', text: 'x', stepId: 'gone' }, '2026-10-02'));
+  assert.equal(s.data.projects[0].workNotes[0].stepId, null);
+});

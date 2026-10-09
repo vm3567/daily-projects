@@ -271,9 +271,10 @@ const handlers = {
     const i = list.findIndex((x) => x.id === snap.id);
     if (i >= 0) list[i] = clone(snap);
     else list.splice(Math.min(Math.max(0, a.index ?? 0), list.length), 0, clone(snap));
-    if (a.undoOpId) {
+    const undone = [a.undoOpId, ...(Array.isArray(a.undoOpIds) ? a.undoOpIds : [])].filter(Boolean);
+    for (const id of undone) {
       for (const events of Object.values(state.history)) {
-        const k = events.findIndex((e) => e.id === a.undoOpId);
+        const k = events.findIndex((e) => e.id === id);
         if (k >= 0) events.splice(k, 1);
       }
     }
@@ -410,7 +411,9 @@ const handlers = {
     const p = findProject(state.data, a.projectId);
     const text = cleanText(a.text, 5000).trim();
     if (!p || !text || p.workNotes.some((n) => n.id === a.noteId)) return false;
-    p.workNotes.unshift({ id: a.noteId, text, createdAt: op.at, updatedAt: op.at });
+    // A note can belong to a step ("what I did on this step"); it stays even if the step is later ticked.
+    const stepId = a.stepId && p.steps.some((s) => s.id === a.stepId) ? a.stepId : null;
+    p.workNotes.unshift({ id: a.noteId, text, stepId, createdAt: op.at, updatedAt: op.at });
     touch(p, op);
     addEvent(state, op, p, 'note_added', text);
     return true;

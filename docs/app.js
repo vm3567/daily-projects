@@ -51,6 +51,25 @@ function toast(text, ms = 3500, undo = null) {
 }
 
 /**
+ * Several changes to one project as ONE action with one Undo (e.g. note + tick + next step).
+ * `steps` is a list of [type, args]. Returns the ops that were applied, or null.
+ */
+function actMany(projectId, steps, message) {
+  const list = store.view.data.projects;
+  const index = list.findIndex((x) => x.id === projectId);
+  const before = index >= 0 ? clone(list[index]) : null;
+  const ops = [];
+  for (const [type, args] of steps) { const op = store.dispatch(type, args); if (op) ops.push(op); }
+  if (!ops.length) return null;
+  const undo = before ? () => {
+    const months = [...new Set(ops.map(opMonth))];
+    if (store.dispatch('restoreProject', { project: before, index, undoOpIds: ops.map((o) => o.id), undoMonth: months[0] })) toast('Undone', 1500);
+  } : null;
+  if (message) toast(message, 5000, undo);
+  return ops;
+}
+
+/**
  * Do one change to a project and offer Undo. Undo puts the whole project back as it was
  * (dot colour included) and removes that change's line from the history.
  * Returns { op, undo } or null if nothing changed.
@@ -85,6 +104,7 @@ const ctx = {
   hasAiKey: () => !!(store && aiReady().key),
   toggleOk: (p) => toggleOk(p),
   act: (type, args, message) => act(type, args, message),
+  actMany: (projectId, steps, message) => actMany(projectId, steps, message),
   chase: (p, s) => chase(p, s),
   afterTick: (id, where, undo) => afterTick(id, where, undo),
   selectPerson: (id) => { ui.person = id; ui.mobile = 'detail'; render(); const d = document.getElementById('detail'); if (d) d.scrollTop = 0; },
@@ -770,7 +790,10 @@ function renderDiary() {
   }
   // Work notes come from the projects (so edits and deletes show correctly)...
   for (const p of data.projects) {
-    for (const n of p.workNotes) add(indiaDate(n.createdAt), { at: n.createdAt, projectId: p.id, text: `📝 ${n.text}`, name: p.name });
+    for (const n of p.workNotes) {
+      const st = n.stepId && p.steps.find((s) => s.id === n.stepId);
+      add(indiaDate(n.createdAt), { at: n.createdAt, projectId: p.id, text: `📝 ${n.text}${st ? `  (on: ${st.text})` : ''}`, name: p.name });
+    }
   }
   // ...and from history only for deleted projects.
   for (const e of Object.values(history).flat()) {
@@ -1079,7 +1102,7 @@ function roundSubmit(text) {
   if (!p || !t) return;
   const mode = ui.round.mode;
   const ok = mode === 'note'
-    ? act('addWorkNote', { projectId: p.id, noteId: newId(), text: t }, `Note saved (${p.name})`)
+    ? act('addWorkNote', { projectId: p.id, noteId: newId(), text: t, stepId: (nextStep(p, todayIndia(), { dueOnly: true }) || {}).id }, `Note saved (${p.name})`)
     : act('addStep', { projectId: p.id, stepId: newId(), text: t }, `Added: ${t}`);
   if (ok) roundNext();
 }
