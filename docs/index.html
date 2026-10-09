@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; connect-src https://api.github.com https://api.anthropic.com https://generativelanguage.googleapis.com; img-src 'self' blob: data:; frame-src blob:; object-src blob:; manifest-src 'self'">
+  <meta name="referrer" content="no-referrer">
+  <meta name="robots" content="noindex">
+  <title>Daily Projects</title>
+  <meta name="description" content="My projects and their next steps, every day.">
+  <meta name="theme-color" content="#ffffff">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Daily Projects">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon-192.png">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="styles.css">
+  <script src="vendor/sortable.min.js" defer></script>
+  <script type="module" src="app.js"></script>
+</head>
+<body>
+  <div id="app"><div class="loading">Loading…</div></div>
+  <div id="keyscreen" hidden></div>
+  <div id="viewer" hidden></div>
+  <div id="toast" role="status" hidden></div>
+</body>
+</html>

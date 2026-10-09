@@ -1,0 +1,12 @@
+# Local copy of the PRIVATE data repository - never push it here
+data/
+
+# Secrets
+.env
+.env.*
+*.key
+*.pem
+
+# Mac / tools
+.DS_Store
+node_modules/
