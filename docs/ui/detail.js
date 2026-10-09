@@ -2,7 +2,8 @@
 // See PLAN.md sections 3, 6-9, 11, 13, 15.
 
 import { h, fmtDay, fmtTime, fmtSize } from './dom.js';
-import { dotColour, todayIndia, isOverdue, indiaDate } from '../rules.js';
+import { dotColour, todayIndia, isOverdue, indiaDate, waitingDays } from '../rules.js';
+import { WAIT_RED_DAYS } from '../config.js';
 import { newId, PRIORITIES, cleanUrl } from '../ops.js';
 import { uploadFiles, openFile } from './files.js';
 
@@ -33,7 +34,11 @@ function stepRow(ctx, p, s) {
   const open = ui.openStep === s.id;
   const today = todayIndia();
   const tags = [];
-  if (s.waiting) tags.push(h('span', { class: 'tag waiting' }, s.waitingOn ? `Waiting: ${s.waitingOn}` : 'Waiting'));
+  if (s.waiting && !s.done) {
+    const d = waitingDays(s, today);
+    const who = s.waitingOn ? `Waiting: ${s.waitingOn}` : 'Waiting';
+    tags.push(h('span', { class: 'tag waiting' + (d >= WAIT_RED_DAYS ? ' late' : '') }, d ? `${who} · ${d}d` : who));
+  }
   if (s.dueDate && !s.done) tags.push(h('span', { class: 'tag' + (s.dueDate < today ? ' late' : '') }, `by ${fmtDay(s.dueDate)}`));
   if (s.note && !open) tags.push(h('span', { class: 'tag' }, 'note'));
   return h('li', { class: 'step' + (s.done ? ' done' : ''), key: 's-' + s.id, 'data-id': s.id },

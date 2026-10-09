@@ -66,6 +66,7 @@ Version: 5.
 | 37 | Target date | Every new project gets a target date 30 days ahead. I can change or remove it. ("Deadline" is called "Target date" in the app.) |
 | 38 | Keyboard | Shortcuts on the computer: ↓ ↑ move between projects, x tick, a add step, w note, n new project, / search, r Red first, t Today, d Diary, Esc leave, ? help |
 | 39 | People | A People list (name only). Type @ in a step, step note, work note or project notes to pick a person. Each person's page shows "Waiting on them" and "To discuss with them" (all projects), notes about them, and done steps. "Waiting on" uses the same names. Keyboard: p opens People. |
+| 40 | Follow-up | Each person gets a dot: red = waiting on them 2+ days (or a linked step's date passed) → contact now; orange = something open; green = nothing open. Today shows a "Follow up today" row (red and orange names). Waiting steps show "Waiting: Name · Nd". |
 
 ---
 

@@ -180,3 +180,23 @@ test('people: add, rename keeps links, delete', () => {
   applyOp(s, op('deletePerson', { personId: 'r' }, '2026-10-03'));
   assert.equal(s.data.people.length, 0);
 });
+
+test('people follow-up colours: waiting 2+ days is red, discuss is orange, nothing open is green', async () => {
+  const { personStatus, waitingDays } = await import('../docs/rules.js');
+  const s = withProject('2026-10-01');
+  applyOp(s, op('addPerson', { personId: 'r', name: 'Ravi' }, '2026-10-01'));
+  applyOp(s, op('addPerson', { personId: 'm', name: 'Meena' }, '2026-10-01'));
+  const ravi = s.data.people.find((x) => x.id === 'r');
+  const meena = s.data.people.find((x) => x.id === 'm');
+  assert.equal(personStatus(s.data, ravi, '2026-10-01').colour, 'green');
+  applyOp(s, op('setStepField', { projectId: 'p1', stepId: 's1', field: 'text', value: 'Tell @Meena the size' }, '2026-10-01'));
+  assert.equal(personStatus(s.data, meena, '2026-10-09').colour, 'orange', 'discuss stays orange');
+  applyOp(s, op('setStepField', { projectId: 'p1', stepId: 's2', field: 'waiting', value: true }, '2026-10-01'));
+  applyOp(s, op('setStepField', { projectId: 'p1', stepId: 's2', field: 'waitingOn', value: 'Ravi' }, '2026-10-01'));
+  const step = s.data.projects[0].steps.find((x) => x.id === 's2');
+  assert.equal(waitingDays(step, '2026-10-02'), 1);
+  assert.equal(personStatus(s.data, ravi, '2026-10-02').colour, 'orange');
+  assert.equal(personStatus(s.data, ravi, '2026-10-03').colour, 'red', '2 days waiting = chase');
+  applyOp(s, op('tickStep', { projectId: 'p1', stepId: 's2' }, '2026-10-03'));
+  assert.equal(personStatus(s.data, ravi, '2026-10-03').colour, 'green', 'done = green');
+});

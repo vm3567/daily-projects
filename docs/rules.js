@@ -1,7 +1,7 @@
 // Shared rules (used by the app in the browser AND by tools/tracker.mjs on the Mac).
 // No browser-only or Node-only code in this file.
 
-import { TIME_ZONE } from './config.js';
+import { TIME_ZONE, WAIT_RED_DAYS } from './config.js';
 
 const dateFmt = new Intl.DateTimeFormat('en-CA', {
   timeZone: TIME_ZONE, year: 'numeric', month: '2-digit', day: '2-digit',
@@ -112,4 +112,46 @@ export function stepLinkedTo(step, person, people) {
 export function initials(name) {
   const parts = String(name).trim().split(/\s+/).filter(Boolean);
   return ((parts[0] || '?')[0] + (parts.length > 1 ? parts[parts.length - 1][0] : '')).toUpperCase();
+}
+
+/** Days a waiting step has been waiting (older steps without waitingSince use their last change). */
+export function waitingDays(step, today = todayIndia()) {
+  if (!step.waiting) return 0;
+  const since = step.waitingSince || (step.updatedAt ? indiaDate(step.updatedAt) : today);
+  return Math.max(0, daysBetween(since, today));
+}
+
+/** Steps linked to a person, split into lists (finished projects are left out of the open lists). */
+export function personSteps(data, person) {
+  const people = data.people || [];
+  const waiting = [];
+  const discuss = [];
+  const done = [];
+  for (const p of data.projects) {
+    for (const s of p.steps) {
+      if (!stepLinkedTo(s, person, people)) continue;
+      const item = { project: p, step: s };
+      if (s.done) done.push(item);
+      else if (p.state === 'finished') continue;
+      else if (s.waiting) waiting.push(item);
+      else discuss.push(item);
+    }
+  }
+  done.sort((a, b) => (a.step.doneAt < b.step.doneAt ? 1 : -1));
+  return { waiting, discuss, done };
+}
+
+/**
+ * Follow-up colour for a person:
+ *   red    = waiting on them WAIT_RED_DAYS+ days, or a linked step is past its date → contact now
+ *   orange = something open (waiting less long, or to discuss)
+ *   green  = nothing open
+ */
+export function personStatus(data, person, today = todayIndia()) {
+  const { waiting, discuss } = personSteps(data, person);
+  const maxWait = waiting.reduce((m, it) => Math.max(m, waitingDays(it.step, today)), 0);
+  const late = [...waiting, ...discuss].some((it) => it.step.dueDate && it.step.dueDate < today);
+  const open = waiting.length + discuss.length;
+  const colour = !open ? 'green' : (waiting.length && maxWait >= WAIT_RED_DAYS) || late ? 'red' : 'orange';
+  return { colour, open, waiting: waiting.length, discuss: discuss.length, maxWait, late };
 }

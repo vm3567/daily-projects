@@ -263,6 +263,7 @@ const handlers = {
     if (s[a.field] === value) return false;
     const old = s[a.field];
     s[a.field] = value;
+    if (a.field === 'waiting') s.waitingSince = value ? indiaDate(op.at) : null; // for "Waiting · 4d"
     s.updatedAt = op.at;
     touch(p, op);
     if (a.field === 'text') addEvent(state, op, p, 'step_edited', `${old} → ${value}`);

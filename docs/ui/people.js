@@ -2,32 +2,30 @@
 // A step is linked to a person when its text or note has "@Name", or "Waiting on" is that person.
 
 import { h, fmtDay, fmtTime } from './dom.js';
-import { stepLinkedTo, mentionedPeople, initials, indiaDate } from '../rules.js';
+import { mentionedPeople, initials, indiaDate, personSteps, personStatus, waitingDays, todayIndia } from '../rules.js';
 import { newId } from '../ops.js';
-
-/** All steps linked to a person, split into the person-page lists. */
-export function personSteps(data, person) {
-  const people = data.people || [];
-  const waiting = [];
-  const discuss = [];
-  const done = [];
-  for (const p of data.projects) {
-    for (const s of p.steps) {
-      if (!stepLinkedTo(s, person, people)) continue;
-      const item = { project: p, step: s };
-      if (s.done) done.push(item);
-      else if (p.state === 'finished') continue;
-      else if (s.waiting) waiting.push(item);
-      else discuss.push(item);
-    }
-  }
-  done.sort((a, b) => (a.step.doneAt < b.step.doneAt ? 1 : -1));
-  return { waiting, discuss, done };
-}
 
 export function openCount(data, person) {
   const { waiting, discuss } = personSteps(data, person);
   return waiting.length + discuss.length;
+}
+
+const ORDER = { red: 0, orange: 1, green: 2 };
+
+/** People sorted for following up: red first, then orange, then green; by name inside. */
+export function peopleByFollowUp(data, today = todayIndia()) {
+  return (data.people || [])
+    .map((person) => ({ person, st: personStatus(data, person, today) }))
+    .sort((a, b) => ORDER[a.st.colour] - ORDER[b.st.colour] || a.person.name.localeCompare(b.person.name));
+}
+
+function statusWords(st) {
+  if (!st.open) return 'Nothing open';
+  const bits = [];
+  if (st.waiting) bits.push(`Waiting ${st.maxWait ? st.maxWait + ' day' + (st.maxWait > 1 ? 's' : '') : 'since today'}`);
+  if (st.discuss) bits.push(`${st.discuss} to discuss`);
+  if (st.late) bits.push('date passed');
+  return bits.join(' · ');
 }
 
 export function renderPeopleList(ctx) {
@@ -50,15 +48,14 @@ export function renderPeopleList(ctx) {
     h('input', { name: 'name', placeholder: 'Add a person (name)', key: 'new-person', autocomplete: 'off' }),
     h('button', { class: 'btn primary small', type: 'submit' }, 'Add')),
     people.length ? null : h('p', { class: 'empty-list' }, 'No people yet. Add a name above, or type @ and a name in any step.'),
-    h('ul', { class: 'plist people-list', key: 'people-list' }, people.map((person) => {
-      const n = openCount(data, person);
-      return h('li', { key: 'pp-' + person.id, 'data-id': person.id, class: 'prow' + (ui.person === person.id ? ' current' : '') },
+    h('ul', { class: 'plist people-list', key: 'people-list' }, peopleByFollowUp(data).map(({ person, st }) => (
+      h('li', { key: 'pp-' + person.id, 'data-id': person.id, class: 'prow' + (ui.person === person.id ? ' current' : '') },
         h('button', { class: 'prow-btn', onClick: () => ctx.selectPerson(person.id) },
+          h('span', { class: `dot ${st.colour}`, 'aria-label': st.colour }),
           h('span', { class: 'avatar' }, initials(person.name)),
           h('span', { class: 'prow-text' },
-            h('span', { class: 'prow-name' }, person.name),
-            h('span', { class: 'prow-next' }, n ? `${n} open step${n > 1 ? 's' : ''}` : 'Nothing open'))));
-    })));
+            h('span', { class: 'prow-name' }, person.name, st.open ? h('span', { class: 'count-pill' }, String(st.open)) : null),
+            h('span', { class: 'prow-next' + (st.colour === 'red' ? ' warn' : '') }, statusWords(st)))))))));
 }
 
 function stepItem(ctx, { project, step }) {
@@ -69,6 +66,7 @@ function stepItem(ctx, { project, step }) {
       onChange: () => store.dispatch(step.done ? 'untickStep' : 'tickStep', { projectId: project.id, stepId: step.id }),
     }),
     h('span', { class: 'person-step-text' }, step.text,
+      step.waiting && !step.done ? h('span', { class: 'muted small' }, ` · waiting ${waitingDays(step)}d`) : null,
       step.dueDate && !step.done ? h('span', { class: 'muted small' }, ` · by ${fmtDay(step.dueDate)}`) : null,
       step.done && step.doneAt ? h('span', { class: 'muted small' }, ` · ${fmtDay(indiaDate(step.doneAt))}`) : null),
     h('button', { class: 'tag link-tag', title: 'Open project', onClick: () => ctx.openProject(project.id) }, project.name));
@@ -101,6 +99,7 @@ export function renderPerson(ctx) {
   return h('div', { class: 'detail-inner', key: 'person-' + person.id },
     h('div', { class: 'detail-top' },
       h('button', { class: 'icon back', 'aria-label': 'Back to list', onClick: () => { ui.mobile = 'list'; ctx.render(); } }, '←'),
+      h('span', { class: `dot ${personStatus(data, person).colour}` }),
       h('span', { class: 'avatar big' }, initials(person.name)),
       h('input', {
         class: 'title-input', value: person.name, 'aria-label': 'Name', key: 'person-name-' + person.id,

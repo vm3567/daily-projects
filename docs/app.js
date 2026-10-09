@@ -2,15 +2,15 @@
 
 import { h, morph, installEvents, fmtDay, fmtLongDay, fmtTime } from './ui/dom.js';
 import { renderDetail } from './ui/detail.js';
-import { renderPeopleList, renderPerson } from './ui/people.js';
+import { renderPeopleList, renderPerson, peopleByFollowUp } from './ui/people.js';
 import { installMentions } from './ui/mention.js';
 import { closeViewer } from './ui/files.js';
 import { Store } from './store.js';
 import { GitHubRepo } from './github.js';
 import { MockRepo } from './mockrepo.js';
 import { device } from './device.js';
-import { DATA_OWNER, DATA_REPO, DATA_BRANCH, REFRESH_MS, AI_DAILY_LIMIT, BRIEF_CLAIM_MINUTES } from './config.js';
-import { dotColour, nextStep, todayIndia, isSundayIndia, colourCounts, isOverdue, indiaDate } from './rules.js';
+import { DATA_OWNER, DATA_REPO, DATA_BRANCH, REFRESH_MS, AI_DAILY_LIMIT, BRIEF_CLAIM_MINUTES, WAIT_RED_DAYS } from './config.js';
+import { dotColour, nextStep, todayIndia, isSundayIndia, colourCounts, isOverdue, indiaDate, waitingDays } from './rules.js';
 import { newId } from './ops.js';
 import * as ai from './ai.js';
 
@@ -325,11 +325,31 @@ function projectRow(p, today) {
           p.state !== 'active' ? h('span', { class: 'tag' }, p.state) : null,
           p.priority === 'high' ? h('span', { class: 'tag high' }, 'High') : null),
         h('span', { class: 'prow-next' + (ns ? '' : ' warn') }, ns ? `Next: ${ns.text}` : 'No next step — add one',
-          ns && ns.waiting ? h('span', { class: 'tag waiting' }, 'Waiting') : null,
+          ns && ns.waiting ? waitingTag(ns) : null,
           p.deadline
             ? h('span', { class: 'tag' + (isOverdue(p, today) ? ' late' : '') }, isOverdue(p, today) ? `Overdue · ${fmtDay(p.deadline)}` : `Target ${fmtDay(p.deadline)}`)
             : null))),
     canDrag() ? h('span', { class: 'grip', 'aria-hidden': 'true', title: 'Drag to reorder' }, '⋮⋮') : null);
+}
+
+/** "Waiting: Ravi · 4d" — red once it is time to chase. */
+function waitingTag(step) {
+  const d = waitingDays(step);
+  const who = step.waitingOn ? `Waiting: ${step.waitingOn}` : 'Waiting';
+  return h('span', { class: 'tag waiting' + (d >= WAIT_RED_DAYS ? ' late' : '') }, d ? `${who} · ${d}d` : who);
+}
+
+/** Today screen: people to contact (red, then orange). Tap a name to open their page. */
+function followUpRow() {
+  const list = peopleByFollowUp(store.view.data).filter((x) => x.st.colour !== 'green');
+  if (!list.length) return null;
+  return h('div', { class: 'follow-up', key: 'follow-up' },
+    h('div', { class: 'follow-up-title' }, 'Follow up today'),
+    h('div', { class: 'follow-up-chips' }, list.map(({ person, st }) => h('button', {
+      class: 'person-chip', key: 'fu-' + person.id,
+      title: st.colour === 'red' ? 'Time to contact' : 'Something open',
+      onClick: () => { ui.view = 'people'; ui.search = ''; rememberUi(); ctx.selectPerson(person.id); },
+    }, h('span', { class: `dot ${st.colour}` }), `${person.name} (${st.open})`))));
 }
 
 function canDrag() {
@@ -442,6 +462,7 @@ function renderListColumn() {
     head,
     mobileSearch,
     ui.view === 'today' && !ui.search ? progressLine(today) : null,
+    ui.view === 'today' && !ui.search ? followUpRow() : null,
     ui.view === 'today' && !ui.search ? renderBrief() : null,
     h('div', { class: 'list-tools' },
       ui.view === 'finished' || ui.view === 'paused' || ui.search ? null : newProjectForm(),
