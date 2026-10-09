@@ -10,6 +10,7 @@ import { AuthError, NetworkError, ClashError } from './github.js';
 import { SAVE_DELAY_MS } from './config.js';
 
 const PENDING_KEY = 'dp.pending';
+const SNAPSHOT_KEY = 'dp.snapshot'; // last data seen from GitHub, so the app can open without internet
 const DATA_PATH = 'data.json';
 const historyPath = (m) => `history/${m}.json`;
 
@@ -87,8 +88,35 @@ export class Store extends EventTarget {
     await this.ensureMonths(base, keepMonths);
     this.base = base;
     this.recompute();
+    this.saveSnapshot();
     if (['loading', 'offline', 'auth', 'error'].includes(this.status) && !this.saving) this.setStatus(this.pending.length ? 'saving' : 'saved');
     this.emit('change', { reason: 'load' });
+  }
+
+  /** Keep the latest data (and this month's history) on the device for opening without internet. */
+  saveSnapshot() {
+    if (!this.base) return;
+    try {
+      const month = monthOf(todayIndia());
+      const snap = {
+        at: new Date().toISOString(), data: this.base.data, history: { [month]: this.base.history[month] || [] },
+        commit: this.base.commit, tree: this.base.tree, entries: [...this.base.entries],
+      };
+      localStorage.setItem(SNAPSHOT_KEY, JSON.stringify(snap));
+    } catch { /* storage full: the app still works online */ }
+  }
+
+  /** Open from the copy on this device (no internet). Returns true if there was one. */
+  openSnapshot() {
+    let snap = null;
+    try { snap = JSON.parse(localStorage.getItem(SNAPSHOT_KEY) || 'null'); } catch { snap = null; }
+    if (!snap || !snap.data) return false;
+    this.base = { data: snap.data, history: snap.history || {}, commit: snap.commit, tree: snap.tree, entries: new Map(snap.entries || []) };
+    this.snapshotAt = snap.at;
+    this.recompute();
+    this.setStatus('offline', 'No connection');
+    this.emit('change', { reason: 'snapshot' });
+    return true;
   }
 
   recompute() {
@@ -206,6 +234,7 @@ export class Store extends EventTarget {
               else entries.delete(c.path);
             }
             this.base = { ...next, commit: r.commit, tree: r.tree, entries };
+            this.saveSnapshot();
           }
           done = true;
         } catch (e) {
@@ -257,6 +286,8 @@ export class Store extends EventTarget {
       await this.load();
       if (this.pending.length) this.scheduleSave(100);
     } catch (e) {
+      // No internet at start: open with the copy kept on this device; it syncs when the internet is back.
+      if (e instanceof NetworkError && !this.base && this.openSnapshot()) return;
       this.handleError(e);
     }
   }

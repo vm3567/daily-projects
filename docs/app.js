@@ -830,7 +830,10 @@ function statusText() {
   const s = store ? store.status : 'loading';
   if (s === 'saving') return h('span', { class: 'status' }, 'Saving…');
   if (s === 'saved') return h('span', { class: 'status ok' }, 'Saved ✓');
-  if (s === 'offline') return h('span', { class: 'status bad', title: 'Your changes wait on this device and are saved when the internet is back' }, `Offline — ${store.pending.length} waiting`);
+  if (s === 'offline') {
+    const since = store.snapshotAt ? ` · data from ${fmtTime(store.snapshotAt)}` : '';
+    return h('span', { class: 'status bad', title: 'Your changes wait on this device and are saved when the internet is back' }, `Offline — ${store.pending.length} waiting${since}`);
+  }
   if (s === 'error') return h('span', { class: 'status bad' }, store.message || 'Error');
   if (s === 'auth') return h('span', { class: 'status bad' }, 'Key problem');
   return h('span', { class: 'status' }, 'Loading…');
@@ -1707,6 +1710,8 @@ function start() {
 
 installEvents(document.body);
 installSwipe();
+// Keep the app's files on the device so it opens without internet (not in test mode on this Mac).
+if ('serviceWorker' in navigator && !isMock) navigator.serviceWorker.register('sw.js').catch(() => {});
 installMentions(() => ctx);
 if (isMock) document.title = 'Daily Projects (test mode)';
 start();

@@ -153,3 +153,38 @@ test('a history month that did not change is not downloaded again', async () => 
   stop(s);
   assert.equal(reads - first, 1, 'second load fetched only data.json, history came from the cache');
 });
+
+test('opens without internet from the copy on the device, then syncs when back online', async () => {
+  const repo = await freshRepoWithProject();
+  localStorage.clear();
+  const first = await device(repo.s); // online once: copy kept on the device
+  stop(first);
+  assert.ok(localStorage.getItem('dp.snapshot'));
+  // next day, no internet
+  const offlineRepo = new MemRepo(repo.s);
+  offlineRepo.fail = 'net';
+  const s = new Store(offlineRepo);
+  await s.init();
+  assert.equal(s.status, 'offline');
+  assert.equal(s.view.data.projects[0].name, 'Kiln trial', 'projects shown from the copy');
+  assert.ok(s.dispatch('tickStep', { projectId: 'p1', stepId: 's1' }), 'changes accepted offline');
+  // meanwhile the phone (online) added a step
+  localStorage.setItem('dp.pending.phone', '');
+  const phone = new Store(new MemRepo(repo.s));
+  const savedPending = localStorage.getItem('dp.pending');
+  await phone.init();
+  phone.pending = [];
+  phone.dispatch('addStep', { projectId: 'p1', stepId: 's9', text: 'From phone' });
+  await phone.flush();
+  stop(phone);
+  localStorage.setItem('dp.pending', savedPending);
+  // internet back on the Mac: the waiting change is sent and merged with the phone's
+  offlineRepo.fail = null;
+  await s.refresh();
+  await s.flush();
+  stop(s);
+  const p = JSON.parse(repo.read('data.json')).projects[0];
+  assert.ok(p.steps.find((x) => x.id === 's1').done, "Mac's offline tick kept");
+  assert.ok(p.steps.find((x) => x.id === 's9'), "phone's step kept");
+  assert.equal(s.status, 'saved');
+});

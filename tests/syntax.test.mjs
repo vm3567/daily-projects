@@ -18,3 +18,14 @@ test('all app files parse', () => {
     assert.doesNotThrow(() => execFileSync(process.execPath, ['--check', f], { stdio: 'pipe' }), `syntax error in ${f}`);
   }
 });
+
+test('every app file is kept for offline use (listed in sw.js)', async () => {
+  const { readFileSync } = await import('node:fs');
+  const sw = readFileSync(join(root, 'docs', 'sw.js'), 'utf8');
+  const list = [...sw.matchAll(/'([^']+\.(?:js|css|html|png|webmanifest))'/g)].map((m) => m[1]);
+  const appFiles = [
+    ...readdirSync(join(root, 'docs')).filter((f) => /\.(js|css|html|webmanifest)$/.test(f) && f !== 'sw.js'),
+    ...readdirSync(join(root, 'docs', 'ui')).filter((f) => f.endsWith('.js')).map((f) => 'ui/' + f),
+  ];
+  for (const f of appFiles) assert.ok(list.includes(f), `${f} is missing from the offline list in docs/sw.js`);
+});
