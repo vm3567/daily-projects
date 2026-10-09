@@ -41,7 +41,7 @@ async function shrinkImage(file) {
  */
 export async function uploadBlob(ctx, original) {
   const { store, toast } = ctx;
-  if (!store.canEdit()) { toast('No connection — photo not added'); return null; }
+  if (store.isOffline() || !store.canEdit()) { toast('No connection — photo not added'); return null; }
   const file = await shrinkImage(original);
   if (file.size > MAX_FILE_BYTES) { toast(`"${original.name}" is bigger than 25 MB, so it was not added.`); return null; }
   toast(`Uploading "${file.name}"…`, 60000);
@@ -60,7 +60,7 @@ export async function uploadBlob(ctx, original) {
 export async function uploadFiles(ctx, projectId, fileList) {
   const { store, toast } = ctx;
   for (const original of fileList) {
-    if (!store.canEdit()) { toast('No connection — file not added'); return; }
+    if (store.isOffline() || !store.canEdit()) { toast('No connection — file not added'); return; }
     const file = await shrinkImage(original);
     if (file.size > MAX_FILE_BYTES) {
       toast(`"${original.name}" is bigger than 25 MB, so it was not added.`);

@@ -265,7 +265,8 @@ function todaysUpdate(ctx, p, notesShown) {
   const { store, ui } = ctx;
   const today = todayIndia();
   const due = p.state === 'active' ? nextStep(p, today, { dueOnly: true }) : null;
-  const u = ((ui.update ||= {})[p.id] ||= { done: false });
+  const u = ((ui.update ||= {})[p.id] ||= { done: false, note: '', next: '' });
+  if (u.done && (!due || u.stepId !== due.id)) u.done = false; // "done" only counts for the step it was ticked for
   const save = (form) => {
     const f = form.elements;
     const text = f.note.value.trim();
@@ -281,13 +282,13 @@ function todaysUpdate(ctx, p, notesShown) {
     if (tick) steps.push(['tickStep', { projectId: p.id, stepId: due.id }]);
     if (next) steps.push(['addStep', { projectId: p.id, stepId: newId(), text: next }]);
     const bits = [text ? 'note saved' : null, photos.length ? `${photos.length} photo${photos.length > 1 ? 's' : ''}` : null, tick ? `✓ ${due.text}` : null, next ? `next: ${next}` : null].filter(Boolean);
-    if (ctx.actMany(p.id, steps, bits.join(' · '))) {
+    const result = ctx.actMany(p.id, steps, bits.join(' · '));
+    if (result) {
       f.note.value = '';
       if (f.next) f.next.value = '';
-      u.done = false;
-      u.photos = [];
+      u.done = false; u.note = ''; u.next = ''; u.photos = [];
       ctx.render();
-      if (tick && !next && !nextStep(store.view.data.projects.find((x) => x.id === p.id) || p, today, { dueOnly: true })) ctx.afterTick(p.id, 'detail');
+      if (tick && !next) ctx.afterTick(p.id, 'detail', result.undo); // keeps the Undo button
     }
   };
   const nextBox = !due || u.done;
@@ -300,14 +301,16 @@ function todaysUpdate(ctx, p, notesShown) {
       onSubmit: (e) => { e.preventDefault(); save(e.target); },
     },
     h('input', {
-      name: 'note', key: 'wn-' + p.id, autocomplete: 'off', enterkeyhint: 'done', 'data-mention': '1',
+      name: 'note', key: 'wn-' + p.id, autocomplete: 'off', enterkeyhint: 'done', 'data-mention': '1', value: u.note,
       placeholder: withKey(due ? 'What did you do on this step?' : 'What did you do today?', 'W'),
+      onInput: (e, el) => { u.note = el.value; }, // half-typed text survives switching projects
     }),
     due ? h('label', { class: 'check update-done' },
-      h('input', { type: 'checkbox', checked: u.done, onChange: (e, el) => { u.done = el.checked; ctx.render(); if (el.checked) setTimeout(() => { const n = document.querySelector(`[data-key="wn-next-${p.id}"]`); if (n) n.focus(); }, 30); } }),
+      h('input', { type: 'checkbox', checked: u.done, onChange: (e, el) => { u.done = el.checked; u.stepId = due.id; ctx.render(); if (el.checked) setTimeout(() => { const n = document.querySelector(`[data-key="wn-next-${p.id}"]`); if (n) n.focus(); }, 30); } }),
       ' This step is done') : null,
     nextBox ? h('input', {
-      name: 'next', key: 'wn-next-' + p.id, autocomplete: 'off', enterkeyhint: 'done', 'data-mention': '1',
+      name: 'next', key: 'wn-next-' + p.id, autocomplete: 'off', enterkeyhint: 'done', 'data-mention': '1', value: u.next,
+      onInput: (e, el) => { u.next = el.value; },
       placeholder: due ? "What's next? (optional)" : 'Next step (optional)',
     }) : null,
     (u.photos || []).length ? h('div', { class: 'photo-chips' }, u.photos.map((ph, i) => h('span', { class: 'tag photo', key: 'ph-' + ph.fileId },

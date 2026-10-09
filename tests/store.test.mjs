@@ -79,18 +79,17 @@ test('no connection: the change waits on the device and is sent later', async ()
   stop(s);
   assert.equal(s.status, 'offline');
   assert.equal(JSON.parse(localStorage.getItem('dp.pending')).length, 1, 'kept on the device');
-  // while offline, new edits are refused (no silent loss)
-  let blocked = false;
-  s.addEventListener('blocked', () => { blocked = true; });
-  assert.equal(s.dispatch('addWorkNote', { projectId: 'p1', noteId: 'n2', text: 'x' }), null);
-  assert.ok(blocked);
+  // while offline, new edits are still accepted and wait on the device too
+  assert.ok(s.dispatch('addWorkNote', { projectId: 'p1', noteId: 'n2', text: 'Second note' }));
+  stop(s);
+  assert.equal(JSON.parse(localStorage.getItem('dp.pending')).length, 2, 'both kept on the device');
   // the app is opened again later, online: the waiting change is sent
   const again = new Store(new MemRepo(repo.s));
   await again.init();
   await again.flush();
   stop(again);
   const p = JSON.parse(repo.read('data.json')).projects[0];
-  assert.equal(p.workNotes[0].text, 'Spoke to Ravi');
+  assert.deepEqual(p.workNotes.map((n) => n.text).sort(), ['Second note', 'Spoke to Ravi']);
   assert.equal(JSON.parse(localStorage.getItem('dp.pending')).length, 0);
 });
 
@@ -139,4 +138,18 @@ test('undo (restoreProject) after another device changed something', async () =>
   stop(s);
   const p = JSON.parse(repo.read('data.json')).projects[0];
   assert.equal(p.steps.find((x) => x.id === 's1').done, false);
+});
+
+test('a history month that did not change is not downloaded again', async () => {
+  const repo = await freshRepoWithProject();
+  localStorage.clear();
+  const s = await device(repo.s);
+  let reads = 0;
+  const real = s.repo.blobText.bind(s.repo);
+  s.repo.blobText = async (sha) => { reads++; return real(sha); };
+  await s.load();
+  const first = reads;
+  await s.load();
+  stop(s);
+  assert.equal(reads - first, 1, 'second load fetched only data.json, history came from the cache');
 });

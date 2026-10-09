@@ -124,11 +124,17 @@ const WORD_CHAR = /[\p{L}\p{N}_]/u;
  * Ids of people mentioned as "@Name" in a text. At each "@", the LONGEST matching name wins,
  * so "@Ravi Kumar" links to "Ravi Kumar", not to a separate "Ravi".
  */
+const sortedCache = new WeakMap(); // people list -> longest names first (sorted once, not per call)
+
 export function mentionedPeople(text, people) {
   const found = new Set();
-  if (!text || !people || !people.length) return found;
+  if (!text || !people || !people.length || text.indexOf('@') < 0) return found;
+  // re-sort only when the list changed (people are added / renamed in place)
+  const sig = people.map((x) => x.id + ':' + x.name).join('|');
+  let c = sortedCache.get(people);
+  if (!c || c.sig !== sig) { c = { sig, sorted: [...people].sort((a, b) => b.name.length - a.name.length) }; sortedCache.set(people, c); }
+  const sorted = c.sorted;
   const lower = text.toLowerCase();
-  const sorted = [...people].sort((a, b) => b.name.length - a.name.length);
   for (let i = lower.indexOf('@'); i >= 0; i = lower.indexOf('@', i + 1)) {
     for (const p of sorted) {
       const n = p.name.toLowerCase();
@@ -157,13 +163,15 @@ export function waitingDays(step, today = todayIndia()) {
 }
 
 /** Steps linked to a person, split into lists (finished projects are left out of the open lists). */
-export function personSteps(data, person) {
+export function personSteps(data, person, opts = {}) {
   const people = data.people || [];
   const waiting = [];
   const discuss = [];
   const done = [];
   for (const p of data.projects) {
+    if (opts.openOnly && p.state === 'finished') continue;
     for (const s of p.steps) {
+      if (opts.openOnly && s.done) continue;
       if (!stepLinkedTo(s, person, people)) continue;
       const item = { project: p, step: s };
       if (s.done) done.push(item);
@@ -183,7 +191,7 @@ export function personSteps(data, person) {
  *   green  = nothing open
  */
 export function personStatus(data, person, today = todayIndia()) {
-  const { waiting, discuss } = personSteps(data, person);
+  const { waiting, discuss } = personSteps(data, person, { openOnly: true });
   const maxWait = waiting.reduce((m, it) => Math.max(m, waitingDays(it.step, today)), 0);
   const late = [...waiting, ...discuss].some((it) => it.step.dueDate && it.step.dueDate < today);
   const open = waiting.length + discuss.length;

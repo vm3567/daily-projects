@@ -39,6 +39,7 @@ const ui = {
 
 let store = null;
 let toastTimer = null;
+let searchTimer = null;
 
 /** Message at the bottom. With `undo`, it shows an Undo button and stays a little longer. */
 function toast(text, ms = 3500, undo = null) {
@@ -67,7 +68,7 @@ function actMany(projectId, steps, message) {
     if (store.dispatch('restoreProject', { project: before, index, undoOpIds: ops.map((o) => o.id), undoMonth: months[0] })) toast('Undone', 1500);
   } : null;
   if (message) toast(message, 5000, undo);
-  return ops;
+  return { ops, undo };
 }
 
 /**
@@ -183,17 +184,21 @@ async function runSuggest(p) {
   const order = [chosen, chosen === 'claude' ? 'gemini' : 'claude'].filter((x) => aiKeyFor(x));
   if (!order.length) { ui.ai = { projectId: p.id, mode: 'suggest', state: 'nokey' }; render(); return; }
   if (!useAi()) { ui.ai = { projectId: p.id, mode: 'suggest', state: 'error', error: 'Daily AI limit reached — try tomorrow.' }; render(); return; }
-  ui.ai = { projectId: p.id, mode: 'suggest', state: 'busy' };
+  const ticket = { projectId: p.id, mode: 'suggest', state: 'busy' };
+  ui.ai = ticket;
   render();
+  const stillWanted = () => ui.ai === ticket; // the user may have closed it or asked for another project
   let lastError = null;
   for (const provider of order) {
     try {
       const steps = await ai.suggestSteps(provider, aiKeyFor(provider), p);
+      if (!stillWanted()) return;
       ui.ai = { projectId: p.id, mode: 'suggest', state: 'list', steps, picked: steps.map(() => true), provider };
       render();
       return;
     } catch (e) { lastError = e; }
   }
+  if (!stillWanted()) return;
   ui.ai = { projectId: p.id, mode: 'suggest', state: 'error', error: lastError ? lastError.message : 'The AI did not answer.' };
   render();
 }
@@ -376,8 +381,13 @@ async function recordPastScores() {
   if (!store || !store.base || !store.canEdit()) return;
   const today = todayIndia();
   const saved = store.view.data.dayScores || {};
+  // every missing day since the last saved one (so a week away does not break the streak), up to 120 days back
+  const savedDays = Object.keys(saved).sort();
+  const firstCreated = store.view.data.projects.map((p) => (p.createdAt ? indiaDate(p.createdAt) : today)).sort()[0] || today;
+  let from = savedDays.length ? addDays(savedDays[savedDays.length - 1], 1) : firstCreated;
+  if (from < addDays(today, -120)) from = addDays(today, -120);
   const days = [];
-  for (let i = 1; i <= 7; i++) { const d = addDays(today, -i); if (!saved[d]) days.push(d); }
+  for (let d = from; d < today; d = addDays(d, 1)) if (!saved[d]) days.push(d);
   if (!days.length || !store.view.data.projects.length) return;
   const months = [...new Set(days.map(monthOf))].filter((m) => !store.view.history[m] && store.availableMonths().includes(m));
   for (const m of months) await store.loadMonth(m);
@@ -420,6 +430,7 @@ function toggleOk(p) {
 }
 
 function select(id) {
+  ui.round = null; // opening a project leaves the daily round
   const list = currentList();
   const at = list.findIndex((x) => x.id === id);
   if (at >= 0) ui.listIndex = at; // remembered, so ↓ ↑ keep your place if this row folds away
@@ -459,7 +470,7 @@ function renderMenu() {
     h('div', { class: 'brand' }, h('img', { src: 'icons/icon-192.png', alt: '', width: 28, height: 28 }), h('span', null, 'Daily Projects')),
     h('input', {
       class: 'search', type: 'search', placeholder: withKey('Search…', '/'), value: ui.search, key: 'search-desktop', 'aria-label': 'Search',
-      onInput: (e, el) => { ui.search = el.value; render(); },
+      onInput: (e, el) => { ui.search = el.value; clearTimeout(searchTimer); searchTimer = setTimeout(render, 120); },
     }),
     h('ul', { class: 'menu-list' },
       item('today', 'Today', active.length),
@@ -595,7 +606,7 @@ function chase(p, step) {
 /** After ticking: if the project has no next step left, ask "What's next?" straight away. */
 function afterTick(projectId, where, undo = null) {
   const p = store.view.data.projects.find((x) => x.id === projectId);
-  if (!p || p.state !== 'active' || nextStep(p, todayIndia(), { dueOnly: true })) return false;
+  if (!p || p.state !== 'active' || p.steps.some((s) => !s.done)) return false;
   if (where === 'detail' || (ui.view === 'today' && !ui.search)) {
     // On Today the now-green row folds away, so ask in the project page instead.
     if (ui.selected !== p.id || where !== 'detail') select(p.id);
@@ -659,7 +670,7 @@ function followUpRow() {
     h('div', { class: 'follow-up-chips' }, list.map(({ person, st }) => h('button', {
       class: 'person-chip', key: 'fu-' + person.id,
       title: st.colour === 'red' ? 'Time to contact' : 'Something open',
-      onClick: () => { ui.view = 'people'; ui.search = ''; rememberUi(); ctx.selectPerson(person.id); },
+      onClick: () => { ui.round = null; ui.view = 'people'; ui.search = ''; rememberUi(); ctx.selectPerson(person.id); },
     }, h('span', { class: `dot ${st.colour}` }), `${person.name} (${st.open})`))));
 }
 
@@ -801,7 +812,7 @@ function statusText() {
   const s = store ? store.status : 'loading';
   if (s === 'saving') return h('span', { class: 'status' }, 'Saving…');
   if (s === 'saved') return h('span', { class: 'status ok' }, 'Saved ✓');
-  if (s === 'offline') return h('span', { class: 'status bad' }, 'No connection');
+  if (s === 'offline') return h('span', { class: 'status bad', title: 'Your changes wait on this device and are saved when the internet is back' }, `Offline — ${store.pending.length} waiting`);
   if (s === 'error') return h('span', { class: 'status bad' }, store.message || 'Error');
   if (s === 'auth') return h('span', { class: 'status bad' }, 'Key problem');
   return h('span', { class: 'status' }, 'Loading…');
@@ -816,7 +827,7 @@ function renderListColumn() {
     h('button', { class: 'icon', title: 'Get latest', 'aria-label': 'Refresh', onClick: () => doRefresh(true) }, '↻'));
   const mobileSearch = h('input', {
     class: 'search mobile-only', type: 'search', placeholder: withKey('Search…', '/'), value: ui.search, key: 'search-mobile', 'aria-label': 'Search',
-    onInput: (e, el) => { ui.search = el.value; render(); },
+    onInput: (e, el) => { ui.search = el.value; clearTimeout(searchTimer); searchTimer = setTimeout(render, 120); },
   });
 
   if (ui.view === 'diary' && !ui.search) return h('div', { class: 'col-inner' }, head, renderDiary());
@@ -879,7 +890,7 @@ function renderDiary() {
       h('ul', null, byDay.get(d).map((l) => h('li', null,
         h('span', { class: 'muted small' }, fmtTime(l.at)), ' ',
         l.exists
-          ? h('button', { class: 'link', onClick: () => { select(l.projectId); } }, l.name)
+          ? h('button', { class: 'link', onClick: () => ctx.openProject(l.projectId) }, l.name)
           : h('span', { class: 'muted' }, l.name),
         ': ', l.text))))),
     days.length > shown.length
@@ -1027,11 +1038,9 @@ function focusKey(key) {
   }, 30);
 }
 
-let sortables = [];
-
 function setupSortable() {
   if (!window.Sortable) return;
-  const lists = root.querySelectorAll('.plist, .sortable-steps');
+  const lists = root.querySelectorAll('.plist:not(.people-list), .sortable-steps');
   for (const el of lists) {
     const isProjects = el.classList.contains('plist');
     if (el.__sortable) {
@@ -1060,7 +1069,6 @@ function setupSortable() {
         }
       },
     });
-    sortables.push(el.__sortable);
   }
 }
 

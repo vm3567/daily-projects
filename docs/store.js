@@ -60,7 +60,10 @@ export class Store extends EventTarget {
     const sha = entries.get(historyPath(month));
     if (!sha) return [];
     if (sha === 'local') return null; // written by us, kept in memory
-    return JSON.parse(await this.repo.blobText(sha));
+    // A month file that did not change (same sha) is never downloaded twice.
+    if (!this.monthCache) this.monthCache = new Map();
+    if (!this.monthCache.has(sha)) this.monthCache.set(sha, await this.repo.blobText(sha));
+    return JSON.parse(this.monthCache.get(sha));
   }
 
   async ensureMonths(target, months) {
@@ -105,20 +108,32 @@ export class Store extends EventTarget {
   }
 
   async loadMonth(month) {
-    await this.ensureMonths(this.base, [month]);
+    // if a save or refresh swapped `base` while downloading, load into the new one too (cached, so free)
+    let b;
+    do { b = this.base; await this.ensureMonths(b, [month]); } while (this.base !== b);
     this.recompute();
     this.emit('change', { reason: 'history' });
   }
 
   async loadAllHistory() {
-    await this.ensureMonths(this.base, this.availableMonths());
+    let b;
+    do { b = this.base; await this.ensureMonths(b, this.availableMonths()); } while (this.base !== b);
     this.recompute();
   }
 
   // ---------- changes ----------
+  /**
+   * Changes are accepted even with no connection: they wait in the queue on this device (kept in
+   * localStorage) and are sent when the connection is back. Only a broken GitHub key or the very
+   * first load blocks editing.
+   */
   canEdit() {
-    return !!this.base && this.status !== 'offline' && this.status !== 'auth' && this.status !== 'loading'
-      && (typeof navigator === 'undefined' || navigator.onLine !== false);
+    return !!this.base && this.status !== 'auth' && this.status !== 'loading';
+  }
+
+  /** True when the device is (or was just) without internet. */
+  isOffline() {
+    return this.status === 'offline' || (typeof navigator !== 'undefined' && navigator.onLine === false);
   }
 
   /** Record one change. Returns the operation, or null if editing is blocked. */
@@ -154,11 +169,11 @@ export class Store extends EventTarget {
   diff(base, next) {
     const changes = [];
     if (JSON.stringify(base.data) !== JSON.stringify(next.data)) {
-      changes.push({ path: DATA_PATH, content: JSON.stringify(next.data, null, 1) + '\n' });
+      changes.push({ path: DATA_PATH, content: JSON.stringify(next.data) + '\n' }); // compact: smaller and faster
     }
     for (const [m, list] of Object.entries(next.history)) {
       if (JSON.stringify(base.history[m] || []) !== JSON.stringify(list)) {
-        changes.push({ path: historyPath(m), content: JSON.stringify(list, null, 1) + '\n' });
+        changes.push({ path: historyPath(m), content: JSON.stringify(list) + '\n' });
       }
     }
     const before = filesOf(base.data);

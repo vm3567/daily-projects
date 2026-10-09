@@ -66,7 +66,7 @@ export function renderDashboard(ctx) {
 
   const get = (d) => scoreFor(data, history, d, today, todayScore);
   const firstCreated = data.projects.map((p) => (p.createdAt ? indiaDate(p.createdAt) : today)).sort()[0] || today;
-  const firstDay = [firstCreated, addDays(today, -120)].sort().reverse()[0];
+  const firstDay = [firstCreated, addDays(today, -800)].sort().reverse()[0]; // ~2 years, same as saved scores
   const st = streaks(get, today, firstDay);
 
   // This month's green days

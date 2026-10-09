@@ -322,3 +322,37 @@ test("today's update: note linked to the step, tick, next step, one undo for all
   applyOp(s, op('addWorkNote', { projectId: 'p1', noteId: 'n2', text: 'x', stepId: 'gone' }, '2026-10-02'));
   assert.equal(s.data.projects[0].workNotes[0].stepId, null);
 });
+
+test('un-tick removes the "✓ step" line, so nothing counts a step that is not done', () => {
+  const s = withProject('2026-10-01');
+  applyOp(s, op('tickStep', { projectId: 'p1', stepId: 's1' }, '2026-10-02'));
+  applyOp(s, op('untickStep', { projectId: 'p1', stepId: 's1' }, '2026-10-02', '10:05:00'));
+  applyOp(s, op('tickStep', { projectId: 'p1', stepId: 's1' }, '2026-10-02', '10:10:00'));
+  const ticks = s.history['2026-10'].filter((e) => e.kind === 'step_ticked');
+  assert.equal(ticks.length, 1, 'tick, untick, tick again = counted once');
+  assert.equal(ticks[0].stepId, 's1');
+});
+
+test('a repeating step keeps only its latest finished copy (data stays small)', () => {
+  const s = withProject('2026-10-01');
+  applyOp(s, op('setStepField', { projectId: 'p1', stepId: 's1', field: 'repeat', value: 'daily' }, '2026-10-01'));
+  for (let d = 2; d <= 9; d++) {
+    const p = s.data.projects[0];
+    const open = p.steps.find((x) => !x.done && x.text === 'Order clay');
+    applyOp(s, op('tickStep', { projectId: 'p1', stepId: open.id }, `2026-10-0${d}`));
+  }
+  const p = s.data.projects[0];
+  assert.equal(p.steps.filter((x) => x.text === 'Order clay' && x.done).length, 1);
+  assert.equal(p.steps.filter((x) => x.text === 'Order clay' && !x.done).length, 1);
+  assert.equal(s.history['2026-10'].filter((e) => e.kind === 'step_ticked').length, 8, 'the Diary keeps every day');
+});
+
+test('@name matching follows people added or renamed later', async () => {
+  const { mentionedPeople } = await import('../docs/rules.js');
+  const people = [{ id: 'a', name: 'Ravi' }];
+  assert.equal(mentionedPeople('@Meena hi', people).size, 0);
+  people.push({ id: 'b', name: 'Meena' });
+  assert.deepEqual([...mentionedPeople('@Meena hi', people)], ['b']);
+  people[0].name = 'Ravi Kumar';
+  assert.deepEqual([...mentionedPeople('ask @Ravi Kumar', people)], ['a']);
+});

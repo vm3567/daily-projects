@@ -94,7 +94,7 @@ function moveInList(list, id, afterId, beforeId) {
   return true;
 }
 
-function addEvent(state, op, project, kind, detail = '') {
+function addEvent(state, op, project, kind, detail = '', extra = null) {
   const month = opMonth(op);
   if (!state.history[month]) state.history[month] = [];
   const list = state.history[month];
@@ -106,7 +106,21 @@ function addEvent(state, op, project, kind, detail = '') {
     kind,
     detail: cleanText(detail, 2000),
     at: op.at,
+    ...(extra || {}),
   });
+}
+
+/** Un-tick takes back the "✓ step" line, so summaries, Diary and Dashboard never count a step that is not done. */
+function removeTickEvent(state, project, step) {
+  let best = null;
+  for (const [m, list] of Object.entries(state.history)) {
+    list.forEach((e, i) => {
+      if (e.kind !== 'step_ticked' || e.projectId !== project.id) return;
+      const same = e.stepId ? e.stepId === step.id : e.detail === step.text; // older lines have no stepId
+      if (same && (!best || e.at > best.at)) best = { m, i, at: e.at };
+    });
+  }
+  if (best) state.history[best.m].splice(best.i, 1);
 }
 
 /** Every change to a project counts as activity for the dot colour (green today). */
@@ -349,7 +363,11 @@ const handlers = {
       }
     }
     touch(p, op);
-    addEvent(state, op, p, 'step_ticked', s.text);
+    if (s.repeat) {
+      // keep data small: older finished copies of this repeating step are dropped (the Diary keeps them)
+      p.steps = p.steps.filter((x) => x === s || !(x.done && x.repeat === s.repeat && x.text === s.text));
+    }
+    addEvent(state, op, p, 'step_ticked', s.text, { stepId: s.id });
     return true;
   },
 
@@ -368,6 +386,7 @@ const handlers = {
     }
     recalcLastTick(p);
     touch(p, op);
+    removeTickEvent(state, p, s);
     addEvent(state, op, p, 'step_unticked', s.text);
     return true;
   },
@@ -555,7 +574,7 @@ const handlers = {
       changed = true;
     }
     const days = Object.keys(scores).sort();
-    while (days.length > 120) delete scores[days.shift()];
+    while (days.length > 800) delete scores[days.shift()]; // about 2 years (a day is ~20 bytes)
     return changed;
   },
 
