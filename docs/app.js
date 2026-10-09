@@ -4,6 +4,7 @@ import { h, morph, installEvents, fmtDay, fmtLongDay, fmtTime, keyHint, withKey 
 import { renderDetail } from './ui/detail.js';
 import { renderPeopleList, renderPerson, peopleByFollowUp } from './ui/people.js';
 import { installMentions } from './ui/mention.js';
+import { renderDashboard } from './ui/dashboard.js';
 import { closeViewer } from './ui/files.js';
 import { Store } from './store.js';
 import { GitHubRepo } from './github.js';
@@ -79,6 +80,7 @@ const ctx = {
   aiSuggest: (p) => runAi(p, 'next'),
   aiSteps: (p) => runSuggest(p),
   goSettings: () => go('settings'),
+  openPerson: (id) => { go('people'); ctx.selectPerson(id); },
   aiBreakdown: (p, goal) => runAi(p, 'breakdown', goal),
   hasAiKey: () => !!(store && aiReady().key),
   toggleOk: (p) => toggleOk(p),
@@ -240,7 +242,7 @@ function visibleProjects() {
 function viewTitle() {
   if (ui.search.trim()) return `Search: "${ui.search.trim()}"`;
   if (ui.view.startsWith('group:')) return groupName(ui.view.slice(6));
-  return { today: 'Today', all: 'All projects', paused: 'Paused', finished: 'Finished', diary: 'Diary', settings: 'Settings', people: 'People' }[ui.view];
+  return { today: 'Today', all: 'All projects', paused: 'Paused', finished: 'Finished', diary: 'Diary', settings: 'Settings', people: 'People', dashboard: 'Dashboard' }[ui.view];
 }
 
 function go(view) {
@@ -337,7 +339,7 @@ function renderMenu() {
   const { data } = store.view;
   const active = data.projects.filter((p) => p.state === 'active');
   const count = (f) => data.projects.filter(f).length;
-  const MENU_KEYS = { today: 'T', people: 'P', diary: 'D' };
+  const MENU_KEYS = { today: 'T', dashboard: 'B', people: 'P', diary: 'D' };
   const item = (view, label, n, extra) => h('li', { key: 'm-' + view },
     h('button', { class: 'menu-item' + (ui.view === view && !ui.search ? ' current' : ''), onClick: () => go(view) },
       h('span', null, label, MENU_KEYS[view] ? keyHint(MENU_KEYS[view]) : null), n !== undefined ? h('span', { class: 'count' }, String(n)) : null),
@@ -357,6 +359,7 @@ function renderMenu() {
         h('span', { class: 'dot red' }), String(counts.red), ' ',
         h('span', { class: 'dot yellow' }), String(counts.yellow), ' ',
         h('span', { class: 'dot green' }), String(counts.green)),
+      item('dashboard', 'Dashboard'),
       item('all', 'All projects', active.length),
       h('li', { class: 'menu-head', key: 'groups-head' }, 'Groups'),
       data.groups.map((g) => item('group:' + g.id, g.name, count((p) => p.groupId === g.id && p.state === 'active'),
@@ -697,6 +700,7 @@ function renderListColumn() {
 
   if (ui.view === 'diary' && !ui.search) return h('div', { class: 'col-inner' }, head, renderDiary());
   if (ui.view === 'settings' && !ui.search) return h('div', { class: 'col-inner' }, head, renderSettings());
+  if (ui.view === 'dashboard' && !ui.search) return h('div', { class: 'col-inner' }, head, renderDashboard(ctx));
   if (ui.view === 'people' && !ui.search) return h('div', { class: 'col-inner' }, head, renderPeopleList(ctx));
 
   const list = sortForView(visibleProjects(), today);
@@ -966,7 +970,7 @@ function render() {
     return;
   }
   if (ui.selected && !store.view.data.projects.some((p) => p.id === ui.selected)) ui.selected = null;
-  const wide = (ui.view === 'diary' || ui.view === 'settings') && !ui.search;
+  const wide = (ui.view === 'diary' || ui.view === 'settings' || ui.view === 'dashboard') && !ui.search;
   const next = h('div', {
     class: ['layout', wide ? 'wide' : '', ui.mobile === 'detail' && !wide ? 'show-detail' : '', ui.menuOpen ? 'menu-open' : ''].join(' ').trim(),
   },
@@ -1145,7 +1149,7 @@ const KEYS = [
   ['n', 'New project'],
   ['/', 'Search'],
   ['r', 'Switch "My order" / "Red first"'],
-  ['t  d  p', 'Go to Today / Diary / People'],
+  ['t  b  d  p', 'Go to Today / Dashboard / Diary / People'],
   ['@', 'In a step or note: pick a person'],
   ['Esc', 'Leave a box, or close what is open'],
   ['?', 'Show or hide this list'],
@@ -1167,7 +1171,7 @@ function isTyping(el) {
 }
 
 function currentList() {
-  if (!store || !store.view || ui.view === 'diary' || ui.view === 'settings') return [];
+  if (!store || !store.view || ui.view === 'diary' || ui.view === 'settings' || ui.view === 'dashboard') return [];
   const today = todayIndia();
   const { open, done } = splitToday(sortForView(visibleProjects(), today), today);
   return ui.showDoneToday || ui.view !== 'today' ? [...open, ...done] : open;
@@ -1227,7 +1231,7 @@ function onKey(e) {
   if (e.repeat && !isArrow && e.key !== 'j' && e.key !== 'k') return; // holding x / o / r must not repeat
   const focused = document.activeElement;
   if (isArrow && focused && (focused.type === 'radio' || focused.nodeName === 'SUMMARY')) return;
-  if (isArrow && (ui.view === 'diary' || ui.view === 'settings') && !ui.search) return; // let the page scroll
+  if (isArrow && (ui.view === 'diary' || ui.view === 'settings' || ui.view === 'dashboard') && !ui.search) return; // let the page scroll
   const k = e.key;
   if (ui.round) {
     const map = { x: 'done', s: 'add', w: 'note', o: 'ok', c: 'chase', n: 'skip', ArrowRight: 'skip' };
@@ -1278,6 +1282,7 @@ function onKey(e) {
   else if (k === 't') go('today');
   else if (k === 'd') go('diary');
   else if (k === 'p') go('people');
+  else if (k === 'b') go('dashboard');
   else if (k === '?') { ui.showKeys = !ui.showKeys; render(); }
   else handled = false;
   if (handled) e.preventDefault();
