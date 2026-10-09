@@ -429,3 +429,45 @@ test('tags per group, one tag per project, timer only in timer groups, time spli
   applyOp(s, op('setGroupTimer', { groupId: personal.id, on: true }, '2026-10-08'));
   assert.equal(applyOp(s, op('startTimer', { projectId: 'h1' }, '2026-10-08')), true, 'switched on in Settings');
 });
+
+test('snooze: hidden for N days (grey, not counted), back by itself, wake early', async () => {
+  const { isSnoozed, colourCounts, dayScore } = await import('../docs/rules.js');
+  const s = withProject('2026-10-01');
+  assert.equal(applyOp(s, op('snooze', { projectId: 'p1', days: 0 }, '2026-10-05')), false, 'needs at least 1 day');
+  assert.ok(applyOp(s, op('snooze', { projectId: 'p1', days: 5 }, '2026-10-05')));
+  const p = s.data.projects[0];
+  assert.equal(p.snoozedUntil, '2026-10-10');
+  assert.equal(p.lastActivityDate, '2026-10-01', 'snoozing is not work');
+  assert.ok(isSnoozed(p, '2026-10-09'));
+  assert.equal(dotColour(p, '2026-10-09'), 'grey');
+  assert.deepEqual(colourCounts(s.data, '2026-10-09'), { green: 0, yellow: 0, red: 0 });
+  assert.equal(dayScore(s.data, s.history, '2026-10-07').total, 0, 'a snoozed day does not break the streak');
+  assert.ok(!isSnoozed(p, '2026-10-10'), 'back on the return day');
+  assert.equal(dotColour(p, '2026-10-10'), 'red');
+  assert.ok(applyOp(s, op('wake', { projectId: 'p1' }, '2026-10-06')));
+  assert.ok(!isSnoozed(p, '2026-10-06'));
+  assert.equal(applyOp(s, op('wake', { projectId: 'p1' }, '2026-10-06')), false, 'already awake');
+});
+
+test('status line: one short line with its date', () => {
+  const s = withProject('2026-10-01');
+  assert.ok(applyOp(s, op('setProjectField', { projectId: 'p1', field: 'status', value: '  Waiting for   mould\n from Ravi ' }, '2026-10-03')));
+  const p = s.data.projects[0];
+  assert.equal(p.status, 'Waiting for mould from Ravi');
+  assert.equal(indiaDate(p.statusAt), '2026-10-03');
+});
+
+test('inbox: capture, turn into a step or a new project, delete', () => {
+  const s = withProject('2026-10-01');
+  assert.ok(applyOp(s, op('addInbox', { itemId: 'i1', text: 'Ask Sandeep about kiln quote' }, '2026-10-02')));
+  assert.ok(applyOp(s, op('addInbox', { itemId: 'i2', text: 'Video on pinholes' }, '2026-10-02')));
+  assert.ok(applyOp(s, op('addInbox', { itemId: 'i3', text: 'junk' }, '2026-10-02')));
+  assert.equal(applyOp(s, op('addInbox', { itemId: 'i4', text: '   ' }, '2026-10-02')), false);
+  assert.ok(applyOp(s, op('inboxToStep', { itemId: 'i1', projectId: 'p1', stepId: 'sx' }, '2026-10-03')));
+  assert.ok(s.data.projects[0].steps.some((x) => x.id === 'sx' && x.text === 'Ask Sandeep about kiln quote'));
+  assert.ok(applyOp(s, op('inboxToProject', { itemId: 'i2', projectId: 'pn', groupId: 'g1' }, '2026-10-03')));
+  assert.equal(s.data.projects.find((x) => x.id === 'pn').name, 'Video on pinholes');
+  assert.equal(applyOp(s, op('inboxToStep', { itemId: 'i3', projectId: 'nope', stepId: 'sy' }, '2026-10-03')), false, 'item kept if the project is gone');
+  assert.ok(applyOp(s, op('removeInbox', { itemId: 'i3' }, '2026-10-03')));
+  assert.deepEqual(s.data.inbox, []);
+});

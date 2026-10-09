@@ -75,7 +75,7 @@ test('project page draws (steps, update box, people, time, links)', () => {
   const s = sampleState();
   const el = renderDetail(fakeCtx(s, { selected: 'p1', openParts: { history: true }, update: {} }));
   const text = el.textContent;
-  for (const bit of ['Kiln', 'Fire samples', "Today's update", 'Ravi', 'Today', 'Spec']) assert.ok(text.includes(bit), bit);
+  for (const bit of ['Kiln', 'Fire samples', 'Save + done', 'Work notes', 'Status', 'Snooze', 'Ravi', 'Today', 'Spec']) assert.ok(text.includes(bit), bit);
 });
 
 test('empty project page draws', () => {
@@ -139,4 +139,18 @@ test('project page: "Save + done" button, and the next project offer when green'
   assert.ok(text.includes('Save + done'), 'save + done button');
   assert.ok(text.includes('Next: Glaze trial'), 'next project offered');
   assert.ok(!text.includes('This step is done'), 'old tick box gone');
+});
+
+test('project page: the write box sits inside the next step; snoozed project shows when it comes back', () => {
+  const s = sampleState();
+  const el = renderDetail(fakeCtx(s, { selected: 'p1', update: {} }));
+  const find = (node, f) => (f(node) ? node : (node.childNodes || []).map((c) => find(c, f)).find(Boolean));
+  const stepWithBox = find(el, (n) => (n.className || '').includes('has-update'));
+  assert.ok(stepWithBox, 'a step holds the box');
+  assert.ok(find(stepWithBox, (n) => n.value === 'Fire samples'), 'it is the next step');
+  assert.ok(stepWithBox.textContent.includes('Save + done'));
+  applyOps(s, [makeOp('snooze', { projectId: 'p1', days: 4 })]);
+  const text = renderDetail(fakeCtx(s, { selected: 'p1', update: {} })).textContent;
+  assert.ok(text.includes('Snoozed — comes back to Today'));
+  assert.ok(text.includes('Wake up now'));
 });

@@ -52,8 +52,13 @@ export function laterDate(a, b) {
  *   green  = changed something today, or pressed "OK for today"
  *   grey   = paused or finished
  */
+/** Snoozed: an active project hidden from Today until a date (it comes back by itself on that day). */
+export function isSnoozed(project, today = todayIndia()) {
+  return project.state === 'active' && !!project.snoozedUntil && project.snoozedUntil > today;
+}
+
 export function dotColour(project, today = todayIndia()) {
-  if (project.state !== 'active') return 'grey';
+  if (project.state !== 'active' || isSnoozed(project, today)) return 'grey';
   if (lastWorkDate(project) === today || project.okDate === today) return 'green';
   if (project.lastOpenedDate === today) return 'yellow';
   return 'red';
@@ -109,10 +114,15 @@ export function activeProjects(data) {
   return data.projects.filter((p) => p.state === 'active');
 }
 
+/** Active and not snoozed: the projects that need you today. */
+export function awakeProjects(data, today = todayIndia()) {
+  return data.projects.filter((p) => p.state === 'active' && !isSnoozed(p, today));
+}
+
 /** Counts of dot colours for active projects. */
 export function colourCounts(data, today = todayIndia()) {
   const counts = { green: 0, yellow: 0, red: 0 };
-  for (const p of activeProjects(data)) counts[dotColour(p, today)]++;
+  for (const p of awakeProjects(data, today)) counts[dotColour(p, today)]++;
   return counts;
 }
 
@@ -218,6 +228,7 @@ export function dayScore(data, history, day) {
     const changed = p.stateChangedAt ? indiaDate(p.stateChangedAt) : created;
     const activeThen = p.state === 'active' ? (p.activeSince || created) <= day : changed > day;
     if (!activeThen) continue;
+    if (p.snoozedFrom && p.snoozedUntil && p.snoozedFrom <= day && day < p.snoozedUntil) continue; // snoozed that day: not counted
     total++;
     if (busy.has(p.id) || lastWorkDate(p) === day || p.okDate === day) green++;
   }

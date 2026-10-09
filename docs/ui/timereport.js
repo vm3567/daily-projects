@@ -105,7 +105,7 @@ function fit(g, text, width) {
 }
 
 /** The owner report: time pie + legend on the left, work done per tag on the right (1600×900). */
-export async function fullReportPng({ title, period, rows, pcts, work, tagColours }) {
+export async function fullReportPng({ title, period, rows, pcts, work, tagColours, statuses = [] }) {
   const W = 1600; const H = 900;
   const FONT = '-apple-system, Segoe UI, Roboto, Arial, sans-serif';
   const c = document.createElement('canvas');
@@ -142,7 +142,9 @@ export async function fullReportPng({ title, period, rows, pcts, work, tagColour
   const doneCount = work.reduce((n, w) => n + w.items.length, 0);
   g.fillText(`Work done (${doneCount} step${doneCount === 1 ? '' : 's'})`, x, 220);
   y = 275;
-  const maxY = H - 70;
+  const standRows = statuses.slice(0, 6);
+  const standTop = standRows.length ? H - 60 - standRows.length * 34 - 50 : H;
+  const maxY = Math.min(H - 70, standTop - 20);
   let hidden = 0;
   for (const w of work) {
     if (y > maxY - 40) { hidden += w.items.length; continue; }
@@ -161,6 +163,20 @@ export async function fullReportPng({ title, period, rows, pcts, work, tagColour
   }
   if (!doneCount) { g.fillStyle = '#94a3b8'; g.font = `24px ${FONT}`; g.fillText('No steps finished in this period.', x, y); }
   if (hidden) { g.fillStyle = '#64748b'; g.font = `22px ${FONT}`; g.fillText(`+ ${hidden} more steps`, x + 34, Math.min(y, H - 40)); }
+  if (standRows.length) { // where things stand: one line per project
+    g.strokeStyle = '#e2e8f0'; g.beginPath(); g.moveTo(x, standTop - 4); g.lineTo(W - 60, standTop - 4); g.stroke();
+    g.fillStyle = '#0f172a'; g.font = `bold 28px ${FONT}`; g.fillText('Where things stand', x, standTop + 32);
+    let sy = standTop + 74;
+    for (const s of standRows) {
+      g.fillStyle = '#0f172a'; g.font = `bold 23px ${FONT}`;
+      const name = fit(g, s.name, 300);
+      g.fillText(name, x, sy);
+      const nw = g.measureText(name).width;
+      g.fillStyle = '#92400e'; g.font = `23px ${FONT}`;
+      g.fillText(fit(g, `— ${s.status}`, W - 60 - (x + nw + 12)), x + nw + 12, sy);
+      sy += 34;
+    }
+  }
   g.fillStyle = '#94a3b8'; g.font = `22px ${FONT}`; g.fillText('Daily Projects', 70, H - 30);
   return new Promise((res) => c.toBlob(res, 'image/png'));
 }
@@ -226,7 +242,8 @@ export function renderTimeReport(ctx) {
     ctx.toast('Image downloaded — insert it in PowerPoint', 2500);
   };
   const fullTitle = `${group.name} — time and work done`;
-  const fullPng = () => fullReportPng({ title: fullTitle, period, rows: tagRows, pcts: percents(tagRows), work, tagColours });
+  const statuses = data.projects.filter((p) => p.groupId === group.id && p.state === 'active' && p.status).map((p) => ({ name: p.name, status: p.status }));
+  const fullPng = () => fullReportPng({ title: fullTitle, period, rows: tagRows, pcts: percents(tagRows), work, tagColours, statuses });
   const downloadFull = async () => {
     const blob = await fullPng();
     const url = URL.createObjectURL(blob);
@@ -292,10 +309,12 @@ export function renderTimeReport(ctx) {
             h('span', null, `✓ ${it.text}`), h('span', { class: 'muted small' }, it.project)))));
       })) : h('p', { class: 'muted' }, 'No steps finished in this period.'),
       work.some((w) => w.items.length > 6) ? h('button', { class: 'link small', onClick: () => set('showAllWork', !tr.showAllWork) }, tr.showAllWork ? 'Show fewer' : 'Show all') : null,
+      statuses.length ? h('div', { class: 'stand' }, h('h4', null, 'Where things stand'),
+        h('ul', null, statuses.map((st, i) => h('li', { key: 'stand-' + i }, h('strong', null, st.name), h('span', { class: 'muted' }, ` — ${st.status}`))))) : null,
       h('div', { class: 'row report-actions' },
         h('button', { class: 'btn primary', onClick: downloadFull }, '⬇ Full report image'),
         h('button', { class: 'btn', onClick: copyFull }, '📋 Copy full report'),
-        h('span', { class: 'muted small' }, 'Time by tag + work done, PowerPoint size'))),
+        h('span', { class: 'muted small' }, 'Time by tag + work done + status, PowerPoint size'))),
     (group.tags || []).length ? null
       : h('p', { class: 'muted small' }, `Tip: give ${group.name} some tags in Settings (or inside a project) to see time by tag.`));
 }

@@ -13,7 +13,7 @@ import { GitHubRepo } from './github.js';
 import { MockRepo } from './mockrepo.js';
 import { device } from './device.js';
 import { DATA_OWNER, DATA_REPO, DATA_BRANCH, REFRESH_MS, AI_DAILY_LIMIT, BRIEF_CLAIM_MINUTES, WAIT_RED_DAYS, NO_WORK_NOTE_DAYS } from './config.js';
-import { dotColour, nextStep, todayIndia, isSundayIndia, colourCounts, isOverdue, indiaDate, waitingDays, daysWithoutWork, dayScore, greenStreak, addDays, monthOf, fmtMinutes } from './rules.js';
+import { dotColour, isSnoozed, awakeProjects, nextStep, todayIndia, isSundayIndia, colourCounts, isOverdue, indiaDate, waitingDays, daysWithoutWork, dayScore, greenStreak, addDays, monthOf, fmtMinutes } from './rules.js';
 import { newId, clone, opMonth, groupHasTimer } from './ops.js';
 import * as ai from './ai.js';
 
@@ -358,7 +358,8 @@ function visibleProjects() {
   const all = store.view.data.projects;
   const q = ui.search.trim().toLowerCase();
   if (q) return all.filter((p) => projectMatches(p, q));
-  if (ui.view === 'today' || ui.view === 'all') return all.filter((p) => p.state === 'active');
+  if (ui.view === 'today') return awakeProjects(store.view.data, todayIndia());
+  if (ui.view === 'all') return all.filter((p) => p.state === 'active');
   if (ui.view === 'paused') return all.filter((p) => p.state === 'paused');
   if (ui.view === 'finished') return all.filter((p) => p.state === 'finished');
   if (ui.view.startsWith('group:')) {
@@ -371,7 +372,7 @@ function visibleProjects() {
 function viewTitle() {
   if (ui.search.trim()) return `Search: "${ui.search.trim()}"`;
   if (ui.view.startsWith('group:')) return groupName(ui.view.slice(6));
-  return { today: 'Today', all: 'All projects', paused: 'Paused', finished: 'Finished', diary: 'Diary', settings: 'Settings', people: 'People', dashboard: 'Dashboard', time: 'Time report' }[ui.view];
+  return { today: 'Today', inbox: 'Inbox', all: 'All projects', paused: 'Paused', finished: 'Finished', diary: 'Diary', settings: 'Settings', people: 'People', dashboard: 'Dashboard', time: 'Time report' }[ui.view];
 }
 
 function go(view) {
@@ -417,7 +418,7 @@ async function recordPastScores() {
 
 function todayScore() {
   const today = todayIndia();
-  const active = store.view.data.projects.filter((p) => p.state === 'active');
+  const active = awakeProjects(store.view.data, todayIndia());
   return { green: active.filter((p) => dotColour(p, today) === 'green').length, total: active.length };
 }
 
@@ -487,7 +488,7 @@ function renderMenu() {
   const { data } = store.view;
   const active = data.projects.filter((p) => p.state === 'active');
   const count = (f) => data.projects.filter(f).length;
-  const MENU_KEYS = { today: 'T', dashboard: 'B', people: 'P', diary: 'D' };
+  const MENU_KEYS = { today: 'T', dashboard: 'B', people: 'P', diary: 'D', inbox: 'Q' };
   const item = (view, label, n, extra) => h('li', { key: 'm-' + view },
     h('button', { class: 'menu-item' + (ui.view === view && !ui.search ? ' current' : ''), onClick: () => go(view) },
       h('span', null, label, MENU_KEYS[view] ? keyHint(MENU_KEYS[view]) : null), n !== undefined ? h('span', { class: 'count' }, String(n)) : null),
@@ -503,11 +504,12 @@ function renderMenu() {
       onKeydown: searchEnter,
     }),
     h('ul', { class: 'menu-list' },
-      item('today', 'Today', active.length),
+      item('today', 'Today', active.filter((p) => !isSnoozed(p, today)).length),
       h('li', { class: 'menu-dots', key: 'dots' },
         h('span', { class: 'dot red' }), String(counts.red), ' ',
         h('span', { class: 'dot yellow' }), String(counts.yellow), ' ',
         h('span', { class: 'dot green' }), String(counts.green)),
+      item('inbox', '📥 Inbox', (data.inbox || []).length),
       item('dashboard', 'Dashboard'),
       item('time', 'Time report'),
       item('all', 'All projects', active.length),
@@ -624,7 +626,8 @@ function projectRow(p, today) {
           ns && ns.waiting ? waitingTag(ns) : null,
           ns && ns.snoozedUntil && ns.snoozedUntil > today ? h('span', { class: 'tag repeat' }, `↻ from ${fmtDay(ns.snoozedUntil)}`) : null,
           isOverdue(p, today) ? h('span', { class: 'tag late' }, `Overdue · ${fmtDay(p.deadline)}`) : null,
-          noWorkTag(p, today)))),
+          isSnoozed(p, today) ? h('span', { class: 'tag snoozed' }, `💤 back ${fmtDay(p.snoozedUntil)}`) : noWorkTag(p, today)),
+        p.status ? h('span', { class: 'prow-status' }, p.status) : null)),
     rowAction(p, due, colour),
     canDrag() ? h('span', { class: 'grip', 'aria-hidden': 'true', title: 'Drag to reorder' }, '⋮⋮') : null,
     ui.quickAdd === p.id ? quickAddForm(p) : null);
@@ -632,7 +635,7 @@ function projectRow(p, today) {
 
 /** One-tap action on a row that is not green yet: "Chased" for a waiting step, else "✓ OK". */
 function rowAction(p, ns, colour) {
-  if (p.state !== 'active' || colour === 'green') return null;
+  if (p.state !== 'active' || colour === 'green' || colour === 'grey') return null; // grey = snoozed
   if (ns && ns.waiting) {
     return h('button', { class: 'row-act chase', title: `Followed up${ns.waitingOn ? ' with ' + ns.waitingOn : ''} today`, onClick: () => chase(p, ns) }, 'Chased');
   }
@@ -714,6 +717,97 @@ function followUpRow() {
     }, h('span', { class: `dot ${st.colour}` }), `${person.name} (${st.open})`))));
 }
 
+// ---------------------------------------------------------------- quick capture + Inbox
+
+function openCapture() {
+  ui.capture = true;
+  ui.menuOpen = false;
+  render();
+  focusKey('capture-input');
+}
+
+/** The quick capture box: type, Enter, it is in the Inbox. Esc or ✕ closes it. */
+function captureBox() {
+  return h('div', { class: 'capture-wrap', key: 'capture', onClick: (e, el) => { if (e.target === el) { ui.capture = false; render(); } } },
+    h('form', {
+      class: 'capture', role: 'dialog', 'aria-label': 'Quick capture',
+      onSubmit: (e) => {
+        e.preventDefault();
+        const input = e.target.elements.text;
+        const text = input.value.trim();
+        if (!text) { ui.capture = false; render(); return; }
+        if (store.dispatch('addInbox', { itemId: newId(), text })) {
+          input.value = '';
+          ui.capture = false;
+          toast(`📥 In your Inbox: ${text}`, 2500);
+          render();
+        }
+      },
+    },
+    h('div', { class: 'capture-head' }, h('strong', null, '📥 Quick capture'), h('span', { class: 'muted small' }, 'Enter = save to Inbox · Esc = close'),
+      h('button', { class: 'icon', type: 'button', 'aria-label': 'Close', onClick: () => { ui.capture = false; render(); } }, '✕')),
+    h('div', { class: 'row' },
+      h('input', { name: 'text', key: 'capture-input', placeholder: 'An idea, a task, a reminder…', autocomplete: 'off', enterkeyhint: 'done', 'data-mention': '1' }),
+      h('button', { class: 'btn primary', type: 'submit' }, 'Save'))));
+}
+
+/** Projects whose name shares a word with the item (for one-tap sorting). */
+function inboxSuggestions(text) {
+  const words = new Set(text.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((w) => w.length >= 4));
+  const people = (store.view.data.people || []).filter((x) => text.toLowerCase().includes(x.name.toLowerCase()));
+  return awakeProjects(store.view.data, todayIndia())
+    .map((p) => {
+      let score = p.name.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((w) => words.has(w)).length * 2;
+      if (people.some((x) => p.steps.some((s) => !s.done && s.text.includes('@' + x.name)))) score += 1;
+      return { p, score };
+    })
+    .filter((x) => x.score > 0).sort((a, b) => b.score - a.score).slice(0, 3).map((x) => x.p);
+}
+
+function renderInbox() {
+  const { data } = store.view;
+  const items = data.inbox || [];
+  const projects = awakeProjects(data, todayIndia()).slice().sort((a, b) => a.name.localeCompare(b.name));
+  const toStep = (item, p) => act('inboxToStep', { itemId: item.id, projectId: p.id, stepId: newId() }, `Added to ${p.name}: ${item.text}`);
+  return h('div', { class: 'inbox' },
+    h('div', { class: 'row inbox-top' },
+      h('button', { class: 'btn primary', onClick: openCapture }, '📥 Capture', keyHint('Q')),
+      h('span', { class: 'muted small' }, items.length ? 'Send each item to a project. Tap a name, or pick from the list.' : '')),
+    items.length ? h('ul', { class: 'inbox-list' }, items.map((item) => {
+      const sugg = inboxSuggestions(item.text);
+      return h('li', { key: 'ib-' + item.id },
+        h('div', { class: 'inbox-text' }, item.text, h('span', { class: 'muted small' }, ` · ${fmtDay(indiaDate(item.createdAt))}`)),
+        h('div', { class: 'inbox-actions' },
+          sugg.map((p) => h('button', { class: 'chip sugg', key: 'sg-' + p.id, title: `Add as a step in ${p.name}`, onClick: () => toStep(item, p) }, `→ ${p.name}`)),
+          h('select', {
+            class: 'inbox-pick', 'aria-label': 'Send to project', key: 'pick-' + item.id, value: '',
+            onChange: (e, el) => {
+              const v = el.value;
+              el.value = '';
+              if (v.startsWith('new:')) {
+                const groupId = v.slice(4);
+                const projectId = newId();
+                if (act('inboxToProject', { itemId: item.id, projectId, groupId }, `New project: ${item.text}`)) render();
+              } else {
+                const p = data.projects.find((x) => x.id === v);
+                if (p) toStep(item, p);
+              }
+            },
+          },
+          h('option', { value: '' }, 'Send to project…'),
+          projects.map((p) => h('option', { value: p.id }, p.name)),
+          data.groups.map((g) => h('option', { value: 'new:' + g.id }, `+ New project in ${g.name}`))),
+          h('button', { class: 'icon', title: 'Delete', 'aria-label': 'Delete', onClick: () => act('removeInbox', { itemId: item.id }, 'Removed from Inbox') }, '🗑')));
+    })) : h('p', { class: 'empty-list' }, 'Inbox is empty. Press Q anywhere (or 📥 at the top) to write something down fast.'));
+}
+
+/** Today: "📥 Inbox (3) — sort now" when something is waiting there. */
+function inboxReminder() {
+  const n = (store.view.data.inbox || []).length;
+  if (!n) return null;
+  return h('button', { class: 'inbox-reminder', key: 'inbox-rem', onClick: () => go('inbox') }, `📥 Inbox (${n}) — sort now →`);
+}
+
 /** The small menu that opens when you right-click a project in the list. */
 function rowMenu() {
   const m = ui.rowMenu;
@@ -734,6 +828,9 @@ function rowMenu() {
     p.state === 'active' ? item('📝', 'Write an update', () => { select(p.id); focusKey('wn-' + p.id); }) : null,
     due && due.waiting ? item('📞', `Chased${due.waitingOn ? ' ' + due.waitingOn : ''}`, () => chase(p, due)) : null,
     p.state === 'active' ? item('👍', p.okDate === today ? 'Undo OK for today' : 'OK for today', () => toggleOk(p)) : null,
+    p.state === 'active' ? (isSnoozed(p, today)
+      ? item('⏰', 'Wake up now', () => act('wake', { projectId: p.id }, `Back on Today: ${p.name}`))
+      : item('💤', 'Snooze…', () => { select(p.id); ui.snoozeOpen = p.id; focusKey('snooze-' + p.id); })) : null,
     p.state === 'active' && groupHasTimer(g || {}) ? item(timing ? '⏹' : '▶', timing ? 'Stop timer' : 'Start timer', () => (timing ? stopTimer() : startTimer(p))) : null,
     p.state === 'active' ? item('⏸', 'Pause project', () => act('pause', { projectId: p.id }, `Paused: ${p.name}`))
       : p.state === 'paused' ? item('▶', 'Unpause project', () => act('unpause', { projectId: p.id }, `Back on Today: ${p.name}`)) : null,
@@ -832,7 +929,7 @@ function weekBars() {
 
 /** "3 of 7 done today" with a thin bar. */
 function progressLine(today) {
-  const active = store.view.data.projects.filter((p) => p.state === 'active');
+  const active = awakeProjects(store.view.data, todayIndia());
   if (!active.length) return null;
   const done = active.filter((p) => dotColour(p, today) === 'green').length;
   const pct = Math.round((done / active.length) * 100);
@@ -897,6 +994,7 @@ function renderListColumn() {
     h('button', { class: 'icon menu-btn', 'aria-label': 'Menu', onClick: () => { ui.menuOpen = true; render(); } }, '☰'),
     h('h2', null, viewTitle()),
     statusText(),
+    h('button', { class: 'icon', title: 'Quick capture: write down an idea or task (key: q)', 'aria-label': 'Quick capture', onClick: openCapture }, '📥'),
     h('button', { class: 'icon', title: 'Jump to a project, person or page (Ctrl+K)', 'aria-label': 'Jump', onClick: openJump }, '🔍'),
     h('button', { class: 'icon', title: 'Get latest', 'aria-label': 'Refresh', onClick: () => doRefresh(true) }, '↻'));
   const mobileSearch = h('input', {
@@ -906,6 +1004,7 @@ function renderListColumn() {
   });
 
   if (ui.view === 'diary' && !ui.search) return h('div', { class: 'col-inner' }, head, timerStrip(), renderDiary());
+  if (ui.view === 'inbox' && !ui.search) return h('div', { class: 'col-inner' }, head, timerStrip(), renderInbox());
   if (ui.view === 'settings' && !ui.search) return h('div', { class: 'col-inner' }, head, timerStrip(), renderSettings());
   if (ui.view === 'dashboard' && !ui.search) return h('div', { class: 'col-inner' }, head, timerStrip(), renderDashboard(ctx));
   if (ui.view === 'time' && !ui.search) return h('div', { class: 'col-inner' }, head, timerStrip(), renderTimeReport(ctx));
@@ -923,6 +1022,7 @@ function renderListColumn() {
     ui.view === 'today' && !ui.search ? celebration() : null,
     ui.view === 'today' && !ui.search ? progressLine(today) : null,
     ui.view === 'today' && !ui.search ? followUpRow() : null,
+    ui.view === 'today' && !ui.search ? inboxReminder() : null,
     ui.view === 'today' && !ui.search ? renderBrief() : null,
     h('div', { class: 'list-tools' },
       ui.view === 'finished' || ui.view === 'paused' || ui.search ? null : newProjectForm(),
@@ -941,6 +1041,15 @@ function splitToday(list, today) {
 function listParts(list, today) {
   const { open, done } = splitToday(list, today);
   const parts = [h('ul', { class: 'plist', key: 'plist-' + (ui.search ? 'search' : ui.view) }, open.map((p) => projectRow(p, today)))];
+  // Today: snoozed projects wait in their own folded list, with the day they come back
+  const snoozed = ui.view === 'today' && !ui.search ? store.view.data.projects.filter((p) => isSnoozed(p, today)) : [];
+  if (snoozed.length) {
+    parts.push(h('button', {
+      class: 'done-toggle', key: 'snooze-toggle', 'aria-expanded': String(!!ui.showSnoozed),
+      onClick: () => { ui.showSnoozed = !ui.showSnoozed; render(); },
+    }, `${ui.showSnoozed ? '▾' : '▸'} 💤 Snoozed (${snoozed.length})`));
+    if (ui.showSnoozed) parts.push(h('ul', { class: 'plist-done', key: 'plist-snoozed' }, snoozed.sort((a, b) => (a.snoozedUntil < b.snoozedUntil ? -1 : 1)).map((p) => projectRow(p, today))));
+  }
   if (!done.length) return parts;
   if (!open.length) parts.push(h('p', { class: 'all-green', key: 'all-green' }, 'Everything is green for today 🎉'));
   parts.push(h('button', {
@@ -1192,7 +1301,8 @@ function render() {
   h('div', { class: 'scrim', onClick: () => { ui.menuOpen = false; render(); } }),
   h('main', { id: 'list' }, renderListColumn()),
   wide ? null : h('section', { id: 'detail' }, ui.round ? renderRound() : ui.view === 'people' && !ui.search ? renderPerson(ctx) : renderDetail(ctx)),
-  ui.showKeys ? keysHelp() : null);
+  ui.showKeys ? keysHelp() : null,
+  ui.capture ? captureBox() : null);
   if (root.firstChild && root.firstChild.classList && root.firstChild.classList.contains('layout')) morph(root.firstChild, next);
   else root.replaceChildren(next);
   setupSortable();
@@ -1203,7 +1313,7 @@ function render() {
 
 function startRound() {
   const today = todayIndia();
-  const active = store.view.data.projects.filter((p) => p.state === 'active');
+  const active = awakeProjects(store.view.data, todayIndia());
   const ids = computeRedFirst(active, today).filter((p) => dotColour(p, today) !== 'green').map((p) => p.id);
   if (!ids.length) { toast('Everything is green for today 🎉'); return; }
   ui.round = { ids, i: 0, mode: null, total: active.length };
@@ -1233,7 +1343,7 @@ function advanceRound() {
   const today = todayIndia();
   const stillOpen = (id) => {
     const p = store.view.data.projects.find((x) => x.id === id);
-    return p && p.state === 'active' && dotColour(p, today) !== 'green';
+    return p && ['red', 'yellow'].includes(dotColour(p, today)); // not green, not snoozed
   };
   const order = [...r.ids.slice(r.i + 1), ...r.ids.slice(0, r.i + 1)];
   const nextId = order.find((id) => stillOpen(id) && id !== r.ids[r.i]) || null;
@@ -1289,7 +1399,7 @@ function roundSubmit(text) {
 function renderRound() {
   const r = ui.round;
   const today = todayIndia();
-  const active = store.view.data.projects.filter((p) => p.state === 'active');
+  const active = awakeProjects(store.view.data, todayIndia());
   const greenCount = active.filter((p) => dotColour(p, today) === 'green').length;
   const left = active.length - greenCount;
   const top = h('div', { class: 'round-top' },
@@ -1445,9 +1555,9 @@ function goProject(step) {
 /** The next project after this one (in the tab you are in) that is not green yet — red first. */
 function nextOpenProject(id) {
   const today = todayIndia();
-  let list = ['diary', 'settings', 'dashboard', 'time', 'people'].includes(ui.view) || ui.search
+  let list = ['diary', 'settings', 'dashboard', 'time', 'people', 'inbox'].includes(ui.view) || ui.search
     ? store.view.data.projects.filter((p) => p.state === 'active') : sortForView(visibleProjects(), today);
-  list = list.filter((p) => p.state === 'active');
+  list = list.filter((p) => p.state === 'active' && (p.id === id || !isSnoozed(p, today)));
   const i = Math.max(0, list.findIndex((p) => p.id === id));
   const after = [...list.slice(i + 1), ...list.slice(0, i)].filter((p) => p.id !== id);
   return after.find((p) => dotColour(p, today) === 'red') || after.find((p) => dotColour(p, today) !== 'green') || null;
@@ -1574,6 +1684,7 @@ const KEYS = [
   ['i', '✨ AI: suggest the next steps'],
   ['n', 'New project'],
   ['/', 'Search'],
+  ['q', 'Quick capture: write an idea or task into the Inbox'],
   ['r', 'Switch "My order" / "Red first"'],
   ['t  b  d  p', 'Go to Today / Dashboard / Diary / People'],
   ['@', 'In a step or note: pick a person'],
@@ -1648,6 +1759,7 @@ function onKey(e) {
     if (!viewer.hidden) { closeSheet(); return; }
     if (ui.showKeys) { ui.showKeys = false; render(); return; }
     if (ui.rowMenu) { ui.rowMenu = null; render(); return; }
+    if (ui.capture) { ui.capture = false; render(); return; }
     if (isTyping(document.activeElement)) { document.activeElement.blur(); return; }
     if (ui.round) { if (ui.round.mode) { ui.round.mode = null; render(); } else endRound(); return; }
     if (ui.menuOpen) { ui.menuOpen = false; render(); return; }
@@ -1662,7 +1774,7 @@ function onKey(e) {
   if (e.repeat && !isArrow && e.key !== 'j' && e.key !== 'k') return; // holding x / o / r must not repeat
   const focused = document.activeElement;
   if (isArrow && focused && (focused.type === 'radio' || focused.nodeName === 'SUMMARY')) return;
-  if (isArrow && ['diary', 'settings', 'dashboard', 'time'].includes(ui.view) && !ui.search) return; // let the page scroll
+  if (isArrow && ['diary', 'settings', 'dashboard', 'time', 'inbox'].includes(ui.view) && !ui.search) return; // let the page scroll
   const k = e.key;
   if (ui.round) {
     const map = { x: 'done', s: 'add', w: 'note', o: 'ok', c: 'chase', n: 'skip', ArrowRight: 'skip' };
@@ -1681,7 +1793,7 @@ function onKey(e) {
   if (k === 'ArrowRight' || k === 'ArrowLeft') {
     const step = k === 'ArrowRight' ? 1 : -1;
     if (ui.view === 'people' && !ui.search) goPerson(step);
-    else if (ui.selected && !['diary', 'settings', 'dashboard', 'time'].includes(ui.view)) goProject(step);
+    else if (ui.selected && !['diary', 'settings', 'dashboard', 'time', 'inbox'].includes(ui.view)) goProject(step);
     else handled = false;
   } else if (k === 'Backspace') {
     if (ui.navStack && ui.navStack.length) goBack(); else handled = false;
@@ -1716,6 +1828,8 @@ function onKey(e) {
   } else if (k === 'n') {
     if (ui.view === 'diary' || ui.view === 'settings' || ui.view === 'paused' || ui.view === 'finished') ui.view = 'today';
     ui.search = ''; ui.adding = true; ui.mobile = 'list'; render(); focusKey('new-name');
+  } else if (k === 'q') {
+    openCapture();
   } else if (k === '/') {
     const box = [...root.querySelectorAll('input.search')].find((el) => el.offsetParent !== null);
     if (box) box.focus();

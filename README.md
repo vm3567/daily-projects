@@ -93,15 +93,21 @@ Also: each red/yellow row has a one-tap **✓ OK** (or **Chased** when waiting),
 
 ---
 
-## Updating several steps
+## Writing what you did (inside the step)
 
-- Every open step has a **📝** button: tap it and **Today's update** is about that step ("📝 About: …").
-- Or use **change:** in Today's update to pick any open step, or **Whole project**.
-- **Click a step's words** and Today's update is about that step. Press **Enter** in the step to jump to the update box.
+- The **write box sits inside the next step** (blue box), with that step's latest notes just above it.
+- **Click another step's words** (or its 📝) and the box moves into that step. Press **Enter** in a step to jump into its box.
 - Write what happened. **Save** (or Enter) keeps the note. **✓ Save + done** (or **Ctrl/⌘+Enter**) keeps the note and ticks the step.
-- **Photos:** paste a screenshot into the box (Ctrl/⌘+V), or drag files onto the project page. Photos go on the update; other files go to Files.
+- **whole project** (right of the buttons) writes a note about the project, not one step.
+- **Photos:** paste a screenshot into the box (Ctrl/⌘+V), or drag files onto the project page. Photos go on the note; other files go to Files.
 - When the project turns green, a **Next: …** button opens the next project that still needs you.
-- Each note shows under its own step, and the Diary and Today's summary say which step it was about.
+- All notes are listed under **Work notes**, each saying which step it was about.
+
+## Status, Snooze and Inbox
+
+- **Status:** one line under the project name on where it stands. It saves by itself, shows in the list, and goes into the owner report ("Where things stand"). After 7 days it turns grey and asks for an update.
+- **💤 Snooze:** type a number of days (or tap 1 / 3 / 7 / 14). The project leaves Today, does not count against your streak, waits in **💤 Snoozed** at the bottom of Today, and comes back by itself on that day. **⏰ Wake up now** brings it back early. Also in the right-click menu.
+- **📥 Quick capture:** press **Q** anywhere (or 📥 at the top, on iPhone too), type, Enter. It goes to the **Inbox**. Today shows "📥 Inbox (n) — sort now". In the Inbox, tap a suggested project, or pick any project (or "+ New project in …") to turn the item into a step.
 
 ---
 

@@ -15,7 +15,8 @@ import { AI_DAILY_LIMIT, BRIEF_CLAIM_MINUTES } from './config.js';
 export const START_GROUPS = ['Acton', 'Personal', 'Ceramic Ninja'];
 export const PRIORITIES = ['high', 'medium', 'low'];
 export const DEFAULT_TARGET_DAYS = 30; // new projects get a target date 30 days ahead
-const PROJECT_FIELDS = ['name', 'groupId', 'priority', 'deadline', 'notes', 'tagId'];
+const PROJECT_FIELDS = ['name', 'groupId', 'priority', 'deadline', 'notes', 'tagId', 'status'];
+export const MAX_SNOOZE_DAYS = 365;
 const STEP_FIELDS = ['text', 'dueDate', 'note', 'waiting', 'waitingOn', 'repeat'];
 
 export function newId() {
@@ -171,6 +172,7 @@ const handlers = {
     let value = a.value;
     if (a.field === 'name') value = cleanText(value, 200).trim() || p.name;
     if (a.field === 'notes') value = cleanText(value, 50000);
+    if (a.field === 'status') { value = cleanText(value, 200).replace(/\s+/g, ' ').trim(); if ((p.status || '') !== value) p.statusAt = op.at; }
     if (a.field === 'priority' && !PRIORITIES.includes(value)) return false;
     if (a.field === 'deadline') value = cleanDate(value);
     if (a.field === 'groupId' && !state.data.groups.some((g) => g.id === value)) return false;
@@ -196,7 +198,30 @@ const handlers = {
       addEvent(state, op, p, 'edited', t ? `Tag: ${t.name}` : 'Tag removed');
     } else if (a.field === 'priority') addEvent(state, op, p, 'edited', `Priority: ${value}`);
     else if (a.field === 'deadline') addEvent(state, op, p, 'edited', value ? `Target date: ${value}` : 'Target date removed');
+    // status: no history event (it saves while typing)
     // notes: no history event (it would add a line for every few words typed)
+    return true;
+  },
+
+  /** Hide an active project from Today for N days; it comes back by itself. Not "work", so the dot is not made green. */
+  snooze(state, op, a) {
+    const p = findProject(state.data, a.projectId);
+    const days = Math.round(Number(a.days));
+    if (!p || p.state !== 'active' || !(days >= 1 && days <= MAX_SNOOZE_DAYS)) return false;
+    const today = indiaDate(op.at);
+    p.snoozedFrom = today;
+    p.snoozedUntil = addDays(today, days);
+    p.updatedAt = op.at;
+    addEvent(state, op, p, 'snoozed', `for ${days} day${days === 1 ? '' : 's'} (back ${p.snoozedUntil})`);
+    return true;
+  },
+
+  wake(state, op, a) {
+    const p = findProject(state.data, a.projectId);
+    if (!p || !p.snoozedUntil || p.snoozedUntil <= indiaDate(op.at)) return false;
+    p.snoozedUntil = indiaDate(op.at); // ends today (keeps today's snooze out of the score)
+    p.updatedAt = op.at;
+    addEvent(state, op, p, 'woke', '');
     return true;
   },
 
@@ -565,6 +590,41 @@ const handlers = {
   },
 
   // ---------- People ----------
+  // ---- Inbox (quick capture): ideas and tasks written down fast, sorted into projects later ----
+  addInbox(state, op, a) {
+    const inbox = (state.data.inbox ||= []);
+    const text = cleanText(a.text, 1000).replace(/\s+/g, ' ').trim();
+    if (!text || inbox.some((x) => x.id === a.itemId)) return false;
+    inbox.push({ id: a.itemId, text, createdAt: op.at });
+    return true;
+  },
+
+  removeInbox(state, op, a) {
+    const inbox = state.data.inbox || [];
+    const i = inbox.findIndex((x) => x.id === a.itemId);
+    if (i < 0) return false;
+    inbox.splice(i, 1);
+    return true;
+  },
+
+  /** Inbox item → a step in a project (one change, so it can't be half done). */
+  inboxToStep(state, op, a) {
+    const inbox = state.data.inbox || [];
+    const item = inbox.find((x) => x.id === a.itemId);
+    if (!item || !handlers.addStep(state, op, { projectId: a.projectId, stepId: a.stepId, text: item.text })) return false;
+    inbox.splice(inbox.indexOf(item), 1);
+    return true;
+  },
+
+  /** Inbox item → a new project with that name. */
+  inboxToProject(state, op, a) {
+    const inbox = state.data.inbox || [];
+    const item = inbox.find((x) => x.id === a.itemId);
+    if (!item || !handlers.createProject(state, op, { projectId: a.projectId, name: item.text, groupId: a.groupId })) return false;
+    inbox.splice(inbox.indexOf(item), 1);
+    return true;
+  },
+
   addPerson(state, op, a) {
     const people = (state.data.people ||= []);
     const name = cleanText(a.name, 80).replace(/^@+/, '').trim();

@@ -699,3 +699,50 @@ kbd.hint {
   .dash-cols { grid-template-columns: 1fr; }
   .dash-cols > .dash-col:first-child { grid-row: auto; }
 }
+
+/* ---------- update in the step, status, snooze, inbox (v25) ---------- */
+.step.has-update { background: #f5f8ff; border: 1.5px solid #c7d7fb; border-radius: 10px; padding-bottom: 8px; margin: 4px 0; }
+.step.has-update .step-text { font-weight: 600; }
+.update-form.in-step { margin: 6px 10px 0 54px; display: flex; flex-direction: column; gap: 6px; }
+.update-form.in-step input[name="note"] { background: #fff; }
+.update-form.loose { margin: 8px 0; display: flex; flex-direction: column; gap: 6px; background: #f5f8ff; border: 1.5px solid #c7d7fb; border-radius: 10px; padding: 10px; }
+.update-label { font-size: 13.5px; color: #1e40af; }
+.update-form .row { flex-wrap: wrap; align-items: center; }
+.push-right { margin-left: auto; }
+.status-line { display: flex; align-items: center; gap: 8px; margin: 2px 0 6px; padding: 4px 8px 4px 10px; background: #fffbeb; border: 1px solid #fde68a; border-radius: 8px; }
+.status-line.empty { background: none; border-style: dashed; border-color: #e2e8f0; }
+.status-line.old { background: #f8fafc; border-color: #e2e8f0; }
+.status-line.old .status-input { color: var(--muted); }
+.status-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: #92400e; flex: none; }
+.status-line.empty .status-label, .status-line.old .status-label { color: var(--muted); }
+.status-input { flex: 1; min-width: 0; border: 0; background: transparent; font: inherit; font-size: 14px; padding: 4px 0; color: #78350f; }
+.status-input:focus { outline: none; }
+.status-age { flex: none; }
+.status-line.old .status-age { color: #b45309; }
+.prow-status { font-size: 12.5px; color: #92400e; font-style: italic; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tag.snoozed { background: #eef2ff; color: #4338ca; }
+.snooze-form { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 6px 0; padding: 8px 10px; background: #eef2ff; border-radius: 8px; font-size: 14px; }
+.snooze-form input[type="number"] { width: 64px; text-align: center; }
+.snoozed-banner { display: flex; align-items: center; gap: 10px; justify-content: space-between; background: #eef2ff; color: #3730a3; }
+.btn.on { background: var(--brand-soft); }
+.capture-wrap { position: fixed; inset: 0; z-index: 70; background: rgba(15, 23, 42, .25); display: flex; align-items: flex-start; justify-content: center; padding-top: 14vh; }
+.capture { width: min(560px, calc(100vw - 32px)); background: #fff; border-radius: 12px; padding: 14px; box-shadow: 0 20px 50px rgba(15, 23, 42, .25); }
+.capture-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.capture-head .icon { margin-left: auto; }
+.capture .row input { flex: 1; min-width: 0; font-size: 16px; }
+.inbox { padding: 8px 12px 30px; }
+.inbox-top { margin-bottom: 10px; align-items: center; }
+.inbox-list { list-style: none; margin: 0; padding: 0; }
+.inbox-list li { border: 1px solid var(--line, #e2e8f0); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; background: #fff; }
+.inbox-text { font-size: 14.5px; margin-bottom: 8px; }
+.inbox-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.inbox-pick { max-width: 220px; }
+.chip.sugg { border-style: solid; background: var(--brand-soft); color: #1e40af; }
+.inbox-reminder { display: block; width: calc(100% - 16px); margin: 4px 8px 8px; text-align: left; border: 1px solid #c7d7fb; background: var(--brand-soft); color: #1e40af; border-radius: 8px; padding: 8px 12px; font: inherit; font-size: 14px; cursor: pointer; }
+@media (max-width: 760px) { .update-form.in-step { margin-left: 12px; } }
+.stand { margin-top: 14px; border-top: 1px solid #f1f5f9; padding-top: 10px; }
+.stand h4 { margin: 0 0 6px; font-size: 14px; }
+.stand li { padding: 3px 0; font-size: 13.5px; }
+.stand .muted { color: #92400e; }
+.detail-top .title-input { flex: 1 1 280px; min-width: 220px; }
+.state-buttons { flex-wrap: wrap; justify-content: flex-end; }

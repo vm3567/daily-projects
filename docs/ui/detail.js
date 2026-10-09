@@ -3,9 +3,11 @@
 import { h, fmtDay, fmtTime, fmtSize, keyHint, withKey, HAS_KEYBOARD } from './dom.js';
 
 const MOD = /Mac|iPhone|iPad/.test(globalThis.navigator ? navigator.platform || navigator.userAgent || '' : '') ? '⌘' : 'Ctrl';
-import { dotColour, todayIndia, isOverdue, indiaDate, waitingDays, lastWorkDate, nextStep, stepLinkedTo, personStatus, minutesBetween, fmtMinutes, weekStart } from '../rules.js';
+import { dotColour, isSnoozed, daysBetween, addDays, todayIndia, isOverdue, indiaDate, waitingDays, lastWorkDate, nextStep, stepLinkedTo, personStatus, minutesBetween, fmtMinutes, weekStart } from '../rules.js';
 import { WAIT_RED_DAYS } from '../config.js';
-import { newId, PRIORITIES, cleanUrl, groupHasTimer } from '../ops.js';
+import { newId, PRIORITIES, cleanUrl, groupHasTimer, MAX_SNOOZE_DAYS } from '../ops.js';
+
+const STATUS_OLD_DAYS = 7; // a status older than this turns grey and asks for an update
 import { uploadFiles, openFile, uploadBlob } from './files.js';
 
 const REPEAT_WORD = { daily: 'every day', weekly: 'every week', monthly: 'every month' };
@@ -50,7 +52,7 @@ function stepNotes(p, s) {
   return h('div', { class: 'step-notes' }, notes.map((n) => h('div', { key: 'sn-' + n.id }, `📝 ${fmtDay(indiaDate(n.createdAt))}: ${n.text}`)));
 }
 
-function stepRow(ctx, p, s) {
+function stepRow(ctx, p, s, box = null) {
   const { store, ui } = ctx;
   const open = ui.openStep === s.id;
   const today = todayIndia();
@@ -69,7 +71,7 @@ function stepRow(ctx, p, s) {
   if (s.repeat && !s.done) tags.push(h('span', { class: 'tag repeat', title: 'Repeats' }, `↻ ${REPEAT_WORD[s.repeat]}`));
   if (s.snoozedUntil && s.snoozedUntil > today && !s.done) tags.push(h('span', { class: 'tag' }, `from ${fmtDay(s.snoozedUntil)}`));
   const aboutThis = () => { const u = updateState(ui, p); if (u.about !== s.id) { u.about = s.id; ctx.render(); } };
-  return h('li', { class: 'step' + (s.done ? ' done' : '') + (s.snoozedUntil && s.snoozedUntil > today && !s.done ? ' later' : ''), key: 's-' + s.id, 'data-id': s.id },
+  return h('li', { class: 'step' + (box ? ' has-update' : '') + (s.done ? ' done' : '') + (s.snoozedUntil && s.snoozedUntil > today && !s.done ? ' later' : ''), key: 's-' + s.id, 'data-id': s.id },
     h('div', { class: 'step-main' },
       s.done ? null : h('span', { class: 'grip', title: 'Drag to reorder', 'aria-hidden': 'true' }, '⋮⋮'),
       h('input', {
@@ -101,6 +103,7 @@ function stepRow(ctx, p, s) {
         onClick: () => { ui.openStep = open ? null : s.id; ctx.render(); },
       }, open ? '▴' : '⋯')),
     stepNotes(p, s),
+    box,
     open ? h('div', { class: 'step-extra' },
       h('label', null, 'Due date ',
         h('input', {
@@ -287,13 +290,17 @@ function historyBlock(ctx, p) {
  *   - [✓ This step is done] → ticks it, and asks "What's next?"
  *   - one Save (Enter) does all of it, with one Undo
  */
-function todaysUpdate(ctx, p, notesShown) {
-  const { store, ui } = ctx;
+/**
+ * The write box ("What did you do?"). It sits INSIDE the step it is about (the next step, or the step you clicked),
+ * so the step and its update are one thing. With no open step (or "whole project") it sits under the steps.
+ * Returns { stepId, box }: stepId = the step it belongs in (null = under the steps).
+ */
+function updateBox(ctx, p) {
+  const { ui } = ctx;
   const today = todayIndia();
   const nextDue = p.state === 'active' ? nextStep(p, today, { dueOnly: true }) : null;
   const openSteps = p.state === 'active' ? p.steps.filter((s) => !s.done) : [];
   const u = updateState(ui, p);
-  // Which step is this update about? The next step by default; any open step via the picker or a step's 📝; or the whole project.
   const chosen = u.about && u.about !== 'project' ? openSteps.find((s) => s.id === u.about) : null;
   const due = u.about === 'project' ? null : chosen || nextDue;
   // "Save" = note only; "Save + done" (or Ctrl/⌘+Enter) = note and tick the step it is about.
@@ -321,65 +328,58 @@ function todaysUpdate(ctx, p, notesShown) {
       if (tick && !next) ctx.afterTick(p.id, 'detail', result.undo); // keeps the Undo button
     }
   };
-  const nextBox = !openSteps.length;
   const addPhotos = async (files) => {
     for (const f of files) {
       const up = await uploadBlob(ctx, f);
       if (up) { (u.photos ||= []).push(up); ctx.render(); }
     }
   };
-  // The project is green: offer the next project that still needs you, right here.
-  const np = p.state === 'active' && dotColour(p, today) === 'green' && ctx.nextOpenProject ? ctx.nextOpenProject(p.id) : null;
-  const picker = openSteps.length > 1 || (openSteps.length && u.about === 'project')
-    ? h('select', {
-      class: 'about-select', key: 'about-' + p.id, value: u.about === 'project' ? 'project' : due ? due.id : 'project', 'aria-label': 'Which step is this update about?',
-      onChange: (e, el) => { u.about = el.value; ctx.render(); setTimeout(() => { const n = document.querySelector(`[data-key="wn-${p.id}"]`); if (n) n.focus(); }, 30); },
+  if (p.state !== 'active') return { stepId: null, box: null };
+  const box = h('form', {
+    class: 'update-form' + (due ? ' in-step' : ' loose'), key: 'update-' + p.id,
+    onSubmit: (e) => { e.preventDefault(); save(e.target); },
+  },
+  due ? null : h('div', { class: 'update-label' },
+    u.about === 'project' && openSteps.length
+      ? ['📝 About the whole project · ', h('button', { class: 'link small', type: 'button', onClick: () => { u.about = null; ctx.render(); } }, 'back to the next step')]
+      : 'No next step yet — write what you did, and add the next step.'),
+  h('input', {
+    name: 'note', key: 'wn-' + p.id, autocomplete: 'off', enterkeyhint: 'done', 'data-mention': '1', value: u.note,
+    placeholder: withKey(due ? 'What did you do on this step today?' : 'What did you do today?', 'W'),
+    onInput: (e, el) => { u.note = el.value; }, // half-typed text survives switching projects
+    onKeydown: (e, el) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); save(el.form, true); } },
+    onPaste: (e) => { // a pasted screenshot becomes a photo on this update
+      const files = [...((e.clipboardData && e.clipboardData.files) || [])].filter((f) => f.type.startsWith('image/'));
+      if (!files.length) return;
+      e.preventDefault();
+      addPhotos(files);
     },
-    openSteps.map((s) => h('option', { value: s.id }, `${s.id === (nextDue || {}).id ? '→ ' : ''}${s.text}`)),
-    h('option', { value: 'project' }, 'Whole project (no step)'))
-    : null;
-  return h('div', { class: 'update' },
-    np ? h('div', { class: 'next-project', key: 'np-' + p.id },
-      h('span', null, '✓ Green for today.'),
-      h('button', { class: 'btn primary small', onClick: () => ctx.openNextOpen(np.id) },
-        h('span', { class: `dot ${dotColour(np, today)}` }), ` Next: ${np.name} →`)) : null,
-    h('div', { class: 'update-next' + (due || u.about === 'project' ? '' : ' none') },
-      due ? [due === nextDue ? '→ Next: ' : '📝 About: ', h('strong', null, due.text), due.waiting ? h('span', { class: 'tag waiting' }, due.waitingOn ? `Waiting: ${due.waitingOn}` : 'Waiting') : null]
-        : u.about === 'project' ? '📝 About: the whole project'
-          : 'No next step yet — write what you did and add the next step below.',
-      picker ? h('span', { class: 'about-pick' }, 'change: ', picker) : null),
-    h('form', {
-      class: 'update-form', key: 'update-' + p.id,
-      onSubmit: (e) => { e.preventDefault(); save(e.target); },
-    },
-    h('input', {
-      name: 'note', key: 'wn-' + p.id, autocomplete: 'off', enterkeyhint: 'done', 'data-mention': '1', value: u.note,
-      placeholder: withKey(due ? 'What did you do on this step?' : 'What did you do today?', 'W'),
-      onInput: (e, el) => { u.note = el.value; }, // half-typed text survives switching projects
-      onKeydown: (e, el) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); save(el.form, true); } },
-      onPaste: (e) => { // a pasted screenshot becomes a photo on this update
-        const files = [...((e.clipboardData && e.clipboardData.files) || [])].filter((f) => f.type.startsWith('image/'));
-        if (!files.length) return;
-        e.preventDefault();
-        addPhotos(files);
-      },
-    }),
-    nextBox ? h('input', {
-      name: 'next', key: 'wn-next-' + p.id, autocomplete: 'off', enterkeyhint: 'done', 'data-mention': '1', value: u.next,
-      onInput: (e, el) => { u.next = el.value; },
-      placeholder: due ? "What's next? (optional)" : 'Next step (optional)',
-    }) : null,
-    (u.photos || []).length ? h('div', { class: 'photo-chips' }, u.photos.map((ph, i) => h('span', { class: 'tag photo', key: 'ph-' + ph.fileId },
-      `📷 ${ph.name}`, h('button', { class: 'icon tiny-x', type: 'button', 'aria-label': 'Remove photo', onClick: () => { u.photos.splice(i, 1); ctx.render(); } }, '✕')))) : null,
-    h('div', { class: 'row' },
-      h('button', { class: 'btn small', type: 'submit' }, 'Save'),
-      due ? h('button', { class: 'btn primary small', type: 'button', title: `Save the note and tick "${due.text}" (${MOD}+Enter)`, onClick: (e, el) => save(el.form, true) }, '✓ Save + done') : null,
-      h('label', { class: 'btn small photo-btn', title: 'Take a photo or choose one' }, '📷 Photo',
-        h('input', {
-          type: 'file', accept: 'image/*', multiple: true, class: 'visually-hidden',
-          onChange: async (e, el) => { const files = [...el.files]; el.value = ''; addPhotos(files); },
-        })),
-      h('span', { class: 'muted small' }, HAS_KEYBOARD ? (due ? `Enter = Save · ${MOD}+Enter = Save + done · paste a screenshot` : 'Enter = Save · paste a screenshot') : ''))),
+  }),
+  openSteps.length ? null : h('input', {
+    name: 'next', key: 'wn-next-' + p.id, autocomplete: 'off', enterkeyhint: 'done', 'data-mention': '1', value: u.next,
+    onInput: (e, el) => { u.next = el.value; },
+    placeholder: 'Next step (optional)',
+  }),
+  (u.photos || []).length ? h('div', { class: 'photo-chips' }, u.photos.map((ph, i) => h('span', { class: 'tag photo', key: 'ph-' + ph.fileId },
+    `📷 ${ph.name}`, h('button', { class: 'icon tiny-x', type: 'button', 'aria-label': 'Remove photo', onClick: () => { u.photos.splice(i, 1); ctx.render(); } }, '✕')))) : null,
+  h('div', { class: 'row' },
+    h('button', { class: 'btn small', type: 'submit' }, 'Save'),
+    due ? h('button', { class: 'btn primary small', type: 'button', title: `Save the note and tick "${due.text}" (${MOD}+Enter)`, onClick: (e, el) => save(el.form, true) }, '✓ Save + done') : null,
+    h('label', { class: 'btn small photo-btn', title: 'Take a photo or choose one' }, '📷 Photo',
+      h('input', {
+        type: 'file', accept: 'image/*', multiple: true, class: 'visually-hidden',
+        onChange: async (e, el) => { const files = [...el.files]; el.value = ''; addPhotos(files); },
+      })),
+    h('span', { class: 'muted small' }, HAS_KEYBOARD ? (due ? `Enter = Save · ${MOD}+Enter = Save + done` : 'Enter = Save') : ''),
+    due ? h('button', { class: 'link small push-right', type: 'button', title: 'Write about the project, not one step', onClick: () => { u.about = 'project'; ctx.render(); focusUpdate(p); } }, 'whole project') : null));
+  return { stepId: due ? due.id : null, box };
+}
+
+/** All work notes, newest first (each says which step it was about). */
+function notesLog(ctx, p, notesShown) {
+  const { store, ui } = ctx;
+  if (!p.workNotes.length) return null;
+  return h('div', null,
     h('ul', { class: 'notes' }, p.workNotes.slice(0, notesShown).map((n) => {
       const st = n.stepId && p.steps.find((x) => x.id === n.stepId);
       return h('li', { key: 'n-' + n.id },
@@ -395,6 +395,49 @@ function todaysUpdate(ctx, p, notesShown) {
     })),
     p.workNotes.length > notesShown
       ? h('button', { class: 'link small', onClick: () => { ui.notesLimit = notesShown + 20; ctx.render(); } }, `Show older notes (${p.workNotes.length - notesShown})`) : null);
+}
+
+/** "Status: one line on where it stands" under the project name. Grey and asks for an update after 7 days. */
+function statusLine(ctx, p) {
+  const { store } = ctx;
+  const today = todayIndia();
+  const age = p.status && p.statusAt ? daysBetween(indiaDate(p.statusAt), today) : null;
+  const old = age !== null && age >= STATUS_OLD_DAYS;
+  return h('div', { class: 'status-line' + (old ? ' old' : '') + (p.status ? '' : ' empty'), key: 'status-' + p.id },
+    h('span', { class: 'status-label' }, 'Status'),
+    autoField('input', {
+      class: 'status-input', value: p.status || '', key: 'st-in-' + p.id, maxlength: 200, 'aria-label': 'Status: one line on where this project stands',
+      placeholder: 'One line on where it stands (e.g. Waiting for mould, test next week)',
+    }, (v) => store.dispatch('setProjectField', { projectId: p.id, field: 'status', value: v })),
+    p.status ? h('span', { class: 'muted small status-age' }, age === 0 ? 'updated today' : old ? `${age} days old — update status?` : `${age} day${age === 1 ? '' : 's'} ago`) : null);
+}
+
+/** Snooze form (number of days) or, when snoozed, the "back on …" line with Wake up now. */
+function snoozeBar(ctx, p) {
+  const { ui } = ctx;
+  const today = todayIndia();
+  if (p.state !== 'active') return null;
+  if (isSnoozed(p, today)) {
+    return h('div', { class: 'banner snoozed-banner', key: 'snz-' + p.id },
+      `💤 Snoozed — comes back to Today on ${fmtDay(p.snoozedUntil)}.`,
+      h('button', { class: 'btn small', onClick: () => ctx.act('wake', { projectId: p.id }, `Back on Today: ${p.name}`) }, '⏰ Wake up now'));
+  }
+  if (ui.snoozeOpen !== p.id) return null;
+  const go = (days) => {
+    const n = Math.round(Number(days));
+    if (!(n >= 1 && n <= MAX_SNOOZE_DAYS)) { ctx.toast(`Type a number of days from 1 to ${MAX_SNOOZE_DAYS}`); return; }
+    if (ctx.act('snooze', { projectId: p.id, days: n }, `💤 ${p.name} snoozed for ${n} day${n === 1 ? '' : 's'} (back ${fmtDay(addDays(today, n))})`)) { ui.snoozeOpen = null; ctx.render(); }
+  };
+  return h('form', {
+    class: 'snooze-form', key: 'snzf-' + p.id,
+    onSubmit: (e) => { e.preventDefault(); go(e.target.elements.days.value); },
+  },
+  h('span', null, '💤 Snooze for'),
+  h('input', { name: 'days', type: 'number', min: 1, max: MAX_SNOOZE_DAYS, value: ui.snoozeDays || 3, key: 'snooze-' + p.id, 'aria-label': 'Days', onInput: (e, el) => { ui.snoozeDays = el.value; } }),
+  h('span', null, 'days'),
+  h('button', { class: 'btn primary small', type: 'submit' }, 'Snooze'),
+  [1, 3, 7, 14].map((n) => h('button', { class: 'chip', type: 'button', key: 'sn' + n, onClick: () => go(n) }, String(n))),
+  h('button', { class: 'link small', type: 'button', onClick: () => { ui.snoozeOpen = null; ctx.render(); } }, 'Cancel'));
 }
 
 const notesTimers = {}; // one save timer per project, kept across screen updates
@@ -531,8 +574,12 @@ function stateButtons(ctx, p) {
       running
         ? h('button', { class: 'btn timer-on', title: 'Stop the timer', onClick: () => ctx.stopTimer() }, `⏸ ${ctx.clockText(t.start)}`)
         : timed ? h('button', { class: 'btn', title: 'Start timing your work on this project', onClick: () => ctx.startTimer(p) }, '▶ Start') : null,
-      !green ? h('button', { class: 'btn ok-btn', title: 'Looked at it, no more work today (key: o)', onClick: () => ctx.toggleOk(p) }, '✓ OK for today', keyHint('O')) : null,
+      !green && !isSnoozed(p, today) ? h('button', { class: 'btn ok-btn', title: 'Looked at it, no more work today (key: o)', onClick: () => ctx.toggleOk(p) }, '✓ OK for today', keyHint('O')) : null,
       okOnly ? h('button', { class: 'btn small', title: 'Undo OK for today', onClick: () => ctx.toggleOk(p) }, 'Undo OK') : null,
+      isSnoozed(p, today) ? null : h('button', {
+        class: 'btn' + (ui.snoozeOpen === p.id ? ' on' : ''), title: 'Hide from Today for some days',
+        onClick: () => { ui.snoozeOpen = ui.snoozeOpen === p.id ? null : p.id; ctx.render(); setTimeout(() => { const n = document.querySelector(`[data-key="snooze-${p.id}"]`); if (n) { n.focus(); n.select(); } }, 30); },
+      }, '💤 Snooze'),
       h('button', { class: 'btn', onClick: () => ctx.act('pause', { projectId: p.id }, `Paused: ${p.name}`) }, 'Pause'),
       h('button', {
         class: 'btn',
@@ -633,6 +680,9 @@ export function renderDetail(ctx) {
   const openPart = (name) => { opened[name] = true; ctx.render(); };
   const chip = (name, label) => (show[name] ? null : h('button', { class: 'chip', onClick: () => openPart(name) }, label));
   const notesShown = ui.notesLimit || 3;
+  const upd = updateBox(ctx, p);
+  // The project is green: offer the next project that still needs you, right here.
+  const np = p.state === 'active' && colour === 'green' && ctx.nextOpenProject ? ctx.nextOpenProject(p.id) : null;
 
   const hasFiles = (e) => e.dataTransfer && [...(e.dataTransfer.types || [])].includes('Files');
   return h('div', {
@@ -662,15 +712,22 @@ export function renderDetail(ctx) {
       autoField('input', { class: 'title-input', value: p.name, 'aria-label': 'Project name', key: 'name-' + p.id },
         (v) => store.dispatch('setProjectField', { projectId: p.id, field: 'name', value: v })),
       h('div', { class: 'state-buttons' }, stateButtons(ctx, p))),
+    snoozeBar(ctx, p),
     navBar(ctx, p),
+    statusLine(ctx, p),
     metaLine(ctx, p, today),
     timeLine(ctx, p, today),
     peopleChips(ctx, p),
     p.state !== 'active' ? h('p', { class: 'banner' }, p.state === 'paused' ? 'This project is paused. It is hidden from Today.' : 'This project is finished.') : null,
 
     section(stepsTitle(),
+      np ? h('div', { class: 'next-project', key: 'np-' + p.id },
+        h('span', null, '✓ Green for today.'),
+        h('button', { class: 'btn primary small', onClick: () => ctx.openNextOpen(np.id) },
+          h('span', { class: `dot ${dotColour(np, today)}` }), ` Next: ${np.name} →`)) : null,
       h('ul', { class: 'steps sortable-steps', key: 'steps-' + p.id, 'data-project': p.id },
-        openSteps.map((s) => stepRow(ctx, p, s))),
+        openSteps.map((s) => stepRow(ctx, p, s, s.id === upd.stepId ? upd.box : null))),
+      upd.stepId ? null : upd.box,
       openSteps.length ? null : h('p', { class: 'warn' }, 'No next step — add one'),
       h('form', {
         class: 'row add-step',
@@ -693,7 +750,7 @@ export function renderDetail(ctx) {
         h('summary', { onClick: (e) => { e.preventDefault(); ui.showDone = !ui.showDone; ctx.render(); } }, `Done (${doneSteps.length})`),
         ui.showDone ? h('ul', { class: 'steps' }, doneSteps.map((s) => stepRow(ctx, p, s))) : null) : null),
 
-    section("Today's update", todaysUpdate(ctx, p, notesShown)),
+    p.workNotes.length ? section('Work notes', notesLog(ctx, p, notesShown)) : null,
 
     show.notes ? section('Notes', notesBox(ctx, p)) : null,
     show.links ? section('Links', linksBlock(ctx, p)) : null,

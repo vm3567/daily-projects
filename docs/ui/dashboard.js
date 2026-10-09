@@ -1,7 +1,7 @@
 // Dashboard (one screen): numbers strip, green days calendar, time, what needs attention.
 
 import { h, fmtDay } from './dom.js';
-import { dotColour, dayScore, todayIndia, addDays, monthOf, daysWithoutWork, isOverdue, indiaDate, initials, minutesBetween, fmtMinutes, weekStart as mondayOf } from '../rules.js';
+import { dotColour, isSnoozed, dayScore, todayIndia, addDays, monthOf, daysWithoutWork, isOverdue, indiaDate, initials, minutesBetween, fmtMinutes, weekStart as mondayOf } from '../rules.js';
 import { peopleByFollowUp } from './people.js';
 import { NO_WORK_NOTE_DAYS } from '../config.js';
 
@@ -45,7 +45,7 @@ export function renderDashboard(ctx) {
   const { store, ui } = ctx;
   const { data, history } = store.view;
   const today = todayIndia();
-  const active = data.projects.filter((p) => p.state === 'active');
+  const active = data.projects.filter((p) => p.state === 'active' && !isSnoozed(p, today));
   const greenNow = active.filter((p) => dotColour(p, today) === 'green').length;
   const todayScore = { green: greenNow, total: active.length };
 
