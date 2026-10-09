@@ -345,7 +345,12 @@ function projectRow(p, today) {
         title: `Tick: ${ns.text}`, 'aria-label': `Tick next step of ${p.name}: ${ns.text}`,
         onChange: (e, el) => quickTick(p, ns, el),
       })
-      : h('span', { class: 'quick-tick-space', 'aria-hidden': 'true' }),
+      : p.state === 'active'
+        ? h('button', {
+          class: 'quick-add', title: 'Add the first step', 'aria-label': `Add a step to ${p.name}`,
+          onClick: () => { ui.quickAdd = ui.quickAdd === p.id ? null : p.id; render(); focusKey('qa-' + p.id); },
+        }, '+')
+        : h('span', { class: 'quick-tick-space', 'aria-hidden': 'true' }),
     h('button', { class: 'prow-btn', onClick: () => select(p.id) },
       h('span', { class: `dot ${colour}`, 'aria-label': colour }),
       h('span', { class: 'prow-text' },
@@ -358,7 +363,35 @@ function projectRow(p, today) {
             ? h('span', { class: 'tag' + (isOverdue(p, today) ? ' late' : '') }, isOverdue(p, today) ? `Overdue · ${fmtDay(p.deadline)}` : `Target ${fmtDay(p.deadline)}`)
             : null,
           noWorkTag(p, today)))),
-    canDrag() ? h('span', { class: 'grip', 'aria-hidden': 'true', title: 'Drag to reorder' }, '⋮⋮') : null);
+    canDrag() ? h('span', { class: 'grip', 'aria-hidden': 'true', title: 'Drag to reorder' }, '⋮⋮') : null,
+    ui.quickAdd === p.id ? quickAddForm(p) : null);
+}
+
+/** The small "+ add a step" box that opens under a row with no steps. */
+function quickAddForm(p) {
+  return h('form', {
+    class: 'quick-add-form', key: 'qaf-' + p.id,
+    onSubmit: (e) => {
+      e.preventDefault();
+      const input = e.target.elements.text;
+      const text = input.value.trim();
+      if (!text) return;
+      if (store.dispatch('addStep', { projectId: p.id, stepId: newId(), text })) {
+        ui.quickAdd = null;
+        toast(`Added to ${p.name}: ${text}`, 3000);
+        render();
+      }
+    },
+  },
+  h('input', {
+    name: 'text', key: 'qa-' + p.id, placeholder: 'First step, then press Enter', autocomplete: 'off',
+    enterkeyhint: 'done', 'data-mention': '1',
+    // Close when leaving an empty box (Esc leaves the box too).
+    onFocusout: (e, el) => setTimeout(() => {
+      if (ui.quickAdd === p.id && !el.value.trim() && document.activeElement !== el) { ui.quickAdd = null; render(); }
+    }, 200),
+  }),
+  h('button', { class: 'btn primary small', type: 'submit' }, 'Add'));
 }
 
 /** "No real work for 6 days" — so nothing hides behind "OK for today". */

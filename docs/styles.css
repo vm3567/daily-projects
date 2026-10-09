@@ -402,3 +402,18 @@ kbd {
 .tag.stale { color: #6b7280; background: #f3f4f6; border-color: #e5e7eb; }
 .ok-btn { color: #15803d; border-color: #bbf7d0; background: #f0fdf4; }
 .ok-btn:hover { background: #dcfce7; }
+
+/* ---------- + add a step from the list (v8) ---------- */
+.prow { flex-wrap: wrap; }
+.quick-add {
+  width: 20px; height: 20px; flex: none; margin: 0 2px 0 6px; padding: 0; line-height: 1;
+  border: 1.5px dashed #9db7f5; border-radius: 5px; background: #fff; color: var(--brand);
+  font-size: 15px; font-weight: 700; cursor: pointer;
+}
+.quick-add:hover { background: var(--brand-soft); border-style: solid; }
+.quick-add-form { flex: 1 1 100%; display: flex; gap: 6px; padding: 0 8px 10px 36px; }
+.quick-add-form input { flex: 1; min-width: 0; }
+@media (max-width: 760px) {
+  .quick-add { width: 24px; height: 24px; margin-left: 4px; font-size: 17px; }
+  .quick-add-form { padding-left: 40px; }
+}
