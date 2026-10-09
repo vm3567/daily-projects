@@ -52,8 +52,11 @@ export function laterDate(a, b) {
 export function dotColour(project, today = todayIndia()) {
   if (project.state !== 'active') return 'grey';
   if (project.deadline && project.deadline < today) return 'red';
-  if (project.lastTickDate === today) return 'green';
-  const ref = laterDate(project.lastTickDate, project.activeSince);
+  // Any activity counts (adding or ticking a step, a note, a link, a file, an edit).
+  // Older data only has lastTickDate, so both are read.
+  const last = laterDate(project.lastActivityDate, project.lastTickDate);
+  if (last === today) return 'green';
+  const ref = laterDate(last, project.activeSince);
   if (ref && daysBetween(ref, today) < 2) return 'orange';
   return 'red';
 }

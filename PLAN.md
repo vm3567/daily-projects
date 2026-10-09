@@ -51,8 +51,8 @@ Version: 5.
 | 22 | Step details | Step text (required), plus optional due date, small note, "waiting on whom" |
 | 23 | List order | My own order. I drag projects up and down. |
 | 24 | Backup | Every save is kept as a version on GitHub, forever. Plus a "Download backup" button. |
-| 25 | Red rule | Red when no step was ticked for 2+ days, OR the project deadline has passed |
-| 26 | Green rule | Green only when I tick a step today |
+| 25 | Red rule | Red when there was no activity for 2+ days, OR the target date has passed |
+| 26 | Green rule | Green when I do ANY activity on the project today (add or tick a step, note, link, file, edit). Changed on 9 Oct. |
 | 27 | Files | Upload copies of files into the project (saved in the private data repository) |
 | 28 | Search | One search box. Searches project names, steps, notes. |
 | 29 | AI jobs | Break a project into steps, suggest the next step, Morning plan, Weekly review |
@@ -139,14 +139,14 @@ A phone is too narrow for 3 columns. So the same page shows one column at a time
 
 | Colour | Meaning |
 |--------|---------|
-| Green | I ticked at least one step today |
-| Orange | No step ticked today, but one was ticked yesterday |
-| Red | No step ticked for 2 or more days, OR the deadline has passed |
+| Green | I did any activity on the project today |
+| Orange | No activity today, but some yesterday |
+| Red | No activity for 2 or more days, OR the target date has passed |
 | Grey | Paused or finished (not on Today) |
 
 - A brand-new project starts orange. It turns red after 2 days with no step ticked.
 - After unpausing, the count starts again from the unpause day, so it starts orange.
-- Adding a step or writing a note does NOT turn it green. Only ticking a step does.
+- Any change to the project today turns it green: adding, ticking or editing a step, a work note, notes, links, files, group, priority or target date.
 - Unticking the only step ticked today takes the green away again.
 - A passed deadline keeps the dot red even after ticking steps. Fix: finish the project, or change the deadline.
 - Deleting a ticked step does not change the dot.

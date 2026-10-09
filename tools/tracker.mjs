@@ -110,7 +110,7 @@ function line(p, today) {
     `priority: ${p.priority}`,
     p.deadline ? `target date: ${p.deadline}${isOverdue(p, today) ? ' (PASSED)' : ''}` : null,
     ns ? `next: ${ns.text}${ns.waiting ? ` (WAITING${ns.waitingOn ? ' on ' + ns.waitingOn : ''})` : ''}` : 'next: NONE',
-    p.lastTickDate ? `last tick: ${p.lastTickDate}` : 'never ticked',
+    (p.lastActivityDate || p.lastTickDate) ? `last activity: ${p.lastActivityDate || p.lastTickDate}` : 'no activity yet',
   ];
   return bits.filter(Boolean).join(' | ');
 }

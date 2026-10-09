@@ -23,33 +23,40 @@ test('India date is used, not UTC', () => {
   assert.equal(daysBetween('2026-10-01', '2026-10-03'), 2);
 });
 
-test('dot colours follow the rules', () => {
+test('dot colours: any activity today is green', () => {
   const s = withProject('2026-10-01');
   const p = s.data.projects[0];
-  assert.equal(dotColour(p, '2026-10-01'), 'orange'); // new project
+  assert.equal(dotColour(p, '2026-10-01'), 'green'); // created + steps added today
   assert.equal(dotColour(p, '2026-10-02'), 'orange');
-  assert.equal(dotColour(p, '2026-10-03'), 'red'); // 2 days, nothing ticked
-  applyOp(s, op('tickStep', { projectId: 'p1', stepId: 's1' }, '2026-10-03'));
-  assert.equal(dotColour(p, '2026-10-03'), 'green');
-  assert.equal(dotColour(p, '2026-10-04'), 'orange');
-  assert.equal(dotColour(p, '2026-10-05'), 'red');
-  // overdue deadline = red even after a tick today
-  applyOp(s, op('setProjectField', { projectId: 'p1', field: 'deadline', value: '2026-10-04' }, '2026-10-05'));
-  applyOp(s, op('tickStep', { projectId: 'p1', stepId: 's2' }, '2026-10-05'));
-  assert.equal(dotColour(p, '2026-10-05'), 'red');
+  assert.equal(dotColour(p, '2026-10-03'), 'red'); // 2 days, nothing done
+  applyOp(s, op('addWorkNote', { projectId: 'p1', noteId: 'n1', text: 'Called Ravi' }, '2026-10-03'));
+  assert.equal(dotColour(p, '2026-10-03'), 'green', 'a note counts');
+  applyOp(s, op('addStep', { projectId: 'p1', stepId: 's9', text: 'New step' }, '2026-10-05'));
+  assert.equal(dotColour(p, '2026-10-05'), 'green', 'adding a step counts');
+  applyOp(s, op('tickStep', { projectId: 'p1', stepId: 's1' }, '2026-10-06'));
+  assert.equal(dotColour(p, '2026-10-06'), 'green', 'ticking counts');
+  assert.equal(dotColour(p, '2026-10-07'), 'orange');
+  assert.equal(dotColour(p, '2026-10-08'), 'red');
+  // a passed target date is red even after activity today
+  applyOp(s, op('setProjectField', { projectId: 'p1', field: 'deadline', value: '2026-10-07' }, '2026-10-08'));
+  assert.equal(dotColour(p, '2026-10-08'), 'red');
 });
 
-test('untick takes green away; unpause restarts the count', () => {
+test('old data without lastActivityDate still works (uses lastTickDate)', () => {
+  const p = { state: 'active', deadline: null, lastTickDate: '2026-10-05', activeSince: '2026-10-01' };
+  assert.equal(dotColour(p, '2026-10-05'), 'green');
+  assert.equal(dotColour(p, '2026-10-06'), 'orange');
+  assert.equal(dotColour(p, '2026-10-07'), 'red');
+});
+
+test('pause hides the dot; unpause restarts the count', () => {
   const s = withProject('2026-10-01');
   const p = s.data.projects[0];
-  applyOp(s, op('tickStep', { projectId: 'p1', stepId: 's1' }, '2026-10-05'));
-  applyOp(s, op('untickStep', { projectId: 'p1', stepId: 's1' }, '2026-10-05', '10:05:00'));
-  assert.equal(p.lastTickDate, null);
-  assert.equal(dotColour(p, '2026-10-05'), 'red');
   applyOp(s, op('pause', { projectId: 'p1' }, '2026-10-05'));
   assert.equal(dotColour(p, '2026-10-20'), 'grey');
   applyOp(s, op('unpause', { projectId: 'p1' }, '2026-10-20'));
-  assert.equal(dotColour(p, '2026-10-20'), 'orange');
+  assert.equal(dotColour(p, '2026-10-20'), 'green');
+  assert.equal(dotColour(p, '2026-10-21'), 'orange');
 });
 
 test('replay on fresh data: both devices\' changes survive, deleted items stay deleted', () => {

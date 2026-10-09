@@ -108,8 +108,10 @@ function addEvent(state, op, project, kind, detail = '') {
   });
 }
 
+/** Every change to a project counts as activity for the dot colour (green today). */
 function touch(project, op) {
   project.updatedAt = op.at;
+  project.lastActivityDate = laterDate(project.lastActivityDate, indiaDate(op.at));
 }
 
 function recalcLastTick(project) {
@@ -134,6 +136,7 @@ const handlers = {
       links: [],
       state: 'active',
       lastTickDate: null,
+      lastActivityDate: indiaDate(op.at),
       activeSince: indiaDate(op.at),
       stateChangedAt: op.at,
       createdAt: op.at,
@@ -303,8 +306,9 @@ const handlers = {
 
   moveStep(state, op, a) {
     const p = findProject(state.data, a.projectId);
-    if (!p) return false;
-    return moveInList(p.steps, a.stepId, a.afterId, a.beforeId);
+    if (!p || !moveInList(p.steps, a.stepId, a.afterId, a.beforeId)) return false;
+    touch(p, op);
+    return true;
   },
 
   // ---------- Work notes ----------
