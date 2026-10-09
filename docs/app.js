@@ -6,7 +6,7 @@ import { renderPeopleList, renderPerson, peopleByFollowUp } from './ui/people.js
 import { installMentions } from './ui/mention.js';
 import { renderDashboard } from './ui/dashboard.js';
 import { renderTimeReport } from './ui/timereport.js';
-import { projectMatches, diaryEntries, backupPayload, summaryText } from './reports.js';
+import { projectMatches, diaryEntries, backupPayload, summaryText, personMessageText } from './reports.js';
 import { closeViewer, uploadBlob } from './ui/files.js';
 import { Store } from './store.js';
 import { GitHubRepo } from './github.js';
@@ -105,6 +105,9 @@ const ctx = {
   goTime: () => go('time'),
   draftFollowUp: (p, s) => draftFollowUp(p, s),
   openSummary: () => openSummary(),
+  openPersonMessage: (person) => openSheet({
+    title: `Pending list for ${person.name}`, text: personMessageText(store.view.data, person, todayIndia()), subject: 'Pending items',
+  }),
   openPerson: (id) => { pushNav(); go('people'); ctx.selectPerson(id); },
   goBack: () => goBack(),
   openInList: (id) => { select(id); const row = root.querySelector(`.prow[data-id="${CSS.escape(id)}"]`); if (row) row.scrollIntoView({ block: 'nearest' }); },

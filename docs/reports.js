@@ -1,7 +1,7 @@
 // Pure logic behind search, the Diary, Today's summary and the backup file.
 // No screen code here, so it is covered by automatic tests (tests/reports.test.mjs).
 
-import { indiaDate, monthOf, nextStep, personStatus, minutesBetween, fmtMinutes } from './rules.js';
+import { indiaDate, monthOf, nextStep, personStatus, minutesBetween, fmtMinutes, personSteps, waitingDays } from './rules.js';
 
 /** Search: project name, notes, steps (text, note, waiting on) and work notes. `q` is lower-case. */
 export function projectMatches(p, q) {
@@ -89,5 +89,29 @@ export function summaryText(data, history, today, dateText) {
   const lines = [title, `${doneCount} step${doneCount === 1 ? '' : 's'} done across ${blocks.length} project${blocks.length === 1 ? '' : 's'}.`, '', ...blocks];
   const waiting = (data.people || []).filter((person) => personStatus(data, person, today).waiting > 0);
   if (waiting.length) lines.push('', `⏳ Waiting on: ${waiting.map((x) => x.name).join(', ')}`);
+  return lines.join('\n');
+}
+
+const shortDate = new Intl.DateTimeFormat('en-IN', { day: 'numeric', month: 'short', timeZone: 'UTC' });
+
+/**
+ * A message to one person with everything open between you: what you are waiting on from them,
+ * and what you need to discuss with them. "@Name" becomes just "Name".
+ */
+export function personMessageText(data, person, today) {
+  const { waiting, discuss } = personSteps(data, person, { openOnly: true });
+  const first = person.name.split(/\s+/)[0];
+  const plain = (t) => t.replace(/@(\S)/g, '$1');
+  const line = ({ step, project }, i, showWait) => {
+    const bits = [`${i + 1}. ${plain(step.text)}`, `(${project.name})`];
+    if (step.dueDate) bits.push(`— by ${shortDate.format(new Date(step.dueDate + 'T00:00:00Z'))}`);
+    if (showWait) { const d = waitingDays(step, today); if (d >= 1) bits.push(`— pending ${d} day${d === 1 ? '' : 's'}`); }
+    return bits.join(' ');
+  };
+  if (!waiting.length && !discuss.length) return `Hi ${first},\n\nNothing is pending between us right now. Thank you!`;
+  const lines = [`Hi ${first},`, '', 'Here are the open items between us:'];
+  if (waiting.length) lines.push('', 'Waiting on you:', ...waiting.map((it, i) => line(it, i, true)));
+  if (discuss.length) lines.push('', 'To discuss:', ...discuss.map((it, i) => line(it, i, false)));
+  lines.push('', 'Could you please share an update on these? Thank you.');
   return lines.join('\n');
 }

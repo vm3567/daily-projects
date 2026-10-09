@@ -111,6 +111,7 @@ export function renderPerson(ctx) {
         onKeydown: (e, el) => { if (e.key === 'Enter') { e.preventDefault(); el.blur(); } },
       }),
       h('div', { class: 'state-buttons' },
+        h('button', { class: 'btn primary small', title: 'Copy or send everything pending with this person', onClick: () => ctx.openPersonMessage(person) }, '📋 Send pending list'),
         ctx.canGoBack() ? h('button', { class: 'btn small', title: 'Back (Backspace)', onClick: () => ctx.goBack() }, '← Back') : null,
         (() => { const pv = ctx.neighbourPerson(-1); return h('button', { class: 'btn small', disabled: pv ? undefined : true, title: pv ? `Previous: ${pv.name} (←)` : '', onClick: () => pv && ctx.selectPerson(pv.id) }, '‹'); })(),
         (() => { const nx = ctx.neighbourPerson(1); return h('button', { class: 'btn small', disabled: nx ? undefined : true, title: nx ? `Next person with open work: ${nx.name} (→)` : 'No more people with open work', onClick: () => nx && ctx.selectPerson(nx.id) }, nx ? `${nx.name.split(' ')[0]} ›` : '›'); })(),

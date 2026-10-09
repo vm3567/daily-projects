@@ -118,6 +118,7 @@ Also: each red/yellow row has a one-tap **✓ OK** (or **Chased** when waiting),
   - **To discuss with them** — other open steps with `@Name`
   - notes about them, and steps done recently
 - Tick steps right there when you meet them.
+- **📋 Send pending list** writes a message with everything open with that person (waiting on them, and to discuss) — Copy, WhatsApp or Email.
 
 ---
 

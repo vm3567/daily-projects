@@ -86,3 +86,20 @@ test('"Forget this device" removes only this app\'s things', async () => {
   device.forgetAll();
   assert.deepEqual(Object.keys(ls), ['other-site']);
 });
+
+test('pending list message for one person: waiting and to-discuss items, no "@"', async () => {
+  const { personMessageText } = await import('../docs/reports.js');
+  const s = sample();
+  applyOps(s, [
+    op('addStep', { projectId: 'p1', stepId: 's3', text: 'Tell @Ravi the new tile size' }, '2026-10-09'),
+    op('setStepField', { projectId: 'p1', stepId: 's2', field: 'dueDate', value: '2026-10-15' }, '2026-10-09'),
+  ]);
+  const ravi = s.data.people.find((p) => p.name === 'Ravi');
+  const text = personMessageText(s.data, ravi, '2026-10-12');
+  assert.match(text, /^Hi Ravi,/);
+  assert.match(text, /Waiting on you:\n1\. Order frit \(Kiln trial\) — by 15 Oct — pending 3 days/);
+  assert.match(text, /To discuss:\n1\. Tell Ravi the new tile size \(Kiln trial\)/);
+  assert.ok(!text.includes('@'));
+  const nobody = { id: 'x', name: 'Meena' };
+  assert.match(personMessageText({ ...s.data, people: [...s.data.people, nobody] }, nobody, '2026-10-12'), /Nothing is pending/);
+});
