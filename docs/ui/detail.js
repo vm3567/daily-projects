@@ -82,10 +82,11 @@ function aiPanel(ctx, p) {
       class: 'btn ai',
       onClick: () => { ui.ai = { projectId: p.id, mode: 'breakdown', state: 'ask', goal: '' }; ctx.render(); },
     }, '✨ Break into steps'));
-  if (!ai) return buttons;
+  if (!ai) return null;
   const closeBtn = h('button', { class: 'icon', 'aria-label': 'Close', onClick: () => { ui.ai = null; ctx.render(); } }, '✕');
   let body;
-  if (ai.state === 'ask') {
+  if (ai.state === 'choose') body = buttons;
+  else if (ai.state === 'ask') {
     body = h('form', {
       class: 'row',
       onSubmit: (e) => { e.preventDefault(); const goal = e.target.elements.goal.value.trim(); if (goal) ctx.aiBreakdown(p, goal); },
@@ -114,9 +115,9 @@ function aiPanel(ctx, p) {
       }, 'Add selected'));
   }
   return h('div', { class: 'ai-panel' },
-    h('div', { class: 'ai-head' }, h('strong', null, ai.mode === 'breakdown' ? '✨ Break into steps' : '✨ Next step ideas'), closeBtn),
-    body,
-    buttons);
+    h('div', { class: 'ai-head' }, h('strong', null,
+      ai.state === 'choose' ? '✨ AI helper' : ai.mode === 'breakdown' ? '✨ Break into steps' : '✨ Next step ideas'), closeBtn),
+    body);
 }
 
 function linksBlock(ctx, p) {
@@ -214,6 +215,67 @@ function section(title, ...children) {
   return h('section', { class: 'block' }, h('h3', null, title), ...children);
 }
 
+/** Pause / Finish (or Unpause / Reopen / Delete) — always visible at the top. */
+function stateButtons(ctx, p) {
+  const { store, ui } = ctx;
+  if (p.state === 'active') {
+    return [
+      h('button', { class: 'btn', onClick: () => store.dispatch('pause', { projectId: p.id }) }, 'Pause'),
+      h('button', {
+        class: 'btn',
+        onClick: () => { if (confirm(`Finish "${p.name}"? It moves to the Finished list.`)) store.dispatch('finish', { projectId: p.id }); },
+      }, 'Finish'),
+    ];
+  }
+  if (p.state === 'paused') {
+    return [
+      h('button', { class: 'btn primary', onClick: () => store.dispatch('unpause', { projectId: p.id }) }, 'Unpause'),
+      h('button', { class: 'btn', onClick: () => store.dispatch('finish', { projectId: p.id }) }, 'Finish'),
+    ];
+  }
+  return [
+    h('button', { class: 'btn primary', onClick: () => store.dispatch('reopen', { projectId: p.id }) }, 'Reopen'),
+    h('button', {
+      class: 'btn danger',
+      onClick: () => {
+        if (!confirm(`Delete "${p.name}" for good?`) || !confirm('Are you really sure? Its files are removed. Its Diary lines stay.')) return;
+        store.dispatch('deleteProject', { projectId: p.id });
+        ui.selected = null; ui.mobile = 'list'; ctx.render();
+      },
+    }, 'Delete'),
+  ];
+}
+
+function metaLine(ctx, p, today) {
+  const { store, ui } = ctx;
+  const g = store.view.data.groups.find((x) => x.id === p.groupId);
+  const pri = p.priority[0].toUpperCase() + p.priority.slice(1);
+  const overdue = isOverdue(p, today);
+  if (!ui.editMeta) {
+    return h('button', { class: 'meta-line', key: 'meta-' + p.id, title: 'Change group, priority or deadline', onClick: () => { ui.editMeta = true; ctx.render(); } },
+      h('span', null, g ? g.name : ''), ' · ', h('span', { class: p.priority === 'high' ? 'meta-high' : '' }, pri),
+      p.deadline ? [' · ', h('span', { class: overdue ? 'late' : '' }, `${overdue ? 'Overdue' : 'Due'} ${fmtDay(p.deadline)}`)] : ' · No deadline',
+      h('span', { class: 'meta-edit', 'aria-hidden': 'true' }, ' ✎'));
+  }
+  return h('div', { class: 'fields', key: 'fields-' + p.id },
+    h('label', null, 'Group ',
+      h('select', {
+        value: p.groupId,
+        onChange: (e, el) => store.dispatch('setProjectField', { projectId: p.id, field: 'groupId', value: el.value }),
+      }, store.view.data.groups.map((x) => h('option', { value: x.id }, x.name)))),
+    h('label', null, 'Priority ',
+      h('select', {
+        value: p.priority,
+        onChange: (e, el) => store.dispatch('setProjectField', { projectId: p.id, field: 'priority', value: el.value }),
+      }, PRIORITIES.map((x) => h('option', { value: x }, x[0].toUpperCase() + x.slice(1))))),
+    h('label', { class: overdue ? 'late' : '' }, 'Deadline ',
+      h('input', {
+        type: 'date', value: p.deadline || '',
+        onChange: (e, el) => store.dispatch('setProjectField', { projectId: p.id, field: 'deadline', value: el.value || null }),
+      })),
+    h('button', { class: 'btn small primary', onClick: () => { ui.editMeta = false; ctx.render(); } }, 'Done'));
+}
+
 export function renderDetail(ctx) {
   const { store, ui } = ctx;
   const p = store.view.data.projects.find((x) => x.id === ui.selected);
@@ -224,28 +286,17 @@ export function renderDetail(ctx) {
   const colour = dotColour(p, today);
   const openSteps = p.steps.filter((s) => !s.done);
   const doneSteps = p.steps.filter((s) => s.done).sort((a, b) => (a.doneAt < b.doneAt ? 1 : -1));
-  const stateButtons = [];
-  if (p.state === 'active') {
-    stateButtons.push(h('button', { class: 'btn', onClick: () => store.dispatch('pause', { projectId: p.id }) }, 'Pause'));
-    stateButtons.push(h('button', {
-      class: 'btn',
-      onClick: () => { if (confirm(`Finish "${p.name}"? It moves to the Finished list.`)) store.dispatch('finish', { projectId: p.id }); },
-    }, 'Finish'));
-  } else if (p.state === 'paused') {
-    stateButtons.push(h('button', { class: 'btn primary', onClick: () => store.dispatch('unpause', { projectId: p.id }) }, 'Unpause'));
-    stateButtons.push(h('button', { class: 'btn', onClick: () => store.dispatch('finish', { projectId: p.id }) }, 'Finish'));
-  } else {
-    stateButtons.push(h('button', { class: 'btn primary', onClick: () => store.dispatch('reopen', { projectId: p.id }) }, 'Reopen'));
-    stateButtons.push(h('button', {
-      class: 'btn danger',
-      onClick: () => {
-        if (!confirm(`Delete "${p.name}" for good?`)) return;
-        if (!confirm('Are you really sure? Its files are removed. Its Diary lines stay.')) return;
-        store.dispatch('deleteProject', { projectId: p.id });
-        ui.selected = null; ui.mobile = 'list'; ctx.render();
-      },
-    }, 'Delete'));
-  }
+  const opened = ui.openParts || (ui.openParts = {});
+  // Extra parts show when they have something in them, or after their "+" button is tapped.
+  const show = {
+    notes: opened.notes || !!p.notes.trim(),
+    links: opened.links || p.links.length > 0,
+    files: opened.files || p.files.length > 0,
+    history: !!opened.history,
+  };
+  const openPart = (name) => { opened[name] = true; ctx.render(); };
+  const chip = (name, label) => (show[name] ? null : h('button', { class: 'chip', onClick: () => openPart(name) }, label));
+  const notesShown = ui.notesLimit || 3;
 
   return h('div', { class: 'detail-inner', key: 'detail-' + p.id },
     h('div', { class: 'detail-top' },
@@ -253,25 +304,9 @@ export function renderDetail(ctx) {
       h('span', { class: `dot ${colour}`, title: COLOUR_WORD[colour] }),
       autoField('input', { class: 'title-input', value: p.name, 'aria-label': 'Project name', key: 'name-' + p.id },
         (v) => store.dispatch('setProjectField', { projectId: p.id, field: 'name', value: v })),
-      h('div', { class: 'state-buttons' }, stateButtons)),
+      h('div', { class: 'state-buttons' }, stateButtons(ctx, p))),
+    metaLine(ctx, p, today),
     p.state !== 'active' ? h('p', { class: 'banner' }, p.state === 'paused' ? 'This project is paused. It is hidden from Today.' : 'This project is finished.') : null,
-    h('div', { class: 'fields' },
-      h('label', null, 'Group ',
-        h('select', {
-          value: p.groupId,
-          onChange: (e, el) => store.dispatch('setProjectField', { projectId: p.id, field: 'groupId', value: el.value }),
-        }, store.view.data.groups.map((g) => h('option', { value: g.id }, g.name)))),
-      h('label', null, 'Priority ',
-        h('select', {
-          value: p.priority,
-          onChange: (e, el) => store.dispatch('setProjectField', { projectId: p.id, field: 'priority', value: el.value }),
-        }, PRIORITIES.map((x) => h('option', { value: x }, x[0].toUpperCase() + x.slice(1))))),
-      h('label', { class: isOverdue(p, today) ? 'late' : '' }, 'Deadline ',
-        h('input', {
-          type: 'date', value: p.deadline || '',
-          onChange: (e, el) => store.dispatch('setProjectField', { projectId: p.id, field: 'deadline', value: el.value || null }),
-        }),
-        isOverdue(p, today) ? h('span', { class: 'tag late' }, 'Overdue') : null)),
 
     section('Steps',
       h('ul', { class: 'steps sortable-steps', key: 'steps-' + p.id, 'data-project': p.id },
@@ -288,8 +323,11 @@ export function renderDetail(ctx) {
           input.focus();
         },
       },
-      h('input', { name: 'text', placeholder: '+ Add step (press Enter)', key: 'add-step-' + p.id }),
-      h('button', { class: 'btn small', type: 'submit' }, 'Add')),
+      h('input', { name: 'text', placeholder: '+ Add step (press Enter)', key: 'add-step-' + p.id, enterkeyhint: 'enter' }),
+      ctx.hasAiKey() ? h('button', {
+        class: 'btn ai small', type: 'button', title: 'AI helper', 'aria-label': 'AI helper',
+        onClick: () => { ui.ai = ui.ai && ui.ai.projectId === p.id ? null : { projectId: p.id, mode: 'choose', state: 'choose' }; ctx.render(); },
+      }, '✨') : null),
       aiPanel(ctx, p),
       doneSteps.length ? h('details', { class: 'done-steps', key: 'done-' + p.id, open: ui.showDone ? true : undefined },
         h('summary', { onClick: (e) => { e.preventDefault(); ui.showDone = !ui.showDone; ctx.render(); } }, `Done (${doneSteps.length})`),
@@ -303,12 +341,11 @@ export function renderDetail(ctx) {
           const input = e.target.elements.note;
           const text = input.value.trim();
           if (!text) return;
-          if (store.dispatch('addWorkNote', { projectId: p.id, noteId: newId(), text })) input.value = '';
+          if (store.dispatch('addWorkNote', { projectId: p.id, noteId: newId(), text })) { input.value = ''; ctx.toast('Note saved'); }
         },
       },
-      h('input', { name: 'note', placeholder: 'A short note, then press Enter', key: 'wn-' + p.id, enterkeyhint: 'done' }),
-      h('button', { class: 'btn small', type: 'submit' }, 'Save')),
-      h('ul', { class: 'notes' }, p.workNotes.slice(0, ui.notesLimit || 10).map((n) => h('li', { key: 'n-' + n.id },
+      h('input', { name: 'note', placeholder: 'A short note, then press Enter', key: 'wn-' + p.id, enterkeyhint: 'done' })),
+      h('ul', { class: 'notes' }, p.workNotes.slice(0, notesShown).map((n) => h('li', { key: 'n-' + n.id },
         h('span', { class: 'muted small' }, `${fmtDay(indiaDate(n.createdAt))} ${fmtTime(n.createdAt)}`),
         autoField('input', { value: n.text, 'aria-label': 'Work note', key: 'nt-' + n.id },
           (v) => { if (v.trim()) store.dispatch('editWorkNote', { projectId: p.id, noteId: n.id, text: v }); }),
@@ -316,13 +353,15 @@ export function renderDetail(ctx) {
           class: 'icon', title: 'Delete note',
           onClick: () => { if (confirm('Delete this note?')) store.dispatch('deleteWorkNote', { projectId: p.id, noteId: n.id }); },
         }, '🗑')))),
-      p.workNotes.length > (ui.notesLimit || 10)
-        ? h('button', { class: 'btn small', onClick: () => { ui.notesLimit = (ui.notesLimit || 10) + 20; ctx.render(); } }, 'Show more notes') : null),
+      p.workNotes.length > notesShown
+        ? h('button', { class: 'link small', onClick: () => { ui.notesLimit = notesShown + 20; ctx.render(); } }, `Show older notes (${p.workNotes.length - notesShown})`) : null),
 
-    section('Notes',
+    show.notes ? section('Notes',
       autoField('textarea', { class: 'notes-box', value: p.notes, rows: 4, placeholder: 'Free notes for this project', key: 'notes-' + p.id },
-        (v) => store.dispatch('setProjectField', { projectId: p.id, field: 'notes', value: v }))),
-    section('Links', linksBlock(ctx, p)),
-    section('Files', filesBlock(ctx, p)),
-    section('History', historyBlock(ctx, p)));
+        (v) => store.dispatch('setProjectField', { projectId: p.id, field: 'notes', value: v }))) : null,
+    show.links ? section('Links', linksBlock(ctx, p)) : null,
+    show.files ? section('Files', filesBlock(ctx, p)) : null,
+    show.history ? section('History', historyBlock(ctx, p)) : null,
+    show.notes && show.links && show.files && show.history ? null : h('div', { class: 'chips', key: 'chips-' + p.id },
+      chip('notes', '+ Notes'), chip('links', '+ Link'), chip('files', '+ File'), chip('history', 'History')));
 }

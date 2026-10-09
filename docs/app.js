@@ -55,6 +55,7 @@ const ctx = {
   render: () => render(),
   aiSuggest: (p) => runAi(p, 'next'),
   aiBreakdown: (p, goal) => runAi(p, 'breakdown', goal),
+  hasAiKey: () => !!(store && aiReady().key),
 };
 
 // ---------------------------------------------------------------- AI
@@ -181,7 +182,9 @@ function select(id) {
     ui.openStep = null;
     ui.showDone = false;
     ui.historyLimit = 30;
-    ui.notesLimit = 10;
+    ui.notesLimit = 3;
+    ui.openParts = {};
+    ui.editMeta = false;
     if (ui.ai && ui.ai.projectId !== id) ui.ai = null;
   }
   ui.mobile = 'detail';

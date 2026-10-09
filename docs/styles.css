@@ -318,3 +318,21 @@ label.late { color: var(--red); }
   .quick-tick { width: 24px; height: 24px; margin-left: 4px; }
   .quick-tick-space { width: 32px; }
 }
+
+/* ---------- simpler project page (v3) ---------- */
+.meta-line {
+  display: block; border: 0; background: none; padding: 6px 0 10px 24px; cursor: pointer; text-align: left;
+  color: var(--muted); font-size: 13.5px;
+}
+.meta-line:hover .meta-edit { color: var(--brand); }
+.meta-line .late { color: var(--red); font-weight: 600; }
+.meta-high { color: #9a3412; }
+.meta-edit { color: #b8bec8; }
+.fields .btn { margin-left: auto; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; padding: 14px 0; border-top: 1px solid var(--line); }
+.chip {
+  border: 1px dashed #c9ced6; background: #fff; border-radius: 99px; padding: 6px 14px;
+  font-size: 13.5px; color: var(--muted); cursor: pointer;
+}
+.chip:hover { border-color: var(--brand); color: var(--brand); background: var(--brand-soft); }
+.add-step .btn.ai { padding: 6px 12px; }
