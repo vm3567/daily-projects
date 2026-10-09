@@ -550,3 +550,23 @@ kbd.hint {
   .cal-cell { height: 40px; }
   .cal-score { display: none; }
 }
+
+/* ---------- dashboard wins (v15) ---------- */
+.celebrate {
+  margin: 12px 14px 0; padding: 14px 16px; border-radius: 14px; text-align: center;
+  background: linear-gradient(135deg, #ecfdf5, #f0fdf4 60%, #fefce8); border: 1px solid #bbf7d0; color: #166534;
+}
+.dashboard .celebrate { margin: 0 0 14px; }
+.celebrate-big { font-size: 20px; font-weight: 800; margin-bottom: 2px; }
+.wins li { display: flex; gap: 10px; align-items: flex-start; padding: 5px 0; border-bottom: 1px solid #f1f5f9; }
+.wins li:last-child { border-bottom: 0; }
+.win-check { color: var(--green); font-weight: 800; }
+.compare li { display: flex; justify-content: space-between; align-items: baseline; padding: 8px 0; border-bottom: 1px solid #f1f5f9; }
+.compare li:last-child { border-bottom: 0; }
+.compare strong { font-size: 22px; }
+.up { color: var(--green); font-size: 12.5px; font-weight: 700; }
+.down { color: #b45309; font-size: 12.5px; font-weight: 700; }
+.shelf { display: flex; flex-wrap: wrap; gap: 6px; }
+.trophy { border: 1px solid #bbf7d0; background: #f0fdf4; color: #166534; border-radius: 99px; padding: 4px 11px; font-size: 13px; cursor: pointer; }
+.trophy:hover { background: #dcfce7; }
+.dashboard > .dash-grid { margin-bottom: 14px; }

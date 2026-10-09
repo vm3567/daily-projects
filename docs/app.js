@@ -604,6 +604,17 @@ function sortSwitch() {
   return h('div', { class: 'segmented', role: 'group', 'aria-label': 'Order (key R)' }, opt('mine', 'My order'), opt('red', 'Red first'), keyHint('R'));
 }
 
+/** Big "All green" message on Today when every active project is green. */
+function celebration() {
+  const sc = todayScore();
+  if (!sc.total || sc.green < sc.total) return null;
+  const n = greenStreak(store.view.data.dayScores || {}, sc);
+  return h('div', { class: 'celebrate', key: 'celebrate' },
+    h('div', { class: 'celebrate-big' }, `🎉 All ${sc.total} projects green!`),
+    h('div', null, n > 1 ? `${n} days in a row. Keep it going!` : 'Every project got your attention today.'),
+    h('button', { class: 'link small', onClick: () => go('dashboard') }, 'See your dashboard →'));
+}
+
 function streakBadge() {
   const n = greenStreak(store.view.data.dayScores || {}, todayScore());
   return n >= 1 ? h('span', { class: 'streak', title: 'Days in a row with every project green' }, ` · 🔥 ${n} day${n > 1 ? 's' : ''} all green`) : null;
@@ -711,6 +722,7 @@ function renderListColumn() {
   return h('div', { class: 'col-inner' },
     head,
     mobileSearch,
+    ui.view === 'today' && !ui.search ? celebration() : null,
     ui.view === 'today' && !ui.search ? progressLine(today) : null,
     ui.view === 'today' && !ui.search ? followUpRow() : null,
     ui.view === 'today' && !ui.search ? renderBrief() : null,

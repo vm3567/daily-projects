@@ -20,6 +20,7 @@ function scoreFor(data, history, day, today, todayScore) {
 }
 
 const isFull = (sc) => !!(sc && sc.total && sc.green === sc.total);
+const exists = (data, id) => data.projects.some((p) => p.id === id);
 
 /** Current streak (ending today or yesterday) and best streak over the days we can see. */
 function streaks(get, today, firstDay) {
@@ -58,6 +59,11 @@ export function renderDashboard(ctx) {
     }
   }
 
+  if (!ui.dashAllLoaded) {
+    ui.dashAllLoaded = true;
+    store.loadAllHistory().then(() => ctx.render()).catch(() => { ui.dashAllLoaded = false; });
+  }
+
   const get = (d) => scoreFor(data, history, d, today, todayScore);
   const firstCreated = data.projects.map((p) => (p.createdAt ? indiaDate(p.createdAt) : today)).sort()[0] || today;
   const firstDay = [firstCreated, addDays(today, -120)].sort().reverse()[0];
@@ -81,6 +87,37 @@ export function renderDashboard(ctx) {
   const stepsDone = events.filter((e) => e.kind === 'step_ticked').length;
   const notes = events.filter((e) => e.kind === 'note_added').length;
   const worked = new Set(events.filter((e) => e.projectId && e.kind !== 'created' && e.kind !== 'reviewed').map((e) => e.projectId)).size;
+
+  // 1. Wins this week: the real steps finished, newest first
+  const nameOf = (e) => (data.projects.find((x) => x.id === e.projectId) || {}).name || e.projectName || '';
+  const wins = events.filter((e) => e.kind === 'step_ticked').sort((a, b) => (a.at < b.at ? 1 : -1));
+  const dayName = new Intl.DateTimeFormat('en-IN', { weekday: 'short', timeZone: 'Asia/Kolkata' });
+
+  // 2. This week vs last week
+  const lastStart = addDays(today, -13);
+  const lastEnd = addDays(today, -7);
+  const allEvents = Object.values(history).flat();
+  const inRange = (e, a, b) => { const d = indiaDate(e.at); return d >= a && d <= b; };
+  const lastWeek = allEvents.filter((e) => inRange(e, lastStart, lastEnd));
+  const greenDaysIn = (a, b) => { let n = 0; for (let d = a; d <= b; d = addDays(d, 1)) if (isFull(get(d))) n++; return n; };
+  const compare = [
+    ['Steps done', stepsDone, lastWeek.filter((e) => e.kind === 'step_ticked').length],
+    ['All-green days', greenDaysIn(weekStart, today), greenDaysIn(lastStart, lastEnd)],
+    ['Work notes', notes, lastWeek.filter((e) => e.kind === 'note_added').length],
+  ];
+  const trend = (now, before) => (now > before ? h('span', { class: 'up' }, `↑ ${now - before} more`)
+    : now < before ? h('span', { class: 'down' }, `↓ ${before - now} fewer`) : h('span', { class: 'muted small' }, 'same'));
+
+  // 3. All time
+  const totalSteps = allEvents.filter((e) => e.kind === 'step_ticked').length;
+  // finished and still finished, plus finished projects that were later deleted (reopened ones don't count)
+  const finishedIds = new Set(data.projects.filter((p) => p.state === 'finished').map((p) => p.id));
+  for (const e of allEvents) if (e.kind === 'finished' && !exists(data, e.projectId)) finishedIds.add(e.projectId);
+  let totalGreenDays = 0;
+  for (let d = firstDay; d <= today; d = addDays(d, 1)) if (isFull(get(d))) totalGreenDays++;
+
+  // 4. Finished projects shelf
+  const shelf = data.projects.filter((p) => p.state === 'finished').sort((a, b) => (a.stateChangedAt < b.stateChangedAt ? 1 : -1));
 
   // Most worked projects this month
   const monthEvents = (history[monthOf(today)] || []).filter((e) => e.projectId && ['step_ticked', 'note_added', 'step_added'].includes(e.kind));
@@ -118,12 +155,42 @@ export function renderDashboard(ctx) {
     ctx.render();
   };
 
+  const allGreen = active.length > 0 && greenNow === active.length;
+  const showWins = ui.showAllWins ? wins : wins.slice(0, 6);
   return h('div', { class: 'dashboard' },
+    allGreen ? h('div', { class: 'celebrate', key: 'celebrate' },
+      h('div', { class: 'celebrate-big' }, `🎉 All ${active.length} projects green!`),
+      h('div', null, st.current > 1 ? `${st.current} days in a row${st.current >= st.best ? ' — your best ever' : ''}` : 'Every project got your attention today.')) : null,
     h('div', { class: 'dash-tiles' },
       tile('Today', `${greenNow} of ${active.length}`, greenNow === active.length && active.length ? 'all green 🎉' : 'projects green', greenNow === active.length && active.length ? 'good' : ''),
       tile('Streak', `🔥 ${st.current}`, st.current === 1 ? 'day all green' : 'days all green in a row', st.current ? 'warm' : ''),
       tile('Best streak', String(st.best), st.best === 1 ? 'day' : 'days'),
       tile(`All-green days`, String(allGreenDays), `in ${monthFmt.format(new Date(Date.UTC(yy, mm - 1, 1)))}`)),
+
+    h('div', { class: 'dash-grid', key: 'dash-wins' },
+      h('section', { class: 'dash-card' }, h('h3', null, `Wins this week (${wins.length})`),
+        wins.length ? h('ul', { class: 'wins' }, showWins.map((e) => h('li', { key: 'win-' + e.id },
+          h('span', { class: 'win-check' }, '✓'),
+          h('div', null, h('div', null, e.detail),
+            h('div', { class: 'muted small' }, exists(data, e.projectId)
+              ? [h('button', { class: 'link small', onClick: () => ctx.openProject(e.projectId) }, nameOf(e)), ` · ${dayName.format(new Date(e.at))}`]
+              : `${nameOf(e)} · ${dayName.format(new Date(e.at))}`))))) : h('p', { class: 'muted small' }, 'Tick a step and it shows here.'),
+        wins.length > 6 ? h('button', { class: 'link small', onClick: () => { ui.showAllWins = !ui.showAllWins; ctx.render(); } },
+          ui.showAllWins ? 'Show fewer' : `+ ${wins.length - 6} more`) : null),
+      h('section', { class: 'dash-card' }, h('h3', null, 'This week vs last week'),
+        h('ul', { class: 'compare' }, compare.map(([label, now, before]) => h('li', { key: 'cmp-' + label },
+          h('span', null, label), h('span', null, h('strong', null, String(now)), ' ', trend(now, before))))))),
+
+    h('div', { class: 'dash-grid', key: 'dash-alltime' },
+      h('section', { class: 'dash-card' }, h('h3', null, 'All time'),
+        h('div', { class: 'dash-nums' },
+          h('div', null, h('strong', null, String(totalSteps)), h('span', null, 'steps done')),
+          h('div', null, h('strong', null, String(finishedIds.size)), h('span', null, 'projects finished')),
+          h('div', null, h('strong', null, String(totalGreenDays)), h('span', null, 'all-green days')))),
+      h('section', { class: 'dash-card' }, h('h3', null, 'Finished projects'),
+        shelf.length ? h('div', { class: 'shelf' }, shelf.slice(0, 12).map((p) => h('button', {
+          class: 'trophy', key: 'tr-' + p.id, title: `Finished ${fmtDay(indiaDate(p.stateChangedAt))}`, onClick: () => ctx.openProject(p.id),
+        }, `🏆 ${p.name}`))) : h('p', { class: 'muted small' }, 'Finish a project and its trophy shows here.'))),
 
     h('section', { class: 'dash-card' },
       h('div', { class: 'dash-card-head' },
