@@ -20,7 +20,10 @@ async function callClaude(key, system, user) {
       },
       body: JSON.stringify({
         model: AI_MODELS.claude,
-        max_tokens: 1500,
+        // Haiku 5.5 thinks before answering and that counts toward max_tokens,
+        // so leave room; low effort keeps it fast and cheap for short step lists.
+        max_tokens: 4000,
+        output_config: { effort: 'low' },
         system,
         messages: [{ role: 'user', content: user }],
       }),
