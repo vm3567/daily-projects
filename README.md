@@ -14,10 +14,16 @@ The full plan is in [PLAN.md](PLAN.md).
 
 | Dot | Meaning |
 |-----|---------|
-| 🟢 Green | You ticked a step today |
-| 🟠 Orange | Not yet today, but ticked yesterday |
-| 🔴 Red | Nothing ticked for 2+ days, or the deadline has passed |
+Every project starts **red** at 12 midnight (India time).
+
+| Dot | Meaning |
+|-----|---------|
+| 🔴 Red | Not looked at today |
+| 🟡 Yellow | Opened today, nothing done yet |
+| 🟢 Green | Changed something today, or pressed **✓ OK for today** |
 | ⚪ Grey | Paused or finished |
+
+A grey note **"No real work for N days"** shows when there was no real change for 3+ days (OK does not count). A passed target date shows **Overdue** in red.
 
 ---
 
@@ -52,6 +58,7 @@ GitHub → your photo → **Settings** → **Password and authentication** → *
 2. In the app: **Settings → Claude key** → paste → **Save** → **Test**.
 3. Gemini (backup, optional): https://aistudio.google.com → **Get API key**. Paste it under **Gemini key**.
 4. Paste each key once, on any device — it is kept in your private data, so all your devices use it.
+5. To really cancel a key, delete it at console.anthropic.com or aistudio.google.com. ("Remove" in Settings takes it out of the app, but GitHub keeps old versions; "Forget this device" does not remove shared keys.)
 
 ---
 
@@ -87,7 +94,8 @@ Open Claude in this folder and type:
 |---------|--------------|
 | `/review-projects` | Goes through your projects one by one, red first. Suggests next steps. Adds them only after you say yes. |
 | `/add` | Add a project or tasks in normal words. Asks before saving. |
-| `/today` | Lists today's red and orange projects. Read only. |
+| `/today` | Lists today's red and yellow projects (not done yet today). Read only. |
+| `/restore` | Go back to an earlier day. Shows the version first and asks before changing anything. |
 
 These use the GitHub login already on the Mac. No extra key is needed.
 
@@ -96,8 +104,8 @@ These use the GitHub login already on the Mac. No extra key is needed.
 ## If something goes wrong
 
 - **"Key problem":** the GitHub key expired or was deleted. Make a new one (step 2) and paste it. Unsaved changes are kept.
-- **"No connection":** check the internet. Changes wait on the device and save when you are back online.
-- **Restore old data:** ask Claude: "restore my tracker to 2026-10-09". The restore is saved as a new version, so nothing is lost.
+- **"No connection":** check the internet. While offline the app does not accept new changes; changes made just before are kept on the device and saved when you are back online.
+- **Restore old data:** in Claude type `/restore` (or "restore my tracker to 9 Oct"). Claude shows what that version has and asks "yes?" first. The restore is saved as a new version, so nothing is lost, and your AI keys are not changed.
 - **Download a backup:** Settings → Download backup.
 
 ---

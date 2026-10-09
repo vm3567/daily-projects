@@ -11,7 +11,7 @@ The user is not a programmer. Use short, plain English.
 
 ```bash
 node tools/tracker.mjs summary
-node tools/tracker.mjs new-project "<name>" --group "<AI|Ceramic|General|Work / Office|...>" --priority <high|medium|low> --steps "<step>" "<step>"
+node tools/tracker.mjs new-project "<name>" --group "<Acton|Personal|Ceramic Ninja|...>" --priority <high|medium|low> --steps "<step>" "<step>"
 node tools/tracker.mjs add-steps "<project id or name>" "<step>" "<step>"
 ```
 

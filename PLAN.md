@@ -2,12 +2,13 @@
 
 Date: 9 Oct 2026
 Status: Built (9 Oct 2026). Live at https://vm3567.github.io/daily-projects/
-Version: 5.
+Version: 6.
 - v1: Mac only.
 - v2: Online with Supabase, on any device + iPhone.
 - v3: Added GitHub, AI helper, Claude review, coding details.
 - v4: Removed Supabase and Netlify. Everything lives on GitHub. No daily reminder for now.
 - v5: Fixed 16 gaps found in review: safe saving between devices, iPhone key storage, file safety, deadlines, AI choice, history rules.
+- v6 (9 Oct, built): many changes while building — see decisions rows 25–47. **Where the older sections below say something different, rows 25–47 are what the app does.** Main ones: daily red/yellow/green dots with "OK for today"; target date (30 days by default) instead of deadline; AI keys shared through the private data; groups Acton / Personal / Ceramic Ninja; Today's update; daily round; People; Dashboard; undo; repeating steps.
 
 ---
 
@@ -64,7 +65,7 @@ Version: 5.
 | 35 | Claude review on Mac | Claude goes through my projects one by one with me. It adds or changes things only after I say yes. |
 | 36 | Deleting a project | Its Diary lines stay, marked "(deleted project)" |
 | 37 | Target date | Every new project gets a target date 30 days ahead. I can change or remove it. ("Deadline" is called "Target date" in the app.) |
-| 38 | Keyboard | Shortcuts on the computer (each key letter is shown on its button or box): ↓ ↑ move between projects, x tick, s add step, w note, n new project, / search, r Red first, t Today, d Diary, Esc leave, ? help |
+| 38 | Keyboard | Shortcuts on the computer (each key letter is shown on its button or box): ↓ ↑ (or j k) move between projects, x tick, s add step, i AI steps, o OK for today, g daily round (then x s w c o n m), b Dashboard, p People, w note, n new project, / search, r Red first, t Today, d Diary, Esc leave, ? help |
 | 39 | People | A People list (name only). Type @ in a step, step note, work note or project notes to pick a person. Each person's page shows "Waiting on them" and "To discuss with them" (all projects), notes about them, and done steps. "Waiting on" uses the same names. Keyboard: p opens People. |
 | 40 | Follow-up | Each person gets a dot: red = waiting on them 2+ days (or a linked step's date passed) → contact now; orange = something open; green = nothing open. Today shows a "Follow up today" row (red and orange names). Waiting steps show "Waiting: Name · Nd". |
 | 41 | Fewer clicks | (1) Daily round: one project at a time, red first; each action (✓ step done, + add step, ✎ note, Chased, ✓ OK, Skip) saves and jumps to the next project. Keys g, then x s w c o n. (2) ✓ OK / Chased button on each list row. (3) Green projects fold into "Done today (n)" on Today. (4) Ticking the last step asks "What's next?". (5) Chased: notes the follow-up and restarts the waiting count. |
@@ -193,7 +194,7 @@ Each project has:
 - The "Next step" shown in the list is the first unfinished step.
 - If no steps are left, the list shows "No next step — add one" in red text.
 - Untick works in case I tick by mistake.
-- Delete a step with a small bin icon. I am asked "Are you sure?" first.
+- Delete a step with a small bin icon. No question; an Undo button shows instead (row 42).
 
 ---
 
@@ -234,7 +235,7 @@ Each project has:
 
 ## 12. Groups
 
-- Start with 4 groups: AI, Ceramic, General, Work / Office.
+- Start with 3 groups: Acton, Personal, Ceramic Ninja.
 - Add a group with "+ Group".
 - Rename a group anytime.
 - Delete a group only when it has no projects in it.
@@ -286,7 +287,7 @@ Each project has:
 ### Choosing the AI (Settings)
 - Settings has a switch: "Claude Haiku" (main) or "Gemini Flash" (backup).
 - It shows "AI uses today: 12 / 50".
-- I paste my AI keys in Settings myself, once per device. They stay only on that device. They are never saved to GitHub.
+- I paste my AI keys in Settings once, on any device. They are saved in my PRIVATE data repository so every device uses them (changed 9 Oct, row 31).
 
 ---
 
@@ -531,14 +532,12 @@ daily-projects-data/
 - GitHub answers 401 (key expired or deleted): show the "paste your key" screen. The pending queue is kept and sent after the new key works.
 
 ### Dot colour (rules.js, India time)
-- `refDate` = the later of `lastTickDate` and `activeSince`.
-- Red if the project's deadline has passed (deadline date is before today), no matter what else.
-- Otherwise green if `lastTickDate` is today.
-- Otherwise orange if `today - refDate` is less than 2 days.
-- Otherwise red.
-- Unticking a step: recalculate `lastTickDate` from the latest `doneAt` of the steps still ticked.
-- Deleting a ticked step: `lastTickDate` stays as it is.
-- Paused and finished projects are grey.
+- Red = not looked at today (every project resets at midnight).
+- Yellow = `lastOpenedDate` is today (opened, nothing done).
+- Green = `lastActivityDate` (any change) or `okDate` ("OK for today") is today.
+- Grey = paused or finished.
+- A passed target date shows an "Overdue" tag; it does not change the dot.
+- "No real work for N days" = days since `lastActivityDate` (OK does not count), shown from 3 days.
 
 ### AI (ai.js)
 - Main AI: **Claude Haiku**. Backup switch: Gemini Flash.
@@ -640,7 +639,6 @@ daily-projects-data/
 - Daily 9:30 AM pop-up reminder (can be added later with a scheduled GitHub job).
 - A real phone app.
 - Sharing with other people.
-- Repeating steps (for example "every Monday").
 - Working without internet.
 - AI changing things on its own.
 

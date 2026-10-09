@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Command-line helper used by the Claude commands /review, /add and /today.
+// Command-line helper used by the Claude commands /review-projects, /add, /today and /restore.
 // Works on the local copy of the private data repository in ../data, using git and the
 // Mac's existing GitHub login. Uses the SAME rules and operations as the app.
 //
@@ -11,7 +11,7 @@
 //   node tools/tracker.mjs tick <project> "<step text or id>"
 //   node tools/tracker.mjs add-note <project> "<text>"
 //   node tools/tracker.mjs new-project "<name>" [--group "<group>"] [--priority high|medium|low] [--steps "<a>" "<b>" ...]
-//   node tools/tracker.mjs restore <YYYY-MM-DD>
+//   node tools/tracker.mjs restore <YYYY-MM-DD>          (shows that version; add --yes to restore it)
 //
 // <project> is a project id, or part of its name.
 
@@ -236,11 +236,24 @@ try {
       pull();
       const commit = git('rev-list', '-1', `--before=${date} 23:59:59 +0530`, 'HEAD');
       if (!commit) throw new Error(`No saved version on or before ${date}.`);
+      if (!args.includes('--yes')) {
+        // Show what would come back, and change nothing (the Claude skill asks "yes?" first).
+        const old = JSON.parse(git('show', `${commit}:data.json`));
+        console.log(`Version from ${date} (${commit.slice(0, 7)}, ${git('log', '-1', '--format=%cd', '--date=format:%d %b %H:%M', commit)}):`);
+        console.log(`  ${old.projects.length} projects: ${old.projects.map((p) => p.name).slice(0, 12).join(', ')}${old.projects.length > 12 ? ' …' : ''}`);
+        console.log('Nothing changed yet. To restore, run the same command with --yes');
+        break;
+      }
+      const currentSecrets = readState().data.secrets || null;
       // Bring back data.json, history and files exactly as they were (as a NEW commit; never a force-push).
       for (const path of ['data.json', 'history', 'files']) {
         try { git('rm', '-r', '-q', '--ignore-unmatch', path); } catch { /* nothing there */ }
         try { git('checkout', commit, '--', path); } catch { /* did not exist then */ }
       }
+      // Keep TODAY's AI keys: a restore must not bring back old keys or remove new ones.
+      const restored = JSON.parse(readFileSync(join(DATA, 'data.json'), 'utf8'));
+      if (currentSecrets) restored.secrets = currentSecrets; else delete restored.secrets;
+      writeFileSync(join(DATA, 'data.json'), JSON.stringify(restored, null, 1) + '\n');
       git('add', '-A');
       try {
         git('commit', '-q', '-m', `Restore to ${date} (${commit.slice(0, 7)}) (via Claude)`);
@@ -248,7 +261,11 @@ try {
         console.log('Nothing to restore: the data is already the same as on that date.');
         break;
       }
-      git('push', '-q', 'origin', 'HEAD:main');
+      try {
+        git('push', '-q', 'origin', 'HEAD:main');
+      } catch {
+        throw new Error('Another device saved just now. Run the restore again in a moment.');
+      }
       console.log(`Restored to the version from ${date} (${commit.slice(0, 7)}). Saved as a new version.`);
       break;
     }

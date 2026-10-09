@@ -138,6 +138,10 @@ function shareLocalKeys() {
   }
 }
 
+function anyAiKey() {
+  return !!(aiKeyFor('claude') || aiKeyFor('gemini'));
+}
+
 function aiReady() {
   const provider = store.view.data.settings.aiProvider || 'claude';
   return { provider, key: aiKeyFor(provider) };
@@ -315,8 +319,7 @@ async function makeBrief(force = false) {
   const today = todayIndia();
   const b = store.view.data.aiBriefs[kind];
   if (!force && b && b.date === today && (b.status === 'ready' || claimIsFresh(b))) return;
-  const { provider, key } = aiReady();
-  if (!key) return;
+  if (!anyAiKey()) return;
   if (!store.view.data.projects.some((p) => p.state === 'active')) return;
   if (store.view.data.aiUsage.date === today && store.view.data.aiUsage.count >= AI_DAILY_LIMIT) {
     if (force) toast('Daily AI limit reached — try tomorrow.');
@@ -330,11 +333,11 @@ async function makeBrief(force = false) {
     await store.flush();
     const now = store.view.data.aiBriefs[kind];
     if (!now || now.claimId !== claim.id) return; // another device is making it
-    if (!useAi()) return;
     if (kind === 'weekly') await store.loadAllHistory();
-    const content = kind === 'weekly'
-      ? await ai.weeklyReview(provider, key, store.view.data, store.view.history)
-      : await ai.morningPlan(provider, key, store.view.data);
+    // chosen AI first, the other one if it fails (same as ✨ AI steps); counts one AI use
+    const content = await withAi((provider, key) => (kind === 'weekly'
+      ? ai.weeklyReview(provider, key, store.view.data, store.view.history)
+      : ai.morningPlan(provider, key, store.view.data)));
     store.dispatch('setBriefReady', { kind, date: today, content });
   } catch (e) {
     ui.brief.error = e.message;
@@ -536,8 +539,8 @@ function renderBrief() {
   const b = store.view.data.aiBriefs[kind];
   const title = kind === 'weekly' ? 'Weekly review' : 'Morning plan';
   const ready = b && b.date === today && b.status === 'ready' && b.content;
-  const { key } = aiReady();
-  if (!key && !ready) return null; // no AI on this device yet: don't take space
+  const key = anyAiKey();
+  if (!key && !ready) return null; // no AI key yet: don't take space
   let body;
   if (ui.brief.error && !ui.brief.busy) body = h('p', { class: 'error' }, `${ui.brief.error} Tap ↻ to try again.`);
   else if (ui.brief.busy || (b && b.date === today && claimIsFresh(b))) body = h('p', { class: 'muted' }, 'Making today\'s plan…');
