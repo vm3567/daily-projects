@@ -52,7 +52,7 @@ test('Today\'s summary: done steps, notes, next step and who you wait on', () =>
   assert.match(text, /^Daily update — Fri, 9 Oct 2026/);
   assert.match(text, /1 step done across 1 project\./);
   assert.match(text, /✅ Call supplier/);
-  assert.match(text, /📝 Spoke to Ravi/);
+  assert.match(text, /📝 Spoke to Ravi \(on: Call supplier\)/, 'each note says which step it is about');
   assert.match(text, /→ Next: Order frit/);
   assert.match(text, /⏳ Waiting on: Ravi/);
   assert.match(summaryText(emptyData(), {}, '2026-10-10', 'x'), /Nothing recorded yet today/);

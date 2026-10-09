@@ -73,6 +73,15 @@ Also: each red/yellow row has a one-tap **✓ OK** (or **Chased** when waiting),
 
 ---
 
+## Updating several steps
+
+- Every open step has a **📝** button: tap it and **Today's update** is about that step ("📝 About: …").
+- Or use **change:** in Today's update to pick any open step, or **Whole project**.
+- Write what happened, tick **This step is done** if it is finished (it ticks the step you chose), press **Enter**. Then 📝 the next step.
+- Each note shows under its own step, and the Diary and Today's summary say which step it was about.
+
+---
+
 ## Moving around quickly
 
 - **Jump anywhere:** press **Ctrl+K** (Mac: **⌘K**) or tap **🔍**, type a few letters of a project, person or page, press **Enter**.

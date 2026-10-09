@@ -62,7 +62,13 @@ export function summaryText(data, history, today, dateText) {
   const byProject = new Map();
   const entry = (pid) => { if (!byProject.has(pid)) byProject.set(pid, { done: [], notes: [] }); return byProject.get(pid); };
   for (const e of events) if (e.kind === 'step_ticked') entry(e.projectId).done.push(e.detail);
-  for (const p of data.projects) for (const n of p.workNotes) if (indiaDate(n.createdAt) === today) entry(p.id).notes.push(n.text);
+  for (const p of data.projects) {
+    for (const n of p.workNotes) {
+      if (indiaDate(n.createdAt) !== today) continue;
+      const st = n.stepId && p.steps.find((s) => s.id === n.stepId);
+      entry(p.id).notes.push(st ? `${n.text} (on: ${st.text})` : n.text);
+    }
+  }
   const title = `Daily update — ${dateText}`;
   let doneCount = 0;
   const blocks = [];

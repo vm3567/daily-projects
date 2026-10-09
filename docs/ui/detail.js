@@ -70,6 +70,18 @@ function stepRow(ctx, p, s) {
         : autoField('input', { class: 'step-text', value: s.text, 'aria-label': 'Step', key: 'st-' + s.id, 'data-mention': '1' },
           (v) => store.dispatch('setStepField', { projectId: p.id, stepId: s.id, field: 'text', value: v })),
       ...tags,
+      s.done ? null : h('button', {
+        class: 'icon', title: 'Write what happened on this step', 'aria-label': `Update on ${s.text}`,
+        onClick: () => {
+          const u = ((ui.update ||= {})[p.id] ||= { done: false, note: '', next: '' });
+          u.about = s.id; u.done = false;
+          ctx.render();
+          setTimeout(() => {
+            const n = document.querySelector(`[data-key="wn-${p.id}"]`);
+            if (n) { n.scrollIntoView({ block: 'center' }); n.focus(); }
+          }, 30);
+        },
+      }, '📝'),
       h('button', {
         class: 'icon', title: 'More', 'aria-label': 'More about this step',
         onClick: () => { ui.openStep = open ? null : s.id; ctx.render(); },
@@ -264,8 +276,12 @@ function historyBlock(ctx, p) {
 function todaysUpdate(ctx, p, notesShown) {
   const { store, ui } = ctx;
   const today = todayIndia();
-  const due = p.state === 'active' ? nextStep(p, today, { dueOnly: true }) : null;
+  const nextDue = p.state === 'active' ? nextStep(p, today, { dueOnly: true }) : null;
+  const openSteps = p.state === 'active' ? p.steps.filter((s) => !s.done) : [];
   const u = ((ui.update ||= {})[p.id] ||= { done: false, note: '', next: '' });
+  // Which step is this update about? The next step by default; any open step via the picker or a step's 📝; or the whole project.
+  const chosen = u.about && u.about !== 'project' ? openSteps.find((s) => s.id === u.about) : null;
+  const due = u.about === 'project' ? null : chosen || nextDue;
   if (u.done && (!due || u.stepId !== due.id)) u.done = false; // "done" only counts for the step it was ticked for
   const save = (form) => {
     const f = form.elements;
@@ -286,16 +302,26 @@ function todaysUpdate(ctx, p, notesShown) {
     if (result) {
       f.note.value = '';
       if (f.next) f.next.value = '';
-      u.done = false; u.note = ''; u.next = ''; u.photos = [];
+      u.done = false; u.note = ''; u.next = ''; u.photos = []; u.about = null; // back to the next step
       ctx.render();
       if (tick && !next) ctx.afterTick(p.id, 'detail', result.undo); // keeps the Undo button
     }
   };
-  const nextBox = !due || u.done;
+  const nextBox = !openSteps.length || u.done;
+  const picker = openSteps.length > 1 || (openSteps.length && u.about === 'project')
+    ? h('select', {
+      class: 'about-select', key: 'about-' + p.id, value: u.about === 'project' ? 'project' : due ? due.id : 'project', 'aria-label': 'Which step is this update about?',
+      onChange: (e, el) => { u.about = el.value; u.done = false; ctx.render(); setTimeout(() => { const n = document.querySelector(`[data-key="wn-${p.id}"]`); if (n) n.focus(); }, 30); },
+    },
+    openSteps.map((s) => h('option', { value: s.id }, `${s.id === (nextDue || {}).id ? '→ ' : ''}${s.text}`)),
+    h('option', { value: 'project' }, 'Whole project (no step)'))
+    : null;
   return h('div', { class: 'update' },
-    h('div', { class: 'update-next' + (due ? '' : ' none') },
-      due ? ['→ Next: ', h('strong', null, due.text), due.waiting ? h('span', { class: 'tag waiting' }, due.waitingOn ? `Waiting: ${due.waitingOn}` : 'Waiting') : null]
-        : 'No next step yet — write what you did and add the next step below.'),
+    h('div', { class: 'update-next' + (due || u.about === 'project' ? '' : ' none') },
+      due ? [due === nextDue ? '→ Next: ' : '📝 About: ', h('strong', null, due.text), due.waiting ? h('span', { class: 'tag waiting' }, due.waitingOn ? `Waiting: ${due.waitingOn}` : 'Waiting') : null]
+        : u.about === 'project' ? '📝 About: the whole project'
+          : 'No next step yet — write what you did and add the next step below.',
+      picker ? h('span', { class: 'about-pick' }, 'change: ', picker) : null),
     h('form', {
       class: 'update-form', key: 'update-' + p.id,
       onSubmit: (e) => { e.preventDefault(); save(e.target); },
