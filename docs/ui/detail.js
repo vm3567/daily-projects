@@ -181,7 +181,7 @@ function linksBlock(ctx, p) {
         h('button', { class: 'btn small', type: 'button', onClick: () => { ui.editLink = null; ctx.render(); } }, 'Cancel')));
     }
     return h('li', { key: 'l-' + l.id, class: 'row' },
-      h('a', { href: l.url, target: '_blank', rel: 'noopener noreferrer' }, l.title),
+      cleanUrl(l.url) ? h('a', { href: cleanUrl(l.url), target: '_blank', rel: 'noopener noreferrer' }, l.title) : h('span', { class: 'muted' }, `${l.title} (link blocked)`),
       h('button', { class: 'icon', title: 'Edit link', onClick: () => { ui.editLink = l.id; ctx.render(); } }, '✎'),
       h('button', {
         class: 'icon', title: 'Remove link',
