@@ -7,6 +7,7 @@ import { WAIT_RED_DAYS } from '../config.js';
 import { newId, PRIORITIES, cleanUrl } from '../ops.js';
 import { uploadFiles, openFile } from './files.js';
 
+const REPEAT_WORD = { daily: 'every day', weekly: 'every week', monthly: 'every month' };
 const COLOUR_WORD = { green: 'Done for today', yellow: 'Opened today', red: 'Not looked at today', grey: 'Paused or finished' };
 const HISTORY_WORDS = {
   created: 'Project created', edited: 'Changed', renamed: 'Renamed', group_changed: 'Moved to group',
@@ -44,14 +45,17 @@ function stepRow(ctx, p, s) {
   }
   if (s.dueDate && !s.done) tags.push(h('span', { class: 'tag' + (s.dueDate < today ? ' late' : '') }, `by ${fmtDay(s.dueDate)}`));
   if (s.note && !open) tags.push(h('span', { class: 'tag' }, 'note'));
-  return h('li', { class: 'step' + (s.done ? ' done' : ''), key: 's-' + s.id, 'data-id': s.id },
+  if (s.repeat && !s.done) tags.push(h('span', { class: 'tag repeat', title: 'Repeats' }, `↻ ${REPEAT_WORD[s.repeat]}`));
+  if (s.snoozedUntil && s.snoozedUntil > today && !s.done) tags.push(h('span', { class: 'tag' }, `from ${fmtDay(s.snoozedUntil)}`));
+  return h('li', { class: 'step' + (s.done ? ' done' : '') + (s.snoozedUntil && s.snoozedUntil > today && !s.done ? ' later' : ''), key: 's-' + s.id, 'data-id': s.id },
     h('div', { class: 'step-main' },
       s.done ? null : h('span', { class: 'grip', title: 'Drag to reorder', 'aria-hidden': 'true' }, '⋮⋮'),
       h('input', {
         type: 'checkbox', checked: s.done, 'aria-label': s.done ? 'Un-tick step' : 'Tick step',
         onChange: () => {
           const wasDone = s.done;
-          if (store.dispatch(wasDone ? 'untickStep' : 'tickStep', { projectId: p.id, stepId: s.id }) && !wasDone) ctx.afterTick(p.id, 'detail');
+          const done = ctx.act(wasDone ? 'untickStep' : 'tickStep', { projectId: p.id, stepId: s.id }, wasDone ? null : `✓ ${s.text}`);
+          if (done && !wasDone) ctx.afterTick(p.id, 'detail', done.undo);
         },
       }),
       s.done
@@ -69,6 +73,15 @@ function stepRow(ctx, p, s) {
           type: 'date', value: s.dueDate || '',
           onChange: (e, el) => store.dispatch('setStepField', { projectId: p.id, stepId: s.id, field: 'dueDate', value: el.value || null }),
         })),
+      h('label', null, 'Repeat ',
+        h('select', {
+          value: s.repeat || '',
+          onChange: (e, el) => store.dispatch('setStepField', { projectId: p.id, stepId: s.id, field: 'repeat', value: el.value || null }),
+        },
+        h('option', { value: '' }, 'Never'),
+        h('option', { value: 'daily' }, 'Every day'),
+        h('option', { value: 'weekly' }, 'Every week'),
+        h('option', { value: 'monthly' }, 'Every month'))),
       h('label', { class: 'check' },
         h('input', {
           type: 'checkbox', checked: s.waiting,
@@ -80,7 +93,7 @@ function stepRow(ctx, p, s) {
         (v) => store.dispatch('setStepField', { projectId: p.id, stepId: s.id, field: 'note', value: v })),
       h('button', {
         class: 'btn danger small',
-        onClick: () => { if (confirm(`Delete the step "${s.text}"?`)) store.dispatch('deleteStep', { projectId: p.id, stepId: s.id }); },
+        onClick: () => ctx.act('deleteStep', { projectId: p.id, stepId: s.id }, `Step deleted: ${s.text}`),
       }, '🗑 Delete step')) : null);
 }
 
@@ -236,17 +249,17 @@ function stateButtons(ctx, p) {
     return [
       !green ? h('button', { class: 'btn ok-btn', title: 'Looked at it, no more work today (key: o)', onClick: () => ctx.toggleOk(p) }, '✓ OK for today') : null,
       okOnly ? h('button', { class: 'btn small', title: 'Undo OK for today', onClick: () => ctx.toggleOk(p) }, 'Undo OK') : null,
-      h('button', { class: 'btn', onClick: () => store.dispatch('pause', { projectId: p.id }) }, 'Pause'),
+      h('button', { class: 'btn', onClick: () => ctx.act('pause', { projectId: p.id }, `Paused: ${p.name}`) }, 'Pause'),
       h('button', {
         class: 'btn',
-        onClick: () => { if (confirm(`Finish "${p.name}"? It moves to the Finished list.`)) store.dispatch('finish', { projectId: p.id }); },
+        onClick: () => ctx.act('finish', { projectId: p.id }, `Finished: ${p.name} (moved to Finished)`),
       }, 'Finish'),
     ];
   }
   if (p.state === 'paused') {
     return [
       h('button', { class: 'btn primary', onClick: () => store.dispatch('unpause', { projectId: p.id }) }, 'Unpause'),
-      h('button', { class: 'btn', onClick: () => store.dispatch('finish', { projectId: p.id }) }, 'Finish'),
+      h('button', { class: 'btn', onClick: () => ctx.act('finish', { projectId: p.id }, `Finished: ${p.name} (moved to Finished)`) }, 'Finish'),
     ];
   }
   return [
@@ -255,7 +268,7 @@ function stateButtons(ctx, p) {
       class: 'btn danger',
       onClick: () => {
         if (!confirm(`Delete "${p.name}" for good?`) || !confirm('Are you really sure? Its files are removed. Its Diary lines stay.')) return;
-        store.dispatch('deleteProject', { projectId: p.id });
+        ctx.act('deleteProject', { projectId: p.id }, `Deleted: ${p.name}`, 8000);
         ui.selected = null; ui.mobile = 'list'; ctx.render();
       },
     }, 'Delete'),
@@ -368,7 +381,7 @@ export function renderDetail(ctx) {
           (v) => { if (v.trim()) store.dispatch('editWorkNote', { projectId: p.id, noteId: n.id, text: v }); }),
         h('button', {
           class: 'icon', title: 'Delete note',
-          onClick: () => { if (confirm('Delete this note?')) store.dispatch('deleteWorkNote', { projectId: p.id, noteId: n.id }); },
+          onClick: () => ctx.act('deleteWorkNote', { projectId: p.id, noteId: n.id }, 'Note deleted'),
         }, '🗑')))),
       p.workNotes.length > notesShown
         ? h('button', { class: 'link small', onClick: () => { ui.notesLimit = notesShown + 20; ctx.render(); } }, `Show older notes (${p.workNotes.length - notesShown})`) : null),

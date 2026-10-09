@@ -10,8 +10,8 @@ import { GitHubRepo } from './github.js';
 import { MockRepo } from './mockrepo.js';
 import { device } from './device.js';
 import { DATA_OWNER, DATA_REPO, DATA_BRANCH, REFRESH_MS, AI_DAILY_LIMIT, BRIEF_CLAIM_MINUTES, WAIT_RED_DAYS, NO_WORK_NOTE_DAYS } from './config.js';
-import { dotColour, nextStep, todayIndia, isSundayIndia, colourCounts, isOverdue, indiaDate, waitingDays, daysWithoutWork } from './rules.js';
-import { newId } from './ops.js';
+import { dotColour, nextStep, todayIndia, isSundayIndia, colourCounts, isOverdue, indiaDate, waitingDays, daysWithoutWork, dayScore, greenStreak, addDays, monthOf } from './rules.js';
+import { newId, clone, opMonth } from './ops.js';
 import * as ai from './ai.js';
 
 const root = document.getElementById('app');
@@ -38,12 +38,32 @@ const ui = {
 let store = null;
 let toastTimer = null;
 
-function toast(text, ms = 3500) {
+/** Message at the bottom. With `undo`, it shows an Undo button and stays a little longer. */
+function toast(text, ms = 3500, undo = null) {
   const t = document.getElementById('toast');
-  t.textContent = text;
+  t.replaceChildren(h('span', null, text),
+    undo ? h('button', { class: 'toast-undo', onClick: () => { t.hidden = true; undo(); } }, 'Undo') : null);
   t.hidden = false;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { t.hidden = true; }, ms);
+  toastTimer = setTimeout(() => { t.hidden = true; }, undo ? Math.max(ms, 6000) : ms);
+}
+
+/**
+ * Do one change to a project and offer Undo. Undo puts the whole project back as it was
+ * (dot colour included) and removes that change's line from the history.
+ * Returns { op, undo } or null if nothing changed.
+ */
+function act(type, args, message, ms = 4000) {
+  const list = store.view.data.projects;
+  const index = list.findIndex((x) => x.id === args.projectId);
+  const before = index >= 0 ? clone(list[index]) : null;
+  const op = store.dispatch(type, args);
+  if (!op) return null;
+  const undo = before ? () => {
+    if (store.dispatch('restoreProject', { project: before, index, undoOpId: op.id, undoMonth: opMonth(op) })) toast('Undone', 1500);
+  } : null;
+  if (message) toast(message, ms, undo);
+  return { op, undo };
 }
 
 function rememberUi() {
@@ -59,8 +79,9 @@ const ctx = {
   aiBreakdown: (p, goal) => runAi(p, 'breakdown', goal),
   hasAiKey: () => !!(store && aiReady().key),
   toggleOk: (p) => toggleOk(p),
+  act: (type, args, message) => act(type, args, message),
   chase: (p, s) => chase(p, s),
-  afterTick: (id, where) => afterTick(id, where),
+  afterTick: (id, where, undo) => afterTick(id, where, undo),
   selectPerson: (id) => { ui.person = id; ui.mobile = 'detail'; render(); const d = document.getElementById('detail'); if (d) d.scrollTop = 0; },
   openProject: (id) => {
     const p = store.view.data.projects.find((x) => x.id === id);
@@ -199,6 +220,30 @@ function markOpened(id) {
   if (store.canEdit()) store.dispatch('markOpened', { projectId: id });
 }
 
+/** Save the green score of each of the last 7 days that has none yet (one save, once a day). */
+async function recordPastScores() {
+  if (!store || !store.base || !store.canEdit()) return;
+  const today = todayIndia();
+  const saved = store.view.data.dayScores || {};
+  const days = [];
+  for (let i = 1; i <= 7; i++) { const d = addDays(today, -i); if (!saved[d]) days.push(d); }
+  if (!days.length || !store.view.data.projects.length) return;
+  const months = [...new Set(days.map(monthOf))].filter((m) => !store.view.history[m] && store.availableMonths().includes(m));
+  for (const m of months) await store.loadMonth(m);
+  const scores = {};
+  for (const d of days) {
+    const sc = dayScore(store.view.data, store.view.history, d);
+    if (sc.total) scores[d] = sc;
+  }
+  if (Object.keys(scores).length) store.dispatch('recordScores', { scores });
+}
+
+function todayScore() {
+  const today = todayIndia();
+  const active = store.view.data.projects.filter((p) => p.state === 'active');
+  return { green: active.filter((p) => dotColour(p, today) === 'green').length, total: active.length };
+}
+
 /** The project in the right column counts as opened, if that column is on screen. */
 function markShownOpened() {
   if (!ui.selected || (ui.view === 'people' && !ui.search)) return;
@@ -213,7 +258,7 @@ function toggleOk(p) {
     store.dispatch('undoOkForToday', { projectId: p.id });
     return;
   }
-  if (store.dispatch('okForToday', { projectId: p.id })) toast(`✓ ${p.name}: OK for today`, 2500);
+  act('okForToday', { projectId: p.id }, `✓ ${p.name}: OK for today`);
 }
 
 function select(id) {
@@ -342,14 +387,15 @@ function renderBrief() {
 
 function projectRow(p, today) {
   const colour = dotColour(p, today);
-  const ns = nextStep(p);
-  const canTick = ns && p.state === 'active';
+  const ns = nextStep(p, today); // shown as "Next:"
+  const due = nextStep(p, today, { dueOnly: true }); // what the tick box ticks
+  const canTick = due && p.state === 'active';
   return h('li', { key: 'p-' + p.id, 'data-id': p.id, class: 'prow' + (ui.selected === p.id ? ' current' : '') },
     canTick
       ? h('input', {
-        type: 'checkbox', class: 'quick-tick', key: 'qt-' + p.id + '-' + ns.id,
-        title: `Tick: ${ns.text}`, 'aria-label': `Tick next step of ${p.name}: ${ns.text}`,
-        onChange: (e, el) => quickTick(p, ns, el),
+        type: 'checkbox', class: 'quick-tick', key: 'qt-' + p.id + '-' + due.id,
+        title: `Tick: ${due.text}`, 'aria-label': `Tick next step of ${p.name}: ${due.text}`,
+        onChange: (e, el) => quickTick(p, due, el),
       })
       : p.state === 'active'
         ? h('button', {
@@ -365,11 +411,12 @@ function projectRow(p, today) {
           p.priority === 'high' ? h('span', { class: 'tag high' }, 'High') : null),
         h('span', { class: 'prow-next' + (ns ? '' : ' warn') }, ns ? `Next: ${ns.text}` : 'No next step — add one',
           ns && ns.waiting ? waitingTag(ns) : null,
+          ns && ns.snoozedUntil && ns.snoozedUntil > today ? h('span', { class: 'tag repeat' }, `↻ from ${fmtDay(ns.snoozedUntil)}`) : null,
           p.deadline
             ? h('span', { class: 'tag' + (isOverdue(p, today) ? ' late' : '') }, isOverdue(p, today) ? `Overdue · ${fmtDay(p.deadline)}` : `Target ${fmtDay(p.deadline)}`)
             : null,
           noWorkTag(p, today)))),
-    rowAction(p, ns, colour),
+    rowAction(p, due, colour),
     canDrag() ? h('span', { class: 'grip', 'aria-hidden': 'true', title: 'Drag to reorder' }, '⋮⋮') : null,
     ui.quickAdd === p.id ? quickAddForm(p) : null);
 }
@@ -384,15 +431,13 @@ function rowAction(p, ns, colour) {
 }
 
 function chase(p, step) {
-  if (store.dispatch('chased', { projectId: p.id, stepId: step.id })) {
-    toast(`Noted: followed up${step.waitingOn ? ' with ' + step.waitingOn : ''}. Waiting count restarted.`, 3500);
-  }
+  act('chased', { projectId: p.id, stepId: step.id }, `Noted: followed up${step.waitingOn ? ' with ' + step.waitingOn : ''}. Waiting count restarted.`);
 }
 
 /** After ticking: if the project has no next step left, ask "What's next?" straight away. */
-function afterTick(projectId, where) {
+function afterTick(projectId, where, undo = null) {
   const p = store.view.data.projects.find((x) => x.id === projectId);
-  if (!p || p.state !== 'active' || nextStep(p)) return false;
+  if (!p || p.state !== 'active' || nextStep(p, todayIndia(), { dueOnly: true })) return false;
   if (where === 'detail' || (ui.view === 'today' && !ui.search)) {
     // On Today the now-green row folds away, so ask in the project page instead.
     if (ui.selected !== p.id || where !== 'detail') select(p.id);
@@ -402,7 +447,7 @@ function afterTick(projectId, where) {
     render();
     focusKey('qa-' + p.id);
   }
-  toast(`What's next for "${p.name}"? Type it and press Enter.`, 4000);
+  toast(`What's next for "${p.name}"? Type it and press Enter.`, 5000, undo);
   return true;
 }
 
@@ -467,12 +512,12 @@ function canDrag() {
 /** Tick a project's next step straight from the list. */
 function quickTick(p, step, el) {
   el.checked = true;
-  const op = store.dispatch('tickStep', { projectId: p.id, stepId: step.id });
-  if (!op) { el.checked = false; return; }
+  const done = act('tickStep', { projectId: p.id, stepId: step.id });
+  if (!done) { el.checked = false; return; }
   const after = store.view.data.projects.find((x) => x.id === p.id);
-  const next = after && nextStep(after);
-  if (next) toast(`✓ ${step.text}. Next: ${next.text}`, 4500);
-  else afterTick(p.id, 'list');
+  const next = after && nextStep(after, todayIndia(), { dueOnly: true });
+  if (next) toast(`✓ ${step.text}. Next: ${next.text}`, 4500, done.undo);
+  else afterTick(p.id, 'list', done.undo);
 }
 
 const COLOUR_ORDER = { red: 0, yellow: 1, green: 2, grey: 3 };
@@ -509,6 +554,32 @@ function sortSwitch() {
   return h('div', { class: 'segmented', role: 'group', 'aria-label': 'Order' }, opt('mine', 'My order'), opt('red', 'Red first'));
 }
 
+function streakBadge() {
+  const n = greenStreak(store.view.data.dayScores || {}, todayScore());
+  return n >= 1 ? h('span', { class: 'streak', title: 'Days in a row with every project green' }, ` · 🔥 ${n} day${n > 1 ? 's' : ''} all green`) : null;
+}
+
+/** Last 7 days: how many projects were green each day (today is live). */
+function weekBars() {
+  const today = todayIndia();
+  const saved = store.view.data.dayScores || {};
+  const days = [];
+  for (let i = 6; i >= 0; i--) days.push(addDays(today, -i));
+  const wd = new Intl.DateTimeFormat('en-IN', { weekday: 'short', timeZone: 'UTC' });
+  return h('div', { class: 'week', key: 'week' },
+    h('div', { class: 'week-title' }, 'Last 7 days — projects green each day'),
+    h('div', { class: 'week-bars' }, days.map((d) => {
+      const sc = d === today ? todayScore() : saved[d];
+      const pct = sc && sc.total ? Math.round((sc.green / sc.total) * 100) : 0;
+      const fill = h('div', { class: 'week-fill' + (pct === 100 ? ' full' : '') });
+      fill.style.height = `${Math.max(pct, sc && sc.total ? 4 : 0)}%`; // style object (allowed by the page's safety rules)
+      return h('div', { class: 'week-day', key: 'wk-' + d, title: sc ? `${sc.green} of ${sc.total} green` : 'No data' },
+        h('div', { class: 'week-bar' }, fill),
+        h('div', { class: 'week-num' }, sc && sc.total ? `${sc.green}/${sc.total}` : '–'),
+        h('div', { class: 'week-label' + (d === today ? ' today' : '') }, d === today ? 'Today' : wd.format(new Date(d + 'T00:00:00Z'))));
+    })));
+}
+
 /** "3 of 7 done today" with a thin bar. */
 function progressLine(today) {
   const active = store.view.data.projects.filter((p) => p.state === 'active');
@@ -520,7 +591,8 @@ function progressLine(today) {
   return h('div', { class: 'progress', key: 'progress' },
     h('div', { class: 'progress-row' },
       h('div', { class: 'progress-text' },
-        h('strong', null, `${done} of ${active.length}`), done === active.length ? ' done today — all green! 🎉' : ' done today'),
+        h('strong', null, `${done} of ${active.length}`), done === active.length ? ' done today — all green! 🎉' : ' done today',
+        streakBadge()),
       done < active.length && !ui.round
         ? h('button', { class: 'btn primary small round-start', title: 'One project at a time (key: g)', onClick: startRound }, '▶ Daily round')
         : null),
@@ -648,6 +720,7 @@ function renderDiary() {
   const loaded = new Set(Object.keys(history));
   const older = store.availableMonths().find((m) => !loaded.has(m));
   return h('div', { class: 'diary' },
+    weekBars(),
     shown.length ? null : h('p', { class: 'empty-list' }, 'Nothing yet. Ticked steps and work notes will show here.'),
     shown.map((d) => h('section', { class: 'diary-day', key: 'd-' + d },
       h('h3', null, fmtLongDay(d)),
@@ -908,22 +981,23 @@ function roundNext() {
 function roundAct(kind) {
   const p = roundProject();
   if (!p) return;
-  const ns = nextStep(p);
+  const ns = nextStep(p, todayIndia(), { dueOnly: true });
   if (kind === 'done') {
     if (!ns) { ui.round.mode = 'next'; render(); focusKey('round-input'); return; }
-    if (!store.dispatch('tickStep', { projectId: p.id, stepId: ns.id })) return;
+    const done = act('tickStep', { projectId: p.id, stepId: ns.id });
+    if (!done) return;
     const after = store.view.data.projects.find((x) => x.id === p.id);
-    if (after && !nextStep(after)) { ui.round.mode = 'next'; render(); focusKey('round-input'); toast(`✓ ${ns.text}. What's next?`, 3000); return; }
-    toast(`✓ ${ns.text}`, 2000);
+    if (after && !nextStep(after, todayIndia(), { dueOnly: true })) { ui.round.mode = 'next'; render(); focusKey('round-input'); toast(`✓ ${ns.text}. What's next?`, 4000, done.undo); return; }
+    toast(`✓ ${ns.text} (${p.name})`, 4000, done.undo);
     roundNext();
   } else if (kind === 'add' || kind === 'note') {
     ui.round.mode = kind;
     render();
     focusKey('round-input');
   } else if (kind === 'ok') {
-    if (store.dispatch('okForToday', { projectId: p.id })) roundNext();
+    if (act('okForToday', { projectId: p.id }, `✓ ${p.name}: OK for today`)) roundNext();
   } else if (kind === 'chase') {
-    if (ns && ns.waiting && store.dispatch('chased', { projectId: p.id, stepId: ns.id })) roundNext();
+    if (ns && ns.waiting && act('chased', { projectId: p.id, stepId: ns.id }, `Chased${ns.waitingOn ? ' ' + ns.waitingOn : ''} (${p.name})`)) roundNext();
   } else if (kind === 'skip') {
     roundNext();
   }
@@ -935,9 +1009,9 @@ function roundSubmit(text) {
   if (!p || !t) return;
   const mode = ui.round.mode;
   const ok = mode === 'note'
-    ? store.dispatch('addWorkNote', { projectId: p.id, noteId: newId(), text: t })
-    : store.dispatch('addStep', { projectId: p.id, stepId: newId(), text: t });
-  if (ok) { toast(mode === 'note' ? 'Note saved' : `Added: ${t}`, 2000); roundNext(); }
+    ? act('addWorkNote', { projectId: p.id, noteId: newId(), text: t }, `Note saved (${p.name})`)
+    : act('addStep', { projectId: p.id, stepId: newId(), text: t }, `Added: ${t}`);
+  if (ok) roundNext();
 }
 
 function renderRound() {
@@ -965,7 +1039,8 @@ function renderRound() {
           h('button', { class: 'btn primary', onClick: endRound }, 'Done'))));
   }
   const p = roundProject();
-  const ns = nextStep(p);
+  const ns = nextStep(p, today);
+  const due = nextStep(p, today, { dueOnly: true });
   const colour = dotColour(p, today);
   const g = store.view.data.groups.find((x) => x.id === p.groupId);
   const open = p.steps.filter((s) => !s.done);
@@ -995,10 +1070,10 @@ function renderRound() {
       h('button', { class: 'btn primary', type: 'submit' }, 'Save'),
       h('button', { class: 'btn', type: 'button', onClick: () => { ui.round.mode = null; render(); } }, 'Cancel')) : null,
       mode ? null : h('div', { class: 'round-actions' },
-        ns ? btn('done', '✓ Step done', 'x', 'primary') : btn('done', '+ What\'s next?', 'x', 'primary'),
+        due ? btn('done', '✓ Step done', 'x', 'primary') : btn('done', '+ What\'s next?', 'x', 'primary'),
         btn('add', '+ Add step', 'a'),
         btn('note', '✎ Note', 'w'),
-        ns && ns.waiting ? btn('chase', 'Chased', 'c') : null,
+        due && due.waiting ? btn('chase', 'Chased', 'c') : null,
         btn('ok', '✓ OK for today', 'o', 'ok-btn'),
         btn('skip', 'Skip →', 's'))));
 }
@@ -1115,13 +1190,14 @@ function onKey(e) {
     else toast('Pick an active project first (↓ ↑).');
   }
   else if (k === 'x') {
-    const ns = p && p.state === 'active' && nextStep(p);
+    const ns = p && p.state === 'active' && nextStep(p, todayIndia(), { dueOnly: true });
     if (ns) {
-      if (store.dispatch('tickStep', { projectId: p.id, stepId: ns.id })) {
+      const done = act('tickStep', { projectId: p.id, stepId: ns.id });
+      if (done) {
         const after = selectedProject();
-        const nn = after && nextStep(after);
-        if (nn) toast(`✓ ${ns.text}. Next: ${nn.text}`, 4500);
-        else afterTick(p.id, 'detail');
+        const nn = after && nextStep(after, todayIndia(), { dueOnly: true });
+        if (nn) toast(`✓ ${ns.text}. Next: ${nn.text}`, 4500, done.undo);
+        else afterTick(p.id, 'detail', done.undo);
       }
     } else toast(p ? 'No step to tick. Press "a" to add one.' : 'Pick a project first (↓ ↑).');
   } else if (k === 'a') {
@@ -1177,13 +1253,13 @@ function start() {
     render(); // put ticked boxes and menus back to the real data
   });
   render();
-  store.init().then(() => { render(); markShownOpened(); makeBrief(); });
+  store.init().then(() => { render(); markShownOpened(); makeBrief(); recordPastScores(); });
   if (started) return;
   started = true;
   let shownDay = todayIndia();
   setInterval(() => {
     if (document.visibilityState === 'visible') doRefresh(false);
-    if (todayIndia() !== shownDay) { shownDay = todayIndia(); resetRedOrder(); render(); markShownOpened(); } // midnight: every dot resets
+    if (todayIndia() !== shownDay) { shownDay = todayIndia(); resetRedOrder(); render(); markShownOpened(); recordPastScores(); } // midnight: every dot resets
   }, REFRESH_MS);
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') doRefresh(false); });
   window.addEventListener('online', () => {

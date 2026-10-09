@@ -76,8 +76,34 @@ export function isOverdue(project, today = todayIndia()) {
 }
 
 /** First unfinished step, or null. */
-export function nextStep(project) {
-  return project.steps.find((s) => !s.done) || null;
+/**
+ * The next step: the first open step that is due now. A repeating step that comes back later
+ * ("snoozed until") waits its turn, unless it is the only open step.
+ */
+export function nextStep(project, today = todayIndia(), opts = {}) {
+  const open = project.steps.filter((s) => !s.done);
+  const due = open.find((s) => !s.snoozedUntil || s.snoozedUntil <= today);
+  if (opts.dueOnly) return due || null; // for ticking: never tick a step that comes back later
+  return due || open[0] || null;
+}
+
+export const REPEATS = ['daily', 'weekly', 'monthly'];
+
+/** Next date for a repeating step, after the day it was done. Keeps the weekday / day of month of its date. */
+export function nextRepeatDate(repeat, anchor, doneDay) {
+  const step = (d) => {
+    if (repeat === 'daily') return addDays(d, 1);
+    if (repeat === 'weekly') return addDays(d, 7);
+    // monthly: same day next month (31st → last day of a shorter month)
+    const [y, m, day] = d.split('-').map(Number);
+    const ny = m === 12 ? y + 1 : y;
+    const nm = m === 12 ? 1 : m + 1;
+    const last = new Date(Date.UTC(ny, nm, 0)).getUTCDate();
+    return `${ny}-${String(nm).padStart(2, '0')}-${String(Math.min(day, last)).padStart(2, '0')}`;
+  };
+  let d = step(anchor || doneDay); // always at least one step on, so an early tick never repeats the same date
+  for (let i = 0; i < 400 && d <= doneDay; i++) d = step(d);
+  return d;
 }
 
 export function activeProjects(data) {
@@ -164,4 +190,40 @@ export function personStatus(data, person, today = todayIndia()) {
   const open = waiting.length + discuss.length;
   const colour = !open ? 'green' : (waiting.length && maxWait >= WAIT_RED_DAYS) || late ? 'red' : 'orange';
   return { colour, open, waiting: waiting.length, discuss: discuss.length, maxWait, late };
+}
+
+// ---------- Daily score and streak ----------
+
+/**
+ * How many projects were green on a past day, worked out from the saved dates and the history.
+ * Counts projects that existed and were active that day.
+ */
+export function dayScore(data, history, day) {
+  const busy = new Set();
+  for (const e of (history[monthOf(day)] || [])) {
+    if (e.projectId && indiaDate(e.at) === day && e.kind !== 'created') busy.add(e.projectId);
+  }
+  let total = 0;
+  let green = 0;
+  for (const p of data.projects) {
+    const created = p.createdAt ? indiaDate(p.createdAt) : null;
+    if (!created || created > day) continue;
+    const changed = p.stateChangedAt ? indiaDate(p.stateChangedAt) : created;
+    const activeThen = p.state === 'active' ? (p.activeSince || created) <= day : changed > day;
+    if (!activeThen) continue;
+    total++;
+    if (busy.has(p.id) || lastWorkDate(p) === day || p.okDate === day) green++;
+  }
+  return { green, total };
+}
+
+/** Days in a row (ending yesterday, plus today if already all green) where every project was green. */
+export function greenStreak(scores, todayScore, today = todayIndia()) {
+  let n = todayScore && todayScore.total && todayScore.green === todayScore.total ? 1 : 0;
+  for (let d = addDays(today, -1); ; d = addDays(d, -1)) {
+    const s = scores[d];
+    if (!s || !s.total || s.green < s.total) break;
+    n++;
+  }
+  return n;
 }

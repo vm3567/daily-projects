@@ -1,7 +1,7 @@
 // Tests for the shared rules and operations. Run: npm test
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { dotColour, indiaDate, addDays, daysBetween } from '../docs/rules.js';
+import { dotColour, indiaDate, addDays, daysBetween, nextStep } from '../docs/rules.js';
 import { applyOp, applyOps, emptyData, makeOp, clone, filePath, cleanUrl } from '../docs/ops.js';
 
 const T = (date, time = '10:00:00') => new Date(`${date}T${time}+05:30`).toISOString();
@@ -231,4 +231,76 @@ test('chased: note, restarts waiting count, green, once a day', async () => {
   assert.equal(dotColour(p, '2026-10-04'), 'green');
   assert.match(p.workNotes[0].text, /Followed up with @Ravi/);
   assert.equal(applyOp(s, op('chased', { projectId: 'p1', stepId: 's2' }, '2026-10-04', '15:00:00')), false);
+});
+
+test('repeating steps come back on the next date', async () => {
+  const { nextRepeatDate } = await import('../docs/rules.js');
+  assert.equal(nextRepeatDate('daily', null, '2026-10-09'), '2026-10-10');
+  assert.equal(nextRepeatDate('weekly', '2026-10-05', '2026-10-09'), '2026-10-12', 'keeps the weekday (Monday)');
+  assert.equal(nextRepeatDate('monthly', '2026-01-31', '2026-02-01'), '2026-02-28', 'short month');
+  const s = withProject('2026-10-01');
+  applyOp(s, op('setStepField', { projectId: 'p1', stepId: 's1', field: 'repeat', value: 'weekly' }, '2026-10-01'));
+  applyOp(s, op('setStepField', { projectId: 'p1', stepId: 's1', field: 'dueDate', value: '2026-10-05' }, '2026-10-01'));
+  const t = op('tickStep', { projectId: 'p1', stepId: 's1' }, '2026-10-05');
+  applyOp(s, t);
+  const p = s.data.projects[0];
+  const copy = p.steps.find((x) => x.id === t.id + 'r');
+  assert.equal(copy.dueDate, '2026-10-12');
+  assert.equal(nextStep(p, '2026-10-06').id, 's2', 'the copy waits; the other step is next');
+  applyOp(s, t); // replay: no second copy
+  assert.equal(p.steps.filter((x) => x.text === 'Order clay' && !x.done).length, 1);
+});
+
+test('undo puts the project back and removes the history line', () => {
+  const s = withProject('2026-10-01');
+  const before = clone(s.data.projects[0]);
+  const t = op('tickStep', { projectId: 'p1', stepId: 's1' }, '2026-10-02');
+  applyOp(s, t);
+  applyOp(s, op('restoreProject', { project: before, undoOpId: t.id }, '2026-10-02', '10:01:00'));
+  assert.equal(s.data.projects[0].steps[0].done, false);
+  assert.equal(dotColour(s.data.projects[0], '2026-10-02'), 'red');
+  assert.ok(!s.history['2026-10'].some((e) => e.id === t.id));
+  // undo a delete puts it back at its place
+  const snap = clone(s.data.projects[0]);
+  applyOp(s, op('finish', { projectId: 'p1' }, '2026-10-02'));
+  applyOp(s, op('deleteProject', { projectId: 'p1' }, '2026-10-02'));
+  applyOp(s, op('restoreProject', { project: snap, index: 0 }, '2026-10-02'));
+  assert.equal(s.data.projects[0].id, 'p1');
+});
+
+test('day score and streak', async () => {
+  const { dayScore, greenStreak } = await import('../docs/rules.js');
+  const s = withProject('2026-10-01');
+  applyOp(s, op('createProject', { projectId: 'p2', name: 'B' }, '2026-10-01'));
+  applyOp(s, op('addWorkNote', { projectId: 'p1', noteId: 'n', text: 'x' }, '2026-10-02'));
+  assert.deepEqual(dayScore(s.data, s.history, '2026-10-02'), { green: 1, total: 2 });
+  applyOp(s, op('okForToday', { projectId: 'p2' }, '2026-10-02'));
+  assert.deepEqual(dayScore(s.data, s.history, '2026-10-02'), { green: 2, total: 2 });
+  const scores = { '2026-10-07': { green: 2, total: 2 }, '2026-10-08': { green: 3, total: 3 }, '2026-10-06': { green: 1, total: 3 } };
+  assert.equal(greenStreak(scores, { green: 1, total: 3 }, '2026-10-09'), 2);
+  assert.equal(greenStreak(scores, { green: 3, total: 3 }, '2026-10-09'), 3);
+});
+
+test('repeat fixes: early tick moves on, untick removes the copy, date change follows', async () => {
+  const { nextRepeatDate } = await import('../docs/rules.js');
+  assert.equal(nextRepeatDate('weekly', '2026-10-09', '2026-10-05'), '2026-10-16', 'ticked early: next week, not the same Friday');
+  const s = withProject('2026-10-01');
+  applyOp(s, op('setStepField', { projectId: 'p1', stepId: 's1', field: 'repeat', value: 'daily' }, '2026-10-01'));
+  applyOp(s, op('tickStep', { projectId: 'p1', stepId: 's1' }, '2026-10-02'));
+  const p = s.data.projects[0];
+  assert.equal(p.steps.filter((x) => x.text === 'Order clay' && !x.done).length, 1);
+  assert.equal(nextStep(p, '2026-10-02', { dueOnly: true }).id, 's2');
+  const copy = p.steps.find((x) => x.text === 'Order clay' && !x.done);
+  applyOp(s, op('setStepField', { projectId: 'p1', stepId: copy.id, field: 'repeat', value: null }, '2026-10-02'));
+  assert.equal(copy.snoozedUntil, null, 'no repeat = show it now');
+  applyOp(s, op('untickStep', { projectId: 'p1', stepId: 's1' }, '2026-10-02', '11:00:00'));
+  assert.equal(p.steps.filter((x) => x.text === 'Order clay').length, 1, 'copy removed on untick');
+});
+
+test('undo OK removes the Reviewed line', () => {
+  const s = withProject('2026-10-01');
+  const ok = op('okForToday', { projectId: 'p1' }, '2026-10-02');
+  applyOp(s, ok);
+  applyOp(s, op('undoOkForToday', { projectId: 'p1' }, '2026-10-02', '10:05:00'));
+  assert.ok(!s.history['2026-10'].some((e) => e.id === ok.id));
 });

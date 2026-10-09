@@ -2,6 +2,9 @@
 // and saves them with replay on clash. See PLAN.md section 25.
 
 import { applyOp, applyOps, emptyData, makeOp, opMonth, commitMessage, clone } from './ops.js';
+
+/** History months an operation touches (its own, plus the month of a change it undoes). */
+const monthsOfOp = (op) => [opMonth(op), op.args && op.args.undoMonth].filter(Boolean);
 import { todayIndia, monthOf } from './rules.js';
 import { AuthError, NetworkError, ClashError } from './github.js';
 import { SAVE_DELAY_MS } from './config.js';
@@ -72,7 +75,7 @@ export class Store extends EventTarget {
   async load() {
     const keepMonths = new Set(this.base ? Object.keys(this.base.history) : []);
     keepMonths.add(monthOf(todayIndia()));
-    for (const op of this.pending) keepMonths.add(opMonth(op));
+    for (const op of this.pending) for (const m of monthsOfOp(op)) keepMonths.add(m);
 
     const snap = await this.repo.snapshot();
     const dataSha = snap.entries.get(DATA_PATH);
@@ -174,7 +177,7 @@ export class Store extends EventTarget {
       let done = false;
       for (let attempt = 0; attempt < 3 && !done; attempt++) {
         try {
-          await this.ensureMonths(this.base, new Set(ops.map(opMonth)));
+          await this.ensureMonths(this.base, new Set(ops.flatMap(monthsOfOp)));
           const next = { data: clone(this.base.data), history: clone(this.base.history) };
           const applied = applyOps(next, ops);
           const changes = this.diff(this.base, next);

@@ -9,14 +9,14 @@
 // applyOp(state, op) changes the state in place and returns true, or returns false
 // when the operation must be skipped (for example, its item no longer exists).
 
-import { indiaDate, monthOf, laterDate, addDays } from './rules.js';
+import { indiaDate, monthOf, laterDate, addDays, REPEATS, nextRepeatDate } from './rules.js';
 import { AI_DAILY_LIMIT, BRIEF_CLAIM_MINUTES } from './config.js';
 
 export const START_GROUPS = ['AI', 'Ceramic', 'General', 'Work / Office'];
 export const PRIORITIES = ['high', 'medium', 'low'];
 export const DEFAULT_TARGET_DAYS = 30; // new projects get a target date 30 days ahead
 const PROJECT_FIELDS = ['name', 'groupId', 'priority', 'deadline', 'notes'];
-const STEP_FIELDS = ['text', 'dueDate', 'note', 'waiting', 'waitingOn'];
+const STEP_FIELDS = ['text', 'dueDate', 'note', 'waiting', 'waitingOn', 'repeat'];
 
 export function newId() {
   const bytes = new Uint8Array(8);
@@ -222,6 +222,7 @@ const handlers = {
     const day = indiaDate(op.at);
     if (!p || p.state !== 'active' || p.okDate === day) return false;
     p.okDate = day;
+    p.okOpId = op.id;
     p.lastOpenedDate = day;
     addEvent(state, op, p, 'reviewed', 'Reviewed — nothing today');
     return true;
@@ -231,6 +232,12 @@ const handlers = {
     const p = findProject(state.data, a.projectId);
     if (!p || p.okDate !== indiaDate(op.at)) return false;
     p.okDate = null;
+    if (p.okOpId) {
+      const events = state.history[opMonth(op)] || [];
+      const k = events.findIndex((e) => e.id === p.okOpId);
+      if (k >= 0) events.splice(k, 1); // so the streak does not count an undone OK
+      p.okOpId = null;
+    }
     return true;
   },
 
@@ -253,6 +260,23 @@ const handlers = {
     if (i < 0) return false;
     const [p] = data.projects.splice(i, 1);
     addEvent(state, op, p, 'deleted', p.name);
+    return true;
+  },
+
+  /** Undo: put the project back exactly as it was, and remove the undone action's history line. */
+  restoreProject(state, op, a) {
+    const snap = a.project;
+    if (!snap || !snap.id) return false;
+    const list = state.data.projects;
+    const i = list.findIndex((x) => x.id === snap.id);
+    if (i >= 0) list[i] = clone(snap);
+    else list.splice(Math.min(Math.max(0, a.index ?? 0), list.length), 0, clone(snap));
+    if (a.undoOpId) {
+      for (const events of Object.values(state.history)) {
+        const k = events.findIndex((e) => e.id === a.undoOpId);
+        if (k >= 0) events.splice(k, 1);
+      }
+    }
     return true;
   },
 
@@ -287,10 +311,15 @@ const handlers = {
     if (a.field === 'waitingOn') value = cleanText(value, 200);
     if (a.field === 'waiting') value = !!value;
     if (a.field === 'dueDate') value = cleanDate(value);
+    if (a.field === 'repeat') value = REPEATS.includes(value) ? value : null;
     if (s[a.field] === value) return false;
     const old = s[a.field];
     s[a.field] = value;
     if (a.field === 'waiting') s.waitingSince = value ? indiaDate(op.at) : null; // for "Waiting · 4d"
+    if (s.snoozedUntil && (a.field === 'dueDate' || a.field === 'repeat')) {
+      // a step that comes back later follows its new date; no repeat or a date today/past = show it now
+      s.snoozedUntil = s.repeat && s.dueDate && s.dueDate > indiaDate(op.at) ? s.dueDate : null;
+    }
     s.updatedAt = op.at;
     touch(p, op);
     if (a.field === 'text') addEvent(state, op, p, 'step_edited', `${old} → ${value}`);
@@ -305,6 +334,19 @@ const handlers = {
     s.doneAt = op.at;
     s.updatedAt = op.at;
     p.lastTickDate = laterDate(p.lastTickDate, indiaDate(op.at));
+    if (s.repeat) {
+      // A repeating step comes back: a fresh copy, due on the next date (same id on every replay).
+      const doneDay = indiaDate(op.at);
+      const due = nextRepeatDate(s.repeat, s.dueDate, doneDay);
+      const copyId = op.id + 'r';
+      s.spawnedCopy = copyId;
+      if (!p.steps.some((x) => x.id === copyId)) {
+        p.steps.push({
+          id: copyId, text: s.text, done: false, doneAt: null, dueDate: due, snoozedUntil: due,
+          note: s.note || '', waiting: false, waitingOn: '', repeat: s.repeat, createdAt: op.at, updatedAt: op.at,
+        });
+      }
+    }
     touch(p, op);
     addEvent(state, op, p, 'step_ticked', s.text);
     return true;
@@ -317,6 +359,12 @@ const handlers = {
     s.done = false;
     s.doneAt = null;
     s.updatedAt = op.at;
+    if (s.spawnedCopy) {
+      // un-ticking a repeating step takes back the copy it made (if not started)
+      const k = p.steps.findIndex((x) => x.id === s.spawnedCopy && !x.done);
+      if (k >= 0) p.steps.splice(k, 1);
+      s.spawnedCopy = null;
+    }
     recalcLastTick(p);
     touch(p, op);
     addEvent(state, op, p, 'step_unticked', s.text);
@@ -491,6 +539,20 @@ const handlers = {
     if (i < 0) return false;
     people.splice(i, 1); // texts keep "@Name"; they are just no longer linked
     return true;
+  },
+
+  /** Save the daily scores of past days (for the streak and the 7-day bars). Keeps 120 days. */
+  recordScores(state, op, a) {
+    const scores = (state.data.dayScores ||= {});
+    let changed = false;
+    for (const [day, v] of Object.entries(a.scores || {})) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || scores[day]) continue;
+      scores[day] = { green: Number(v.green) || 0, total: Number(v.total) || 0 };
+      changed = true;
+    }
+    const days = Object.keys(scores).sort();
+    while (days.length > 120) delete scores[days.shift()];
+    return changed;
   },
 
   // ---------- Settings and AI ----------
