@@ -1,4 +1,5 @@
-// Things saved only on this device (never sent to GitHub). See PLAN.md section 25 "Device storage".
+// Things saved only on this device: the GitHub key, AI keys pasted here (they are also shared
+// through the private data), the waiting changes and screen choices.
 
 const KEYS = {
   github: 'dp.githubKey',

@@ -1,5 +1,5 @@
 // The app's data store: loads from GitHub, keeps a queue of pending operations,
-// and saves them with replay on clash. See PLAN.md section 25.
+// and saves them with replay on clash.
 
 import { applyOp, applyOps, emptyData, makeOp, opMonth, commitMessage, clone } from './ops.js';
 

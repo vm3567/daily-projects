@@ -1,5 +1,4 @@
 // The right column: everything about one project, all editable in place.
-// See PLAN.md sections 3, 6-9, 11, 13, 15.
 
 import { h, fmtDay, fmtTime, fmtSize, keyHint, withKey, HAS_KEYBOARD } from './dom.js';
 import { dotColour, todayIndia, isOverdue, indiaDate, waitingDays, lastWorkDate, nextStep } from '../rules.js';

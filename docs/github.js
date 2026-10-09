@@ -1,5 +1,4 @@
 // Talks to the private data repository through the GitHub REST API (Git Data API).
-// See PLAN.md section 25 "Loading" and "Saving".
 
 const API = 'https://api.github.com';
 

@@ -1,4 +1,4 @@
-// File upload and the in-app viewer. See PLAN.md section 13 and section 25 "Files".
+// File upload and the in-app viewer.
 
 import { h, fmtSize } from './dom.js';
 import { bytesToBase64 } from '../github.js';

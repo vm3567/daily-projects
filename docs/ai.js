@@ -1,6 +1,5 @@
 // AI helper: Claude Haiku (main) or Gemini Flash (backup), called straight from the browser
 // with the key saved on this device. The AI only suggests; it never changes anything.
-// See PLAN.md section 15 and section 25 "AI".
 
 import { AI_MODELS } from './config.js';
 import { dotColour, nextStep, todayIndia, addDays, isOverdue, daysBetween, indiaDate } from './rules.js';

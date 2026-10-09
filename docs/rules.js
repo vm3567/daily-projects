@@ -51,7 +51,6 @@ export function laterDate(a, b) {
  *   yellow = opened today, nothing done yet
  *   green  = changed something today, or pressed "OK for today"
  *   grey   = paused or finished
- * See PLAN.md section 5.
  */
 export function dotColour(project, today = todayIndia()) {
   if (project.state !== 'active') return 'grey';

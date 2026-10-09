@@ -1,6 +1,6 @@
 // Operations: every change to the tracker is one small operation.
 // The same code runs in the browser (docs/store.js) and on the Mac (tools/tracker.mjs),
-// so both apply changes the same way. See PLAN.md section 25 "Saving: operation queue".
+// so both apply changes the same way.
 //
 // A "state" is { data, history } where
 //   data    = the contents of data.json
@@ -377,7 +377,7 @@ const handlers = {
     const i = p ? p.steps.findIndex((x) => x.id === a.stepId) : -1;
     if (i < 0) return false;
     const [s] = p.steps.splice(i, 1);
-    touch(p, op); // lastTickDate stays as it is (PLAN.md section 5)
+    touch(p, op); // lastTickDate stays as it is
     addEvent(state, op, p, 'step_deleted', s.text);
     return true;
   },

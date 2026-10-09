@@ -6,7 +6,6 @@ A simple tracker for many projects. It shows the next step of every project, and
 - **Your data** lives in a separate PRIVATE GitHub repository: `vm3567/daily-projects-data`.
 - This repository holds only the app code. It has no data and no keys.
 
-The full plan is in [PLAN.md](PLAN.md).
 
 ---
 
