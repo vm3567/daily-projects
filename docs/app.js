@@ -230,7 +230,8 @@ function renderMenu() {
       item('paused', 'Paused', count((p) => p.state === 'paused')),
       item('finished', 'Finished', count((p) => p.state === 'finished')),
       item('diary', 'Diary'),
-      item('settings', 'Settings')));
+      item('settings', 'Settings')),
+    h('button', { class: 'keys-hint', onClick: () => { ui.showKeys = true; ui.menuOpen = false; render(); } }, 'Keyboard shortcuts: press ?'));
 }
 
 function addGroup() {
@@ -665,10 +666,114 @@ function render() {
   h('aside', { id: 'menu' }, renderMenu()),
   h('div', { class: 'scrim', onClick: () => { ui.menuOpen = false; render(); } }),
   h('main', { id: 'list' }, renderListColumn()),
-  wide ? null : h('section', { id: 'detail' }, renderDetail(ctx)));
+  wide ? null : h('section', { id: 'detail' }, renderDetail(ctx)),
+  ui.showKeys ? keysHelp() : null);
   if (root.firstChild && root.firstChild.classList && root.firstChild.classList.contains('layout')) morph(root.firstChild, next);
   else root.replaceChildren(next);
   setupSortable();
+}
+
+// ---------------------------------------------------------------- keyboard
+
+const KEYS = [
+  ['↓  ↑', 'Next / previous project'],
+  ['x', 'Tick the next step of the open project'],
+  ['a', 'Type a new step'],
+  ['w', 'Type in "What did you do today?"'],
+  ['n', 'New project'],
+  ['/', 'Search'],
+  ['r', 'Switch "My order" / "Red first"'],
+  ['t  d', 'Go to Today / Diary'],
+  ['Esc', 'Leave a box, or close what is open'],
+  ['?', 'Show or hide this list'],
+];
+
+function keysHelp() {
+  return h('div', { class: 'keys-help', key: 'keys-help', role: 'dialog', 'aria-label': 'Keyboard shortcuts' },
+    h('div', { class: 'keys-head' }, h('strong', null, 'Keyboard shortcuts'),
+      h('button', { class: 'icon', 'aria-label': 'Close', onClick: () => { ui.showKeys = false; render(); } }, '✕')),
+    h('p', { class: 'muted small' }, 'They work when you are not typing in a box. Press Esc to leave a box.'),
+    h('table', null, KEYS.map(([k, what]) => h('tr', null, h('td', null, h('kbd', null, k)), h('td', null, what)))));
+}
+
+function isTyping(el) {
+  if (!el) return false;
+  if (el.isContentEditable) return true;
+  if (el.nodeName === 'TEXTAREA' || el.nodeName === 'SELECT') return true;
+  return el.nodeName === 'INPUT' && !['checkbox', 'radio', 'button', 'submit'].includes(el.type);
+}
+
+function currentList() {
+  if (!store || !store.view || ui.view === 'diary' || ui.view === 'settings') return [];
+  return sortForView(visibleProjects(), todayIndia());
+}
+
+function moveSelection(step) {
+  const list = currentList();
+  if (!list.length) return;
+  const i = list.findIndex((p) => p.id === ui.selected);
+  const next = i < 0 ? list[step > 0 ? 0 : list.length - 1] : list[Math.min(list.length - 1, Math.max(0, i + step))];
+  if (!next || next.id === ui.selected) return;
+  select(next.id);
+  ui.mobile = 'list'; // keyboard use: keep the list in view on small screens
+  render();
+  const row = root.querySelector(`.prow[data-id="${CSS.escape(next.id)}"]`);
+  if (row) row.scrollIntoView({ block: 'nearest' });
+}
+
+function selectedProject() {
+  return store && store.view ? store.view.data.projects.find((p) => p.id === ui.selected) : null;
+}
+
+function onKey(e) {
+  if (e.metaKey || e.ctrlKey || e.altKey) return; // leave browser shortcuts alone
+  if (e.key === 'Escape') {
+    const viewer = document.getElementById('viewer');
+    if (!viewer.hidden) { closeViewer(); return; }
+    if (ui.showKeys) { ui.showKeys = false; render(); return; }
+    if (isTyping(document.activeElement)) { document.activeElement.blur(); return; }
+    if (ui.menuOpen) { ui.menuOpen = false; render(); return; }
+    if (ui.adding) { ui.adding = false; render(); return; }
+    if (ui.search) { ui.search = ''; render(); return; }
+    if (ui.ai) { ui.ai = null; render(); return; }
+    return;
+  }
+  if (isTyping(document.activeElement)) return;
+  if (!store || !store.view || !document.getElementById('keyscreen').hidden) return;
+  const p = selectedProject();
+  const k = e.key;
+  let handled = true;
+  if (k === 'ArrowDown' || k === 'j') moveSelection(1);
+  else if (k === 'ArrowUp' || k === 'k') moveSelection(-1);
+  else if (k === 'x') {
+    const ns = p && p.state === 'active' && nextStep(p);
+    if (ns) {
+      if (store.dispatch('tickStep', { projectId: p.id, stepId: ns.id })) {
+        const after = selectedProject();
+        const nn = after && nextStep(after);
+        toast(nn ? `✓ ${ns.text}. Next: ${nn.text}` : `✓ ${ns.text}. Press "a" to add the next step.`, 4500);
+      }
+    } else toast(p ? 'No step to tick. Press "a" to add one.' : 'Pick a project first (↓ ↑).');
+  } else if (k === 'a') {
+    if (!p) { toast('Pick a project first (↓ ↑).'); return; }
+    ui.mobile = 'detail'; render(); focusKey('add-step-' + p.id);
+  } else if (k === 'w') {
+    if (!p) { toast('Pick a project first (↓ ↑).'); return; }
+    ui.mobile = 'detail'; render(); focusKey('wn-' + p.id);
+  } else if (k === 'n') {
+    if (ui.view === 'diary' || ui.view === 'settings' || ui.view === 'paused' || ui.view === 'finished') ui.view = 'today';
+    ui.search = ''; ui.adding = true; ui.mobile = 'list'; render(); focusKey('new-name');
+  } else if (k === '/') {
+    const box = [...root.querySelectorAll('input.search')].find((el) => el.offsetParent !== null);
+    if (box) box.focus();
+  } else if (k === 'r') {
+    ui.sort = ui.sort === 'red' ? 'mine' : 'red'; rememberUi(); render();
+    toast(ui.sort === 'red' ? 'Red first' : 'My order', 1500);
+  } else if (k === 't') go('today');
+  else if (k === 'd') go('diary');
+  else if (k === '?') { ui.showKeys = !ui.showKeys; render(); }
+  else handled = false;
+  if (handled) e.preventDefault();
 }
 
 // ---------------------------------------------------------------- start
@@ -710,7 +815,7 @@ function start() {
     store.init().then(() => { if (store.pending.length) store.save(); else if (store.status !== 'auth') store.setStatus('saved'); });
   });
   window.addEventListener('offline', () => store.setStatus('offline', 'No connection'));
-  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeViewer(); });
+  document.addEventListener('keydown', onKey);
 }
 
 installEvents(document.body);

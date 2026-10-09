@@ -336,3 +336,23 @@ label.late { color: var(--red); }
 }
 .chip:hover { border-color: var(--brand); color: var(--brand); background: var(--brand-soft); }
 .add-step .btn.ai { padding: 6px 12px; }
+
+/* ---------- keyboard shortcuts (v4) ---------- */
+.keys-hint { display: block; margin: 18px 10px 0; border: 0; background: none; color: var(--muted); font-size: 12px; cursor: pointer; padding: 0; }
+.keys-hint:hover { color: var(--brand); }
+.keys-help {
+  position: fixed; right: 20px; bottom: 76px; z-index: 40; width: min(380px, calc(100vw - 32px));
+  background: #fff; border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px;
+  box-shadow: 0 12px 36px rgba(0,0,0,.14);
+}
+.keys-head { display: flex; justify-content: space-between; align-items: center; }
+.keys-help p { margin: 4px 0 8px; }
+.keys-help table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+.keys-help td { padding: 4px 0; vertical-align: top; }
+.keys-help td:first-child { width: 72px; }
+kbd {
+  display: inline-block; min-width: 22px; padding: 1px 6px; border: 1px solid var(--line); border-bottom-width: 2px;
+  border-radius: 6px; background: var(--panel); font: 12px/1.5 var(--font); text-align: center; white-space: pre;
+}
+.prow.current { outline: 2px solid #c7d7fb; outline-offset: -2px; }
+@media (hover: none) { .keys-hint { display: none; } }
