@@ -5,6 +5,7 @@ import { renderDetail } from './ui/detail.js';
 import { renderPeopleList, renderPerson, peopleByFollowUp } from './ui/people.js';
 import { installMentions } from './ui/mention.js';
 import { renderDashboard } from './ui/dashboard.js';
+import { projectMatches, diaryEntries, backupPayload, summaryText } from './reports.js';
 import { closeViewer, uploadBlob } from './ui/files.js';
 import { Store } from './store.js';
 import { GitHubRepo } from './github.js';
@@ -261,33 +262,8 @@ async function draftFollowUp(p, step) {
 
 /** 📋 Everything done today, grouped by project, ready to send. */
 function todaySummaryText() {
-  const { data, history } = store.view;
-  const today = todayIndia();
-  const events = (history[monthOf(today)] || []).filter((e) => indiaDate(e.at) === today && e.projectId);
-  const byProject = new Map();
-  const entry = (pid) => { if (!byProject.has(pid)) byProject.set(pid, { done: [], notes: [] }); return byProject.get(pid); };
-  for (const e of events) if (e.kind === 'step_ticked') entry(e.projectId).done.push(e.detail);
-  for (const p of data.projects) for (const n of p.workNotes) if (indiaDate(n.createdAt) === today) entry(p.id).notes.push(n.text);
   const dateText = new Intl.DateTimeFormat('en-IN', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata' }).format(new Date());
-  const lines = [`Daily update — ${dateText}`];
-  let doneCount = 0;
-  const blocks = [];
-  for (const [pid, x] of byProject) {
-    const p = data.projects.find((q) => q.id === pid);
-    if (!p || (!x.done.length && !x.notes.length)) continue;
-    doneCount += x.done.length;
-    const b = [`• ${p.name}`];
-    for (const d of x.done) b.push(`   ✅ ${d}`);
-    for (const n of x.notes) b.push(`   📝 ${n}`);
-    const ns = p.state === 'active' && nextStep(p, today, { dueOnly: true });
-    if (ns) b.push(`   → Next: ${ns.text}`);
-    blocks.push(b.join('\n'));
-  }
-  if (!blocks.length) return `${lines[0]}\n\nNothing recorded yet today.`;
-  lines.push(`${doneCount} step${doneCount === 1 ? '' : 's'} done across ${blocks.length} project${blocks.length === 1 ? '' : 's'}.`, '', ...blocks);
-  const waiting = peopleByFollowUp(data).filter((x) => x.st.waiting);
-  if (waiting.length) lines.push('', `⏳ Waiting on: ${waiting.map((x) => x.person.name).join(', ')}`);
-  return lines.join('\n');
+  return summaryText(store.view.data, store.view.history, todayIndia(), dateText);
 }
 
 function openSummary() {
@@ -319,7 +295,7 @@ async function makeBrief(force = false) {
   const today = todayIndia();
   const b = store.view.data.aiBriefs[kind];
   if (!force && b && b.date === today && (b.status === 'ready' || claimIsFresh(b))) return;
-  if (!anyAiKey()) return;
+  if (!aiKeyFor('gemini')) return; // Morning plan / Weekly review use Gemini only (free; saves Claude credit)
   if (!store.view.data.projects.some((p) => p.state === 'active')) return;
   if (store.view.data.aiUsage.date === today && store.view.data.aiUsage.count >= AI_DAILY_LIMIT) {
     if (force) toast('Daily AI limit reached — try tomorrow.');
@@ -334,10 +310,12 @@ async function makeBrief(force = false) {
     const now = store.view.data.aiBriefs[kind];
     if (!now || now.claimId !== claim.id) return; // another device is making it
     if (kind === 'weekly') await store.loadAllHistory();
-    // chosen AI first, the other one if it fails (same as ✨ AI steps); counts one AI use
-    const content = await withAi((provider, key) => (kind === 'weekly'
-      ? ai.weeklyReview(provider, key, store.view.data, store.view.history)
-      : ai.morningPlan(provider, key, store.view.data)));
+    // Gemini only, never Claude (the user's choice, to keep Claude credit for AI steps and drafts)
+    if (!useAi()) return;
+    const gKey = aiKeyFor('gemini');
+    const content = kind === 'weekly'
+      ? await ai.weeklyReview('gemini', gKey, store.view.data, store.view.history)
+      : await ai.morningPlan('gemini', gKey, store.view.data);
     store.dispatch('setBriefReady', { kind, date: today, content });
   } catch (e) {
     ui.brief.error = e.message;
@@ -354,16 +332,11 @@ function groupName(id) {
   return g ? g.name : '';
 }
 
-function matches(p, q) {
-  const hay = [p.name, p.notes, ...p.steps.map((s) => `${s.text} ${s.note} ${s.waitingOn}`), ...p.workNotes.map((n) => n.text)]
-    .join('\n').toLowerCase();
-  return hay.includes(q);
-}
 
 function visibleProjects() {
   const all = store.view.data.projects;
   const q = ui.search.trim().toLowerCase();
-  if (q) return all.filter((p) => matches(p, q));
+  if (q) return all.filter((p) => projectMatches(p, q));
   if (ui.view === 'today' || ui.view === 'all') return all.filter((p) => p.state === 'active');
   if (ui.view === 'paused') return all.filter((p) => p.state === 'paused');
   if (ui.view === 'finished') return all.filter((p) => p.state === 'finished');
@@ -539,15 +512,15 @@ function renderBrief() {
   const b = store.view.data.aiBriefs[kind];
   const title = kind === 'weekly' ? 'Weekly review' : 'Morning plan';
   const ready = b && b.date === today && b.status === 'ready' && b.content;
-  const key = anyAiKey();
-  if (!key && !ready) return null; // no AI key yet: don't take space
+  const key = aiKeyFor('gemini'); // the plan is made with Gemini only
+  if (!key && !ready) return null; // no Gemini key: don't take space
   let body;
   if (ui.brief.error && !ui.brief.busy) body = h('p', { class: 'error' }, `${ui.brief.error} Tap ↻ to try again.`);
   else if (ui.brief.busy || (b && b.date === today && claimIsFresh(b))) body = h('p', { class: 'muted' }, 'Making today\'s plan…');
   else if (!ready) {
     body = h('p', { class: 'muted' }, key
       ? 'No plan yet. Tap ↻ to make one.'
-      : 'No plan yet — open on a device with an AI key, or add a key in Settings.');
+      : 'No plan yet — the Morning plan needs a Gemini key (Settings).');
   } else if (kind === 'weekly') {
     const part = (label, list) => (list.length ? h('div', null, h('strong', null, label), h('ul', null, list.map((t) => h('li', null, t)))) : null);
     body = h('div', null, part('What moved', b.content.moved || []), part('What is stuck', b.content.stuck || []), part('What to fix', b.content.fix || []));
@@ -892,32 +865,8 @@ function listParts(list, today) {
 // ---------------------------------------------------------------- Diary
 
 function renderDiary() {
-  const { data, history } = store.view;
-  const byDay = new Map();
-  const add = (date, line) => { if (!byDay.has(date)) byDay.set(date, []); byDay.get(date).push(line); };
-  const exists = new Set(data.projects.map((p) => p.id));
-  const nameOf = (e) => {
-    const p = data.projects.find((x) => x.id === e.projectId);
-    return p ? p.name : `${e.projectName || ''} (deleted project)`;
-  };
-  for (const e of Object.values(history).flat()) {
-    if (!['step_ticked', 'paused', 'unpaused', 'finished', 'reopened', 'reviewed'].includes(e.kind)) continue;
-    const words = { step_ticked: '✓', paused: 'Paused', unpaused: 'Unpaused', finished: 'Finished', reopened: 'Reopened', reviewed: 'Reviewed — nothing today' }[e.kind];
-    add(indiaDate(e.at), { at: e.at, projectId: e.projectId, text: `${words} ${e.kind === 'step_ticked' ? e.detail : ''}`.trim(), name: nameOf(e) });
-  }
-  // Work notes come from the projects (so edits and deletes show correctly)...
-  for (const p of data.projects) {
-    for (const n of p.workNotes) {
-      const st = n.stepId && p.steps.find((s) => s.id === n.stepId);
-      add(indiaDate(n.createdAt), { at: n.createdAt, projectId: p.id, text: `📝 ${n.text}${st ? `  (on: ${st.text})` : ''}`, name: p.name });
-    }
-  }
-  // ...and from history only for deleted projects.
-  for (const e of Object.values(history).flat()) {
-    if (e.kind === 'note_added' && !exists.has(e.projectId)) {
-      add(indiaDate(e.at), { at: e.at, projectId: e.projectId, text: `📝 ${e.detail}`, name: nameOf(e) });
-    }
-  }
+  const { history } = store.view;
+  const byDay = diaryEntries(store.view.data, history);
   const days = [...byDay.keys()].sort().reverse();
   const shown = days.slice(0, ui.diaryDays);
   const loaded = new Set(Object.keys(history));
@@ -927,9 +876,9 @@ function renderDiary() {
     shown.length ? null : h('p', { class: 'empty-list' }, 'Nothing yet. Ticked steps and work notes will show here.'),
     shown.map((d) => h('section', { class: 'diary-day', key: 'd-' + d },
       h('h3', null, fmtLongDay(d)),
-      h('ul', null, byDay.get(d).sort((a, b) => (a.at < b.at ? 1 : -1)).map((l) => h('li', null,
+      h('ul', null, byDay.get(d).map((l) => h('li', null,
         h('span', { class: 'muted small' }, fmtTime(l.at)), ' ',
-        exists.has(l.projectId)
+        l.exists
           ? h('button', { class: 'link', onClick: () => { select(l.projectId); } }, l.name)
           : h('span', { class: 'muted' }, l.name),
         ': ', l.text))))),
@@ -984,8 +933,7 @@ async function downloadBackup() {
   try {
     await store.loadAllHistory();
     const today = todayIndia();
-    const { secrets, ...dataWithoutKeys } = store.view.data; // AI keys are left out of the backup file
-    const backup = { app: 'daily-projects', madeAt: new Date().toISOString(), data: dataWithoutKeys, history: store.view.history };
+    const backup = backupPayload(store.view.data, store.view.history); // AI keys are left out
     const blob = new Blob([JSON.stringify(backup, null, 1)], { type: 'application/octet-stream' });
     const url = URL.createObjectURL(blob);
     const a = h('a', { href: url, download: `daily-projects-backup-${today}.json` });

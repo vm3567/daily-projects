@@ -1,0 +1,88 @@
+// Search, Diary, Today's summary, backup file, @names and device storage.
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { installStorage } from './helpers.mjs';
+import { projectMatches, diaryEntries, backupPayload, summaryText } from '../docs/reports.js';
+import { mentionQuery, matchPeople } from '../docs/ui/mention.js';
+import { applyOp, applyOps, emptyData, makeOp } from '../docs/ops.js';
+
+const T = (date, time = '10:00:00') => new Date(`${date}T${time}+05:30`).toISOString();
+const op = (type, args, date, time) => makeOp(type, args, T(date, time));
+
+function sample() {
+  const s = { data: emptyData(), history: {} };
+  applyOps(s, [
+    op('createProject', { projectId: 'p1', name: 'Kiln trial' }, '2026-10-09'),
+    op('addStep', { projectId: 'p1', stepId: 's1', text: 'Call supplier' }, '2026-10-09'),
+    op('addStep', { projectId: 'p1', stepId: 's2', text: 'Order frit' }, '2026-10-09'),
+    op('addWorkNote', { projectId: 'p1', noteId: 'n1', text: 'Spoke to Ravi', stepId: 's1' }, '2026-10-09', '11:00:00'),
+    op('tickStep', { projectId: 'p1', stepId: 's1' }, '2026-10-09', '11:01:00'),
+    op('createProject', { projectId: 'p2', name: 'Old test' }, '2026-10-09'),
+    op('addWorkNote', { projectId: 'p2', noteId: 'n2', text: 'Gone note' }, '2026-10-09', '12:00:00'),
+    op('finish', { projectId: 'p2' }, '2026-10-09', '12:01:00'),
+    op('deleteProject', { projectId: 'p2' }, '2026-10-09', '12:02:00'),
+    op('addPerson', { personId: 'r', name: 'Ravi' }, '2026-10-09'),
+    op('setStepField', { projectId: 'p1', stepId: 's2', field: 'waiting', value: true }, '2026-10-09'),
+    op('setStepField', { projectId: 'p1', stepId: 's2', field: 'waitingOn', value: 'Ravi' }, '2026-10-09'),
+  ]);
+  s.data.secrets = { claude: 'secret-test-value' };
+  return s;
+}
+
+test('search finds names, steps, waiting names and work notes (case does not matter)', () => {
+  const { data } = sample();
+  const p = data.projects[0];
+  for (const q of ['kiln', 'order frit', 'ravi', 'spoke to']) assert.ok(projectMatches(p, q), q);
+  assert.ok(!projectMatches(p, 'glaze'));
+});
+
+test('Diary: ticks, notes with their step, and deleted projects marked', () => {
+  const { data, history } = sample();
+  const day = diaryEntries(data, history).get('2026-10-09');
+  const texts = day.map((l) => `${l.name}: ${l.text}`);
+  assert.ok(texts.includes('Kiln trial: ✓ Call supplier'));
+  assert.ok(texts.some((t) => t.startsWith('Kiln trial: 📝 Spoke to Ravi') && t.includes('(on: Call supplier)')));
+  assert.ok(texts.some((t) => t === 'Old test (deleted project): 📝 Gone note'));
+  assert.ok(day.every((l, i) => i === 0 || day[i - 1].at >= l.at), 'newest first');
+});
+
+test('Today\'s summary: done steps, notes, next step and who you wait on', () => {
+  const { data, history } = sample();
+  const text = summaryText(data, history, '2026-10-09', 'Fri, 9 Oct 2026');
+  assert.match(text, /^Daily update — Fri, 9 Oct 2026/);
+  assert.match(text, /1 step done across 1 project\./);
+  assert.match(text, /✅ Call supplier/);
+  assert.match(text, /📝 Spoke to Ravi/);
+  assert.match(text, /→ Next: Order frit/);
+  assert.match(text, /⏳ Waiting on: Ravi/);
+  assert.match(summaryText(emptyData(), {}, '2026-10-10', 'x'), /Nothing recorded yet today/);
+});
+
+test('the backup file never contains the AI keys', () => {
+  const { data, history } = sample();
+  const b = backupPayload(data, history, '2026-10-09T00:00:00Z');
+  assert.equal(b.data.secrets, undefined);
+  assert.ok(!JSON.stringify(b).includes('secret-test-value'));
+  assert.equal(b.data.projects.length, 1);
+  assert.equal(data.secrets.claude, 'secret-test-value', 'the real data is not changed');
+});
+
+test('@names: what is being typed, and who matches', () => {
+  assert.deepEqual(mentionQuery('Ask @Ra', 7, false), { query: 'Ra', start: 4, end: 7, plain: false });
+  assert.equal(mentionQuery('email me@ravi.com', 17, false), null, 'not inside an email address');
+  assert.deepEqual(mentionQuery('San', 3, true), { query: 'San', start: 0, end: 3, plain: true });
+  const people = [{ id: 'a', name: 'Ravi Kumar' }, { id: 'b', name: 'Sandeep sir' }, { id: 'c', name: 'Niketan' }];
+  assert.deepEqual(matchPeople(people, 'ku').map((p) => p.id), ['a'], 'matches a later word');
+  assert.deepEqual(matchPeople(people, 'S').map((p) => p.id), ['b']);
+  assert.equal(matchPeople(people, '').length, 3);
+});
+
+test('"Forget this device" removes only this app\'s things', async () => {
+  const ls = installStorage();
+  const { device } = await import('../docs/device.js');
+  ls.setItem('dp.githubKey', 'x'); ls.setItem('dp.pending', '[]'); ls.setItem('other-site', 'keep');
+  device.setAiKey('claude', '  key-with-spaces  ');
+  assert.equal(device.aiKey('claude'), 'key-with-spaces');
+  device.forgetAll();
+  assert.deepEqual(Object.keys(ls), ['other-site']);
+});

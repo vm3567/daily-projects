@@ -22,17 +22,24 @@ function close() {
   b.replaceChildren();
 }
 
-function findQuery(el) {
-  const caret = el.selectionStart ?? el.value.length;
-  if (el.dataset.mention === 'plain') {
-    const q = el.value.trim();
-    return q ? { query: q, start: 0, end: el.value.length, plain: true } : null;
+/** The "@name" being typed just before the caret (or the whole box in plain mode). Pure: tested. */
+export function mentionQuery(value, caret, plain) {
+  if (plain) {
+    const q = value.trim();
+    return q ? { query: q, start: 0, end: value.length, plain: true } : null;
   }
-  const before = el.value.slice(0, caret);
+  const before = value.slice(0, caret);
   const m = /(^|[\s(,])@([^@\n]{0,40})$/.exec(before);
   if (!m) return null;
   return { query: m[2], start: caret - m[2].length - 1, end: caret, plain: false };
 }
+
+function findQuery(el) {
+  return mentionQuery(el.value, el.selectionStart ?? el.value.length, el.dataset.mention === 'plain');
+}
+
+/** People whose name (or any word of it) starts with the query. Pure: tested. */
+export function matchPeople(people, query) { return matches(people, query); }
 
 function matches(people, query) {
   const q = query.toLowerCase().trim();
