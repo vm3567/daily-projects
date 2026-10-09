@@ -15,7 +15,7 @@ import { AI_DAILY_LIMIT, BRIEF_CLAIM_MINUTES } from './config.js';
 export const START_GROUPS = ['Acton', 'Personal', 'Ceramic Ninja'];
 export const PRIORITIES = ['high', 'medium', 'low'];
 export const DEFAULT_TARGET_DAYS = 30; // new projects get a target date 30 days ahead
-const PROJECT_FIELDS = ['name', 'groupId', 'priority', 'deadline', 'notes'];
+const PROJECT_FIELDS = ['name', 'groupId', 'priority', 'deadline', 'notes', 'tagId'];
 const STEP_FIELDS = ['text', 'dueDate', 'note', 'waiting', 'waitingOn', 'repeat'];
 
 export function newId() {
@@ -174,6 +174,13 @@ const handlers = {
     if (a.field === 'priority' && !PRIORITIES.includes(value)) return false;
     if (a.field === 'deadline') value = cleanDate(value);
     if (a.field === 'groupId' && !state.data.groups.some((g) => g.id === value)) return false;
+    if (a.field === 'tagId') {
+      if (!value) value = null;
+      if ((p.tagId || null) === value) return false;
+      // a tag must belong to the project's group (or null = no tag)
+      const g = state.data.groups.find((x) => x.id === p.groupId);
+      if (value !== null && !(g && (g.tags || []).some((t) => t.id === value))) return false;
+    }
     if (p[a.field] === value) return false;
     const old = p[a.field];
     p[a.field] = value;
@@ -181,7 +188,12 @@ const handlers = {
     if (a.field === 'name') addEvent(state, op, p, 'renamed', `${old} → ${value}`);
     else if (a.field === 'groupId') {
       const g = state.data.groups.find((x) => x.id === value);
+      if (p.tagId && !(g && (g.tags || []).some((t) => t.id === p.tagId))) p.tagId = null; // tags belong to a group
       addEvent(state, op, p, 'group_changed', g ? g.name : '');
+    } else if (a.field === 'tagId') {
+      const g = state.data.groups.find((x) => x.id === p.groupId);
+      const t = g && (g.tags || []).find((x) => x.id === value);
+      addEvent(state, op, p, 'edited', t ? `Tag: ${t.name}` : 'Tag removed');
     } else if (a.field === 'priority') addEvent(state, op, p, 'edited', `Priority: ${value}`);
     else if (a.field === 'deadline') addEvent(state, op, p, 'edited', value ? `Target date: ${value}` : 'Target date removed');
     // notes: no history event (it would add a line for every few words typed)
@@ -494,6 +506,44 @@ const handlers = {
     return true;
   },
 
+  /** Timer on/off for a group (e.g. on for Acton and Ceramic Ninja, off for Personal). */
+  setGroupTimer(state, op, a) {
+    const g = state.data.groups.find((x) => x.id === a.groupId);
+    if (!g || groupHasTimer(g) === !!a.on) return false;
+    g.timer = !!a.on;
+    return true;
+  },
+
+  /** Tags belong to a group; a project in that group can pick one. */
+  addTag(state, op, a) {
+    const g = state.data.groups.find((x) => x.id === a.groupId);
+    const name = cleanText(a.name, 60).trim();
+    if (!g || !name) return false;
+    const tags = (g.tags ||= []);
+    if (tags.some((t) => t.id === a.tagId || t.name.toLowerCase() === name.toLowerCase())) return false;
+    tags.push({ id: a.tagId, name });
+    return true;
+  },
+
+  renameTag(state, op, a) {
+    const g = state.data.groups.find((x) => x.id === a.groupId);
+    const t = g && (g.tags || []).find((x) => x.id === a.tagId);
+    const name = cleanText(a.name, 60).trim();
+    if (!t || !name || t.name === name) return false;
+    if (g.tags.some((x) => x.id !== t.id && x.name.toLowerCase() === name.toLowerCase())) return false;
+    t.name = name;
+    return true;
+  },
+
+  deleteTag(state, op, a) {
+    const g = state.data.groups.find((x) => x.id === a.groupId);
+    const i = g && g.tags ? g.tags.findIndex((x) => x.id === a.tagId) : -1;
+    if (i < 0) return false;
+    g.tags.splice(i, 1);
+    for (const p of state.data.projects) if (p.tagId === a.tagId) p.tagId = null; // time stays, now "No tag"
+    return true;
+  },
+
   renameGroup(state, op, a) {
     const g = state.data.groups.find((x) => x.id === a.groupId);
     const name = cleanText(a.name, 100).trim();
@@ -595,6 +645,8 @@ const handlers = {
   startTimer(state, op, a) {
     const p = findProject(state.data, a.projectId);
     if (!p || p.state !== 'active') return false;
+    const grp = state.data.groups.find((g) => g.id === p.groupId);
+    if (!groupHasTimer(grp)) return false; // the timer is only for groups that have it switched on
     const t = state.data.timer;
     if (t && t.projectId === p.id) return false; // already running here
     if (t) closeTimer(state, op, op.at);
@@ -669,6 +721,13 @@ const handlers = {
 };
 
 export const TIMER_MAX_MINUTES = 10 * 60; // a timer left running is cut to 10 hours
+
+/** A group has the timer unless it was switched off (Personal is off by default). */
+export function groupHasTimer(g) {
+  if (!g) return false;
+  if (typeof g.timer === 'boolean') return g.timer;
+  return g.name.trim().toLowerCase() !== 'personal';
+}
 
 /** Stop the running timer at `endIso` and log the time on its project. */
 function closeTimer(state, op, endIso) {

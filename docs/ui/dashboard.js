@@ -194,7 +194,7 @@ export function renderDashboard(ctx) {
           h('span', null, label), h('span', null, h('strong', null, String(now)), ' ', trend(now, before))))))),
 
     h('section', { class: 'dash-card', key: 'dash-time' },
-      h('h3', null, 'Time this week'),
+      h('div', { class: 'dash-card-head' }, h('h3', null, 'Time this week'), h('button', { class: 'link small', onClick: () => ctx.goTime() }, 'Time report →')),
       timeTotal ? h('div', null,
         h('div', { class: 'time-total' }, h('strong', null, fmtMinutes(timeTotal)),
           lastTotal ? h('span', { class: timeTotal >= lastTotal ? 'up' : 'down' }, timeTotal >= lastTotal ? ` ↑ ${fmtMinutes(timeTotal - lastTotal)} more than last week` : ` ↓ ${fmtMinutes(lastTotal - timeTotal)} less than last week`) : h('span', { class: 'muted small' }, ' since Monday')),

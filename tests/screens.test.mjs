@@ -21,6 +21,7 @@ class Node {
 globalThis.document = {
   createElement: (t) => new Node(t),
   createTextNode: (t) => ({ nodeType: 3, nodeValue: t }),
+  createElementNS: (ns, t) => new Node(t),
   querySelector: () => null,
   getElementById: () => null,
 };
@@ -30,6 +31,7 @@ installStorage();
 const { renderDetail } = await import('../docs/ui/detail.js');
 const { renderDashboard } = await import('../docs/ui/dashboard.js');
 const { renderPeopleList, renderPerson } = await import('../docs/ui/people.js');
+const { renderTimeReport, rangeFor } = await import('../docs/ui/timereport.js');
 
 function sampleState() {
   const now = new Date();
@@ -48,6 +50,8 @@ function sampleState() {
     makeOp('addTime', { projectId: 'p1', minutes: 45 }, at(100)),
     makeOp('startTimer', { projectId: 'p1' }, at(20)),
     makeOp('addLink', { projectId: 'p1', linkId: newId(), title: 'Spec', url: 'https://example.com' }, at(10)),
+    makeOp('addTag', { groupId: g, tagId: 'kiln', name: 'Kiln' }, at(9)),
+    makeOp('setProjectField', { projectId: 'p1', field: 'tagId', value: 'kiln' }, at(8)),
   ]);
   return s;
 }
@@ -89,4 +93,20 @@ test('people list and person page draw', () => {
   const person = renderPerson(fakeCtx(s, { person: 'r' })).textContent;
   assert.ok(person.includes('Waiting on Ravi'));
   assert.ok(person.includes('Fire samples'));
+});
+
+test('time report draws (pie, legend in % and hours) and date ranges are right', () => {
+  const s = sampleState();
+  const ui = {};
+  const text = renderTimeReport(fakeCtx(s, ui)).textContent;
+  assert.ok(text.includes('time by tag'));
+  assert.ok(text.includes('Kiln'));
+  assert.ok(text.includes('100%'));
+  ui.timeReport.mode = 'hours';
+  assert.ok(renderTimeReport(fakeCtx(s, ui)).textContent.includes('Download image'));
+  assert.deepEqual(rangeFor('thisWeek', '2026-10-09'), ['2026-10-05', '2026-10-09']);
+  assert.deepEqual(rangeFor('lastWeek', '2026-10-09'), ['2026-09-28', '2026-10-04']);
+  assert.deepEqual(rangeFor('thisMonth', '2026-10-09'), ['2026-10-01', '2026-10-09']);
+  assert.deepEqual(rangeFor('lastMonth', '2026-01-15'), ['2025-12-01', '2025-12-31']);
+  assert.deepEqual(rangeFor('custom', '2026-10-09', { from: '2026-10-08', to: '2026-10-01' }), ['2026-10-01', '2026-10-08']);
 });

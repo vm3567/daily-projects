@@ -5,6 +5,7 @@ import { renderDetail } from './ui/detail.js';
 import { renderPeopleList, renderPerson, peopleByFollowUp } from './ui/people.js';
 import { installMentions } from './ui/mention.js';
 import { renderDashboard } from './ui/dashboard.js';
+import { renderTimeReport } from './ui/timereport.js';
 import { projectMatches, diaryEntries, backupPayload, summaryText } from './reports.js';
 import { closeViewer, uploadBlob } from './ui/files.js';
 import { Store } from './store.js';
@@ -13,7 +14,7 @@ import { MockRepo } from './mockrepo.js';
 import { device } from './device.js';
 import { DATA_OWNER, DATA_REPO, DATA_BRANCH, REFRESH_MS, AI_DAILY_LIMIT, BRIEF_CLAIM_MINUTES, WAIT_RED_DAYS, NO_WORK_NOTE_DAYS } from './config.js';
 import { dotColour, nextStep, todayIndia, isSundayIndia, colourCounts, isOverdue, indiaDate, waitingDays, daysWithoutWork, dayScore, greenStreak, addDays, monthOf, fmtMinutes } from './rules.js';
-import { newId, clone, opMonth } from './ops.js';
+import { newId, clone, opMonth, groupHasTimer } from './ops.js';
 import * as ai from './ai.js';
 
 const root = document.getElementById('app');
@@ -101,6 +102,7 @@ const ctx = {
   aiSuggest: (p) => runAi(p, 'next'),
   aiSteps: (p) => runSuggest(p),
   goSettings: () => go('settings'),
+  goTime: () => go('time'),
   draftFollowUp: (p, s) => draftFollowUp(p, s),
   openSummary: () => openSummary(),
   openPerson: (id) => { pushNav(); go('people'); ctx.selectPerson(id); },
@@ -364,7 +366,7 @@ function visibleProjects() {
 function viewTitle() {
   if (ui.search.trim()) return `Search: "${ui.search.trim()}"`;
   if (ui.view.startsWith('group:')) return groupName(ui.view.slice(6));
-  return { today: 'Today', all: 'All projects', paused: 'Paused', finished: 'Finished', diary: 'Diary', settings: 'Settings', people: 'People', dashboard: 'Dashboard' }[ui.view];
+  return { today: 'Today', all: 'All projects', paused: 'Paused', finished: 'Finished', diary: 'Diary', settings: 'Settings', people: 'People', dashboard: 'Dashboard', time: 'Time report' }[ui.view];
 }
 
 function go(view) {
@@ -488,6 +490,7 @@ function renderMenu() {
         h('span', { class: 'dot yellow' }), String(counts.yellow), ' ',
         h('span', { class: 'dot green' }), String(counts.green)),
       item('dashboard', 'Dashboard'),
+      item('time', 'Time report'),
       item('all', 'All projects', active.length),
       h('li', { class: 'menu-head', key: 'groups-head' }, 'Groups'),
       data.groups.map((g) => item('group:' + g.id, g.name, count((p) => p.groupId === g.id && p.state === 'active'),
@@ -849,6 +852,7 @@ function renderListColumn() {
   if (ui.view === 'diary' && !ui.search) return h('div', { class: 'col-inner' }, head, timerStrip(), renderDiary());
   if (ui.view === 'settings' && !ui.search) return h('div', { class: 'col-inner' }, head, timerStrip(), renderSettings());
   if (ui.view === 'dashboard' && !ui.search) return h('div', { class: 'col-inner' }, head, timerStrip(), renderDashboard(ctx));
+  if (ui.view === 'time' && !ui.search) return h('div', { class: 'col-inner' }, head, timerStrip(), renderTimeReport(ctx));
   if (ui.view === 'people' && !ui.search) return h('div', { class: 'col-inner' }, head, timerStrip(), renderPeopleList(ctx));
 
   const list = sortForView(visibleProjects(), today);
@@ -1004,6 +1008,34 @@ function renderSettings() {
       h('p', null, `AI uses today: ${usage} / ${AI_DAILY_LIMIT}`),
       keyForm('claude', 'Claude', 'From console.anthropic.com → API keys. Saved in your private data, so all your devices use it.'),
       keyForm('gemini', 'Gemini', 'Optional backup. From aistudio.google.com → Get API key. Shared with all your devices. On the free plan Google may read the text.')),
+    h('section', { class: 'block' }, h('h3', null, 'Groups and tags'),
+      h('p', { class: 'muted small' }, 'Tags belong to a group; each project picks one. The timer and the Time report use the groups that have the timer on.'),
+      data.groups.map((g) => h('div', { class: 'group-set', key: 'gs-' + g.id },
+        h('div', { class: 'row' },
+          h('strong', null, g.name),
+          h('label', { class: 'check' },
+            h('input', { type: 'checkbox', checked: groupHasTimer(g), onChange: (e, el) => store.dispatch('setGroupTimer', { groupId: g.id, on: el.checked }) }),
+            ' Timer')),
+        h('div', { class: 'tag-list' },
+          (g.tags || []).map((t) => h('span', { class: 'tag tag-chip', key: 'tg-' + t.id }, `🏷 ${t.name}`,
+            h('button', {
+              class: 'icon tiny-x', title: 'Rename tag',
+              onClick: () => { const n = prompt('Rename tag:', t.name); if (n && n.trim()) store.dispatch('renameTag', { groupId: g.id, tagId: t.id, name: n.trim() }); },
+            }, '✎'),
+            h('button', {
+              class: 'icon tiny-x', title: 'Delete tag',
+              onClick: () => {
+                const used = data.projects.filter((p) => p.tagId === t.id).length;
+                if (confirm(`Delete the tag "${t.name}"?${used ? `\n\n${used} project(s) use it; they will have no tag (their time is kept).` : ''}`)) store.dispatch('deleteTag', { groupId: g.id, tagId: t.id });
+              },
+            }, '✕'))),
+          h('button', {
+            class: 'btn small',
+            onClick: () => {
+              const n = prompt(`New tag for ${g.name}:`);
+              if (n && n.trim() && !store.dispatch('addTag', { groupId: g.id, tagId: newId(), name: n.trim() })) toast(`"${n.trim()}" already exists in ${g.name}`);
+            },
+          }, '+ Tag'))))),
     h('section', { class: 'block' }, h('h3', null, 'Backup'),
       h('p', { class: 'muted' }, 'Every save is kept as a version on GitHub. You can also download a copy.'),
       h('button', { class: 'btn', onClick: downloadBackup }, 'Download backup')),
@@ -1095,7 +1127,7 @@ function render() {
     return;
   }
   if (ui.selected && !store.view.data.projects.some((p) => p.id === ui.selected)) ui.selected = null;
-  const wide = (ui.view === 'diary' || ui.view === 'settings' || ui.view === 'dashboard') && !ui.search;
+  const wide = ['diary', 'settings', 'dashboard', 'time'].includes(ui.view) && !ui.search;
   const next = h('div', {
     class: ['layout', wide ? 'wide' : '', ui.mobile === 'detail' && !wide ? 'show-detail' : '', ui.menuOpen ? 'menu-open' : ''].join(' ').trim(),
   },
@@ -1398,7 +1430,7 @@ function jumpItems() {
   const pages = [
     ['Today', () => go('today')], ['All projects', () => go('all')], ['Dashboard', () => go('dashboard')],
     ['People', () => go('people')], ['Diary', () => go('diary')], ['Paused', () => go('paused')],
-    ['Finished', () => go('finished')], ['Settings', () => go('settings')], ['Daily round', () => { go('today'); startRound(); }],
+    ['Finished', () => go('finished')], ['Settings', () => go('settings')], ['Time report', () => go('time')], ['Daily round', () => { go('today'); startRound(); }],
     ["Today's summary", () => openSummary()], ['New project', () => { go('today'); ui.adding = true; render(); focusKey('new-name'); }],
     ...data.groups.map((g) => [`Group: ${g.name}`, () => go('group:' + g.id)]),
   ].map(([label, run]) => ({ kind: 'page', label, run }));
@@ -1491,7 +1523,7 @@ function isTyping(el) {
 }
 
 function currentList() {
-  if (!store || !store.view || ui.view === 'diary' || ui.view === 'settings' || ui.view === 'dashboard') return [];
+  if (!store || !store.view || ['diary', 'settings', 'dashboard', 'time'].includes(ui.view)) return [];
   const today = todayIndia();
   const { open, done } = splitToday(sortForView(visibleProjects(), today), today);
   return ui.showDoneToday || ui.view !== 'today' ? [...open, ...done] : open;
@@ -1552,7 +1584,7 @@ function onKey(e) {
   if (e.repeat && !isArrow && e.key !== 'j' && e.key !== 'k') return; // holding x / o / r must not repeat
   const focused = document.activeElement;
   if (isArrow && focused && (focused.type === 'radio' || focused.nodeName === 'SUMMARY')) return;
-  if (isArrow && (ui.view === 'diary' || ui.view === 'settings' || ui.view === 'dashboard') && !ui.search) return; // let the page scroll
+  if (isArrow && ['diary', 'settings', 'dashboard', 'time'].includes(ui.view) && !ui.search) return; // let the page scroll
   const k = e.key;
   if (ui.round) {
     const map = { x: 'done', s: 'add', w: 'note', o: 'ok', c: 'chase', n: 'skip', ArrowRight: 'skip' };
@@ -1571,7 +1603,7 @@ function onKey(e) {
   if (k === 'ArrowRight' || k === 'ArrowLeft') {
     const step = k === 'ArrowRight' ? 1 : -1;
     if (ui.view === 'people' && !ui.search) goPerson(step);
-    else if (ui.selected && !['diary', 'settings', 'dashboard'].includes(ui.view)) goProject(step);
+    else if (ui.selected && !['diary', 'settings', 'dashboard', 'time'].includes(ui.view)) goProject(step);
     else handled = false;
   } else if (k === 'Backspace') {
     if (ui.navStack && ui.navStack.length) goBack(); else handled = false;

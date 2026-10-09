@@ -82,6 +82,15 @@ Also: each red/yellow row has a one-tap **✓ OK** (or **Chased** when waiting),
 
 ---
 
+## Tags and the Time report
+
+- **Timer** works in **Acton** and **Ceramic Ninja** (not Personal). Change it per group in **Settings → Groups and tags**.
+- **Tags belong to a group** (e.g. Acton: Kiln, Glaze, Quality). Add / rename / delete them in Settings, or pick **+ New tag…** inside a project. One tag per project: tap the line under the project name (group · tag · priority) to set it.
+- **Time report** (left menu, or 🔍 → "Time report"): pick the **group**, the **period** (this week, last week, this month, last month, or your own dates), **By tag / By project**, **% / Hours**. A pie chart shows where the time went.
+- **⬇ Download image** saves a PowerPoint-size (16:9) picture; **📋 Copy image** lets you paste it straight into PowerPoint or WhatsApp.
+
+---
+
 ## Updating several steps
 
 - Every open step has a **📝** button: tap it and **Today's update** is about that step ("📝 About: …").

@@ -360,6 +360,7 @@ test('@name matching follows people added or renamed later', async () => {
 test('time log: start, stop, switching projects, 10-hour cut, manual time, totals', async () => {
   const { minutesBetween, fmtMinutes, weekStart } = await import('../docs/rules.js');
   const s = withProject('2026-10-01');
+  applyOp(s, op('setProjectField', { projectId: 'p1', field: 'groupId', value: 'g1' }, '2026-10-01')); // Acton has the timer
   applyOp(s, op('createProject', { projectId: 'p2', name: 'B' }, '2026-10-01'));
   applyOp(s, op('startTimer', { projectId: 'p1' }, '2026-10-05', '09:00:00'));
   assert.equal(applyOp(s, op('startTimer', { projectId: 'p1' }, '2026-10-05', '09:10:00')), false, 'already running');
@@ -390,4 +391,41 @@ test('time log: start, stop, switching projects, 10-hour cut, manual time, total
   // remove an entry
   applyOp(s, op('removeTime', { projectId: 'p1', logId: p1.timeLogs[2].id }, '2026-10-08'));
   assert.equal(p1.timeLogs.length, 2);
+});
+
+test('tags per group, one tag per project, timer only in timer groups, time split by tag', async () => {
+  const { timeSplit, percents } = await import('../docs/rules.js');
+  const s = { data: emptyData(), history: {} };
+  const [acton, personal] = [s.data.groups[0], s.data.groups[1]]; // Acton, Personal
+  applyOps(s, [
+    op('addTag', { groupId: acton.id, tagId: 'kiln', name: 'Kiln' }, '2026-10-05'),
+    op('addTag', { groupId: acton.id, tagId: 'glaze', name: 'Glaze' }, '2026-10-05'),
+    op('createProject', { projectId: 'a1', name: 'Electric kiln', groupId: acton.id }, '2026-10-05'),
+    op('createProject', { projectId: 'a2', name: 'New glaze', groupId: acton.id }, '2026-10-05'),
+    op('createProject', { projectId: 'a3', name: 'Misc', groupId: acton.id }, '2026-10-05'),
+    op('createProject', { projectId: 'h1', name: 'Home', groupId: personal.id }, '2026-10-05'),
+    op('setProjectField', { projectId: 'a1', field: 'tagId', value: 'kiln' }, '2026-10-05'),
+    op('setProjectField', { projectId: 'a2', field: 'tagId', value: 'glaze' }, '2026-10-05'),
+  ]);
+  assert.equal(applyOp(s, op('setProjectField', { projectId: 'h1', field: 'tagId', value: 'kiln' }, '2026-10-05')), false, 'tag from another group refused');
+  assert.equal(applyOp(s, op('addTag', { groupId: acton.id, tagId: 'x', name: 'kiln' }, '2026-10-05')), false, 'no duplicate names');
+  assert.equal(applyOp(s, op('startTimer', { projectId: 'h1' }, '2026-10-05')), false, 'Personal has no timer');
+  applyOps(s, [
+    op('addTime', { projectId: 'a1', minutes: 120 }, '2026-10-06'),
+    op('addTime', { projectId: 'a2', minutes: 60 }, '2026-10-06'),
+    op('addTime', { projectId: 'a3', minutes: 60 }, '2026-10-07'),
+    op('addTime', { projectId: 'a1', minutes: 60 }, '2026-09-20'), // outside the range
+  ]);
+  const byTag = timeSplit(s.data, acton.id, '2026-10-01', '2026-10-31');
+  assert.deepEqual(byTag.map((r) => [r.name, r.minutes]), [['Kiln', 120], ['Glaze', 60], ['No tag', 60]]);
+  assert.deepEqual(percents(byTag), [50, 25, 25]);
+  assert.equal(percents([{ minutes: 1 }, { minutes: 1 }, { minutes: 1 }]).reduce((a, b) => a + b, 0), 100, 'always adds up to 100');
+  assert.equal(timeSplit(s.data, acton.id, '2026-10-01', '2026-10-31', 'project')[0].name, 'Electric kiln');
+  // moving a project to another group clears its tag; deleting a tag leaves projects untagged
+  applyOp(s, op('setProjectField', { projectId: 'a2', field: 'groupId', value: personal.id }, '2026-10-08'));
+  assert.equal(s.data.projects.find((p) => p.id === 'a2').tagId, null);
+  applyOp(s, op('deleteTag', { groupId: acton.id, tagId: 'kiln' }, '2026-10-08'));
+  assert.equal(s.data.projects.find((p) => p.id === 'a1').tagId, null);
+  applyOp(s, op('setGroupTimer', { groupId: personal.id, on: true }, '2026-10-08'));
+  assert.equal(applyOp(s, op('startTimer', { projectId: 'h1' }, '2026-10-08')), true, 'switched on in Settings');
 });

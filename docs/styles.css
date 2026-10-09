@@ -631,3 +631,21 @@ kbd.hint {
 .time-groups { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 8px; }
 .dash-bars li span.muted { white-space: nowrap; }
 .dash-bars li { grid-template-columns: minmax(0, 1.2fr) 1fr 52px; }
+
+/* ---------- tags and time report (v21) ---------- */
+.tag.tag-chip { color: #0f766e; background: #f0fdfa; border-color: #99f6e4; display: inline-flex; align-items: center; gap: 2px; }
+.group-set { padding: 10px 0; border-bottom: 1px solid #f1f5f9; }
+.group-set .row strong { min-width: 120px; }
+.tag-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; align-items: center; }
+.report { padding: 14px 22px 40px; max-width: 980px; }
+.report-controls { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center; margin-bottom: 14px; }
+.report-controls label { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13.5px; }
+.report-body { display: flex; flex-wrap: wrap; gap: 24px; align-items: center; }
+.pie { flex: none; }
+.report-legend { flex: 1 1 260px; }
+.report-legend li { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto auto; gap: 10px; align-items: center; padding: 6px 0; border-bottom: 1px solid #f1f5f9; }
+.report-legend .swatch { width: 14px; height: 14px; border-radius: 4px; }
+.legend-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.report-legend strong { font-size: 17px; }
+.report-actions { margin-top: 14px; }
+@media (max-width: 760px) { .report { padding: 10px 14px 40px; } .pie { width: 200px; height: 200px; margin: 0 auto; } }

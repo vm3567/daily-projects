@@ -263,3 +263,41 @@ export function weekStart(day) {
   const dow = (new Date(day + 'T00:00:00Z').getUTCDay() + 6) % 7; // Monday = 0
   return addDays(day, -dow);
 }
+
+/**
+ * Time in a group between two India dates, split by tag (or by project).
+ * Returns [{ key, name, minutes }] biggest first; projects without a tag are "No tag".
+ */
+export function timeSplit(data, groupId, fromDay, toDay, by = 'tag', now = new Date()) {
+  const g = data.groups.find((x) => x.id === groupId);
+  const tags = (g && g.tags) || [];
+  const rows = new Map();
+  for (const p of data.projects) {
+    if (p.groupId !== groupId) continue;
+    const m = minutesBetween(p, fromDay, toDay, data.timer, now);
+    if (!m) continue;
+    let key;
+    let name;
+    if (by === 'project') { key = p.id; name = p.name; } else {
+      const t = tags.find((x) => x.id === p.tagId);
+      key = t ? t.id : 'none'; name = t ? t.name : 'No tag';
+    }
+    const row = rows.get(key) || { key, name, minutes: 0 };
+    row.minutes += m;
+    rows.set(key, row);
+  }
+  // biggest first; on a tie, "No tag" goes last, then by name (same order every time)
+  return [...rows.values()].sort((a, b) => b.minutes - a.minutes || (a.key === 'none') - (b.key === 'none') || a.name.localeCompare(b.name));
+}
+
+/** Whole-number percentages that always add up to 100. */
+export function percents(rows) {
+  const total = rows.reduce((n, r) => n + r.minutes, 0);
+  if (!total) return rows.map(() => 0);
+  const raw = rows.map((r) => (r.minutes * 100) / total);
+  const out = raw.map(Math.floor);
+  let left = 100 - out.reduce((a, b) => a + b, 0);
+  const order = raw.map((v, i) => [v - Math.floor(v), i]).sort((a, b) => b[0] - a[0]);
+  for (let k = 0; k < left; k++) out[order[k % order.length][1]]++;
+  return out;
+}

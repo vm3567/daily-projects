@@ -3,7 +3,7 @@
 import { h, fmtDay, fmtTime, fmtSize, keyHint, withKey, HAS_KEYBOARD } from './dom.js';
 import { dotColour, todayIndia, isOverdue, indiaDate, waitingDays, lastWorkDate, nextStep, stepLinkedTo, personStatus, minutesBetween, fmtMinutes, weekStart } from '../rules.js';
 import { WAIT_RED_DAYS } from '../config.js';
-import { newId, PRIORITIES, cleanUrl } from '../ops.js';
+import { newId, PRIORITIES, cleanUrl, groupHasTimer } from '../ops.js';
 import { uploadFiles, openFile, uploadBlob } from './files.js';
 
 const REPEAT_WORD = { daily: 'every day', weekly: 'every week', monthly: 'every month' };
@@ -408,11 +408,18 @@ function notesBox(ctx, p) {
     h('div', { class: 'save-row', key: 'notes-sign-' + p.id }, sign));
 }
 
+function tagName(g, p) {
+  const t = g && p.tagId && (g.tags || []).find((x) => x.id === p.tagId);
+  return t ? t.name : '';
+}
+
 /** ⏱ Today 1h 20m · This week 4h · Total 12h  · + Add time · entries */
 function timeLine(ctx, p, today) {
   const { store, ui } = ctx;
   const timer = store.view.data.timer;
   const logs = p.timeLogs || [];
+  const timed = groupHasTimer(store.view.data.groups.find((g) => g.id === p.groupId));
+  if (!timed && !logs.length) return null; // no timer in this group (e.g. Personal)
   if (!logs.length && !(timer && timer.projectId === p.id)) {
     return h('div', { class: 'time-line', key: 'time-' + p.id },
       h('button', { class: 'link small', onClick: () => addTimePrompt(ctx, p) }, '⏱ + Add time'));
@@ -495,10 +502,11 @@ function stateButtons(ctx, p) {
     const okOnly = p.okDate === today && lastWorkDate(p) !== today;
     const t = store.view.data.timer;
     const running = t && t.projectId === p.id;
+    const timed = groupHasTimer(store.view.data.groups.find((g) => g.id === p.groupId));
     return [
       running
         ? h('button', { class: 'btn timer-on', title: 'Stop the timer', onClick: () => ctx.stopTimer() }, `⏸ ${ctx.clockText(t.start)}`)
-        : h('button', { class: 'btn', title: 'Start timing your work on this project', onClick: () => ctx.startTimer(p) }, '▶ Start'),
+        : timed ? h('button', { class: 'btn', title: 'Start timing your work on this project', onClick: () => ctx.startTimer(p) }, '▶ Start') : null,
       !green ? h('button', { class: 'btn ok-btn', title: 'Looked at it, no more work today (key: o)', onClick: () => ctx.toggleOk(p) }, '✓ OK for today', keyHint('O')) : null,
       okOnly ? h('button', { class: 'btn small', title: 'Undo OK for today', onClick: () => ctx.toggleOk(p) }, 'Undo OK') : null,
       h('button', { class: 'btn', onClick: () => ctx.act('pause', { projectId: p.id }, `Paused: ${p.name}`) }, 'Pause'),
@@ -534,7 +542,9 @@ function metaLine(ctx, p, today) {
   const overdue = isOverdue(p, today);
   if (!ui.editMeta) {
     return h('button', { class: 'meta-line', key: 'meta-' + p.id, title: 'Change group, priority or target date', onClick: () => { ui.editMeta = true; ctx.render(); } },
-      h('span', null, g ? g.name : ''), ' · ', h('span', { class: p.priority === 'high' ? 'meta-high' : '' }, pri),
+      h('span', null, g ? g.name : ''),
+      tagName(g, p) ? [' · ', h('span', { class: 'tag tag-chip' }, `🏷 ${tagName(g, p)}`)] : '',
+      ' · ', h('span', { class: p.priority === 'high' ? 'meta-high' : '' }, pri),
       p.deadline ? [' · ', h('span', { class: overdue ? 'late' : '' }, `${overdue ? 'Overdue' : 'Target'} ${fmtDay(p.deadline)}`)] : ' · No target date',
       h('span', { class: 'meta-edit', 'aria-hidden': 'true' }, ' ✎'));
   }
@@ -544,6 +554,26 @@ function metaLine(ctx, p, today) {
         value: p.groupId,
         onChange: (e, el) => store.dispatch('setProjectField', { projectId: p.id, field: 'groupId', value: el.value }),
       }, store.view.data.groups.map((x) => h('option', { value: x.id }, x.name)))),
+    h('label', null, 'Tag ',
+      h('select', {
+        value: p.tagId || '',
+        onChange: (e, el) => {
+          if (el.value === '__new') {
+            const name = prompt(`New tag for the group "${g ? g.name : ''}":`);
+            if (name && name.trim() && g) {
+              const tagId = newId();
+              if (store.dispatch('addTag', { groupId: g.id, tagId, name: name.trim() })) store.dispatch('setProjectField', { projectId: p.id, field: 'tagId', value: tagId });
+              else ctx.toast(`"${name.trim()}" already exists in ${g.name}`);
+            }
+            ctx.render();
+            return;
+          }
+          store.dispatch('setProjectField', { projectId: p.id, field: 'tagId', value: el.value || null });
+        },
+      },
+      h('option', { value: '' }, 'No tag'),
+      ((g && g.tags) || []).map((t) => h('option', { value: t.id }, t.name)),
+      h('option', { value: '__new' }, '+ New tag…'))),
     h('label', null, 'Priority ',
       h('select', {
         value: p.priority,
