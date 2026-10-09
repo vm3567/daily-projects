@@ -271,7 +271,7 @@ export function renderDetail(ctx) {
           type: 'date', value: p.deadline || '',
           onChange: (e, el) => store.dispatch('setProjectField', { projectId: p.id, field: 'deadline', value: el.value || null }),
         }),
-        isOverdue(p, today) ? h('span', { class: 'tag late' }, 'Passed') : null)),
+        isOverdue(p, today) ? h('span', { class: 'tag late' }, 'Overdue') : null)),
 
     section('Steps',
       h('ul', { class: 'steps sortable-steps', key: 'steps-' + p.id, 'data-project': p.id },

@@ -24,6 +24,7 @@ const ui = {
   mobile: 'list', // list | detail (phone only)
   menuOpen: false,
   briefFolded: !!saved.briefFolded,
+  sort: saved.sort === 'red' ? 'red' : 'mine', // 'mine' = my drag order, 'red' = red first
   adding: false,
   openStep: null,
   showDone: false,
@@ -44,7 +45,7 @@ function toast(text, ms = 3500) {
 }
 
 function rememberUi() {
-  device.setUi({ view: ui.view, selected: ui.selected, briefFolded: ui.briefFolded });
+  device.setUi({ view: ui.view, selected: ui.selected, briefFolded: ui.briefFolded, sort: ui.sort });
 }
 
 const ctx = {
@@ -257,6 +258,7 @@ function renderBrief() {
   const title = kind === 'weekly' ? 'Weekly review' : 'Morning plan';
   const ready = b && b.date === today && b.status === 'ready' && b.content;
   const { key } = aiReady();
+  if (!key && !ready) return null; // no AI on this device yet: don't take space
   let body;
   if (ui.brief.error && !ui.brief.busy) body = h('p', { class: 'error' }, `${ui.brief.error} Tap ↻ to try again.`);
   else if (ui.brief.busy || (b && b.date === today && claimIsFresh(b))) body = h('p', { class: 'muted' }, 'Making today\'s plan…');
@@ -291,7 +293,15 @@ function renderBrief() {
 function projectRow(p, today) {
   const colour = dotColour(p, today);
   const ns = nextStep(p);
+  const canTick = ns && p.state === 'active';
   return h('li', { key: 'p-' + p.id, 'data-id': p.id, class: 'prow' + (ui.selected === p.id ? ' current' : '') },
+    canTick
+      ? h('input', {
+        type: 'checkbox', class: 'quick-tick', key: 'qt-' + p.id + '-' + ns.id,
+        title: `Tick: ${ns.text}`, 'aria-label': `Tick next step of ${p.name}: ${ns.text}`,
+        onChange: (e, el) => quickTick(p, ns, el),
+      })
+      : h('span', { class: 'quick-tick-space', 'aria-hidden': 'true' }),
     h('button', { class: 'prow-btn', onClick: () => select(p.id) },
       h('span', { class: `dot ${colour}`, 'aria-label': colour }),
       h('span', { class: 'prow-text' },
@@ -300,8 +310,58 @@ function projectRow(p, today) {
           p.priority === 'high' ? h('span', { class: 'tag high' }, 'High') : null),
         h('span', { class: 'prow-next' + (ns ? '' : ' warn') }, ns ? `Next: ${ns.text}` : 'No next step — add one',
           ns && ns.waiting ? h('span', { class: 'tag waiting' }, 'Waiting') : null,
-          p.deadline ? h('span', { class: 'tag' + (isOverdue(p, today) ? ' late' : '') }, fmtDay(p.deadline)) : null))),
-    ui.search ? null : h('span', { class: 'grip', 'aria-hidden': 'true', title: 'Drag to reorder' }, '⋮⋮'));
+          p.deadline
+            ? h('span', { class: 'tag' + (isOverdue(p, today) ? ' late' : '') }, isOverdue(p, today) ? `Overdue · ${fmtDay(p.deadline)}` : `Due ${fmtDay(p.deadline)}`)
+            : null))),
+    canDrag() ? h('span', { class: 'grip', 'aria-hidden': 'true', title: 'Drag to reorder' }, '⋮⋮') : null);
+}
+
+function canDrag() {
+  return !ui.search && ui.sort === 'mine';
+}
+
+/** Tick a project's next step straight from the list. */
+function quickTick(p, step, el) {
+  el.checked = true;
+  const op = store.dispatch('tickStep', { projectId: p.id, stepId: step.id });
+  if (!op) { el.checked = false; return; }
+  const after = store.view.data.projects.find((x) => x.id === p.id);
+  const next = after && nextStep(after);
+  toast(next ? `✓ ${step.text}. Next: ${next.text}` : `✓ ${step.text}. Add the next step for "${p.name}".`, 4500);
+}
+
+const COLOUR_ORDER = { red: 0, orange: 1, green: 2, grey: 3 };
+const PRIORITY_ORDER = { high: 0, medium: 1, low: 2 };
+
+/** "Red first": red, then orange, then green; high priority first within each; else my order. */
+function sortForView(list, today) {
+  if (ui.sort !== 'red' || ui.search) return list;
+  return list
+    .map((p, i) => ({ p, i, c: COLOUR_ORDER[dotColour(p, today)], r: PRIORITY_ORDER[p.priority] ?? 1 }))
+    .sort((a, b) => a.c - b.c || a.r - b.r || a.i - b.i)
+    .map((x) => x.p);
+}
+
+function sortSwitch() {
+  const opt = (value, label) => h('button', {
+    class: 'seg' + (ui.sort === value ? ' on' : ''), 'aria-pressed': String(ui.sort === value),
+    onClick: () => { ui.sort = value; rememberUi(); render(); },
+  }, label);
+  return h('div', { class: 'segmented', role: 'group', 'aria-label': 'Order' }, opt('mine', 'My order'), opt('red', 'Red first'));
+}
+
+/** "3 of 7 done today" with a thin bar. */
+function progressLine(today) {
+  const active = store.view.data.projects.filter((p) => p.state === 'active');
+  if (!active.length) return null;
+  const done = active.filter((p) => dotColour(p, today) === 'green').length;
+  const pct = Math.round((done / active.length) * 100);
+  const bar = h('div', { class: 'progress-bar' }, h('div', { class: 'progress-fill', key: 'pf' }));
+  bar.firstChild.style.width = `${pct}%`; // set through the style object (allowed by the page's safety rules)
+  return h('div', { class: 'progress', key: 'progress' },
+    h('div', { class: 'progress-text' },
+      h('strong', null, `${done} of ${active.length}`), done === active.length ? ' done today — all green! 🎉' : ' done today'),
+    bar);
 }
 
 function newProjectForm() {
@@ -356,15 +416,19 @@ function renderListColumn() {
   if (ui.view === 'diary' && !ui.search) return h('div', { class: 'col-inner' }, head, renderDiary());
   if (ui.view === 'settings' && !ui.search) return h('div', { class: 'col-inner' }, head, renderSettings());
 
-  const list = visibleProjects();
+  const list = sortForView(visibleProjects(), today);
+  const showSort = !ui.search && ui.view !== 'paused' && ui.view !== 'finished' && list.length > 1;
   const empty = !list.length ? h('p', { class: 'empty-list' },
     ui.search ? 'Nothing found.' : ui.view === 'paused' ? 'No paused projects.' : ui.view === 'finished' ? 'No finished projects yet.'
       : 'No projects yet. Add your first one with "+ New project".') : null;
   return h('div', { class: 'col-inner' },
     head,
     mobileSearch,
+    ui.view === 'today' && !ui.search ? progressLine(today) : null,
     ui.view === 'today' && !ui.search ? renderBrief() : null,
-    ui.view === 'finished' || ui.view === 'paused' || ui.search ? null : newProjectForm(),
+    h('div', { class: 'list-tools' },
+      ui.view === 'finished' || ui.view === 'paused' || ui.search ? null : newProjectForm(),
+      showSort && !ui.adding ? sortSwitch() : null),
     h('ul', { class: 'plist', key: 'plist-' + (ui.search ? 'search' : ui.view) }, list.map((p) => projectRow(p, today))),
     empty);
 }
@@ -554,10 +618,14 @@ function setupSortable() {
   if (!window.Sortable) return;
   const lists = root.querySelectorAll('.plist, .sortable-steps');
   for (const el of lists) {
-    if (el.__sortable) continue;
     const isProjects = el.classList.contains('plist');
+    if (el.__sortable) {
+      if (isProjects) el.__sortable.option('disabled', !canDrag());
+      continue;
+    }
     el.__sortable = window.Sortable.create(el, {
       animation: 150,
+      disabled: isProjects && !canDrag(),
       handle: isProjects ? undefined : '.grip',
       delay: 300,
       delayOnTouchOnly: true,
@@ -570,7 +638,7 @@ function setupSortable() {
         const i = ids.indexOf(id);
         const where = i > 0 ? { afterId: ids[i - 1] } : { beforeId: ids[1] };
         if (isProjects) {
-          if (ui.search) { render(); return; }
+          if (!canDrag()) { render(); return; }
           if (!store.dispatch('moveProject', { projectId: id, ...where })) render();
         } else {
           if (!store.dispatch('moveStep', { projectId: el.dataset.project, stepId: id, ...where })) render();

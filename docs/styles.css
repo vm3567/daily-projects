@@ -278,3 +278,43 @@ label.late { color: var(--red); }
   .step-extra { padding-left: 8px; }
   .diary, .settings { padding: 6px 14px 40px; }
 }
+
+/* ---------- quick tick, order switch, progress (v2) ---------- */
+.prow { gap: 2px; padding-left: 4px; }
+.quick-tick { width: 20px; height: 20px; flex: none; margin: 0 2px 0 6px; accent-color: var(--green); cursor: pointer; }
+.quick-tick-space { width: 28px; flex: none; }
+.list-tools { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin: 12px 14px 4px; }
+.list-tools .new-project, .list-tools .new-form { margin: 0; }
+.list-tools .new-form { flex: 1 1 100%; }
+.segmented { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.seg { border: 0; background: #fff; padding: 6px 10px; font-size: 13px; color: var(--muted); cursor: pointer; }
+.seg + .seg { border-left: 1px solid var(--line); }
+.seg.on { background: var(--brand-soft); color: #1e40af; font-weight: 600; }
+.progress { margin: 12px 14px 0; }
+.progress-text { font-size: 13.5px; color: var(--muted); margin-bottom: 5px; }
+.progress-text strong { color: var(--text); }
+.progress-bar { height: 6px; background: #eef0f3; border-radius: 99px; overflow: hidden; }
+.progress-fill { height: 100%; background: var(--green); border-radius: 99px; transition: width .3s ease; }
+
+/* ---------- medium screens (small laptop, tablet): menu becomes a drawer ---------- */
+.detail-top { flex-wrap: wrap; }
+.title-input { flex: 1 1 220px; min-width: 160px; }
+@media (min-width: 761px) and (max-width: 1100px) {
+  .layout { grid-template-columns: minmax(280px, 360px) 1fr; }
+  .layout.wide { grid-template-columns: 1fr; }
+  #menu {
+    position: fixed; inset: 0 auto 0 0; width: 280px; z-index: 30;
+    transform: translateX(-100%); transition: transform .2s ease; border-right: 1px solid var(--line);
+  }
+  .menu-open #menu { transform: none; box-shadow: 0 10px 40px rgba(0,0,0,.15); }
+  .menu-open .scrim { display: block; position: fixed; inset: 0; background: rgba(0,0,0,.25); z-index: 20; cursor: pointer; }
+  #menu .search { display: none; }
+  .icon.tiny { visibility: visible; }
+  .menu-btn { display: inline-block; }
+  .mobile-only { display: block; width: calc(100% - 28px); margin: 10px 14px 0; }
+  .detail-inner { padding: 0 18px 60px; }
+}
+@media (max-width: 760px) {
+  .quick-tick { width: 24px; height: 24px; margin-left: 4px; }
+  .quick-tick-space { width: 32px; }
+}

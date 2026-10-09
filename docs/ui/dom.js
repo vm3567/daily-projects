@@ -65,8 +65,10 @@ export function morph(from, to) {
     return;
   }
   // attributes
-  for (const { name } of [...from.attributes]) if (!to.hasAttribute(name)) from.removeAttribute(name);
-  for (const { name, value } of [...to.attributes]) if (from.getAttribute(name) !== value) from.setAttribute(name, value);
+  for (const { name } of [...from.attributes]) if (name !== 'style' && !to.hasAttribute(name)) from.removeAttribute(name);
+  for (const { name, value } of [...to.attributes]) if (name !== 'style' && from.getAttribute(name) !== value) from.setAttribute(name, value);
+  // Styles are copied through the style object: the page's safety rules (CSP) block style attributes.
+  if (from.style && from.style.cssText !== to.style.cssText) from.style.cssText = to.style.cssText;
   from.__on = to.__on;
   // form values: never touch the box being typed in
   const focused = from === document.activeElement;

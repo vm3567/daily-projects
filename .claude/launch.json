@@ -4,7 +4,9 @@
     {
       "name": "daily-projects",
       "runtimeExecutable": "python3",
-      "runtimeArgs": ["-m", "http.server", "8080", "--directory", "docs"],
+      "runtimeArgs": [
+        "tools/devserver.py"
+      ],
       "port": 8080
     }
   ]
