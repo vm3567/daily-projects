@@ -340,6 +340,23 @@ const handlers = {
     return true;
   },
 
+  /** "Chased": followed up on a waiting step. Saves a work note and restarts the waiting count. */
+  chased(state, op, a) {
+    const p = findProject(state.data, a.projectId);
+    const s = p && p.steps.find((x) => x.id === a.stepId);
+    if (!s || s.done || !s.waiting) return false;
+    const day = indiaDate(op.at);
+    if (s.chasedDate === day) return false; // once a day is enough
+    s.chasedDate = day;
+    s.waitingSince = day; // give them time again before turning red
+    s.updatedAt = op.at;
+    const text = s.waitingOn ? `Followed up with @${s.waitingOn} — ${s.text}` : `Followed up — ${s.text}`;
+    p.workNotes.unshift({ id: op.id, text, createdAt: op.at, updatedAt: op.at });
+    touch(p, op);
+    addEvent(state, op, p, 'note_added', text);
+    return true;
+  },
+
   // ---------- Work notes ----------
   addWorkNote(state, op, a) {
     const p = findProject(state.data, a.projectId);

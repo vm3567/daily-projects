@@ -59,6 +59,8 @@ const ctx = {
   aiBreakdown: (p, goal) => runAi(p, 'breakdown', goal),
   hasAiKey: () => !!(store && aiReady().key),
   toggleOk: (p) => toggleOk(p),
+  chase: (p, s) => chase(p, s),
+  afterTick: (id, where) => afterTick(id, where),
   selectPerson: (id) => { ui.person = id; ui.mobile = 'detail'; render(); const d = document.getElementById('detail'); if (d) d.scrollTop = 0; },
   openProject: (id) => {
     const p = store.view.data.projects.find((x) => x.id === id);
@@ -181,6 +183,7 @@ function viewTitle() {
 
 function go(view) {
   ui.view = view;
+  ui.round = null;
   resetRedOrder();
   ui.search = '';
   ui.menuOpen = false;
@@ -214,6 +217,9 @@ function toggleOk(p) {
 }
 
 function select(id) {
+  const list = currentList();
+  const at = list.findIndex((x) => x.id === id);
+  if (at >= 0) ui.listIndex = at; // remembered, so ↓ ↑ keep your place if this row folds away
   if (ui.selected !== id) {
     ui.selected = id;
     ui.openStep = null;
@@ -363,8 +369,41 @@ function projectRow(p, today) {
             ? h('span', { class: 'tag' + (isOverdue(p, today) ? ' late' : '') }, isOverdue(p, today) ? `Overdue · ${fmtDay(p.deadline)}` : `Target ${fmtDay(p.deadline)}`)
             : null,
           noWorkTag(p, today)))),
+    rowAction(p, ns, colour),
     canDrag() ? h('span', { class: 'grip', 'aria-hidden': 'true', title: 'Drag to reorder' }, '⋮⋮') : null,
     ui.quickAdd === p.id ? quickAddForm(p) : null);
+}
+
+/** One-tap action on a row that is not green yet: "Chased" for a waiting step, else "✓ OK". */
+function rowAction(p, ns, colour) {
+  if (p.state !== 'active' || colour === 'green') return null;
+  if (ns && ns.waiting) {
+    return h('button', { class: 'row-act chase', title: `Followed up${ns.waitingOn ? ' with ' + ns.waitingOn : ''} today`, onClick: () => chase(p, ns) }, 'Chased');
+  }
+  return h('button', { class: 'row-act', title: 'OK for today (nothing more today)', onClick: () => toggleOk(p) }, '✓ OK');
+}
+
+function chase(p, step) {
+  if (store.dispatch('chased', { projectId: p.id, stepId: step.id })) {
+    toast(`Noted: followed up${step.waitingOn ? ' with ' + step.waitingOn : ''}. Waiting count restarted.`, 3500);
+  }
+}
+
+/** After ticking: if the project has no next step left, ask "What's next?" straight away. */
+function afterTick(projectId, where) {
+  const p = store.view.data.projects.find((x) => x.id === projectId);
+  if (!p || p.state !== 'active' || nextStep(p)) return false;
+  if (where === 'detail' || (ui.view === 'today' && !ui.search)) {
+    // On Today the now-green row folds away, so ask in the project page instead.
+    if (ui.selected !== p.id || where !== 'detail') select(p.id);
+    focusKey('add-step-' + p.id);
+  } else {
+    ui.quickAdd = p.id;
+    render();
+    focusKey('qa-' + p.id);
+  }
+  toast(`What's next for "${p.name}"? Type it and press Enter.`, 4000);
+  return true;
 }
 
 /** The small "+ add a step" box that opens under a row with no steps. */
@@ -432,7 +471,8 @@ function quickTick(p, step, el) {
   if (!op) { el.checked = false; return; }
   const after = store.view.data.projects.find((x) => x.id === p.id);
   const next = after && nextStep(after);
-  toast(next ? `✓ ${step.text}. Next: ${next.text}` : `✓ ${step.text}. Add the next step for "${p.name}".`, 4500);
+  if (next) toast(`✓ ${step.text}. Next: ${next.text}`, 4500);
+  else afterTick(p.id, 'list');
 }
 
 const COLOUR_ORDER = { red: 0, yellow: 1, green: 2, grey: 3 };
@@ -478,8 +518,12 @@ function progressLine(today) {
   const bar = h('div', { class: 'progress-bar' }, h('div', { class: 'progress-fill', key: 'pf' }));
   bar.firstChild.style.width = `${pct}%`; // set through the style object (allowed by the page's safety rules)
   return h('div', { class: 'progress', key: 'progress' },
-    h('div', { class: 'progress-text' },
-      h('strong', null, `${done} of ${active.length}`), done === active.length ? ' done today — all green! 🎉' : ' done today'),
+    h('div', { class: 'progress-row' },
+      h('div', { class: 'progress-text' },
+        h('strong', null, `${done} of ${active.length}`), done === active.length ? ' done today — all green! 🎉' : ' done today'),
+      done < active.length && !ui.round
+        ? h('button', { class: 'btn primary small round-start', title: 'One project at a time (key: g)', onClick: startRound }, '▶ Daily round')
+        : null),
     bar);
 }
 
@@ -550,8 +594,27 @@ function renderListColumn() {
     h('div', { class: 'list-tools' },
       ui.view === 'finished' || ui.view === 'paused' || ui.search ? null : newProjectForm(),
       showSort && !ui.adding ? sortSwitch() : null),
-    h('ul', { class: 'plist', key: 'plist-' + (ui.search ? 'search' : ui.view) }, list.map((p) => projectRow(p, today))),
+    ...listParts(list, today),
     empty);
+}
+
+/** Today: projects not yet green, then a folded "Done today (n)" group. Other views: one list. */
+function splitToday(list, today) {
+  if (ui.view !== 'today' || ui.search) return { open: list, done: [] };
+  return { open: list.filter((p) => dotColour(p, today) !== 'green'), done: list.filter((p) => dotColour(p, today) === 'green') };
+}
+
+function listParts(list, today) {
+  const { open, done } = splitToday(list, today);
+  const parts = [h('ul', { class: 'plist', key: 'plist-' + (ui.search ? 'search' : ui.view) }, open.map((p) => projectRow(p, today)))];
+  if (!done.length) return parts;
+  if (!open.length) parts.push(h('p', { class: 'all-green', key: 'all-green' }, 'Everything is green for today 🎉'));
+  parts.push(h('button', {
+    class: 'done-toggle', key: 'done-toggle', 'aria-expanded': String(!!ui.showDoneToday),
+    onClick: () => { ui.showDoneToday = !ui.showDoneToday; render(); },
+  }, `${ui.showDoneToday ? '▾' : '▸'} Done today (${done.length})`));
+  if (ui.showDoneToday) parts.push(h('ul', { class: 'plist-done', key: 'plist-done' }, done.map((p) => projectRow(p, today))));
+  return parts;
 }
 
 // ---------------------------------------------------------------- Diary
@@ -783,11 +846,161 @@ function render() {
   h('aside', { id: 'menu' }, renderMenu()),
   h('div', { class: 'scrim', onClick: () => { ui.menuOpen = false; render(); } }),
   h('main', { id: 'list' }, renderListColumn()),
-  wide ? null : h('section', { id: 'detail' }, ui.view === 'people' && !ui.search ? renderPerson(ctx) : renderDetail(ctx)),
+  wide ? null : h('section', { id: 'detail' }, ui.round ? renderRound() : ui.view === 'people' && !ui.search ? renderPerson(ctx) : renderDetail(ctx)),
   ui.showKeys ? keysHelp() : null);
   if (root.firstChild && root.firstChild.classList && root.firstChild.classList.contains('layout')) morph(root.firstChild, next);
   else root.replaceChildren(next);
   setupSortable();
+}
+
+// ---------------------------------------------------------------- daily round
+// One project at a time, red first. Every action saves AND jumps to the next project that is not green.
+
+function startRound() {
+  const today = todayIndia();
+  const active = store.view.data.projects.filter((p) => p.state === 'active');
+  const ids = computeRedFirst(active, today).filter((p) => dotColour(p, today) !== 'green').map((p) => p.id);
+  if (!ids.length) { toast('Everything is green for today 🎉'); return; }
+  ui.round = { ids, i: 0, mode: null, total: active.length };
+  ui.mobile = 'detail';
+  ui.menuOpen = false;
+  markOpened(ids[0]);
+  render();
+  const d = document.getElementById('detail');
+  if (d) d.scrollTop = 0;
+}
+
+function endRound() {
+  ui.round = null;
+  ui.mobile = 'list';
+  render();
+}
+
+function roundProject() {
+  if (!ui.round || ui.round.done) return null;
+  const p = store.view.data.projects.find((x) => x.id === ui.round.ids[ui.round.i]);
+  return p && p.state === 'active' ? p : null; // deleted, paused or finished elsewhere = gone
+}
+
+/** Move the round to the next project that is not green. Returns false when none is left. */
+function advanceRound() {
+  const r = ui.round;
+  const today = todayIndia();
+  const stillOpen = (id) => {
+    const p = store.view.data.projects.find((x) => x.id === id);
+    return p && p.state === 'active' && dotColour(p, today) !== 'green';
+  };
+  const order = [...r.ids.slice(r.i + 1), ...r.ids.slice(0, r.i + 1)];
+  const nextId = order.find((id) => stillOpen(id) && id !== r.ids[r.i]) || null;
+  r.mode = null;
+  if (!nextId) { r.done = true; return false; }
+  r.i = r.ids.indexOf(nextId);
+  return true;
+}
+
+function roundNext() {
+  if (!ui.round) return;
+  if (advanceRound()) markOpened(ui.round.ids[ui.round.i]);
+  render();
+  if (!ui.round.done) focusKey('round-card');
+}
+
+function roundAct(kind) {
+  const p = roundProject();
+  if (!p) return;
+  const ns = nextStep(p);
+  if (kind === 'done') {
+    if (!ns) { ui.round.mode = 'next'; render(); focusKey('round-input'); return; }
+    if (!store.dispatch('tickStep', { projectId: p.id, stepId: ns.id })) return;
+    const after = store.view.data.projects.find((x) => x.id === p.id);
+    if (after && !nextStep(after)) { ui.round.mode = 'next'; render(); focusKey('round-input'); toast(`✓ ${ns.text}. What's next?`, 3000); return; }
+    toast(`✓ ${ns.text}`, 2000);
+    roundNext();
+  } else if (kind === 'add' || kind === 'note') {
+    ui.round.mode = kind;
+    render();
+    focusKey('round-input');
+  } else if (kind === 'ok') {
+    if (store.dispatch('okForToday', { projectId: p.id })) roundNext();
+  } else if (kind === 'chase') {
+    if (ns && ns.waiting && store.dispatch('chased', { projectId: p.id, stepId: ns.id })) roundNext();
+  } else if (kind === 'skip') {
+    roundNext();
+  }
+}
+
+function roundSubmit(text) {
+  const p = roundProject();
+  const t = text.trim();
+  if (!p || !t) return;
+  const mode = ui.round.mode;
+  const ok = mode === 'note'
+    ? store.dispatch('addWorkNote', { projectId: p.id, noteId: newId(), text: t })
+    : store.dispatch('addStep', { projectId: p.id, stepId: newId(), text: t });
+  if (ok) { toast(mode === 'note' ? 'Note saved' : `Added: ${t}`, 2000); roundNext(); }
+}
+
+function renderRound() {
+  const r = ui.round;
+  const today = todayIndia();
+  const active = store.view.data.projects.filter((p) => p.state === 'active');
+  const greenCount = active.filter((p) => dotColour(p, today) === 'green').length;
+  const left = active.length - greenCount;
+  const top = h('div', { class: 'round-top' },
+    h('button', { class: 'icon back', 'aria-label': 'End round', onClick: endRound }, '←'),
+    h('strong', null, 'Daily round'),
+    h('span', { class: 'muted small' }, `${greenCount} of ${active.length} green · ${left} left`),
+    h('button', { class: 'btn small', onClick: endRound, title: 'End the round (Esc)' }, 'End'));
+  // The current project was deleted / paused on another device: quietly move on.
+  if (!r.done && !roundProject()) {
+    if (advanceRound()) setTimeout(() => { if (ui.round) markOpened(ui.round.ids[ui.round.i]); }, 0);
+  }
+  if (r.done || !roundProject()) {
+    return h('div', { class: 'detail-inner round', key: 'round-done' }, top,
+      h('div', { class: 'round-card round-finish', key: 'round-card', tabindex: '-1' },
+        h('div', { class: 'round-big' }, left ? 'Round finished' : 'All green for today 🎉'),
+        h('p', { class: 'muted' }, left ? `${left} project${left > 1 ? 's' : ''} still not green (you skipped them).` : 'Every project got your attention today.'),
+        h('div', { class: 'row' },
+          left ? h('button', { class: 'btn', onClick: () => { ui.round = null; startRound(); } }, 'Go through skipped ones') : null,
+          h('button', { class: 'btn primary', onClick: endRound }, 'Done'))));
+  }
+  const p = roundProject();
+  const ns = nextStep(p);
+  const colour = dotColour(p, today);
+  const g = store.view.data.groups.find((x) => x.id === p.groupId);
+  const open = p.steps.filter((s) => !s.done);
+  const lastNote = p.workNotes[0];
+  const mode = r.mode;
+  const placeholder = mode === 'note' ? 'What did you do? (Enter)' : mode === 'next' ? `What's next for "${p.name}"? (Enter)` : 'New step (Enter)';
+  const btn = (kind, label, keyName, cls = '') => h('button', { class: `btn round-btn ${cls}`, onClick: () => roundAct(kind), title: `Key: ${keyName}` },
+    label, h('kbd', null, keyName));
+  return h('div', { class: 'detail-inner round', key: 'round-' + p.id }, top,
+    h('div', { class: 'round-card', key: 'round-card', tabindex: '-1' },
+      h('div', { class: 'round-name' },
+        h('span', { class: `dot ${colour}` }),
+        h('button', { class: 'link round-title', title: 'Open the full project', onClick: () => { const id = p.id; ui.round = null; select(id); } }, p.name)),
+      h('p', { class: 'muted small round-meta' }, [g ? g.name : '', p.priority === 'high' ? 'High' : '', p.deadline ? `${isOverdue(p, today) ? 'Overdue' : 'Target'} ${fmtDay(p.deadline)}` : '']
+        .filter(Boolean).join(' · ')),
+      h('div', { class: 'round-next' + (ns ? '' : ' warn') },
+        ns ? ['Next: ', h('strong', null, ns.text)] : 'No next step yet',
+        ns && ns.waiting ? waitingTag(ns) : null),
+      open.length > 1 ? h('p', { class: 'muted small' }, `then: ${open.slice(1, 3).map((s) => s.text).join(' · ')}${open.length > 3 ? ' …' : ''}`) : null,
+      lastNote ? h('p', { class: 'muted small' }, `Last note (${fmtDay(indiaDate(lastNote.createdAt))}): ${lastNote.text}`) : null,
+      noWorkTag(p, today),
+      mode ? h('form', {
+        class: 'row round-form', key: 'round-form-' + mode,
+        onSubmit: (e) => { e.preventDefault(); roundSubmit(e.target.elements.text.value); },
+      },
+      h('input', { name: 'text', key: 'round-input', placeholder, autocomplete: 'off', 'data-mention': '1', enterkeyhint: 'done' }),
+      h('button', { class: 'btn primary', type: 'submit' }, 'Save'),
+      h('button', { class: 'btn', type: 'button', onClick: () => { ui.round.mode = null; render(); } }, 'Cancel')) : null,
+      mode ? null : h('div', { class: 'round-actions' },
+        ns ? btn('done', '✓ Step done', 'x', 'primary') : btn('done', '+ What\'s next?', 'x', 'primary'),
+        btn('add', '+ Add step', 'a'),
+        btn('note', '✎ Note', 'w'),
+        ns && ns.waiting ? btn('chase', 'Chased', 'c') : null,
+        btn('ok', '✓ OK for today', 'o', 'ok-btn'),
+        btn('skip', 'Skip →', 's'))));
 }
 
 // ---------------------------------------------------------------- keyboard
@@ -796,6 +1009,7 @@ const KEYS = [
   ['↓  ↑', 'Next / previous project'],
   ['x', 'Tick the next step of the open project'],
   ['o', 'OK for today (or undo)'],
+  ['g', 'Start the daily round (then x a w o c s)'],
   ['a', 'Type a new step'],
   ['w', 'Type in "What did you do today?"'],
   ['n', 'New project'],
@@ -824,7 +1038,9 @@ function isTyping(el) {
 
 function currentList() {
   if (!store || !store.view || ui.view === 'diary' || ui.view === 'settings') return [];
-  return sortForView(visibleProjects(), todayIndia());
+  const today = todayIndia();
+  const { open, done } = splitToday(sortForView(visibleProjects(), today), today);
+  return ui.showDoneToday || ui.view !== 'today' ? [...open, ...done] : open;
 }
 
 function moveSelection(step) {
@@ -842,7 +1058,13 @@ function moveSelection(step) {
   const list = currentList();
   if (!list.length) return;
   const i = list.findIndex((p) => p.id === ui.selected);
-  const next = i < 0 ? list[step > 0 ? 0 : list.length - 1] : list[Math.min(list.length - 1, Math.max(0, i + step))];
+  let next;
+  if (i >= 0) next = list[Math.min(list.length - 1, Math.max(0, i + step))];
+  else if (ui.selected && ui.listIndex !== undefined) {
+    // the selected row folded away: the row now at its old place is the "next" one
+    const base = step > 0 ? ui.listIndex : ui.listIndex - 1;
+    next = list[Math.min(list.length - 1, Math.max(0, base))];
+  } else next = list[step > 0 ? 0 : list.length - 1];
   if (!next || next.id === ui.selected) return;
   select(next.id);
   ui.mobile = 'list'; // keyboard use: keep the list in view on small screens
@@ -862,6 +1084,7 @@ function onKey(e) {
     if (!viewer.hidden) { closeViewer(); return; }
     if (ui.showKeys) { ui.showKeys = false; render(); return; }
     if (isTyping(document.activeElement)) { document.activeElement.blur(); return; }
+    if (ui.round) { if (ui.round.mode) { ui.round.mode = null; render(); } else endRound(); return; }
     if (ui.menuOpen) { ui.menuOpen = false; render(); return; }
     if (ui.adding) { ui.adding = false; render(); return; }
     if (ui.search) { ui.search = ''; render(); return; }
@@ -875,8 +1098,14 @@ function onKey(e) {
   const focused = document.activeElement;
   if (isArrow && focused && (focused.type === 'radio' || focused.nodeName === 'SUMMARY')) return;
   if (isArrow && (ui.view === 'diary' || ui.view === 'settings') && !ui.search) return; // let the page scroll
-  const p = selectedProject();
   const k = e.key;
+  if (ui.round) {
+    const map = { x: 'done', a: 'add', w: 'note', o: 'ok', c: 'chase', s: 'skip', ArrowRight: 'skip' };
+    if (map[k] && !ui.round.done) { e.preventDefault(); roundAct(map[k]); return; }
+    if (k === '?') { ui.showKeys = !ui.showKeys; render(); e.preventDefault(); }
+    return; // other keys do nothing during the round
+  }
+  const p = selectedProject();
   let handled = true;
   if (k === 'ArrowDown' || k === 'j') moveSelection(1);
   else if (k === 'ArrowUp' || k === 'k') moveSelection(-1);
@@ -891,7 +1120,8 @@ function onKey(e) {
       if (store.dispatch('tickStep', { projectId: p.id, stepId: ns.id })) {
         const after = selectedProject();
         const nn = after && nextStep(after);
-        toast(nn ? `✓ ${ns.text}. Next: ${nn.text}` : `✓ ${ns.text}. Press "a" to add the next step.`, 4500);
+        if (nn) toast(`✓ ${ns.text}. Next: ${nn.text}`, 4500);
+        else afterTick(p.id, 'detail');
       }
     } else toast(p ? 'No step to tick. Press "a" to add one.' : 'Pick a project first (↓ ↑).');
   } else if (k === 'a') {
@@ -909,7 +1139,8 @@ function onKey(e) {
   } else if (k === 'r') {
     ui.sort = ui.sort === 'red' ? 'mine' : 'red'; resetRedOrder(); rememberUi(); render();
     toast(ui.sort === 'red' ? 'Red first' : 'My order', 1500);
-  } else if (k === 't') go('today');
+  } else if (k === 'g') { if (ui.view !== 'today') go('today'); startRound(); }
+  else if (k === 't') go('today');
   else if (k === 'd') go('diary');
   else if (k === 'p') go('people');
   else if (k === '?') { ui.showKeys = !ui.showKeys; render(); }

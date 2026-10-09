@@ -67,6 +67,7 @@ Version: 5.
 | 38 | Keyboard | Shortcuts on the computer: ↓ ↑ move between projects, x tick, a add step, w note, n new project, / search, r Red first, t Today, d Diary, Esc leave, ? help |
 | 39 | People | A People list (name only). Type @ in a step, step note, work note or project notes to pick a person. Each person's page shows "Waiting on them" and "To discuss with them" (all projects), notes about them, and done steps. "Waiting on" uses the same names. Keyboard: p opens People. |
 | 40 | Follow-up | Each person gets a dot: red = waiting on them 2+ days (or a linked step's date passed) → contact now; orange = something open; green = nothing open. Today shows a "Follow up today" row (red and orange names). Waiting steps show "Waiting: Name · Nd". |
+| 41 | Fewer clicks | (1) Daily round: one project at a time, red first; each action (✓ step done, + add step, ✎ note, Chased, ✓ OK, Skip) saves and jumps to the next project. Keys g, then x a w c o s. (2) ✓ OK / Chased button on each list row. (3) Green projects fold into "Done today (n)" on Today. (4) Ticking the last step asks "What's next?". (5) Chased: notes the follow-up and restarts the waiting count. |
 
 ---
 

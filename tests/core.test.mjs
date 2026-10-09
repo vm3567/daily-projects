@@ -216,3 +216,19 @@ test('rename does not touch a longer name of someone else, and keeps "$" as type
   applyOp(s, op('renamePerson', { personId: 'r', name: 'Mr $1 Ravi' }, '2026-10-03'));
   assert.equal(s.data.projects[0].steps.find((x) => x.id === 's1').text, 'Ask @Ravi Kumar and @Mr $1 Ravi');
 });
+
+test('chased: note, restarts waiting count, green, once a day', async () => {
+  const { waitingDays } = await import('../docs/rules.js');
+  const s = withProject('2026-10-01');
+  applyOp(s, op('setStepField', { projectId: 'p1', stepId: 's2', field: 'waiting', value: true }, '2026-10-01'));
+  applyOp(s, op('setStepField', { projectId: 'p1', stepId: 's2', field: 'waitingOn', value: 'Ravi' }, '2026-10-01'));
+  const p = s.data.projects[0];
+  const st = p.steps.find((x) => x.id === 's2');
+  assert.equal(waitingDays(st, '2026-10-04'), 3);
+  assert.equal(dotColour(p, '2026-10-04'), 'red');
+  assert.equal(applyOp(s, op('chased', { projectId: 'p1', stepId: 's2' }, '2026-10-04')), true);
+  assert.equal(waitingDays(st, '2026-10-04'), 0);
+  assert.equal(dotColour(p, '2026-10-04'), 'green');
+  assert.match(p.workNotes[0].text, /Followed up with @Ravi/);
+  assert.equal(applyOp(s, op('chased', { projectId: 'p1', stepId: 's2' }, '2026-10-04', '15:00:00')), false);
+});

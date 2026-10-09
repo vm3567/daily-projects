@@ -55,6 +55,18 @@ GitHub → your photo → **Settings** → **Password and authentication** → *
 
 ---
 
+## Daily round (fastest way)
+
+1. On **Today**, tap **▶ Daily round** (or press **g**).
+2. You see one project at a time, red first.
+3. Tap one button — it saves and jumps to the next project:
+   **✓ Step done** (x) · **+ Add step** (a) · **✎ Note** (w) · **Chased** (c) · **✓ OK for today** (o) · **Skip** (s)
+4. Skipped projects come back at the end. **End** (Esc) leaves the round.
+
+Also: each red/yellow row has a one-tap **✓ OK** (or **Chased** when waiting), green projects fold into **Done today**, and ticking the last step asks **"What's next?"**.
+
+---
+
 ## People
 
 - **People** in the left menu: add names (or type `@` and a new name in any step).

@@ -38,6 +38,9 @@ function stepRow(ctx, p, s) {
     const d = waitingDays(s, today);
     const who = s.waitingOn ? `Waiting: ${s.waitingOn}` : 'Waiting';
     tags.push(h('span', { class: 'tag waiting' + (d >= WAIT_RED_DAYS ? ' late' : '') }, d ? `${who} · ${d}d` : who));
+    if (s.chasedDate !== today) {
+      tags.push(h('button', { class: 'row-act chase', title: 'I followed up today', onClick: () => ctx.chase(p, s) }, 'Chased'));
+    }
   }
   if (s.dueDate && !s.done) tags.push(h('span', { class: 'tag' + (s.dueDate < today ? ' late' : '') }, `by ${fmtDay(s.dueDate)}`));
   if (s.note && !open) tags.push(h('span', { class: 'tag' }, 'note'));
@@ -46,7 +49,10 @@ function stepRow(ctx, p, s) {
       s.done ? null : h('span', { class: 'grip', title: 'Drag to reorder', 'aria-hidden': 'true' }, '⋮⋮'),
       h('input', {
         type: 'checkbox', checked: s.done, 'aria-label': s.done ? 'Un-tick step' : 'Tick step',
-        onChange: () => store.dispatch(s.done ? 'untickStep' : 'tickStep', { projectId: p.id, stepId: s.id }),
+        onChange: () => {
+          const wasDone = s.done;
+          if (store.dispatch(wasDone ? 'untickStep' : 'tickStep', { projectId: p.id, stepId: s.id }) && !wasDone) ctx.afterTick(p.id, 'detail');
+        },
       }),
       s.done
         ? h('span', { class: 'step-text' }, s.text, h('span', { class: 'muted small' }, ` · ${fmtDay(s.doneAt ? indiaDate(s.doneAt) : '')}`))
@@ -334,7 +340,7 @@ export function renderDetail(ctx) {
           input.focus();
         },
       },
-      h('input', { name: 'text', placeholder: '+ Add step (type @ for a person)', key: 'add-step-' + p.id, enterkeyhint: 'enter', 'data-mention': '1', autocomplete: 'off' }),
+      h('input', { name: 'text', placeholder: openSteps.length ? '+ Add step (type @ for a person)' : `What's next for "${p.name}"?`, key: 'add-step-' + p.id, enterkeyhint: 'enter', 'data-mention': '1', autocomplete: 'off' }),
       ctx.hasAiKey() ? h('button', {
         class: 'btn ai small', type: 'button', title: 'AI helper', 'aria-label': 'AI helper',
         onClick: () => { ui.ai = ui.ai && ui.ai.projectId === p.id ? null : { projectId: p.id, mode: 'choose', state: 'choose' }; ctx.render(); },

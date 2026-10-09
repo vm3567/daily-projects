@@ -417,3 +417,41 @@ kbd {
   .quick-add { width: 24px; height: 24px; margin-left: 4px; font-size: 17px; }
   .quick-add-form { padding-left: 40px; }
 }
+
+/* ---------- fewer clicks (v9): row actions, done group, daily round ---------- */
+.row-act {
+  flex: none; margin-left: 4px; border: 1px solid #bbf7d0; background: #f0fdf4; color: #15803d;
+  border-radius: 99px; padding: 3px 9px; font-size: 12px; cursor: pointer; white-space: nowrap;
+}
+.row-act:hover { background: #dcfce7; }
+.row-act.chase { border-color: #c7d7fb; background: var(--brand-soft); color: #1e40af; }
+.prow .row-act { align-self: center; }
+.done-toggle { display: block; margin: 6px 14px; border: 0; background: none; color: var(--muted); cursor: pointer; font-size: 13.5px; padding: 6px 4px; }
+.done-toggle:hover { color: var(--brand); }
+.plist-done { padding: 0 8px; opacity: .85; }
+.all-green { margin: 10px 16px; color: var(--green); font-weight: 600; }
+.progress-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 5px; }
+.progress-row .progress-text { margin: 0; }
+.round-top { position: sticky; top: 0; z-index: 2; background: var(--bg); display: flex; align-items: center; gap: 10px; padding: 14px 0 10px; border-bottom: 1px solid var(--line); }
+.round-top strong { font-size: 16px; }
+.round-top .muted { flex: 1; }
+.round-card { margin-top: 18px; padding: 20px 22px; border: 1px solid var(--line); border-radius: 16px; background: #fff; box-shadow: 0 6px 24px rgba(16,24,40,.06); outline: none; }
+.round-name { display: flex; align-items: center; gap: 10px; }
+.round-name .dot { width: 14px; height: 14px; }
+.round-title { font-size: 22px; font-weight: 700; color: var(--text); }
+.round-meta { margin: 4px 0 14px 24px; }
+.round-next { font-size: 16px; margin: 0 0 6px; }
+.round-next.warn { color: var(--red); }
+.round-actions { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; margin-top: 18px; }
+.round-btn { justify-content: space-between; padding: 11px 12px; font-size: 14.5px; }
+.round-btn.primary kbd { background: rgba(255,255,255,.2); border-color: rgba(255,255,255,.4); color: #fff; }
+.round-form { margin-top: 16px; }
+.round-finish { text-align: center; }
+.round-finish .row { justify-content: center; margin-top: 14px; }
+.round-big { font-size: 22px; font-weight: 700; margin-bottom: 4px; }
+@media (max-width: 760px) {
+  .round-card { padding: 16px; }
+  .round-actions { grid-template-columns: 1fr 1fr; }
+  .round-btn kbd { display: none; }
+  .round-top { padding-top: calc(10px + env(safe-area-inset-top)); }
+}
