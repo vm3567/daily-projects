@@ -449,6 +449,7 @@ const handlers = {
     p.files.push({
       id: a.fileId, name, path: filePath(p.id, a.fileId, name), sha: a.sha,
       size: Number(a.size) || 0, type: cleanText(a.type, 100), createdAt: op.at,
+      noteId: a.noteId || null, // photo added with a work note
     });
     touch(p, op);
     addEvent(state, op, p, 'file_added', name);

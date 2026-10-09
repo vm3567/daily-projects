@@ -35,6 +35,27 @@ async function shrinkImage(file) {
   }
 }
 
+/**
+ * Upload ONE file (photos are shrunk first) and return what addFile needs — without adding it yet.
+ * Returns null (with a message) if it can't be uploaded.
+ */
+export async function uploadBlob(ctx, original) {
+  const { store, toast } = ctx;
+  if (!store.canEdit()) { toast('No connection — photo not added'); return null; }
+  const file = await shrinkImage(original);
+  if (file.size > MAX_FILE_BYTES) { toast(`"${original.name}" is bigger than 25 MB, so it was not added.`); return null; }
+  toast(`Uploading "${file.name}"…`, 60000);
+  try {
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const sha = await store.repo.createBlobBase64(bytesToBase64(bytes));
+    toast(`Photo ready: ${file.name}`, 1500);
+    return { fileId: newId(), name: file.name || 'photo.jpg', sha, size: file.size, type: file.type || '' };
+  } catch (e) {
+    toast(`Could not upload "${file.name}": ${e.message}`);
+    return null;
+  }
+}
+
 /** Upload files to the data repository and add them to the project. */
 export async function uploadFiles(ctx, projectId, fileList) {
   const { store, toast } = ctx;
@@ -64,6 +85,7 @@ let currentUrl = null;
 export function closeViewer() {
   const v = document.getElementById('viewer');
   v.hidden = true;
+  v.classList.remove('sheet-mode');
   v.replaceChildren();
   if (currentUrl) URL.revokeObjectURL(currentUrl);
   currentUrl = null;

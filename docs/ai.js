@@ -150,6 +150,34 @@ export async function suggestSteps(provider, key, project) {
   return steps;
 }
 
+/** ✍ A short, polite follow-up message to someone you are waiting on. */
+export async function draftFollowUp(provider, key, { person, step, project, days }) {
+  const notes = project.workNotes.filter((n) => !n.stepId || n.stepId === step.id).slice(0, 4)
+    .map((n) => `- ${indiaDate(n.createdAt)}: ${n.text}`).join('\n');
+  const r = await ask(provider, key,
+    'You write short follow-up messages for WhatsApp or email, for a professional in the Indian ceramic industry. '
+    + 'Friendly, polite, respectful, plain English. 2 to 4 short sentences. Start with a greeting using the person\'s first name. '
+    + 'Say clearly what you are waiting for and ask for an update or a date. No subject line, no signature, no emojis. '
+    + 'Answer ONLY with JSON: {"message": "..."}',
+    `Person: ${person || '(name not known)'}\nWaiting for: ${step.text}\nProject: ${project.name}\n`
+    + `Waiting for ${days} day${days === 1 ? '' : 's'}.\n${step.note ? 'Step note: ' + step.note + '\n' : ''}${notes ? 'Recent notes:\n' + notes : ''}`);
+  const msg = typeof r.message === 'string' ? r.message.trim().slice(0, 1200) : '';
+  if (!msg) throw new AiError('The AI gave no message. Try again.');
+  return msg;
+}
+
+/** ✨ Make the day summary shorter and nicer, keeping every fact. */
+export async function polishSummary(provider, key, text) {
+  const r = await ask(provider, key,
+    'Rewrite this daily work update to send to a manager on WhatsApp. Keep every fact, project name and person; '
+    + 'make it short, clear and professional. Use simple bullet lines. No emojis except ✅ and ⏳. '
+    + 'Answer ONLY with JSON: {"text": "..."}',
+    text);
+  const out = typeof r.text === 'string' ? r.text.trim().slice(0, 4000) : '';
+  if (!out) throw new AiError('The AI gave no text. Try again.');
+  return out;
+}
+
 /** Morning plan: the 5 most important things for today. Returns { items: [{projectId, text}] }. */
 export async function morningPlan(provider, key, data) {
   const today = todayIndia();

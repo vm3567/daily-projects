@@ -5,7 +5,7 @@ import { renderDetail } from './ui/detail.js';
 import { renderPeopleList, renderPerson, peopleByFollowUp } from './ui/people.js';
 import { installMentions } from './ui/mention.js';
 import { renderDashboard } from './ui/dashboard.js';
-import { closeViewer } from './ui/files.js';
+import { closeViewer, uploadBlob } from './ui/files.js';
 import { Store } from './store.js';
 import { GitHubRepo } from './github.js';
 import { MockRepo } from './mockrepo.js';
@@ -99,6 +99,8 @@ const ctx = {
   aiSuggest: (p) => runAi(p, 'next'),
   aiSteps: (p) => runSuggest(p),
   goSettings: () => go('settings'),
+  draftFollowUp: (p, s) => draftFollowUp(p, s),
+  openSummary: () => openSummary(),
   openPerson: (id) => { go('people'); ctx.selectPerson(id); },
   aiBreakdown: (p, goal) => runAi(p, 'breakdown', goal),
   hasAiKey: () => !!(store && aiReady().key),
@@ -189,6 +191,116 @@ async function runSuggest(p) {
   }
   ui.ai = { projectId: p.id, mode: 'suggest', state: 'error', error: lastError ? lastError.message : 'The AI did not answer.' };
   render();
+}
+
+/** Run an AI job with the chosen AI first, the other one if it fails. Counts one AI use. */
+async function withAi(job) {
+  const chosen = store.view.data.settings.aiProvider || 'claude';
+  const order = [chosen, chosen === 'claude' ? 'gemini' : 'claude'].filter((x) => aiKeyFor(x));
+  if (!order.length) throw new Error('Add a Claude or Gemini key in Settings first.');
+  if (!useAi()) throw new Error('Daily AI limit reached — try tomorrow.');
+  let last = null;
+  for (const provider of order) {
+    try { return await job(provider, aiKeyFor(provider)); } catch (e) { last = e; }
+  }
+  throw last || new Error('The AI did not answer.');
+}
+
+// ---------------------------------------------------------------- message sheet
+// A white panel over the page with an editable text, and Copy / WhatsApp / Email buttons.
+
+function openSheet({ title, text, busy = false, error = '', extra = null, subject = 'Update' }) {
+  const v = document.getElementById('viewer');
+  v.hidden = false;
+  v.classList.add('sheet-mode');
+  const area = h('textarea', { class: 'sheet-text', rows: 12, 'aria-label': title });
+  area.value = text || '';
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(area.value); toast('Copied ✓ — paste it in WhatsApp or email', 2500); }
+    catch { area.select(); document.execCommand && document.execCommand('copy'); toast('Copied ✓', 2000); }
+  };
+  const wa = () => window.open(`https://wa.me/?text=${encodeURIComponent(area.value)}`, '_blank', 'noopener');
+  const mail = () => { location.href = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(area.value)}`; };
+  v.replaceChildren(
+    h('div', { class: 'sheet' },
+      h('div', { class: 'sheet-head' }, h('strong', null, title), h('button', { class: 'icon', 'aria-label': 'Close', onClick: closeSheet }, '✕')),
+      busy ? h('p', { class: 'muted' }, 'Writing…') : error ? h('p', { class: 'error' }, error) : area,
+      busy || error ? null : h('p', { class: 'muted small' }, 'You can change the words before sending.'),
+      h('div', { class: 'row sheet-actions' },
+        busy || error ? null : h('button', { class: 'btn primary', onClick: copy }, '📋 Copy'),
+        busy || error ? null : h('button', { class: 'btn wa', onClick: wa }, 'WhatsApp'),
+        busy || error ? null : h('button', { class: 'btn', onClick: mail }, '✉ Email'),
+        extra)));
+  if (!busy && !error) setTimeout(() => area.focus(), 30);
+}
+
+function closeSheet() {
+  const v = document.getElementById('viewer');
+  v.classList.remove('sheet-mode');
+  closeViewer();
+}
+
+/** ✍ Draft a follow-up message for a waiting step. */
+async function draftFollowUp(p, step) {
+  const title = `Message to ${step.waitingOn || 'follow up'}`;
+  openSheet({ title, busy: true });
+  try {
+    const text = await withAi((provider, key) => ai.draftFollowUp(provider, key, { person: step.waitingOn, step, project: p, days: waitingDays(step) }));
+    openSheet({
+      title, text, subject: step.text,
+      extra: h('button', { class: 'btn', title: 'Saves a work note and restarts the waiting count', onClick: () => { chase(p, step); closeSheet(); } }, 'Mark as chased'),
+    });
+  } catch (e) {
+    openSheet({ title, error: e.message });
+  }
+}
+
+/** 📋 Everything done today, grouped by project, ready to send. */
+function todaySummaryText() {
+  const { data, history } = store.view;
+  const today = todayIndia();
+  const events = (history[monthOf(today)] || []).filter((e) => indiaDate(e.at) === today && e.projectId);
+  const byProject = new Map();
+  const entry = (pid) => { if (!byProject.has(pid)) byProject.set(pid, { done: [], notes: [] }); return byProject.get(pid); };
+  for (const e of events) if (e.kind === 'step_ticked') entry(e.projectId).done.push(e.detail);
+  for (const p of data.projects) for (const n of p.workNotes) if (indiaDate(n.createdAt) === today) entry(p.id).notes.push(n.text);
+  const dateText = new Intl.DateTimeFormat('en-IN', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata' }).format(new Date());
+  const lines = [`Daily update — ${dateText}`];
+  let doneCount = 0;
+  const blocks = [];
+  for (const [pid, x] of byProject) {
+    const p = data.projects.find((q) => q.id === pid);
+    if (!p || (!x.done.length && !x.notes.length)) continue;
+    doneCount += x.done.length;
+    const b = [`• ${p.name}`];
+    for (const d of x.done) b.push(`   ✅ ${d}`);
+    for (const n of x.notes) b.push(`   📝 ${n}`);
+    const ns = p.state === 'active' && nextStep(p, today, { dueOnly: true });
+    if (ns) b.push(`   → Next: ${ns.text}`);
+    blocks.push(b.join('\n'));
+  }
+  if (!blocks.length) return `${lines[0]}\n\nNothing recorded yet today.`;
+  lines.push(`${doneCount} step${doneCount === 1 ? '' : 's'} done across ${blocks.length} project${blocks.length === 1 ? '' : 's'}.`, '', ...blocks);
+  const waiting = peopleByFollowUp(data).filter((x) => x.st.waiting);
+  if (waiting.length) lines.push('', `⏳ Waiting on: ${waiting.map((x) => x.person.name).join(', ')}`);
+  return lines.join('\n');
+}
+
+function openSummary() {
+  const text = todaySummaryText();
+  const polish = h('button', {
+    class: 'btn ai',
+    onClick: async () => {
+      const current = document.querySelector('.sheet-text');
+      const base = current ? current.value : text;
+      openSheet({ title: "Today's summary", busy: true });
+      try {
+        const better = await withAi((provider, key) => ai.polishSummary(provider, key, base));
+        openSheet({ title: "Today's summary", text: better, subject: 'Daily update' });
+      } catch (e) { openSheet({ title: "Today's summary", text: base, subject: 'Daily update' }); toast(e.message); }
+    },
+  }, '✨ Shorter with AI');
+  openSheet({ title: "Today's summary", text, subject: 'Daily update', extra: polish });
 }
 
 function briefKind() {
@@ -674,9 +786,11 @@ function progressLine(today) {
       h('div', { class: 'progress-text' },
         h('strong', null, `${done} of ${active.length}`), done === active.length ? ' done today — all green! 🎉' : ' done today',
         streakBadge()),
-      done < active.length && !ui.round
-        ? h('button', { class: 'btn primary small round-start', title: 'One project at a time (key: g)', onClick: startRound }, '▶ Daily round', keyHint('G'))
-        : null),
+      h('div', { class: 'progress-btns' },
+        h('button', { class: 'btn small', title: "Everything you did today, ready to send", onClick: openSummary }, '📋 Summary'),
+        done < active.length && !ui.round
+          ? h('button', { class: 'btn primary small round-start', title: 'One project at a time (key: g)', onClick: startRound }, '▶ Daily round', keyHint('G'))
+          : null)),
     bar);
 }
 
@@ -1167,6 +1281,23 @@ function renderRound() {
         btn('add', '+ Add step', 's'),
         btn('note', '✎ Note', 'w'),
         due && due.waiting ? btn('chase', 'Chased', 'c') : null,
+        due && due.waiting ? h('button', { class: 'btn round-btn', onClick: () => draftFollowUp(p, due) }, '✍ Draft message', h('kbd', null, 'm')) : null,
+        h('label', { class: 'btn round-btn photo-btn' }, '📷 Photo',
+          h('input', {
+            type: 'file', accept: 'image/*', class: 'visually-hidden',
+            onChange: async (e, el) => {
+              const file = el.files && el.files[0];
+              el.value = '';
+              if (!file) return;
+              const up = await uploadBlob(ctx, file);
+              if (!up) return;
+              const noteId = newId();
+              actMany(p.id, [
+                ['addWorkNote', { projectId: p.id, noteId, text: `📷 Photo${due ? ' — ' + due.text : ''}`, stepId: due ? due.id : null }],
+                ['addFile', { projectId: p.id, ...up, noteId }],
+              ], `Photo added to ${p.name}`);
+            },
+          })),
         btn('ok', '✓ OK for today', 'o', 'ok-btn'),
         btn('skip', 'Skip →', 'n'))));
 }
@@ -1250,7 +1381,7 @@ function onKey(e) {
   if (e.metaKey || e.ctrlKey || e.altKey) return; // leave browser shortcuts alone
   if (e.key === 'Escape') {
     const viewer = document.getElementById('viewer');
-    if (!viewer.hidden) { closeViewer(); return; }
+    if (!viewer.hidden) { closeSheet(); return; }
     if (ui.showKeys) { ui.showKeys = false; render(); return; }
     if (isTyping(document.activeElement)) { document.activeElement.blur(); return; }
     if (ui.round) { if (ui.round.mode) { ui.round.mode = null; render(); } else endRound(); return; }
@@ -1271,6 +1402,12 @@ function onKey(e) {
   if (ui.round) {
     const map = { x: 'done', s: 'add', w: 'note', o: 'ok', c: 'chase', n: 'skip', ArrowRight: 'skip' };
     if (map[k] && !ui.round.done) { e.preventDefault(); roundAct(map[k]); return; }
+    if (k === 'm' && !ui.round.done) {
+      const rp = roundProject();
+      const d = rp && nextStep(rp, todayIndia(), { dueOnly: true });
+      if (d && d.waiting) { e.preventDefault(); draftFollowUp(rp, d); }
+      return;
+    }
     if (k === '?') { ui.showKeys = !ui.showKeys; render(); e.preventDefault(); }
     return; // other keys do nothing during the round
   }

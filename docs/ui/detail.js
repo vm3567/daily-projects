@@ -5,7 +5,7 @@ import { h, fmtDay, fmtTime, fmtSize, keyHint, withKey, HAS_KEYBOARD } from './d
 import { dotColour, todayIndia, isOverdue, indiaDate, waitingDays, lastWorkDate, nextStep } from '../rules.js';
 import { WAIT_RED_DAYS } from '../config.js';
 import { newId, PRIORITIES, cleanUrl } from '../ops.js';
-import { uploadFiles, openFile } from './files.js';
+import { uploadFiles, openFile, uploadBlob } from './files.js';
 
 const REPEAT_WORD = { daily: 'every day', weekly: 'every week', monthly: 'every month' };
 const COLOUR_WORD = { green: 'Done for today', yellow: 'Opened today', red: 'Not looked at today', grey: 'Paused or finished' };
@@ -49,6 +49,7 @@ function stepRow(ctx, p, s) {
     if (s.chasedDate !== today) {
       tags.push(h('button', { class: 'row-act chase', title: 'I followed up today', onClick: () => ctx.chase(p, s) }, 'Chased'));
     }
+    tags.push(h('button', { class: 'row-act draft', title: 'AI writes a short follow-up message', onClick: () => ctx.draftFollowUp(p, s) }, '✍ Draft'));
   }
   if (s.dueDate && !s.done) tags.push(h('span', { class: 'tag' + (s.dueDate < today ? ' late' : '') }, `by ${fmtDay(s.dueDate)}`));
   if (s.note && !open) tags.push(h('span', { class: 'tag' }, 'note'));
@@ -271,16 +272,21 @@ function todaysUpdate(ctx, p, notesShown) {
     const text = f.note.value.trim();
     const next = f.next ? f.next.value.trim() : '';
     const tick = !!(due && u.done);
-    if (!text && !tick && !next) return;
+    const photos = u.photos || [];
+    if (!text && !tick && !next && !photos.length) return;
     const steps = [];
-    if (text) steps.push(['addWorkNote', { projectId: p.id, noteId: newId(), text, stepId: due ? due.id : null }]);
+    const noteId = newId();
+    const noteText = text || (photos.length ? `📷 ${photos.length} photo${photos.length > 1 ? 's' : ''}` : '');
+    if (noteText) steps.push(['addWorkNote', { projectId: p.id, noteId, text: noteText, stepId: due ? due.id : null }]);
+    for (const ph of photos) steps.push(['addFile', { projectId: p.id, ...ph, noteId }]);
     if (tick) steps.push(['tickStep', { projectId: p.id, stepId: due.id }]);
     if (next) steps.push(['addStep', { projectId: p.id, stepId: newId(), text: next }]);
-    const bits = [text ? 'note saved' : null, tick ? `✓ ${due.text}` : null, next ? `next: ${next}` : null].filter(Boolean);
+    const bits = [text ? 'note saved' : null, photos.length ? `${photos.length} photo${photos.length > 1 ? 's' : ''}` : null, tick ? `✓ ${due.text}` : null, next ? `next: ${next}` : null].filter(Boolean);
     if (ctx.actMany(p.id, steps, bits.join(' · '))) {
       f.note.value = '';
       if (f.next) f.next.value = '';
       u.done = false;
+      u.photos = [];
       ctx.render();
       if (tick && !next && !nextStep(store.view.data.projects.find((x) => x.id === p.id) || p, today, { dueOnly: true })) ctx.afterTick(p.id, 'detail');
     }
@@ -305,8 +311,22 @@ function todaysUpdate(ctx, p, notesShown) {
       name: 'next', key: 'wn-next-' + p.id, autocomplete: 'off', enterkeyhint: 'done', 'data-mention': '1',
       placeholder: due ? "What's next? (optional)" : 'Next step (optional)',
     }) : null,
+    (u.photos || []).length ? h('div', { class: 'photo-chips' }, u.photos.map((ph, i) => h('span', { class: 'tag photo', key: 'ph-' + ph.fileId },
+      `📷 ${ph.name}`, h('button', { class: 'icon tiny-x', type: 'button', 'aria-label': 'Remove photo', onClick: () => { u.photos.splice(i, 1); ctx.render(); } }, '✕')))) : null,
     h('div', { class: 'row' },
       h('button', { class: 'btn primary small', type: 'submit' }, 'Save update'),
+      h('label', { class: 'btn small photo-btn', title: 'Take a photo or choose one' }, '📷 Photo',
+        h('input', {
+          type: 'file', accept: 'image/*', multiple: true, class: 'visually-hidden',
+          onChange: async (e, el) => {
+            const files = [...el.files];
+            el.value = '';
+            for (const f of files) {
+              const up = await uploadBlob(ctx, f);
+              if (up) { (u.photos ||= []).push(up); ctx.render(); }
+            }
+          },
+        })),
       h('span', { class: 'muted small' }, 'Enter also saves'))),
     h('ul', { class: 'notes' }, p.workNotes.slice(0, notesShown).map((n) => {
       const st = n.stepId && p.steps.find((x) => x.id === n.stepId);
@@ -315,6 +335,7 @@ function todaysUpdate(ctx, p, notesShown) {
         autoField('input', { value: n.text, 'aria-label': 'Work note', key: 'nt-' + n.id, 'data-mention': '1' },
           (v) => { if (v.trim()) store.dispatch('editWorkNote', { projectId: p.id, noteId: n.id, text: v }); }),
         st ? h('span', { class: 'tag on-step', title: 'This note is about this step' }, `on: ${st.text}`) : null,
+        ...p.files.filter((f) => f.noteId === n.id).map((f) => h('button', { class: 'tag photo', key: 'nf-' + f.id, title: 'Open photo', onClick: () => openFile(ctx, f) }, '📷')),
         h('button', {
           class: 'icon', title: 'Delete note',
           onClick: () => ctx.act('deleteWorkNote', { projectId: p.id, noteId: n.id }, 'Note deleted'),

@@ -73,6 +73,7 @@ Version: 5.
 | 44 | Notes save sign | Under the big Notes box: "Typing…" → "Saving…" → "Saved ✓ time" (red if no connection). Typed text is also saved when leaving the app or switching tabs. |
 | 45 | Dashboard | Menu → Dashboard (key b): today's green count, current and best all-green streak, all-green days this month, a month calendar of green days (‹ › for other months), last 7 days numbers (steps done, notes, projects worked on), most worked projects this month, projects that need attention (overdue or no real work 3+ days), people to contact, wins this week (the real steps done), this week vs last week, all-time totals, a 🏆 shelf of finished projects, and a 🎉 all-green celebration (also on Today). |
 | 46 | Today's update | "What did you do today?" became "Today's update": shows the next step on top; the note is linked to that step; tick "This step is done" and a "What's next?" box appears; one Save (Enter) saves note + tick + next step with one Undo. Notes show under their step and in the Diary ("on: step"). |
+| 47 | Draft, summary, photos | ✍ Draft on waiting steps (project page, person page, daily round key m): AI writes a short polite follow-up; Copy / WhatsApp / Email / Mark as chased. 📋 Summary on Today: everything done today by project, with next steps and who you wait on; Copy / WhatsApp / Email; ✨ Shorter with AI. 📷 Photo in Today's update and the daily round (iPhone camera or library); photos are linked to that note. |
 
 ---
 
