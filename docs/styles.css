@@ -668,3 +668,34 @@ kbd.hint {
 .row-menu-item { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; background: none; border: 0; border-radius: 6px; padding: 7px 10px; font: inherit; font-size: 14px; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .row-menu-item:hover, .row-menu-item:focus-visible { background: var(--brand-soft); }
 .rm-icon { width: 18px; text-align: center; flex: none; }
+
+/* ---------- compact one-screen dashboard (v24) ---------- */
+.dashboard.compact { max-width: none; padding: 12px 18px 16px; }
+.dashboard.compact .dash-tiles { grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; margin-bottom: 12px; }
+.dashboard.compact .dash-tile { padding: 9px 12px; border-radius: 12px; }
+.dashboard.compact .dash-label { font-size: 11px; }
+.dashboard.compact .dash-value { font-size: 22px; line-height: 1.2; }
+.dashboard.compact .dash-sub { font-size: 12px; }
+.dash-cols { display: grid; grid-template-columns: minmax(330px, 1.25fr) minmax(0, 1fr) minmax(0, 1fr); gap: 12px; align-items: start; }
+.dash-col { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.dashboard.compact .dash-card { margin: 0; padding: 12px 14px; }
+.dashboard.compact .dash-card h3 { margin: 0 0 8px; }
+.dashboard.compact .dash-card-head { margin-bottom: 4px; }
+.dashboard.compact .dash-card-head h3 { margin: 0; }
+.dashboard.compact .cal { gap: 4px; margin-top: 6px; }
+.dashboard.compact .cal-cell { height: 40px; font-size: 12px; }
+.dashboard.compact .cal-score { font-size: 10.5px; }
+.dashboard.compact .cal-legend { margin-top: 8px; }
+.dashboard.compact .dash-bars li, .dashboard.compact .dash-list li { padding: 3px 0; }
+.dashboard.compact .dash-list li .link, .dashboard.compact .dash-bars li .link { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dashboard.compact .shelf { gap: 6px; }
+@media (max-width: 1250px) {
+  .dashboard.compact .dash-tiles { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .dash-cols { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .dash-cols > .dash-col:first-child { grid-row: span 2; }
+}
+@media (max-width: 760px) {
+  .dashboard.compact .dash-tiles { grid-template-columns: 1fr 1fr; }
+  .dash-cols { grid-template-columns: 1fr; }
+  .dash-cols > .dash-col:first-child { grid-row: auto; }
+}

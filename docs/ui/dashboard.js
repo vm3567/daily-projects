@@ -1,4 +1,4 @@
-// Dashboard: streaks, green days calendar, this week's numbers, what needs attention.
+// Dashboard (one screen): numbers strip, green days calendar, time, what needs attention.
 
 import { h, fmtDay } from './dom.js';
 import { dotColour, dayScore, todayIndia, addDays, monthOf, daysWithoutWork, isOverdue, indiaDate, initials, minutesBetween, fmtMinutes, weekStart as mondayOf } from '../rules.js';
@@ -73,50 +73,20 @@ export function renderDashboard(ctx) {
   const [yy, mm] = month.split('-').map(Number);
   const daysInMonth = new Date(Date.UTC(yy, mm, 0)).getUTCDate();
   let allGreenDays = 0;
-  let someGreenDays = 0;
   for (let i = 1; i <= daysInMonth; i++) {
     const d = `${month}-${String(i).padStart(2, '0')}`;
     const sc = get(d);
     if (isFull(sc)) allGreenDays++;
-    else if (sc && sc.green) someGreenDays++;
   }
 
-  // This week (last 7 days) from history
-  const weekStart = addDays(today, -6);
-  const events = Object.values(history).flat().filter((e) => indiaDate(e.at) >= weekStart);
-  const stepsDone = events.filter((e) => e.kind === 'step_ticked').length;
-  const notes = events.filter((e) => e.kind === 'note_added').length;
-  const worked = new Set(events.filter((e) => e.projectId && e.kind !== 'created' && e.kind !== 'reviewed').map((e) => e.projectId)).size;
-
-  // 1. Wins this week: the real steps finished, newest first
-  const nameOf = (e) => (data.projects.find((x) => x.id === e.projectId) || {}).name || e.projectName || '';
-  const wins = events.filter((e) => e.kind === 'step_ticked').sort((a, b) => (a.at < b.at ? 1 : -1));
-  const dayName = new Intl.DateTimeFormat('en-IN', { weekday: 'short', timeZone: 'Asia/Kolkata' });
-
-  // 2. This week vs last week
-  const lastStart = addDays(today, -13);
-  const lastEnd = addDays(today, -7);
+  // All time
   const allEvents = Object.values(history).flat();
-  const inRange = (e, a, b) => { const d = indiaDate(e.at); return d >= a && d <= b; };
-  const lastWeek = allEvents.filter((e) => inRange(e, lastStart, lastEnd));
-  const greenDaysIn = (a, b) => { let n = 0; for (let d = a; d <= b; d = addDays(d, 1)) if (isFull(get(d))) n++; return n; };
-  const compare = [
-    ['Steps done', stepsDone, lastWeek.filter((e) => e.kind === 'step_ticked').length],
-    ['All-green days', greenDaysIn(weekStart, today), greenDaysIn(lastStart, lastEnd)],
-    ['Work notes', notes, lastWeek.filter((e) => e.kind === 'note_added').length],
-  ];
-  const trend = (now, before) => (now > before ? h('span', { class: 'up' }, `↑ ${now - before} more`)
-    : now < before ? h('span', { class: 'down' }, `↓ ${before - now} fewer`) : h('span', { class: 'muted small' }, 'same'));
-
-  // 3. All time
   const totalSteps = allEvents.filter((e) => e.kind === 'step_ticked').length;
   // finished and still finished, plus finished projects that were later deleted (reopened ones don't count)
   const finishedIds = new Set(data.projects.filter((p) => p.state === 'finished').map((p) => p.id));
   for (const e of allEvents) if (e.kind === 'finished' && !exists(data, e.projectId)) finishedIds.add(e.projectId);
-  let totalGreenDays = 0;
-  for (let d = firstDay; d <= today; d = addDays(d, 1)) if (isFull(get(d))) totalGreenDays++;
 
-  // 4. Finished projects shelf
+  // Finished projects shelf
   const shelf = data.projects.filter((p) => p.state === 'finished').sort((a, b) => (a.stateChangedAt < b.stateChangedAt ? 1 : -1));
 
   // Time this week (Monday to today), by group and by project, and last week's total
@@ -168,98 +138,62 @@ export function renderDashboard(ctx) {
   };
 
   const allGreen = active.length > 0 && greenNow === active.length;
-  const showWins = ui.showAllWins ? wins : wins.slice(0, 6);
-  return h('div', { class: 'dashboard' },
-    allGreen ? h('div', { class: 'celebrate', key: 'celebrate' },
-      h('div', { class: 'celebrate-big' }, `🎉 All ${active.length} projects green!`),
-      h('div', null, st.current > 1 ? `${st.current} days in a row${st.current >= st.best ? ' — your best ever' : ''}` : 'Every project got your attention today.')) : null,
+  const monthName = monthFmt.format(new Date(Date.UTC(yy, mm - 1, 1)));
+  const bar = (n, max, min) => { const f = h('div', { class: 'dash-bar-fill' }); f.style.width = `${Math.max(min, Math.round((n / max) * 100))}%`; return f; }; // style object (allowed by the page's safety rules)
+  const card = (title, body, head = null, key = title) => h('section', { class: 'dash-card', key: 'dc-' + key },
+    head || h('h3', null, title), body);
+  // One screen: a strip of numbers on top, then three columns.
+  return h('div', { class: 'dashboard compact' },
     h('div', { class: 'dash-tiles' },
-      tile('Today', `${greenNow} of ${active.length}`, greenNow === active.length && active.length ? 'all green 🎉' : 'projects green', greenNow === active.length && active.length ? 'good' : ''),
-      tile('Streak', `🔥 ${st.current}`, st.current === 1 ? 'day all green' : 'days all green in a row', st.current ? 'warm' : ''),
+      tile('Today', `${greenNow} of ${active.length}`, allGreen ? 'all green 🎉' : 'projects green', allGreen ? 'good' : ''),
+      tile('Streak', `🔥 ${st.current}`, st.current === 1 ? 'day all green' : 'days in a row', st.current ? 'warm' : ''),
       tile('Best streak', String(st.best), st.best === 1 ? 'day' : 'days'),
-      tile(`All-green days`, String(allGreenDays), `in ${monthFmt.format(new Date(Date.UTC(yy, mm - 1, 1)))}`)),
+      tile('Green days', String(allGreenDays), `in ${monthName}`),
+      tile('Steps done', String(totalSteps), 'all time'),
+      tile('Finished', String(finishedIds.size), finishedIds.size === 1 ? 'project' : 'projects')),
 
-    h('div', { class: 'dash-grid', key: 'dash-wins' },
-      h('section', { class: 'dash-card' }, h('h3', null, `Wins this week (${wins.length})`),
-        wins.length ? h('ul', { class: 'wins' }, showWins.map((e) => h('li', { key: 'win-' + e.id },
-          h('span', { class: 'win-check' }, '✓'),
-          h('div', null, h('div', null, e.detail),
-            h('div', { class: 'muted small' }, exists(data, e.projectId)
-              ? [h('button', { class: 'link small', onClick: () => ctx.openProject(e.projectId) }, nameOf(e)), ` · ${dayName.format(new Date(e.at))}`]
-              : `${nameOf(e)} · ${dayName.format(new Date(e.at))}`))))) : h('p', { class: 'muted small' }, 'Tick a step and it shows here.'),
-        wins.length > 6 ? h('button', { class: 'link small', onClick: () => { ui.showAllWins = !ui.showAllWins; ctx.render(); } },
-          ui.showAllWins ? 'Show fewer' : `+ ${wins.length - 6} more`) : null),
-      h('section', { class: 'dash-card' }, h('h3', null, 'This week vs last week'),
-        h('ul', { class: 'compare' }, compare.map(([label, now, before]) => h('li', { key: 'cmp-' + label },
-          h('span', null, label), h('span', null, h('strong', null, String(now)), ' ', trend(now, before))))))),
+    h('div', { class: 'dash-cols' },
+      h('div', { class: 'dash-col' },
+        card('Green days', h('div', null,
+          h('div', { class: 'cal' }, WEEKDAYS.map((w) => h('div', { class: 'cal-head', key: 'w' + w }, w)), cells),
+          h('div', { class: 'cal-legend' },
+            h('span', null, h('i', { class: 'cal-key full' }), 'all green'),
+            h('span', null, h('i', { class: 'cal-key half' }), 'half or more'),
+            h('span', null, h('i', { class: 'cal-key some' }), 'a few'),
+            h('span', null, h('i', { class: 'cal-key zero' }), 'none'))),
+        h('div', { class: 'dash-card-head' },
+          h('button', { class: 'icon', 'aria-label': 'Previous month', onClick: () => shift(-1) }, '‹'),
+          h('h3', null, `Green days — ${monthName}`),
+          h('button', { class: 'icon', 'aria-label': 'Next month', onClick: () => shift(1), disabled: month >= monthOf(today) ? true : undefined }, '›')), 'cal')),
 
-    h('section', { class: 'dash-card', key: 'dash-time' },
-      h('div', { class: 'dash-card-head' }, h('h3', null, 'Time this week'), h('button', { class: 'link small', onClick: () => ctx.goTime() }, 'Time report →')),
-      timeTotal ? h('div', null,
-        h('div', { class: 'time-total' }, h('strong', null, fmtMinutes(timeTotal)),
-          lastTotal ? h('span', { class: timeTotal >= lastTotal ? 'up' : 'down' }, timeTotal >= lastTotal ? ` ↑ ${fmtMinutes(timeTotal - lastTotal)} more than last week` : ` ↓ ${fmtMinutes(lastTotal - timeTotal)} less than last week`) : h('span', { class: 'muted small' }, ' since Monday')),
-        h('div', { class: 'time-groups' }, groupRows.map((g) => h('span', { class: 'tag', key: 'tg-' + g.name }, `${g.name}: ${fmtMinutes(g.m)}`))),
-        h('ul', { class: 'dash-bars' }, timeRows.slice(0, 8).map(({ p, m }) => {
-          const fill = h('div', { class: 'dash-bar-fill' });
-          fill.style.width = `${Math.max(6, Math.round((m / maxTime) * 100))}%`; // style object (allowed by the page's safety rules)
-          return h('li', { key: 'tm-' + p.id },
+      h('div', { class: 'dash-col' },
+        card('Time this week', timeTotal ? h('div', null,
+          h('div', { class: 'time-total' }, h('strong', null, fmtMinutes(timeTotal)),
+            lastTotal ? h('span', { class: timeTotal >= lastTotal ? 'up' : 'down' }, timeTotal >= lastTotal ? ` ↑ ${fmtMinutes(timeTotal - lastTotal)} vs last week` : ` ↓ ${fmtMinutes(lastTotal - timeTotal)} vs last week`) : h('span', { class: 'muted small' }, ' since Monday')),
+          h('div', { class: 'time-groups' }, groupRows.map((g) => h('span', { class: 'tag', key: 'tg-' + g.name }, `${g.name}: ${fmtMinutes(g.m)}`))),
+          h('ul', { class: 'dash-bars' }, timeRows.slice(0, 5).map(({ p, m }) => h('li', { key: 'tm-' + p.id },
             h('button', { class: 'link', onClick: () => ctx.openProject(p.id) }, p.name),
-            h('div', { class: 'dash-bar' }, fill), h('span', { class: 'muted small' }, fmtMinutes(m)));
-        })))
-        : h('p', { class: 'muted small' }, 'No time logged this week yet. Press ▶ Start in a project to time your work.')),
+            h('div', { class: 'dash-bar' }, bar(m, maxTime, 6)), h('span', { class: 'muted small' }, fmtMinutes(m))))))
+          : h('p', { class: 'muted small' }, 'No time logged this week. Press ▶ Start in a project.'),
+        h('div', { class: 'dash-card-head' }, h('h3', null, 'Time this week'), h('button', { class: 'link small', onClick: () => ctx.goTime() }, 'Time report →'))),
+        card('Most worked this month', top.length ? h('ul', { class: 'dash-bars' }, top.map(({ p, n }) => h('li', { key: 'top-' + p.id },
+          h('button', { class: 'link', onClick: () => ctx.openProject(p.id) }, p.name),
+          h('div', { class: 'dash-bar' }, bar(n, maxTop, 8)), h('span', { class: 'muted small' }, String(n)))))
+          : h('p', { class: 'muted small' }, 'Nothing yet this month.'))),
 
-    h('div', { class: 'dash-grid', key: 'dash-alltime' },
-      h('section', { class: 'dash-card' }, h('h3', null, 'All time'),
-        h('div', { class: 'dash-nums' },
-          h('div', null, h('strong', null, String(totalSteps)), h('span', null, 'steps done')),
-          h('div', null, h('strong', null, String(finishedIds.size)), h('span', null, 'projects finished')),
-          h('div', null, h('strong', null, String(totalGreenDays)), h('span', null, 'all-green days')))),
-      h('section', { class: 'dash-card' }, h('h3', null, 'Finished projects'),
-        shelf.length ? h('div', { class: 'shelf' }, shelf.slice(0, 12).map((p) => h('button', {
-          class: 'trophy', key: 'tr-' + p.id, title: `Finished ${fmtDay(indiaDate(p.stateChangedAt))}`, onClick: () => ctx.openProject(p.id),
-        }, `🏆 ${p.name}`))) : h('p', { class: 'muted small' }, 'Finish a project and its trophy shows here.'))),
-
-    h('section', { class: 'dash-card' },
-      h('div', { class: 'dash-card-head' },
-        h('button', { class: 'icon', 'aria-label': 'Previous month', onClick: () => shift(-1) }, '‹'),
-        h('h3', null, `Green days — ${monthFmt.format(new Date(Date.UTC(yy, mm - 1, 1)))}`),
-        h('button', { class: 'icon', 'aria-label': 'Next month', onClick: () => shift(1), disabled: month >= monthOf(today) ? true : undefined }, '›')),
-      h('div', { class: 'cal' }, WEEKDAYS.map((w) => h('div', { class: 'cal-head', key: 'w' + w }, w)), cells),
-      h('div', { class: 'cal-legend' },
-        h('span', null, h('i', { class: 'cal-key full' }), 'all green'),
-        h('span', null, h('i', { class: 'cal-key half' }), 'half or more'),
-        h('span', null, h('i', { class: 'cal-key some' }), 'a few'),
-        h('span', null, h('i', { class: 'cal-key zero' }), 'none'),
-        someGreenDays || allGreenDays ? null : h('span', { class: 'muted' }, 'Fills in as days pass.'))),
-
-    h('div', { class: 'dash-grid' },
-      h('section', { class: 'dash-card' }, h('h3', null, 'Last 7 days'),
-        h('div', { class: 'dash-nums' },
-          h('div', null, h('strong', null, String(stepsDone)), h('span', null, 'steps done')),
-          h('div', null, h('strong', null, String(notes)), h('span', null, 'work notes')),
-          h('div', null, h('strong', null, String(worked)), h('span', null, 'projects worked on')))),
-
-      h('section', { class: 'dash-card' }, h('h3', null, 'Most worked this month'),
-        top.length ? h('ul', { class: 'dash-bars' }, top.map(({ p, n }) => {
-          const fill = h('div', { class: 'dash-bar-fill' });
-          fill.style.width = `${Math.max(8, Math.round((n / maxTop) * 100))}%`; // style object (allowed by the page's safety rules)
-          return h('li', { key: 'top-' + p.id },
-            h('button', { class: 'link', onClick: () => ctx.openProject(p.id) }, p.name),
-            h('div', { class: 'dash-bar' }, fill), h('span', { class: 'muted small' }, String(n)));
-        })) : h('p', { class: 'muted small' }, 'Nothing yet this month.')),
-
-      h('section', { class: 'dash-card' }, h('h3', null, 'Needs attention'),
-        stale.length || overdue.length ? h('ul', { class: 'dash-list' },
-          overdue.map((p) => h('li', { key: 'od-' + p.id }, h('span', { class: 'dot red' }),
+      h('div', { class: 'dash-col' },
+        card('Needs attention', stale.length || overdue.length ? h('ul', { class: 'dash-list' },
+          [...overdue.map((p) => h('li', { key: 'od-' + p.id }, h('span', { class: 'dot red' }),
             h('button', { class: 'link', onClick: () => ctx.openProject(p.id) }, p.name), h('span', { class: 'tag late' }, `Overdue · ${fmtDay(p.deadline)}`))),
-          stale.filter((x) => !isOverdue(x.p, today)).map(({ p, d }) => h('li', { key: 'st-' + p.id }, h('span', { class: `dot ${dotColour(p, today)}` }),
-            h('button', { class: 'link', onClick: () => ctx.openProject(p.id) }, p.name), h('span', { class: 'tag stale' }, `No real work for ${d} days`))))
+          ...stale.filter((x) => !isOverdue(x.p, today)).map(({ p, d }) => h('li', { key: 'st-' + p.id }, h('span', { class: `dot ${dotColour(p, today)}` }),
+            h('button', { class: 'link', onClick: () => ctx.openProject(p.id) }, p.name), h('span', { class: 'tag stale' }, `No work ${d} days`)))].slice(0, 5))
           : h('p', { class: 'muted small' }, 'Nothing stuck. 👍')),
-
-      h('section', { class: 'dash-card' }, h('h3', null, 'People to contact'),
-        chase.length ? h('ul', { class: 'dash-list' }, chase.map(({ person, st: s }) => h('li', { key: 'pc-' + person.id },
+        card('People to contact', chase.length ? h('ul', { class: 'dash-list' }, chase.slice(0, 4).map(({ person, st: s }) => h('li', { key: 'pc-' + person.id },
           h('span', { class: 'avatar' }, initials(person.name)),
           h('button', { class: 'link', onClick: () => ctx.openPerson(person.id) }, person.name),
           h('span', { class: 'muted small' }, s.waiting ? `waiting ${s.maxWait} day${s.maxWait === 1 ? '' : 's'}` : 'date passed'))))
-          : h('p', { class: 'muted small' }, 'Nobody to chase right now.'))));
+          : h('p', { class: 'muted small' }, 'Nobody to chase right now.')),
+        card('Finished projects', shelf.length ? h('div', { class: 'shelf' }, shelf.slice(0, 6).map((p) => h('button', {
+          class: 'trophy', key: 'tr-' + p.id, title: `Finished ${fmtDay(indiaDate(p.stateChangedAt))}`, onClick: () => ctx.openProject(p.id),
+        }, `🏆 ${p.name}`))) : h('p', { class: 'muted small' }, 'Finish a project and its trophy shows here.')))));
 }

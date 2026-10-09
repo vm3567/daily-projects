@@ -82,9 +82,10 @@ test('empty project page draws', () => {
   assert.ok(renderDetail(fakeCtx(sampleState(), { selected: 'nope' })).textContent.includes('Pick a project'));
 });
 
-test('dashboard draws (tiles, calendar, time, wins, people)', () => {
+test('dashboard draws (tiles, calendar, time, people) on one screen', () => {
   const text = renderDashboard(fakeCtx(sampleState(), {})).textContent;
-  for (const bit of ['Streak', 'Green days', 'Time this week', 'Wins this week', 'People to contact']) assert.ok(text.includes(bit), bit);
+  for (const bit of ['Streak', 'Green days', 'Time this week', 'People to contact', 'Needs attention']) assert.ok(text.includes(bit), bit);
+  for (const gone of ['Wins this week', 'This week vs last week']) assert.ok(!text.includes(gone), gone + ' removed');
 });
 
 test('people list and person page draw', () => {
