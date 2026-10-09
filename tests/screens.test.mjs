@@ -104,6 +104,10 @@ test('time report draws (pie, legend in % and hours) and date ranges are right',
   assert.ok(text.includes('100%'));
   ui.timeReport.mode = 'hours';
   assert.ok(renderTimeReport(fakeCtx(s, ui)).textContent.includes('Download image'));
+  const full = renderTimeReport(fakeCtx(s, ui)).textContent;
+  assert.ok(full.includes('Work done (1 step)'), 'work done section');
+  assert.ok(full.includes('✓ Call Ravi'), 'finished step listed');
+  assert.ok(full.includes('Full report image'));
   assert.deepEqual(rangeFor('thisWeek', '2026-10-09'), ['2026-10-05', '2026-10-09']);
   assert.deepEqual(rangeFor('lastWeek', '2026-10-09'), ['2026-09-28', '2026-10-04']);
   assert.deepEqual(rangeFor('thisMonth', '2026-10-09'), ['2026-10-01', '2026-10-09']);

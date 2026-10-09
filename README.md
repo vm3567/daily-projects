@@ -88,6 +88,8 @@ Also: each red/yellow row has a one-tap **✓ OK** (or **Chased** when waiting),
 - **Tags belong to a group** (e.g. Acton: Kiln, Glaze, Quality). Add / rename / delete them in Settings, or pick **+ New tag…** inside a project. One tag per project: tap the line under the project name (group · tag · priority) to set it.
 - **Time report** (left menu, or 🔍 → "Time report"): pick the **group**, the **period** (this week, last week, this month, last month, or your own dates), **By tag / By project**, **% / Hours**. A pie chart shows where the time went.
 - **⬇ Download image** saves a PowerPoint-size (16:9) picture; **📋 Copy image** lets you paste it straight into PowerPoint or WhatsApp.
+- **Work done** (under the pie): the steps you finished in that period, grouped by tag.
+- **⬇ Full report image** / **📋 Copy full report**: one picture with the time pie on the left and the work done on the right — the monthly owner report. Pick **Last month**, then download.
 
 ---
 
@@ -118,7 +120,7 @@ Also: each red/yellow row has a one-tap **✓ OK** (or **Chased** when waiting),
   - **To discuss with them** — other open steps with `@Name`
   - notes about them, and steps done recently
 - Tick steps right there when you meet them.
-- **📋 Send pending list** writes a message with everything open with that person (waiting on them, and to discuss) — Copy, WhatsApp or Email.
+- **📋 Send pending list** writes a message with everything open with that person (waiting on them, and to discuss) — Copy, WhatsApp or Email. Their own name is left out, because the message goes to them.
 
 ---
 

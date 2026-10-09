@@ -92,14 +92,46 @@ test('pending list message for one person: waiting and to-discuss items, no "@"'
   const s = sample();
   applyOps(s, [
     op('addStep', { projectId: 'p1', stepId: 's3', text: 'Tell @Ravi the new tile size' }, '2026-10-09'),
+    op('addStep', { projectId: 'p1', stepId: 's4', text: 'Prepare the mould for MOR testing @Ravi' }, '2026-10-09'),
+    op('addPerson', { personId: 'm', name: 'Meena' }, '2026-10-09'),
+    op('addStep', { projectId: 'p1', stepId: 's5', text: 'Share @Meena report with @Ravi' }, '2026-10-09'),
     op('setStepField', { projectId: 'p1', stepId: 's2', field: 'dueDate', value: '2026-10-15' }, '2026-10-09'),
   ]);
   const ravi = s.data.people.find((p) => p.name === 'Ravi');
   const text = personMessageText(s.data, ravi, '2026-10-12');
   assert.match(text, /^Hi Ravi,/);
   assert.match(text, /Waiting on you:\n1\. Order frit \(Kiln trial\) — by 15 Oct — pending 3 days/);
-  assert.match(text, /To discuss:\n1\. Tell Ravi the new tile size \(Kiln trial\)/);
+  assert.match(text, /To discuss:\n1\. Tell the new tile size \(Kiln trial\)/, 'his own name is taken out');
+  assert.ok(!/Ravi \(/.test(text.split('\n').slice(1).join('\n')), 'no "Ravi" inside the list lines');
   assert.ok(!text.includes('@'));
-  const nobody = { id: 'x', name: 'Meena' };
+  assert.match(text, /\d\. Prepare the mould for MOR testing \(Kiln trial\)/);
+  assert.match(text, /\d\. Share Meena report \(Kiln trial\)/, 'other names stay, dangling "with" removed');
+  const nobody = { id: 'x', name: 'Niketan' };
   assert.match(personMessageText({ ...s.data, people: [...s.data.people, nobody] }, nobody, '2026-10-12'), /Nothing is pending/);
+});
+
+test('work done by tag for the owner report', async () => {
+  const { workDoneByTag } = await import('../docs/reports.js');
+  const s = { data: emptyData(), history: {} };
+  const acton = s.data.groups[0];
+  applyOps(s, [
+    op('addTag', { groupId: acton.id, tagId: 'kiln', name: 'Kiln' }, '2026-10-01'),
+    op('createProject', { projectId: 'a1', name: 'Electric kiln', groupId: acton.id }, '2026-10-01'),
+    op('createProject', { projectId: 'a2', name: 'Misc', groupId: acton.id }, '2026-10-01'),
+    op('createProject', { projectId: 'h1', name: 'Home', groupId: s.data.groups[1].id }, '2026-10-01'),
+    op('setProjectField', { projectId: 'a1', field: 'tagId', value: 'kiln' }, '2026-10-01'),
+    op('addStep', { projectId: 'a1', stepId: 'x1', text: 'Replace element with @Ravi' }, '2026-10-01'),
+    op('addStep', { projectId: 'a1', stepId: 'x2', text: 'Test firing' }, '2026-10-01'),
+    op('addStep', { projectId: 'a2', stepId: 'y1', text: 'Order gloves' }, '2026-10-01'),
+    op('addStep', { projectId: 'h1', stepId: 'z1', text: 'Pay bill' }, '2026-10-01'),
+    op('tickStep', { projectId: 'a1', stepId: 'x1' }, '2026-10-03'),
+    op('tickStep', { projectId: 'a1', stepId: 'x2' }, '2026-10-05'),
+    op('tickStep', { projectId: 'a2', stepId: 'y1' }, '2026-10-04'),
+    op('tickStep', { projectId: 'h1', stepId: 'z1' }, '2026-10-04'),
+  ]);
+  const out = workDoneByTag(s.data, s.history, acton.id, '2026-10-01', '2026-10-31');
+  assert.deepEqual(out.map((g) => [g.name, g.items.length]), [['Kiln', 2], ['No tag', 1]]);
+  assert.equal(out[0].items[0].text, 'Test firing', 'newest first');
+  assert.equal(out[0].items[1].text, 'Replace element with Ravi');
+  assert.equal(workDoneByTag(s.data, s.history, acton.id, '2026-10-04', '2026-10-04').length, 1, 'date range respected');
 });

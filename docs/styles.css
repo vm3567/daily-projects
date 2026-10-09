@@ -649,3 +649,10 @@ kbd.hint {
 .report-legend strong { font-size: 17px; }
 .report-actions { margin-top: 14px; }
 @media (max-width: 760px) { .report { padding: 10px 14px 40px; } .pie { width: 200px; height: 200px; margin: 0 auto; } }
+
+/* ---------- full report (v22) ---------- */
+.work-done { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; }
+.work-tag-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.work-tag .swatch { width: 12px; height: 12px; border-radius: 3px; }
+.work-tag li { display: flex; justify-content: space-between; gap: 10px; padding: 3px 0; border-bottom: 1px solid #f1f5f9; font-size: 13.5px; }
+.report .report-card + .report-card { margin-top: 14px; }

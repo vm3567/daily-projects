@@ -2,7 +2,8 @@
 // and a PNG image (PowerPoint size) to download or copy.
 
 import { h } from './dom.js';
-import { todayIndia, addDays, timeSplit, percents, fmtMinutes, weekStart } from '../rules.js';
+import { todayIndia, addDays, timeSplit, percents, fmtMinutes, weekStart, monthOf } from '../rules.js';
+import { workDoneByTag } from '../reports.js';
 import { groupHasTimer } from '../ops.js';
 
 const COLOURS = ['#2563eb', '#16a34a', '#f59e0b', '#dc2626', '#7c3aed', '#0891b2', '#db2777', '#65a30d', '#ea580c', '#475569'];
@@ -94,6 +95,75 @@ export async function reportPng({ title, period, rows, pcts, mode }) {
   return new Promise((res) => c.toBlob(res, 'image/png'));
 }
 
+/** Fit text into a width on the canvas, adding "…" when too long. */
+function fit(g, text, width) {
+  if (g.measureText(text).width <= width) return text;
+  let t = text;
+  while (t.length > 1 && g.measureText(t + '…').width > width) t = t.slice(0, -1);
+  return t + '…';
+}
+
+/** The owner report: time pie + legend on the left, work done per tag on the right (1600×900). */
+export async function fullReportPng({ title, period, rows, pcts, work, tagColours }) {
+  const W = 1600; const H = 900;
+  const FONT = '-apple-system, Segoe UI, Roboto, Arial, sans-serif';
+  const c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  const g = c.getContext('2d');
+  g.fillStyle = '#ffffff'; g.fillRect(0, 0, W, H);
+  const total = rows.reduce((n, r) => n + r.minutes, 0);
+  g.fillStyle = '#0f172a'; g.font = `bold 50px ${FONT}`; g.fillText(fit(g, title, W - 140), 70, 95);
+  g.fillStyle = '#475569'; g.font = `30px ${FONT}`; g.fillText(`${period}   ·   Total ${fmtMinutes(total)}`, 70, 145);
+  // left: pie
+  const cx = 330; const cy = 400; const rad = 190;
+  let a0 = -Math.PI / 2;
+  rows.forEach((row, i) => {
+    const a1 = a0 + (total ? (row.minutes / total) * Math.PI * 2 : 0);
+    g.beginPath(); g.moveTo(cx, cy); g.arc(cx, cy, rad, a0, a1); g.closePath();
+    g.fillStyle = colourFor(row, i); g.fill(); g.strokeStyle = '#fff'; g.lineWidth = 4; g.stroke();
+    a0 = a1;
+  });
+  // left: legend under the pie
+  let y = 640;
+  rows.slice(0, 5).forEach((row, i) => {
+    g.fillStyle = colourFor(row, i); g.fillRect(90, y - 22, 26, 26);
+    g.fillStyle = '#0f172a'; g.font = `bold 26px ${FONT}`; g.fillText(fit(g, row.name, 250), 130, y);
+    g.textAlign = 'right'; g.fillText(`${pcts[i]}%`, 520, y);
+    g.fillStyle = '#64748b'; g.font = `24px ${FONT}`; g.fillText(fmtMinutes(row.minutes), 620, y);
+    g.textAlign = 'left';
+    y += 44;
+  });
+  if (rows.length > 5) { g.fillStyle = '#64748b'; g.font = `22px ${FONT}`; g.fillText(`+ ${rows.length - 5} more`, 130, y); }
+  // right: work done per tag
+  const x = 720;
+  g.strokeStyle = '#e2e8f0'; g.lineWidth = 2; g.beginPath(); g.moveTo(x - 40, 190); g.lineTo(x - 40, H - 60); g.stroke();
+  g.fillStyle = '#0f172a'; g.font = `bold 34px ${FONT}`;
+  const doneCount = work.reduce((n, w) => n + w.items.length, 0);
+  g.fillText(`Work done (${doneCount} step${doneCount === 1 ? '' : 's'})`, x, 220);
+  y = 275;
+  const maxY = H - 70;
+  let hidden = 0;
+  for (const w of work) {
+    if (y > maxY - 40) { hidden += w.items.length; continue; }
+    g.fillStyle = tagColours[w.key] || NO_TAG_COLOUR; g.fillRect(x, y - 22, 22, 22);
+    g.fillStyle = '#0f172a'; g.font = `bold 28px ${FONT}`; g.fillText(fit(g, `${w.name} (${w.items.length})`, 780), x + 34, y);
+    y += 40;
+    for (const it of w.items) {
+      if (y > maxY) { hidden++; continue; }
+      g.fillStyle = '#334155'; g.font = `24px ${FONT}`;
+      g.fillText(fit(g, `•  ${it.text}`, 600), x + 34, y);
+      g.fillStyle = '#94a3b8'; g.font = `20px ${FONT}`;
+      g.textAlign = 'right'; g.fillText(fit(g, it.project, 200), W - 60, y); g.textAlign = 'left';
+      y += 34;
+    }
+    y += 12;
+  }
+  if (!doneCount) { g.fillStyle = '#94a3b8'; g.font = `24px ${FONT}`; g.fillText('No steps finished in this period.', x, y); }
+  if (hidden) { g.fillStyle = '#64748b'; g.font = `22px ${FONT}`; g.fillText(`+ ${hidden} more steps`, x + 34, Math.min(y, H - 40)); }
+  g.fillStyle = '#94a3b8'; g.font = `22px ${FONT}`; g.fillText('Daily Projects', 70, H - 30);
+  return new Promise((res) => c.toBlob(res, 'image/png'));
+}
+
 export function renderTimeReport(ctx) {
   const { store, ui } = ctx;
   const data = store.view.data;
@@ -104,6 +174,21 @@ export function renderTimeReport(ctx) {
   const group = groups.find((g) => g.id === tr.groupId);
   const [from, to] = rangeFor(tr.preset, todayIndia(), tr.custom);
   const rows = timeSplit(data, group.id, from, to, tr.by);
+  // the history months this period needs (for "Work done")
+  const need = new Set();
+  for (let d = from; d <= to; d = addDays(d, 27)) need.add(monthOf(d));
+  need.add(monthOf(to));
+  const loading = (ui.trLoaded ||= new Set());
+  for (const m of need) {
+    if (!store.view.history[m] && store.availableMonths().includes(m) && !loading.has(m)) {
+      loading.add(m);
+      store.loadMonth(m).catch(() => loading.delete(m));
+    }
+  }
+  const work = workDoneByTag(data, store.view.history, group.id, from, to);
+  const tagRows = tr.by === 'tag' ? rows : timeSplit(data, group.id, from, to, 'tag');
+  const tagColours = {};
+  tagRows.forEach((r, i) => { tagColours[r.key] = colourFor(r, i); });
   const pcts = percents(rows);
   const total = rows.reduce((n, r) => n + r.minutes, 0);
   const period = from === to ? fmtDate(from) : `${fmtDate(from)} – ${fmtDate(to)}`;
@@ -120,6 +205,22 @@ export function renderTimeReport(ctx) {
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 10000);
     ctx.toast('Image downloaded — insert it in PowerPoint', 2500);
+  };
+  const fullTitle = `${group.name} — time and work done`;
+  const fullPng = () => fullReportPng({ title: fullTitle, period, rows: tagRows, pcts: percents(tagRows), work, tagColours });
+  const downloadFull = async () => {
+    const blob = await fullPng();
+    const url = URL.createObjectURL(blob);
+    const a = h('a', { href: url, download: `${group.name}-report-${from}-to-${to}.png` });
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    ctx.toast('Report image downloaded — insert it in PowerPoint', 2500);
+  };
+  const copyFull = async () => {
+    try {
+      await navigator.clipboard.write([new ClipboardItem({ 'image/png': fullPng() })]);
+      ctx.toast('Report image copied — paste it in PowerPoint or WhatsApp', 2500);
+    } catch { ctx.toast('Copy is not allowed here — use Download instead'); }
   };
   const copy = async () => {
     try {
@@ -161,6 +262,21 @@ export function renderTimeReport(ctx) {
         h('button', { class: 'btn primary', onClick: download }, '⬇ Download image'),
         h('button', { class: 'btn', onClick: copy }, '📋 Copy image'),
         h('span', { class: 'muted small' }, 'PowerPoint size (16:9)')) : null),
+    h('section', { class: 'dash-card report-card' },
+      h('div', { class: 'dash-card-head' }, h('h3', null, ((n) => `Work done (${n} step${n === 1 ? '' : 's'})`)(work.reduce((n, w) => n + w.items.length, 0)))),
+      work.length ? h('div', { class: 'work-done' }, work.map((w) => {
+        const sw = h('span', { class: 'swatch' });
+        sw.style.background = tagColours[w.key] || NO_TAG_COLOUR; // style object (allowed by the page's safety rules)
+        return h('div', { class: 'work-tag', key: 'wd-' + w.key },
+          h('div', { class: 'work-tag-head' }, sw, h('strong', null, w.name), h('span', { class: 'muted small' }, `${w.items.length} step${w.items.length === 1 ? '' : 's'}`)),
+          h('ul', null, w.items.slice(0, tr.showAllWork ? 999 : 6).map((it, i) => h('li', { key: 'wi-' + i },
+            h('span', null, `✓ ${it.text}`), h('span', { class: 'muted small' }, it.project)))));
+      })) : h('p', { class: 'muted' }, 'No steps finished in this period.'),
+      work.some((w) => w.items.length > 6) ? h('button', { class: 'link small', onClick: () => set('showAllWork', !tr.showAllWork) }, tr.showAllWork ? 'Show fewer' : 'Show all') : null,
+      h('div', { class: 'row report-actions' },
+        h('button', { class: 'btn primary', onClick: downloadFull }, '⬇ Full report image'),
+        h('button', { class: 'btn', onClick: copyFull }, '📋 Copy full report'),
+        h('span', { class: 'muted small' }, 'Time by tag + work done, PowerPoint size'))),
     (group.tags || []).length ? null
       : h('p', { class: 'muted small' }, `Tip: give ${group.name} some tags in Settings (or inside a project) to see time by tag.`));
 }

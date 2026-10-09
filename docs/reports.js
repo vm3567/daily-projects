@@ -101,7 +101,15 @@ const shortDate = new Intl.DateTimeFormat('en-IN', { day: 'numeric', month: 'sho
 export function personMessageText(data, person, today) {
   const { waiting, discuss } = personSteps(data, person, { openOnly: true });
   const first = person.name.split(/\s+/)[0];
-  const plain = (t) => t.replace(/@(\S)/g, '$1');
+  // The message goes TO this person, so their own "@Name" is taken out; other "@Names" just lose the "@".
+  const esc = person.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const own = new RegExp(`\\s*@${esc}(?![\\p{L}\\p{N}_])`, 'giu');
+  const plain = (t) => t.replace(own, ' ')
+    .replace(/@(\S)/g, '$1')
+    .replace(/\s+(to|with|for|from|by|and|ask|tell)\s*$/i, '') // a word left dangling at the end ("... with")
+    .replace(/\s{2,}/g, ' ')
+    .replace(/\s+([,.;:)])/g, '$1')
+    .trim();
   const line = ({ step, project }, i, showWait) => {
     const bits = [`${i + 1}. ${plain(step.text)}`, `(${project.name})`];
     if (step.dueDate) bits.push(`— by ${shortDate.format(new Date(step.dueDate + 'T00:00:00Z'))}`);
@@ -114,4 +122,27 @@ export function personMessageText(data, person, today) {
   if (discuss.length) lines.push('', 'To discuss:', ...discuss.map((it, i) => line(it, i, false)));
   lines.push('', 'Could you please share an update on these? Thank you.');
   return lines.join('\n');
+}
+
+/**
+ * Work finished in a group between two India dates, grouped by the project's tag:
+ * [{ key, name, items: [{ text, project, day }] }], most items first, "No tag" last.
+ */
+export function workDoneByTag(data, history, groupId, fromDay, toDay) {
+  const g = data.groups.find((x) => x.id === groupId);
+  const tags = (g && g.tags) || [];
+  const projects = new Map(data.projects.filter((p) => p.groupId === groupId).map((p) => [p.id, p]));
+  const groups = new Map();
+  for (const e of Object.values(history).flat()) {
+    if (e.kind !== 'step_ticked' || !projects.has(e.projectId)) continue;
+    const day = indiaDate(e.at);
+    if (day < fromDay || day > toDay) continue;
+    const p = projects.get(e.projectId);
+    const t = tags.find((x) => x.id === p.tagId);
+    const key = t ? t.id : 'none';
+    if (!groups.has(key)) groups.set(key, { key, name: t ? t.name : 'No tag', items: [] });
+    groups.get(key).items.push({ text: e.detail.replace(/@(\S)/g, '$1'), project: p.name, day, at: e.at });
+  }
+  for (const grp of groups.values()) grp.items.sort((a, b) => (a.at < b.at ? 1 : -1));
+  return [...groups.values()].sort((a, b) => b.items.length - a.items.length || (a.key === 'none') - (b.key === 'none') || a.name.localeCompare(b.name));
 }
