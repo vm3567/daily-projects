@@ -55,6 +55,18 @@ GitHub → your photo → **Settings** → **Password and authentication** → *
 
 ---
 
+## People
+
+- **People** in the left menu: add names (or type `@` and a new name in any step).
+- In a step, step note, work note or project notes, type `@` and the first letters, then pick a name (↓ ↑ Enter, or tap).
+- Open a person to see, across all projects:
+  - **Waiting on them** — steps marked "Waiting" on that person
+  - **To discuss with them** — other open steps with `@Name`
+  - notes about them, and steps done recently
+- Tick steps right there when you meet them.
+
+---
+
 ## Claude commands (on the Mac)
 
 Open Claude in this folder and type:

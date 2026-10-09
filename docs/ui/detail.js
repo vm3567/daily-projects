@@ -45,7 +45,7 @@ function stepRow(ctx, p, s) {
       }),
       s.done
         ? h('span', { class: 'step-text' }, s.text, h('span', { class: 'muted small' }, ` · ${fmtDay(s.doneAt ? indiaDate(s.doneAt) : '')}`))
-        : autoField('input', { class: 'step-text', value: s.text, 'aria-label': 'Step', key: 'st-' + s.id },
+        : autoField('input', { class: 'step-text', value: s.text, 'aria-label': 'Step', key: 'st-' + s.id, 'data-mention': '1' },
           (v) => store.dispatch('setStepField', { projectId: p.id, stepId: s.id, field: 'text', value: v })),
       ...tags,
       h('button', {
@@ -63,9 +63,9 @@ function stepRow(ctx, p, s) {
           type: 'checkbox', checked: s.waiting,
           onChange: (e, el) => store.dispatch('setStepField', { projectId: p.id, stepId: s.id, field: 'waiting', value: el.checked }),
         }), ' Waiting'),
-      s.waiting ? autoField('input', { placeholder: 'Waiting on whom?', value: s.waitingOn, key: 'wo-' + s.id },
+      s.waiting ? autoField('input', { placeholder: 'Waiting on whom? (type a name)', value: s.waitingOn, key: 'wo-' + s.id, 'data-mention': 'plain', autocomplete: 'off' },
         (v) => store.dispatch('setStepField', { projectId: p.id, stepId: s.id, field: 'waitingOn', value: v })) : null,
-      autoField('textarea', { placeholder: 'Small note for this step', value: s.note, rows: 2, key: 'sn-' + s.id },
+      autoField('textarea', { placeholder: 'Small note for this step', value: s.note, rows: 2, key: 'sn-' + s.id, 'data-mention': '1' },
         (v) => store.dispatch('setStepField', { projectId: p.id, stepId: s.id, field: 'note', value: v })),
       h('button', {
         class: 'btn danger small',
@@ -323,7 +323,7 @@ export function renderDetail(ctx) {
           input.focus();
         },
       },
-      h('input', { name: 'text', placeholder: '+ Add step (press Enter)', key: 'add-step-' + p.id, enterkeyhint: 'enter' }),
+      h('input', { name: 'text', placeholder: '+ Add step (type @ for a person)', key: 'add-step-' + p.id, enterkeyhint: 'enter', 'data-mention': '1', autocomplete: 'off' }),
       ctx.hasAiKey() ? h('button', {
         class: 'btn ai small', type: 'button', title: 'AI helper', 'aria-label': 'AI helper',
         onClick: () => { ui.ai = ui.ai && ui.ai.projectId === p.id ? null : { projectId: p.id, mode: 'choose', state: 'choose' }; ctx.render(); },
@@ -344,10 +344,10 @@ export function renderDetail(ctx) {
           if (store.dispatch('addWorkNote', { projectId: p.id, noteId: newId(), text })) { input.value = ''; ctx.toast('Note saved'); }
         },
       },
-      h('input', { name: 'note', placeholder: 'A short note, then press Enter', key: 'wn-' + p.id, enterkeyhint: 'done' })),
+      h('input', { name: 'note', placeholder: 'A short note, then press Enter', key: 'wn-' + p.id, enterkeyhint: 'done', 'data-mention': '1', autocomplete: 'off' })),
       h('ul', { class: 'notes' }, p.workNotes.slice(0, notesShown).map((n) => h('li', { key: 'n-' + n.id },
         h('span', { class: 'muted small' }, `${fmtDay(indiaDate(n.createdAt))} ${fmtTime(n.createdAt)}`),
-        autoField('input', { value: n.text, 'aria-label': 'Work note', key: 'nt-' + n.id },
+        autoField('input', { value: n.text, 'aria-label': 'Work note', key: 'nt-' + n.id, 'data-mention': '1' },
           (v) => { if (v.trim()) store.dispatch('editWorkNote', { projectId: p.id, noteId: n.id, text: v }); }),
         h('button', {
           class: 'icon', title: 'Delete note',
@@ -357,7 +357,7 @@ export function renderDetail(ctx) {
         ? h('button', { class: 'link small', onClick: () => { ui.notesLimit = notesShown + 20; ctx.render(); } }, `Show older notes (${p.workNotes.length - notesShown})`) : null),
 
     show.notes ? section('Notes',
-      autoField('textarea', { class: 'notes-box', value: p.notes, rows: 4, placeholder: 'Free notes for this project', key: 'notes-' + p.id },
+      autoField('textarea', { class: 'notes-box', value: p.notes, rows: 4, placeholder: 'Free notes for this project', key: 'notes-' + p.id, 'data-mention': '1' },
         (v) => store.dispatch('setProjectField', { projectId: p.id, field: 'notes', value: v }))) : null,
     show.links ? section('Links', linksBlock(ctx, p)) : null,
     show.files ? section('Files', filesBlock(ctx, p)) : null,

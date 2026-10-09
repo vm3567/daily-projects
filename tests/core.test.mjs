@@ -156,3 +156,27 @@ test('new projects get a target date 30 days ahead (India date)', () => {
   applyOp(s, op('createProject', { projectId: 'p2', name: 'B', deadline: null }, '2026-10-09'));
   assert.equal(s.data.projects[0].deadline, null, 'an explicit "no date" is kept');
 });
+
+test('people: @mentions link to the longest matching name', async () => {
+  const { mentionedPeople, stepLinkedTo } = await import('../docs/rules.js');
+  const people = [{ id: 'a', name: 'Ravi' }, { id: 'b', name: 'Ravi Kumar' }, { id: 'c', name: 'Sandeep' }];
+  assert.deepEqual([...mentionedPeople('Ask @Ravi Kumar for price', people)], ['b']);
+  assert.deepEqual([...mentionedPeople('Call @ravi today', people)], ['a']);
+  assert.deepEqual([...mentionedPeople('Mail @Sandeep and @Ravi', people)].sort(), ['a', 'c']);
+  assert.equal(mentionedPeople('email me@Ravish.com', people).size, 0);
+  assert.ok(stepLinkedTo({ text: 'Quote', waitingOn: 'sandeep', note: '' }, people[2], people));
+});
+
+test('people: add, rename keeps links, delete', () => {
+  const s = withProject();
+  applyOp(s, op('addPerson', { personId: 'r', name: 'Ravi' }, '2026-10-02'));
+  assert.equal(applyOp(s, op('addPerson', { personId: 'x', name: 'ravi' }, '2026-10-02')), false, 'no duplicates');
+  applyOp(s, op('setStepField', { projectId: 'p1', stepId: 's2', field: 'text', value: 'Call @Ravi for frit' }, '2026-10-02'));
+  applyOp(s, op('setStepField', { projectId: 'p1', stepId: 's2', field: 'waitingOn', value: 'Ravi' }, '2026-10-02'));
+  applyOp(s, op('renamePerson', { personId: 'r', name: 'Ravi Kumar' }, '2026-10-03'));
+  const st = s.data.projects[0].steps.find((x) => x.id === 's2');
+  assert.equal(st.text, 'Call @Ravi Kumar for frit');
+  assert.equal(st.waitingOn, 'Ravi Kumar');
+  applyOp(s, op('deletePerson', { personId: 'r' }, '2026-10-03'));
+  assert.equal(s.data.people.length, 0);
+});

@@ -65,6 +65,7 @@ Version: 5.
 | 36 | Deleting a project | Its Diary lines stay, marked "(deleted project)" |
 | 37 | Target date | Every new project gets a target date 30 days ahead. I can change or remove it. ("Deadline" is called "Target date" in the app.) |
 | 38 | Keyboard | Shortcuts on the computer: ↓ ↑ move between projects, x tick, a add step, w note, n new project, / search, r Red first, t Today, d Diary, Esc leave, ? help |
+| 39 | People | A People list (name only). Type @ in a step, step note, work note or project notes to pick a person. Each person's page shows "Waiting on them" and "To discuss with them" (all projects), notes about them, and done steps. "Waiting on" uses the same names. Keyboard: p opens People. |
 
 ---
 

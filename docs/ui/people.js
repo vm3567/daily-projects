@@ -1,0 +1,132 @@
+// People: the list of people (middle column) and one person's page (right column).
+// A step is linked to a person when its text or note has "@Name", or "Waiting on" is that person.
+
+import { h, fmtDay, fmtTime } from './dom.js';
+import { stepLinkedTo, mentionedPeople, initials, indiaDate } from '../rules.js';
+import { newId } from '../ops.js';
+
+/** All steps linked to a person, split into the person-page lists. */
+export function personSteps(data, person) {
+  const people = data.people || [];
+  const waiting = [];
+  const discuss = [];
+  const done = [];
+  for (const p of data.projects) {
+    for (const s of p.steps) {
+      if (!stepLinkedTo(s, person, people)) continue;
+      const item = { project: p, step: s };
+      if (s.done) done.push(item);
+      else if (p.state === 'finished') continue;
+      else if (s.waiting) waiting.push(item);
+      else discuss.push(item);
+    }
+  }
+  done.sort((a, b) => (a.step.doneAt < b.step.doneAt ? 1 : -1));
+  return { waiting, discuss, done };
+}
+
+export function openCount(data, person) {
+  const { waiting, discuss } = personSteps(data, person);
+  return waiting.length + discuss.length;
+}
+
+export function renderPeopleList(ctx) {
+  const { store, ui } = ctx;
+  const data = store.view.data;
+  const people = data.people || [];
+  return h('div', { class: 'people' },
+    h('form', {
+      class: 'row people-add',
+      onSubmit: (e) => {
+        e.preventDefault();
+        const input = e.target.elements.name;
+        const name = input.value.replace(/^@+/, '').trim();
+        if (!name) return;
+        const personId = newId();
+        if (store.dispatch('addPerson', { personId, name })) { input.value = ''; ctx.selectPerson(personId); }
+        else ctx.toast(`"${name}" is already in People`);
+      },
+    },
+    h('input', { name: 'name', placeholder: 'Add a person (name)', key: 'new-person', autocomplete: 'off' }),
+    h('button', { class: 'btn primary small', type: 'submit' }, 'Add')),
+    people.length ? null : h('p', { class: 'empty-list' }, 'No people yet. Add a name above, or type @ and a name in any step.'),
+    h('ul', { class: 'plist people-list', key: 'people-list' }, people.map((person) => {
+      const n = openCount(data, person);
+      return h('li', { key: 'pp-' + person.id, 'data-id': person.id, class: 'prow' + (ui.person === person.id ? ' current' : '') },
+        h('button', { class: 'prow-btn', onClick: () => ctx.selectPerson(person.id) },
+          h('span', { class: 'avatar' }, initials(person.name)),
+          h('span', { class: 'prow-text' },
+            h('span', { class: 'prow-name' }, person.name),
+            h('span', { class: 'prow-next' }, n ? `${n} open step${n > 1 ? 's' : ''}` : 'Nothing open'))));
+    })));
+}
+
+function stepItem(ctx, { project, step }) {
+  const { store } = ctx;
+  return h('li', { key: 'ps-' + step.id, class: 'person-step' + (step.done ? ' done' : '') },
+    h('input', {
+      type: 'checkbox', checked: step.done, 'aria-label': step.done ? 'Un-tick step' : 'Tick step',
+      onChange: () => store.dispatch(step.done ? 'untickStep' : 'tickStep', { projectId: project.id, stepId: step.id }),
+    }),
+    h('span', { class: 'person-step-text' }, step.text,
+      step.dueDate && !step.done ? h('span', { class: 'muted small' }, ` · by ${fmtDay(step.dueDate)}`) : null,
+      step.done && step.doneAt ? h('span', { class: 'muted small' }, ` · ${fmtDay(indiaDate(step.doneAt))}`) : null),
+    h('button', { class: 'tag link-tag', title: 'Open project', onClick: () => ctx.openProject(project.id) }, project.name));
+}
+
+function list(title, items, ctx, empty) {
+  return h('section', { class: 'block' },
+    h('h3', null, `${title} (${items.length})`),
+    items.length ? h('ul', { class: 'person-steps' }, items.map((it) => stepItem(ctx, it))) : h('p', { class: 'muted small' }, empty));
+}
+
+export function renderPerson(ctx) {
+  const { store, ui } = ctx;
+  const data = store.view.data;
+  const people = data.people || [];
+  const person = people.find((x) => x.id === ui.person);
+  if (!person) {
+    return h('div', { class: 'empty' }, h('p', null, 'Pick a person on the left.'),
+      h('p', null, 'Tip: type @ and a name in any step to link it to a person.'));
+  }
+  const { waiting, discuss, done } = personSteps(data, person);
+  const notes = [];
+  for (const p of data.projects) {
+    for (const n of p.workNotes) if (mentionedPeople(n.text, people).has(person.id)) notes.push({ project: p, note: n });
+  }
+  notes.sort((a, b) => (a.note.createdAt < b.note.createdAt ? 1 : -1));
+  let timer = null;
+  const first = person.name.split(/\s+/)[0];
+
+  return h('div', { class: 'detail-inner', key: 'person-' + person.id },
+    h('div', { class: 'detail-top' },
+      h('button', { class: 'icon back', 'aria-label': 'Back to list', onClick: () => { ui.mobile = 'list'; ctx.render(); } }, '←'),
+      h('span', { class: 'avatar big' }, initials(person.name)),
+      h('input', {
+        class: 'title-input', value: person.name, 'aria-label': 'Name', key: 'person-name-' + person.id,
+        onInput: (e, el) => {
+          clearTimeout(timer);
+          timer = setTimeout(() => { if (el.value.trim()) store.dispatch('renamePerson', { personId: person.id, name: el.value }); }, 900);
+        },
+        onChange: (e, el) => { clearTimeout(timer); if (el.value.trim()) store.dispatch('renamePerson', { personId: person.id, name: el.value }); },
+        onKeydown: (e, el) => { if (e.key === 'Enter') { e.preventDefault(); el.blur(); } },
+      }),
+      h('div', { class: 'state-buttons' },
+        h('button', {
+          class: 'btn danger',
+          onClick: () => {
+            if (!confirm(`Remove ${person.name} from People?\n\nSteps keep the text "@${person.name}", but are no longer linked.`)) return;
+            store.dispatch('deletePerson', { personId: person.id });
+            ui.person = null; ui.mobile = 'list'; ctx.render();
+          },
+        }, 'Remove'))),
+    h('p', { class: 'meta-line static' }, 'Linked by @name in steps, or by "Waiting on".'),
+    list(`Waiting on ${first}`, waiting, ctx, `Nothing waiting on ${first}. Tick "Waiting" on a step and pick ${first}.`),
+    list(`To discuss with ${first}`, discuss, ctx, `Nothing to discuss. Type @${first} in any step.`),
+    notes.length ? h('section', { class: 'block' }, h('h3', null, `Notes about ${first}`),
+      h('ul', { class: 'history' }, notes.slice(0, 8).map(({ project, note }) => h('li', { key: 'pn-' + note.id },
+        h('span', { class: 'muted small' }, `${fmtDay(indiaDate(note.createdAt))} ${fmtTime(note.createdAt)}`), ' ',
+        h('button', { class: 'link', onClick: () => ctx.openProject(project.id) }, project.name), `: ${note.text}`)))) : null,
+    done.length ? h('section', { class: 'block' }, h('h3', null, 'Done recently'),
+      h('ul', { class: 'person-steps' }, done.slice(0, 8).map((it) => stepItem(ctx, it)))) : null);
+}

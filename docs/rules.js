@@ -80,3 +80,36 @@ export function colourCounts(data, today = todayIndia()) {
   for (const p of activeProjects(data)) counts[dotColour(p, today)]++;
   return counts;
 }
+
+// ---------- People (@mentions) ----------
+
+const WORD_CHAR = /[\p{L}\p{N}_]/u;
+
+/**
+ * Ids of people mentioned as "@Name" in a text. At each "@", the LONGEST matching name wins,
+ * so "@Ravi Kumar" links to "Ravi Kumar", not to a separate "Ravi".
+ */
+export function mentionedPeople(text, people) {
+  const found = new Set();
+  if (!text || !people || !people.length) return found;
+  const lower = text.toLowerCase();
+  const sorted = [...people].sort((a, b) => b.name.length - a.name.length);
+  for (let i = lower.indexOf('@'); i >= 0; i = lower.indexOf('@', i + 1)) {
+    for (const p of sorted) {
+      const n = p.name.toLowerCase();
+      if (lower.startsWith(n, i + 1) && !WORD_CHAR.test(text.charAt(i + 1 + n.length))) { found.add(p.id); break; }
+    }
+  }
+  return found;
+}
+
+/** Is this step linked to the person (by @name in its text or note, or by "Waiting on")? */
+export function stepLinkedTo(step, person, people) {
+  if (step.waitingOn && step.waitingOn.trim().toLowerCase() === person.name.toLowerCase()) return true;
+  return mentionedPeople(step.text, people).has(person.id) || mentionedPeople(step.note, people).has(person.id);
+}
+
+export function initials(name) {
+  const parts = String(name).trim().split(/\s+/).filter(Boolean);
+  return ((parts[0] || '?')[0] + (parts.length > 1 ? parts[parts.length - 1][0] : '')).toUpperCase();
+}

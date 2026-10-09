@@ -33,6 +33,7 @@ export function emptyData() {
     version: 1,
     groups: START_GROUPS.map((name, i) => ({ id: 'g' + (i + 1), name })),
     projects: [],
+    people: [],
     settings: { aiProvider: 'claude' },
     aiUsage: { date: null, count: 0 },
     aiBriefs: { morning: null, weekly: null },
@@ -394,6 +395,48 @@ const handlers = {
     if (data.projects.some((p) => p.groupId === a.groupId)) return false;
     const [g] = data.groups.splice(i, 1);
     addEvent(state, op, null, 'group_deleted', g.name);
+    return true;
+  },
+
+  // ---------- People ----------
+  addPerson(state, op, a) {
+    const people = (state.data.people ||= []);
+    const name = cleanText(a.name, 80).replace(/^@+/, '').trim();
+    if (!name || people.some((x) => x.id === a.personId || x.name.toLowerCase() === name.toLowerCase())) return false;
+    people.push({ id: a.personId, name, createdAt: op.at });
+    people.sort((x, y) => x.name.localeCompare(y.name));
+    return true;
+  },
+
+  renamePerson(state, op, a) {
+    const people = state.data.people || [];
+    const person = people.find((x) => x.id === a.personId);
+    const name = cleanText(a.name, 80).replace(/^@+/, '').trim();
+    if (!person || !name || person.name === name) return false;
+    if (people.some((x) => x.id !== person.id && x.name.toLowerCase() === name.toLowerCase())) return false;
+    const old = person.name;
+    // Change "@Old Name" to "@New Name" everywhere, so the links stay.
+    const re = new RegExp('@' + old.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(?![\\p{L}\\p{N}_])', 'giu');
+    const fix = (t) => (typeof t === 'string' ? t.replace(re, '@' + name) : t);
+    for (const p of state.data.projects) {
+      p.notes = fix(p.notes);
+      for (const s of p.steps) {
+        s.text = fix(s.text);
+        s.note = fix(s.note);
+        if (s.waitingOn && s.waitingOn.toLowerCase() === old.toLowerCase()) s.waitingOn = name;
+      }
+      for (const n of p.workNotes) n.text = fix(n.text);
+    }
+    person.name = name;
+    people.sort((x, y) => x.name.localeCompare(y.name));
+    return true;
+  },
+
+  deletePerson(state, op, a) {
+    const people = state.data.people || [];
+    const i = people.findIndex((x) => x.id === a.personId);
+    if (i < 0) return false;
+    people.splice(i, 1); // texts keep "@Name"; they are just no longer linked
     return true;
   },
 

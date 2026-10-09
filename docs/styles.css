@@ -356,3 +356,30 @@ kbd {
 }
 .prow.current { outline: 2px solid #c7d7fb; outline-offset: -2px; }
 @media (hover: none) { .keys-hint { display: none; } }
+
+/* ---------- people and @ names (v5) ---------- */
+#mention {
+  position: fixed; z-index: 70; min-width: 220px; max-width: min(340px, calc(100vw - 16px));
+  background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 4px;
+  box-shadow: 0 10px 30px rgba(0,0,0,.14);
+}
+.mention-item {
+  display: block; width: 100%; text-align: left; border: 0; background: none; padding: 8px 10px;
+  border-radius: 7px; cursor: pointer; font-size: 14px;
+}
+.mention-item.on, .mention-item:hover { background: var(--brand-soft); color: #1e40af; }
+.avatar {
+  width: 30px; height: 30px; border-radius: 50%; flex: none; display: inline-flex; align-items: center; justify-content: center;
+  background: #efeafd; color: #5b3fb8; font-size: 12px; font-weight: 700;
+}
+.avatar.big { width: 38px; height: 38px; font-size: 14px; }
+.people-add { margin: 12px 14px 4px; }
+.people-list .prow-btn { align-items: center; }
+.person-steps li, .person-step { display: flex; align-items: center; gap: 10px; padding: 6px 4px; border-radius: 8px; }
+.person-step:hover { background: var(--panel); }
+.person-step input[type=checkbox] { width: 19px; height: 19px; flex: none; accent-color: var(--green); }
+.person-step-text { flex: 1; min-width: 0; }
+.person-step.done .person-step-text { color: var(--muted); text-decoration: line-through; }
+.link-tag { cursor: pointer; margin-left: auto; max-width: 45%; overflow: hidden; text-overflow: ellipsis; }
+.link-tag:hover { border-color: var(--brand); color: var(--brand); }
+.meta-line.static { cursor: default; }
