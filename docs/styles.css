@@ -832,3 +832,7 @@ input:not([type=checkbox]):not([type=radio]):not([type=range]), select, textarea
 .remind-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 0 8px; border-bottom: 1px dashed #e5e7eb; margin-bottom: 6px; width: 100%; }
 .remind-label { font-size: 13.5px; color: #9a3412; font-weight: 600; }
 .remind-date { font-size: 13px; color: var(--muted); display: inline-flex; align-items: center; gap: 4px; }
+
+/* v27: a change waiting over a minute — a clear red bar at the top */
+.unsent-bar { position: fixed; top: 8px; left: 50%; transform: translateX(-50%); z-index: 60; max-width: min(720px, calc(100vw - 32px)); background: #fef2f2; color: #991b1b; border: 1px solid #fca5a5; border-radius: 10px; padding: 10px 14px; font: inherit; font-size: 14px; line-height: 1.35; text-align: left; cursor: pointer; box-shadow: 0 4px 14px rgba(0,0,0,.12); }
+.unsent-bar:hover { background: #fee2e2; }

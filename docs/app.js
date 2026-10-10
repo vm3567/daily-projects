@@ -1380,6 +1380,7 @@ function render() {
   wide ? null : h('section', { id: 'detail' }, ui.round ? renderRound() : ui.view === 'people' && !ui.search ? renderPerson(ctx) : renderDetail(ctx)),
   ui.showKeys ? keysHelp() : null,
   ui.capture ? captureBox() : null,
+  unsentBar(),
   tabBar());
   const moves = takePositions();
   if (root.firstChild && root.firstChild.classList && root.firstChild.classList.contains('layout')) morph(root.firstChild, next);
@@ -1388,6 +1389,22 @@ function render() {
   document.body.classList.toggle('on-detail', ui.mobile === 'detail' || ui.menuOpen); // phone: messages sit lower when the bottom bar is hidden
   restoreScrollOnce();
   setupSortable();
+}
+
+/** A red bar when a change has waited over a minute without reaching GitHub (so it would be missing on the other computer). */
+const UNSENT_AFTER_MS = 60 * 1000;
+function unsentBar() {
+  if (!store || !store.pending.length || store.status === 'auth') return null;
+  const oldest = Date.parse(store.pending[0].at);
+  if (!(Date.now() - oldest > UNSENT_AFTER_MS)) return null;
+  const n = store.pending.length;
+  const what = `${n} change${n === 1 ? '' : 's'} not sent yet`;
+  const why = store.status === 'offline' ? ' — no internet. Keep this computer on; they send when the internet is back. Tap to try now.'
+    : store.saving ? ' — sending now…' : ' — your other computer cannot see them. Tap to send.';
+  return h('button', {
+    class: 'unsent-bar', key: 'unsent', type: 'button', title: 'Send waiting changes to GitHub now',
+    onClick: () => doRefresh(true).then(() => { if (!store.pending.length) toast('All sent ✓'); render(); }),
+  }, '⚠︎ ', h('b', null, what), why);
 }
 
 /** Phone only: a fixed bar at the bottom — Today, Inbox, People, More (the menu). Hidden on the desktop by CSS. */
@@ -2047,7 +2064,8 @@ function start() {
   store.init().then(() => { render(); shareLocalKeys(); markShownOpened(); makeBrief(); recordPastScores(); });
   if (started) return;
   started = true;
-  setInterval(() => { if (store && store.view && store.view.data.timer && document.visibilityState === 'visible') render(); }, 20000);
+  // redraw now and then: the running timer, and the "not sent yet" bar appearing after a minute
+  setInterval(() => { if (store && store.view && (store.view.data.timer || store.pending.length) && document.visibilityState === 'visible') render(); }, 20000);
   let shownDay = todayIndia();
   let lastTick = Date.now();
   setInterval(() => {
