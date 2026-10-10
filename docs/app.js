@@ -14,7 +14,7 @@ import { GitHubRepo } from './github.js';
 import { MockRepo } from './mockrepo.js';
 import { device } from './device.js';
 import { DATA_OWNER, DATA_REPO, DATA_BRANCH, REFRESH_MS, AI_DAILY_LIMIT, BRIEF_CLAIM_MINUTES, WAIT_RED_DAYS, NO_WORK_NOTE_DAYS } from './config.js';
-import { dotColour, isSnoozed, awakeProjects, nextStep, todayIndia, isSundayIndia, colourCounts, isOverdue, indiaDate, waitingDays, daysWithoutWork, dayScore, greenStreak, addDays, monthOf, fmtMinutes } from './rules.js';
+import { dotColour, isSnoozed, restUntil, awakeProjects, nextStep, todayIndia, isSundayIndia, colourCounts, isOverdue, indiaDate, waitingDays, daysWithoutWork, dayScore, greenStreak, addDays, monthOf, fmtMinutes } from './rules.js';
 import { newId, clone, opMonth, groupHasTimer } from './ops.js';
 import * as ai from './ai.js';
 
@@ -667,7 +667,7 @@ function projectRow(p, today) {
           ns && ns.waiting ? waitingTag(ns) : null,
           ns && ns.snoozedUntil && ns.snoozedUntil > today ? h('span', { class: 'tag repeat' }, `↻ from ${fmtDay(ns.snoozedUntil)}`) : null,
           isOverdue(p, today) ? h('span', { class: 'tag late' }, `Overdue · ${fmtDay(p.deadline)}`) : null,
-          isSnoozed(p, today) ? h('span', { class: 'tag snoozed' }, `💤 back ${fmtDay(p.snoozedUntil)}`) : noWorkTag(p, today)),
+          isSnoozed(p, today) ? h('span', { class: 'tag snoozed' }, `${p.snoozedUntil > today ? '💤' : '⏰'} back ${fmtDay(restUntil(p, today))}`) : noWorkTag(p, today)),
         p.status ? h('span', { class: 'prow-status' }, p.status) : null)),
     rowAction(p, due, colour),
     canDrag() ? h('span', { class: 'grip', 'aria-hidden': 'true', title: 'Drag to reorder' }, '⋮⋮') : null,
@@ -890,7 +890,7 @@ function rowMenu() {
     p.state === 'active' ? item('📝', 'Write an update', () => { select(p.id); focusKey('wn-' + p.id); }) : null,
     due && due.waiting ? item('📞', `Chased${due.waitingOn ? ' ' + due.waitingOn : ''}`, () => chase(p, due)) : null,
     p.state === 'active' ? item('👍', p.okDate === today ? 'Undo OK for today' : 'OK for today', () => toggleOk(p)) : null,
-    p.state === 'active' ? (isSnoozed(p, today)
+    p.state === 'active' ? (p.snoozedUntil && p.snoozedUntil > today
       ? item('⏰', 'Wake up now', () => act('wake', { projectId: p.id }, `Back on Today: ${p.name}`))
       : item('💤', 'Snooze…', () => { select(p.id); ui.snoozeOpen = p.id; focusKey('snooze-' + p.id); })) : null,
     p.state === 'active' && groupHasTimer(g || {}) ? item(timing ? '⏹' : '▶', timing ? 'Stop timer' : 'Start timer', () => (timing ? stopTimer() : startTimer(p))) : null,
@@ -1119,7 +1119,7 @@ function listParts(list, today) {
       class: 'done-toggle', key: 'snooze-toggle', 'aria-expanded': String(!!ui.showSnoozed),
       onClick: () => { ui.showSnoozed = !ui.showSnoozed; render(); },
     }, `${ui.showSnoozed ? '▾' : '▸'} 💤 Snoozed (${snoozed.length})`));
-    if (ui.showSnoozed) parts.push(h('ul', { class: 'plist-done', key: 'plist-snoozed' }, snoozed.sort((a, b) => (a.snoozedUntil < b.snoozedUntil ? -1 : 1)).map((p) => projectRow(p, today))));
+    if (ui.showSnoozed) parts.push(h('ul', { class: 'plist-done', key: 'plist-snoozed' }, snoozed.sort((a, b) => (restUntil(a, today) < restUntil(b, today) ? -1 : 1)).map((p) => projectRow(p, today))));
   }
   if (!done.length) return parts;
   if (!open.length) parts.push(h('p', { class: 'all-green', key: 'all-green' }, 'Everything is green for today 🎉'));

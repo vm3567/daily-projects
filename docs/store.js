@@ -40,7 +40,12 @@ export class Store extends EventTarget {
     if (typeof window !== 'undefined' && window.addEventListener) {
       window.addEventListener('storage', (e) => {
         if (e.key !== PENDING_KEY || !this.base) return;
-        this.pending = readPending().filter((o) => !this.sentIds.has(o.id));
+        // Take the other tab's waiting changes, but never drop our own: if the other tab already sent them,
+        // our copy is still shown until we load the newest data (sending them again changes nothing).
+        const stored = readPending().filter((o) => !this.sentIds.has(o.id));
+        const ids = new Set(stored.map((o) => o.id));
+        const mine = this.pending.filter((o) => !ids.has(o.id));
+        this.pending = [...stored, ...mine].sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
         this.recompute();
         this.emit('change', { reason: 'other-tab' });
         if (this.pending.length && !this.saving) this.scheduleSave();

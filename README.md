@@ -113,6 +113,15 @@ Also: each red/yellow row has a one-tap **✓ OK** (or **Chased** when waiting),
 - **iPhone:** a bar at the bottom — Today, Inbox, People, More — and bigger buttons.
 - **Remembers where you were:** the same page, project and scroll place when you open the app again.
 
+## ⏰ Remind me (a step comes back later)
+
+- Click **⏰** on a step, then **1 day**, **2 days**, **1 week**, or pick a date.
+- The step goes grey with its day ("⏰ 12 Oct") and waits. The write box moves to the next step.
+- On that day it comes back as the **next step**, marked "⏰ Reminder".
+- If **every** step of a project is waiting for a reminder, the project rests (like Snooze) and returns on the first reminder day. It does not break your streak.
+- Changed your mind? Click ⏰ again → **Show it now**.
+- The reminder shows when you open the app (it cannot send a phone notification).
+
 ## Name, delete and typing help
 
 - **Change a project's name:** click the name at the top (or the ✎ next to it), type, press Enter.

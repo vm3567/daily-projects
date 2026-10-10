@@ -3,7 +3,7 @@
 import { h, fmtDay, fmtTime, fmtSize, keyHint, withKey, HAS_KEYBOARD } from './dom.js';
 
 const MOD = /Mac|iPhone|iPad/.test(globalThis.navigator ? navigator.platform || navigator.userAgent || '' : '') ? '⌘' : 'Ctrl';
-import { dotColour, isSnoozed, daysBetween, addDays, todayIndia, isOverdue, indiaDate, waitingDays, lastWorkDate, nextStep, stepLinkedTo, personStatus, minutesBetween, fmtMinutes, weekStart } from '../rules.js';
+import { dotColour, isSnoozed, restUntil, stepWaitsForReminder, daysBetween, addDays, todayIndia, isOverdue, indiaDate, waitingDays, lastWorkDate, nextStep, stepLinkedTo, personStatus, minutesBetween, fmtMinutes, weekStart } from '../rules.js';
 import { WAIT_RED_DAYS } from '../config.js';
 import { newId, PRIORITIES, cleanUrl, groupHasTimer, MAX_SNOOZE_DAYS } from '../ops.js';
 
@@ -18,7 +18,7 @@ const HISTORY_WORDS = {
   step_deleted: 'Step deleted', note_added: 'Work note', note_edited: 'Work note changed', note_deleted: 'Work note deleted',
   paused: 'Paused', unpaused: 'Unpaused', finished: 'Finished', reopened: 'Reopened',
   file_added: 'File added', file_removed: 'File removed', deleted: 'Deleted', reviewed: 'OK for today',
-  snoozed: 'Snoozed', woke: 'Woken up', time_added: 'Time added', time_logged: 'Time logged',
+  snoozed: 'Snoozed', woke: 'Woken up', step_remind: 'Remind me', time_added: 'Time added', time_logged: 'Time logged',
   group_added: 'Group added', group_renamed: 'Group renamed', group_deleted: 'Group deleted',
 };
 
@@ -63,6 +63,21 @@ function focusUpdate(p) {
   }, 30);
 }
 
+/** ⏰ Remind me: 1 day · 2 days · 1 week · a date — or cancel. */
+function remindRow(ctx, p, s, today) {
+  const set = (date) => {
+    const r = ctx.act('remindStep', { projectId: p.id, stepId: s.id, date }, date ? `⏰ "${s.text}" comes back on ${fmtDay(date)}` : `⏰ Reminder cancelled — "${s.text}" is back`);
+    if (r) { ctx.ui.openStep = null; ctx.render(); }
+  };
+  const waiting = stepWaitsForReminder(s, today);
+  return h('div', { class: 'remind-row', key: 'rm-' + s.id },
+    h('span', { class: 'remind-label' }, waiting ? `⏰ Comes back on ${fmtDay(s.snoozedUntil)} ·` : '⏰ Remind me in'),
+    waiting ? null : [[1, '1 day'], [2, '2 days'], [7, '1 week']].map(([n, label]) => h('button', { class: 'chip', type: 'button', key: 'rd' + n, onClick: () => set(addDays(today, n)) }, label)),
+    h('label', { class: 'remind-date' }, waiting ? 'change: ' : 'or on ',
+      h('input', { type: 'date', min: addDays(today, 1), value: waiting ? s.snoozedUntil : '', 'aria-label': 'Remind me on this date', onChange: (e, el) => { if (el.value) set(el.value); } })),
+    waiting ? h('button', { class: 'chip', type: 'button', onClick: () => set(null) }, 'Show it now') : null);
+}
+
 /** Notes written about this step (newest 2), shown under it. */
 function stepNotes(p, s) {
   const notes = p.workNotes.filter((n) => n.stepId === s.id).slice(0, 2);
@@ -87,7 +102,9 @@ function stepRow(ctx, p, s, box = null) {
   if (s.dueDate && !s.done) tags.push(h('span', { class: 'tag' + (s.dueDate < today ? ' late' : '') }, `by ${fmtDay(s.dueDate)}`));
   if (s.note && !open) tags.push(h('span', { class: 'tag' }, 'note'));
   if (s.repeat && !s.done) tags.push(h('span', { class: 'tag repeat', title: 'Repeats' }, `↻ ${REPEAT_WORD[s.repeat]}`));
-  if (s.snoozedUntil && s.snoozedUntil > today && !s.done) tags.push(h('span', { class: 'tag' }, `from ${fmtDay(s.snoozedUntil)}`));
+  if (stepWaitsForReminder(s, today)) tags.push(h('span', { class: 'tag remind', title: 'Comes back on this day' }, `⏰ ${fmtDay(s.snoozedUntil)}`));
+  else if (s.snoozedUntil && s.snoozedUntil > today && !s.done) tags.push(h('span', { class: 'tag' }, `from ${fmtDay(s.snoozedUntil)}`));
+  else if (!s.done && s.remindUntil && s.remindUntil <= today) tags.push(h('span', { class: 'tag remind due', title: 'Your reminder for this step' }, '⏰ Reminder'));
   const aboutThis = () => { const u = updateState(ui, p); if (u.about !== s.id) { u.about = s.id; ctx.render(); } };
   return h('li', { class: 'step' + (box ? ' has-update' : '') + (s.done ? ' done' : '') + (s.snoozedUntil && s.snoozedUntil > today && !s.done ? ' later' : ''), key: 's-' + s.id, 'data-id': s.id },
     h('div', { class: 'step-main' },
@@ -116,6 +133,10 @@ function stepRow(ctx, p, s, box = null) {
         class: 'icon', title: 'Write what happened on this step', 'aria-label': `Update on ${s.text}`,
         onClick: () => { updateState(ui, p).about = s.id; ctx.render(); focusUpdate(p); },
       }, '📝'),
+      s.done ? null : h('button', {
+        class: 'icon', title: 'Remind me later (hide this step until a day)', 'aria-label': `Remind me about ${s.text}`,
+        onClick: () => { ui.openStep = open ? null : s.id; ctx.render(); },
+      }, '⏰'),
       h('button', {
         class: 'icon', title: 'More', 'aria-label': 'More about this step',
         onClick: () => { ui.openStep = open ? null : s.id; ctx.render(); },
@@ -123,6 +144,7 @@ function stepRow(ctx, p, s, box = null) {
     stepNotes(p, s),
     box,
     open ? h('div', { class: 'step-extra' },
+      s.done ? null : remindRow(ctx, p, s, today),
       h('label', null, 'Due date ',
         h('input', {
           type: 'date', value: s.dueDate || '',
@@ -428,6 +450,10 @@ function snoozeBar(ctx, p) {
   const today = todayIndia();
   if (p.state !== 'active') return null;
   if (isSnoozed(p, today)) {
+    if (!(p.snoozedUntil && p.snoozedUntil > today)) { // resting because every step is set to "remind me"
+      return h('div', { class: 'banner snoozed-banner', key: 'snz-' + p.id },
+        `⏰ All steps are set to remind you — back on Today on ${fmtDay(restUntil(p, today))}.`);
+    }
     return h('div', { class: 'banner snoozed-banner', key: 'snz-' + p.id },
       `💤 Snoozed — comes back to Today on ${fmtDay(p.snoozedUntil)}.`,
       h('button', { class: 'btn small', onClick: () => ctx.act('wake', { projectId: p.id }, `Back on Today: ${p.name}`) }, '⏰ Wake up now'));

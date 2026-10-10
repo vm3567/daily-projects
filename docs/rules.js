@@ -52,9 +52,26 @@ export function laterDate(a, b) {
  *   green  = changed something today, or pressed "OK for today"
  *   grey   = paused or finished
  */
-/** Snoozed: an active project hidden from Today until a date (it comes back by itself on that day). */
+/** A step set to "remind me" on a later date: hidden until that day. */
+export function stepWaitsForReminder(step, today = todayIndia()) {
+  return !step.done && !!step.remindUntil && !!step.snoozedUntil && step.snoozedUntil > today;
+}
+
+/**
+ * The day an active project comes back to Today, or null if it needs you now:
+ * the project is snoozed, OR every open step is set to "remind me" later (then: the earliest reminder).
+ */
+export function restUntil(project, today = todayIndia()) {
+  if (project.state !== 'active') return null;
+  if (project.snoozedUntil && project.snoozedUntil > today) return project.snoozedUntil;
+  const open = (project.steps || []).filter((s) => !s.done);
+  if (!open.length || !open.every((s) => stepWaitsForReminder(s, today))) return null;
+  return open.map((s) => s.snoozedUntil).sort()[0];
+}
+
+/** Snoozed (or all steps waiting for their reminder): hidden from Today until a date; comes back by itself. */
 export function isSnoozed(project, today = todayIndia()) {
-  return project.state === 'active' && !!project.snoozedUntil && project.snoozedUntil > today;
+  return !!restUntil(project, today);
 }
 
 export function dotColour(project, today = todayIndia()) {
@@ -86,7 +103,9 @@ export function isOverdue(project, today = todayIndia()) {
  */
 export function nextStep(project, today = todayIndia(), opts = {}) {
   const open = project.steps.filter((s) => !s.done);
-  const due = open.find((s) => !s.snoozedUntil || s.snoozedUntil <= today);
+  // a "remind me" step whose day has come goes first; then the first step that is due
+  const due = open.find((s) => s.remindUntil && s.remindUntil <= today && (!s.snoozedUntil || s.snoozedUntil <= today))
+    || open.find((s) => !s.snoozedUntil || s.snoozedUntil <= today);
   if (opts.dueOnly) return due || null; // for ticking: never tick a step that comes back later
   return due || open[0] || null;
 }
@@ -240,7 +259,13 @@ export function personStatus(data, person, today = todayIndia()) {
  * How many projects were green on a past day, worked out from the saved dates and the history.
  * Counts projects that existed and were active that day.
  */
-const NOT_WORK = new Set(['created', 'snoozed', 'woke']); // these history lines are not work on the project
+const NOT_WORK = new Set(['created', 'snoozed', 'woke', 'step_remind']);
+
+/** On that day, was every open step of the project waiting for a "remind me" date? */
+function restingByReminders(p, day) {
+  const open = (p.steps || []).filter((s) => (!s.createdAt || indiaDate(s.createdAt) <= day) && (!s.done || (s.doneAt && indiaDate(s.doneAt) > day)));
+  return open.length > 0 && open.every((s) => s.remindFrom && s.remindUntil && s.remindFrom <= day && day < s.remindUntil);
+} // these history lines are not work on the project
 
 export function dayScore(data, history, day) {
   const busy = new Set();
@@ -256,6 +281,7 @@ export function dayScore(data, history, day) {
     const activeThen = p.state === 'active' ? (p.activeSince || created) <= day : changed > day;
     if (!activeThen) continue;
     if (p.snoozedFrom && p.snoozedUntil && p.snoozedFrom <= day && day < p.snoozedUntil) continue; // snoozed that day: not counted
+    if (restingByReminders(p, day)) continue; // every open step was waiting for its "remind me" day
     total++;
     if (busy.has(p.id) || lastWorkDate(p) === day || p.okDate === day) green++;
   }

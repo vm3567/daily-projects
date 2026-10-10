@@ -2,7 +2,7 @@
 // with the key saved on this device. The AI only suggests; it never changes anything.
 
 import { AI_MODELS } from './config.js';
-import { dotColour, nextStep, todayIndia, addDays, isOverdue, daysBetween, indiaDate } from './rules.js';
+import { dotColour, isSnoozed, nextStep, todayIndia, addDays, isOverdue, daysBetween, indiaDate } from './rules.js';
 
 export class AiError extends Error {}
 
@@ -180,7 +180,7 @@ export async function polishSummary(provider, key, text) {
 /** Morning plan: the 5 most important things for today. Returns { items: [{projectId, text}] }. */
 export async function morningPlan(provider, key, data) {
   const today = todayIndia();
-  const active = data.projects.filter((p) => p.state === 'active' && !(p.snoozedUntil && p.snoozedUntil > today)); // snoozed ones wait
+  const active = data.projects.filter((p) => p.state === 'active' && !isSnoozed(p, today)); // snoozed ones (and all-steps-reminded) wait
   if (!active.length) return { items: [] };
   const r = await ask(provider, key,
     `You plan someone's work day across many projects. Pick the 5 most important things to do today. `

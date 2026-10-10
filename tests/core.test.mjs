@@ -547,3 +547,27 @@ test('review fixes: a removed AI key is remembered as removed', () => {
   assert.equal(s.data.secrets.claude, 'k2');
   assert.ok(!s.data.secrets.removed.claude);
 });
+
+test('remind me: a step hides until its day, then comes back first; all steps waiting = project rests', async () => {
+  const { isSnoozed, restUntil, dayScore } = await import('../docs/rules.js');
+  const s = withProject('2026-10-01'); // steps s1 "Order clay", s2 "Call supplier"
+  assert.equal(applyOp(s, op('remindStep', { projectId: 'p1', stepId: 's1', date: '2026-10-05' }, '2026-10-05')), false, 'must be a later day');
+  assert.ok(applyOp(s, op('remindStep', { projectId: 'p1', stepId: 's1', date: '2026-10-07' }, '2026-10-05')));
+  const p = s.data.projects[0];
+  assert.equal(p.lastActivityDate, '2026-10-01', 'setting a reminder is not work');
+  assert.equal(nextStep(p, '2026-10-06').id, 's2', 'the reminded step waits');
+  assert.ok(!isSnoozed(p, '2026-10-06'), 'another step still needs work');
+  assert.ok(applyOp(s, op('remindStep', { projectId: 'p1', stepId: 's2', date: '2026-10-09' }, '2026-10-05')));
+  assert.equal(restUntil(p, '2026-10-06'), '2026-10-07', 'all steps waiting: project rests until the first reminder');
+  assert.equal(dotColour(p, '2026-10-06'), 'grey');
+  assert.equal(dayScore(s.data, s.history, '2026-10-06').total, 0, 'a resting day does not break the streak');
+  assert.equal(nextStep(p, '2026-10-07').id, 's1', 'on its day the reminded step is next');
+  assert.equal(dotColour(p, '2026-10-07'), 'red');
+  // cancel brings it back now
+  assert.ok(applyOp(s, op('remindStep', { projectId: 'p1', stepId: 's2', date: null }, '2026-10-06')));
+  assert.equal(nextStep(p, '2026-10-06').id, 's2');
+  // changing the due date does not cancel a reminder
+  applyOp(s, op('remindStep', { projectId: 'p1', stepId: 's2', date: '2026-10-20' }, '2026-10-06'));
+  applyOp(s, op('setStepField', { projectId: 'p1', stepId: 's2', field: 'dueDate', value: '2026-10-25' }, '2026-10-06'));
+  assert.equal(p.steps.find((x) => x.id === 's2').snoozedUntil, '2026-10-20');
+});

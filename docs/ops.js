@@ -229,6 +229,36 @@ const handlers = {
     return true;
   },
 
+  /**
+   * "Remind me": hide a step until a date (it comes back first in line on that day). date = null cancels.
+   * Not "work", so the dot is not made green.
+   */
+  remindStep(state, op, a) {
+    const p = findProject(state.data, a.projectId);
+    const s = p && p.steps.find((x) => x.id === a.stepId);
+    if (!s || s.done) return false;
+    const today = indiaDate(op.at);
+    const date = cleanDate(a.date);
+    if (date) {
+      if (date <= today || date > addDays(today, MAX_SNOOZE_DAYS)) return false;
+      if (s.remindUntil === date && s.snoozedUntil === date) return false;
+      s.remindFrom = today;
+      s.remindUntil = date;
+      s.snoozedUntil = date;
+      s.updatedAt = op.at;
+      addEvent(state, op, p, 'step_remind', `${s.text} → ${date}`, { stepId: s.id });
+      return true;
+    }
+    if (!s.remindUntil) return false;
+    // cancel: back now (a repeating step keeps waiting for its own next date)
+    s.snoozedUntil = s.repeat && s.dueDate && s.dueDate > today ? s.dueDate : null;
+    s.remindUntil = null;
+    s.remindFrom = null;
+    s.updatedAt = op.at;
+    addEvent(state, op, p, 'step_remind', `${s.text} → now`, { stepId: s.id });
+    return true;
+  },
+
   addLink(state, op, a) {
     const p = findProject(state.data, a.projectId);
     const url = cleanUrl(a.url);
@@ -372,7 +402,8 @@ const handlers = {
     const old = s[a.field];
     s[a.field] = value;
     if (a.field === 'waiting') s.waitingSince = value ? indiaDate(op.at) : null; // for "Waiting · 4d"
-    if (s.snoozedUntil && (a.field === 'dueDate' || a.field === 'repeat')) {
+    const reminderOn = s.remindUntil && s.snoozedUntil === s.remindUntil && s.snoozedUntil > indiaDate(op.at);
+    if (s.snoozedUntil && !reminderOn && (a.field === 'dueDate' || a.field === 'repeat')) {
       // a step that comes back later follows its new date; no repeat or a date today/past = show it now
       s.snoozedUntil = s.repeat && s.dueDate && s.dueDate > indiaDate(op.at) ? s.dueDate : null;
     }

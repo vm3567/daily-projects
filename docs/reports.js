@@ -12,7 +12,7 @@ export function projectMatches(p, q) {
 
 const DIARY_WORDS = {
   step_ticked: '✓', paused: 'Paused', unpaused: 'Unpaused', finished: 'Finished', reopened: 'Reopened', reviewed: 'Reviewed — nothing today',
-  snoozed: '💤 Snoozed', woke: 'Back from snooze',
+  snoozed: '💤 Snoozed', woke: 'Back from snooze', step_remind: '⏰ Remind me:',
 };
 
 /**
@@ -32,7 +32,7 @@ export function diaryEntries(data, history) {
     if (!DIARY_WORDS[e.kind]) continue;
     add(indiaDate(e.at), {
       at: e.at, projectId: e.projectId, name: nameOf(e), exists: exists.has(e.projectId),
-      text: `${DIARY_WORDS[e.kind]} ${e.kind === 'step_ticked' || e.kind === 'snoozed' ? e.detail : ''}`.trim(),
+      text: `${DIARY_WORDS[e.kind]} ${e.kind === 'step_ticked' || e.kind === 'snoozed' || e.kind === 'step_remind' ? e.detail : ''}`.trim(),
     });
   }
   for (const p of data.projects) {

@@ -20,7 +20,7 @@ import { existsSync, readFileSync, writeFileSync, readdirSync, mkdirSync } from 
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { applyOps, makeOp, newId, emptyData } from '../docs/ops.js';
-import { dotColour, nextStep, todayIndia, isOverdue, colourCounts, isSnoozed, awakeProjects } from '../docs/rules.js';
+import { dotColour, nextStep, todayIndia, isOverdue, colourCounts, isSnoozed, restUntil, awakeProjects } from '../docs/rules.js';
 import { DATA_OWNER, DATA_REPO } from '../docs/config.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -106,7 +106,7 @@ function line(p, today) {
   const c = dotColour(p, today);
   const bits = [
     `${(isSnoozed(p, today) ? 'SNOOZE' : c.toUpperCase()).padEnd(6)} ${p.name} [${p.id}]`,
-    isSnoozed(p, today) ? `snoozed until ${p.snoozedUntil}` : null,
+    isSnoozed(p, today) ? `snoozed until ${restUntil(p, today)}` : null,
     p.status ? `status: ${p.status}` : null,
     `group: ${p.groupName}`,
     `priority: ${p.priority}`,
@@ -171,7 +171,7 @@ try {
       withGroups(data);
       const p = findProject(data, args.join(' '));
       console.log(line(p, today));
-      console.log(`State: ${p.state}${isSnoozed(p, today) ? ` (snoozed until ${p.snoozedUntil})` : ''}`);
+      console.log(`State: ${p.state}${isSnoozed(p, today) ? ` (snoozed until ${restUntil(p, today)})` : ''}`);
       if (p.status) console.log(`Status: ${p.status}`);
       if (p.notes) console.log(`Notes: ${p.notes}`);
       console.log('Open steps:');

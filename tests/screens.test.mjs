@@ -162,3 +162,14 @@ test('project page: notes, links, files and history wait under "More" until open
   assert.ok(text.includes('1 work note') && text.includes('1 link'), 'the fold says what is inside');
   assert.ok(!text.includes('Spec'), 'links are folded away');
 });
+
+test('project page: ⏰ remind me options, and the step shows its return day', () => {
+  const s = sampleState();
+  const ui = { selected: 'p1', update: {}, openStep: 's2' };
+  let text = renderDetail(fakeCtx(s, ui)).textContent;
+  assert.ok(text.includes('Remind me in') && text.includes('1 week'));
+  const day = new Date(Date.now() + 3 * 864e5).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+  applyOps(s, [makeOp('remindStep', { projectId: 'p1', stepId: 's2', date: day })]);
+  text = renderDetail(fakeCtx(s, { selected: 'p1', update: {} })).textContent;
+  assert.ok(text.includes('⏰'), 'reminder tag shown');
+});

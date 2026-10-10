@@ -825,3 +825,10 @@ input:not([type=checkbox]):not([type=radio]):not([type=range]), select, textarea
   .step-main .icon { min-width: 34px; min-height: 36px; padding: 4px; }
   .step-main .step-text { min-width: 0; flex: 1 1 120px; }
 }
+
+/* ⏰ remind me */
+.tag.remind { background: #fff7ed; color: #9a3412; border-color: #fed7aa; }
+.tag.remind.due { background: #fef3c7; color: #92400e; font-weight: 600; }
+.remind-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 0 8px; border-bottom: 1px dashed #e5e7eb; margin-bottom: 6px; width: 100%; }
+.remind-label { font-size: 13.5px; color: #9a3412; font-weight: 600; }
+.remind-date { font-size: 13px; color: var(--muted); display: inline-flex; align-items: center; gap: 4px; }

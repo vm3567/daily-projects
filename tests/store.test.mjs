@@ -213,3 +213,20 @@ test('the offline copy keeps a history month that was only saved from this devic
   assert.equal(snap.history['2020-01'].length, 1);
   stop(s);
 });
+
+test('two tabs: when the other tab already sent my change, my screen keeps showing it', async () => {
+  const repo = await freshRepoWithProject();
+  localStorage.clear();
+  const tabA = await device(repo.s);
+  stop(tabA);
+  tabA.dispatch('createProject', { projectId: 'p9', name: 'New one', groupId: 'g1' });
+  stop(tabA);
+  // the other tab sent it and emptied the shared list; this tab hears about it
+  localStorage.setItem('dp.pending', '[]');
+  // simulate the 'storage' signal by calling the same merge the listener does
+  const stored = JSON.parse(localStorage.getItem('dp.pending')).filter((o) => !tabA.sentIds.has(o.id));
+  const ids = new Set(stored.map((o) => o.id));
+  tabA.pending = [...stored, ...tabA.pending.filter((o) => !ids.has(o.id))];
+  tabA.recompute();
+  assert.ok(tabA.view.data.projects.some((p) => p.id === 'p9'), 'the new project does not vanish');
+});
