@@ -16,7 +16,7 @@ export const AI_DAILY_LIMIT = 50;
 export const MAX_FILE_BYTES = 25 * 1024 * 1024;
 export const IMAGE_MAX_WIDTH = 2000;
 export const SAVE_DELAY_MS = 2000;
-export const REFRESH_MS = 60 * 1000;
+export const REFRESH_MS = 30 * 1000;
 export const BRIEF_CLAIM_MINUTES = 5;
 export const NO_WORK_NOTE_DAYS = 3; // show "No real work for N days" from this many days
 export const WAIT_RED_DAYS = 2; // waiting on a person this many days = time to chase (red)

@@ -2011,6 +2011,11 @@ function onKey(e) {
 
 // ---------------------------------------------------------------- start
 
+/** Send waiting changes right away (used when leaving or closing the app). */
+function sendNow() {
+  if (store && store.pending.length && !store.saving && store.status !== 'auth' && store.status !== 'checking') store.flush();
+}
+
 async function doRefresh(force) {
   if (!store || store.status === 'auth') return;
   await store.refresh(force);
@@ -2033,6 +2038,7 @@ function start() {
     }
     render();
   });
+  store.addEventListener('remote', () => toast('↻ Updated with changes from your other device'));
   store.addEventListener('blocked', (e) => {
     toast(e.detail.status === 'offline' ? 'No connection — changes not saved. Try again when online.' : 'Please wait…');
     render(); // put ticked boxes and menus back to the real data
@@ -2043,15 +2049,23 @@ function start() {
   started = true;
   setInterval(() => { if (store && store.view && store.view.data.timer && document.visibilityState === 'visible') render(); }, 20000);
   let shownDay = todayIndia();
+  let lastTick = Date.now();
   setInterval(() => {
-    if (document.visibilityState === 'visible') doRefresh(false);
+    const woke = Date.now() - lastTick > REFRESH_MS * 3; // the computer was asleep: check at once, even if this window is behind another
+    lastTick = Date.now();
+    if (document.visibilityState === 'visible' || woke || (store && store.pending.length)) doRefresh(false);
     if (todayIndia() !== shownDay) { shownDay = todayIndia(); resetRedOrder(); render(); markShownOpened(); recordPastScores(); } // midnight: every dot resets
   }, REFRESH_MS);
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') doRefresh(false);
-    else { saveTypedText(); rememberScroll(); }
+    else { saveTypedText(); rememberScroll(); sendNow(); } // leaving the app: send waiting changes at once, not after the usual pause
   });
-  window.addEventListener('pagehide', () => { saveTypedText(); rememberScroll(); });
+  window.addEventListener('focus', () => doRefresh(false)); // back to this window from another app
+  window.addEventListener('pagehide', () => { saveTypedText(); rememberScroll(); sendNow(); });
+  // Closing the app while changes are still being sent: ask first, so nothing stays only on this computer.
+  window.addEventListener('beforeunload', (e) => {
+    if (store && store.pending.length && store.status !== 'auth') { sendNow(); e.preventDefault(); e.returnValue = ''; }
+  });
   window.addEventListener('online', () => {
     if (store.status !== 'offline') return;
     store.init().then(() => { if (store.pending.length) store.save(); else if (store.status !== 'auth') store.setStatus('saved'); });

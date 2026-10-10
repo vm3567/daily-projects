@@ -293,21 +293,24 @@ export class Store extends EventTarget {
     }
   }
 
-  /** Get the latest data if another device saved. Skipped while changes are waiting. */
+  /** Get the latest data if another device saved. With changes waiting, send them first. */
   async refresh(force = false) {
     if (!this.base) return this.init();
     if (this.pending.length) {
-      // Waiting changes: try again if the last save failed (or when ↻ is tapped).
-      if (force || ((this.status === 'offline' || this.status === 'error') && !this.saving)) {
-        if (this.status === 'offline') this.setStatus('saving');
+      // Waiting changes: send them now (a save that stalled or failed is tried again; saving also gets the other device's changes).
+      if (!this.saving && this.status !== 'auth' && this.status !== 'checking') {
+        if (this.status === 'offline' || this.status === 'error') this.setStatus('saving');
         await this.flush();
       }
       return;
     }
-    if (this.saving) return;
+    if (this.saving || this.status === 'checking') return;
     try {
       const head = await this.repo.headCommit();
-      if (head !== this.base.commit) await this.load();
+      if (head !== this.base.commit) {
+        await this.load();
+        this.emit('remote', {}); // another computer saved: the screen now shows its changes
+      }
       if (this.status !== 'saved') this.setStatus('saved');
     } catch (e) {
       this.handleError(e);

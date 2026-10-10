@@ -180,6 +180,7 @@ These use the GitHub login already on the Mac. No extra key is needed.
 ## If something goes wrong
 
 - **"Key problem":** the GitHub key expired or was deleted. Make a new one (step 2) and paste it. Unsaved changes are kept.
+- **Two computers (or computer + phone):** a change is sent 2 seconds after you make it, and at once when you switch away or close the app. If something is still being sent, the browser asks before closing. The other computer checks every 30 seconds, and at once when you come back to its window or wake it from sleep. It then shows **↻ Updated with changes from your other device**. Tip: before you leave a computer, look for ☁︎✓ at the top (all sent).
 - **No internet:** the app still opens (after it was opened once online) and shows your projects as they were last time — the top says **Offline**. Tick, add steps, write notes, use the timer: changes wait on the device and are saved by themselves when the internet is back (or tap ↻). If another device changed things meanwhile, both are kept. AI, photos and files need internet.
 - **Restore old data:** in Claude type `/restore` (or "restore my tracker to 9 Oct"). Claude shows what that version has and asks "yes?" first. The restore is saved as a new version, so nothing is lost, and your AI keys are not changed.
 - **Download a backup:** Settings → Download backup.

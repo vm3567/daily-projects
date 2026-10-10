@@ -230,3 +230,24 @@ test('two tabs: when the other tab already sent my change, my screen keeps showi
   tabA.recompute();
   assert.ok(tabA.view.data.projects.some((p) => p.id === 'p9'), 'the new project does not vanish');
 });
+
+test('other computer: a refresh shows its change and says so; a stalled waiting change is sent by the next refresh', async () => {
+  const repo = await freshRepoWithProject();
+  localStorage.clear();
+  const office = await device(repo.s);
+  const home = await device(repo.s);
+  office.pending = []; home.pending = [];
+  let told = 0;
+  home.addEventListener('remote', () => { told++; });
+  office.dispatch('addStep', { projectId: 'p1', stepId: 's9', text: 'Glaze test' });
+  stop(office); // the save timer never ran (laptop closed straight away)
+  assert.equal(JSON.parse(repo.read('data.json')).projects[0].steps.length, 2, 'not sent yet');
+  await office.refresh(); // next check sends it, even though no save had failed
+  stop(office);
+  assert.equal(office.pending.length, 0);
+  await home.refresh();
+  assert.ok(home.view.data.projects[0].steps.find((s) => s.id === 's9'), 'home computer shows it');
+  assert.equal(told, 1);
+  await home.refresh(); // nothing new: no message
+  assert.equal(told, 1);
+});
