@@ -874,7 +874,7 @@ function clipBox() {
     h('div', { class: 'capture-head' }, h('strong', null, isMailLink(clip.link) ? '✉ Add from mail' : '↗ Add from page'),
       h('span', { class: 'muted small' }, 'Enter = add to the first project · Esc = close'),
       h('button', { class: 'icon', type: 'button', 'aria-label': 'Close', onClick: close }, '✕')),
-    h('input', { name: 'text', key: 'capture-input', value: clip.text, autocomplete: 'off', 'aria-label': 'Step', placeholder: 'What is the next step?', 'data-mention': '1' }),
+    h('input', { name: 'text', key: 'capture-input', value: clip.text, autocomplete: 'off', 'aria-label': 'Step', placeholder: 'What is the next step?', 'data-mention': '1', onInput: (e, el) => { clip.text = el.value; } }),
     clip.link ? h('div', { class: 'clip-link muted small', title: clip.link.url }, '🔗 ', clip.link.title) : null,
     ...alreadyAdded(clip.link).slice(0, 3).map((x, i) => h('div', { class: 'clip-already', key: 'al' + i },
       x.inbox ? `⚠︎ Already in your Inbox: ${x.inbox.text}` : `⚠︎ Already in ${x.project.name}${x.step ? `: ${x.step.text}${x.step.done ? ' (done)' : ''}` : ' (project link)'}`,
@@ -2148,6 +2148,8 @@ function onKey(e) {
   } else if (k === 'w') {
     if (!p) { toast('Pick a project first (↓ ↑).'); return; }
     ui.mobile = 'detail'; render(); focusKey('wn-' + p.id);
+  } else if (k === 'n' && ui.view === 'people' && ui.person && !ui.search) {
+    focusKey('person-task-input'); // on a person's page: the "Add a task with …" box
   } else if (k === 'n') {
     if (!(ui.view === 'today' || ui.view === 'all' || ui.view.startsWith('group:'))) ui.view = 'today'; // the form is only on project lists
     ui.search = ''; ui.adding = true; ui.mobile = 'list'; render(); focusKey('new-name');

@@ -2,7 +2,7 @@
 // A step is linked to a person when its text or note has "@Name", or "Waiting on" is that person.
 
 import { h, fmtDay, fmtTime } from './dom.js';
-import { mentionedPeople, initials, indiaDate, personSteps, personStatus, waitingDays, todayIndia } from '../rules.js';
+import { mentionedPeople, initials, indiaDate, personSteps, personStatus, waitingDays, todayIndia, stepLinkedTo, awakeProjects, addDays } from '../rules.js';
 import { newId } from '../ops.js';
 
 export function openCount(data, person) {
@@ -79,6 +79,72 @@ function list(title, items, ctx, empty) {
     items.length ? h('ul', { class: 'person-steps' }, items.map((it) => stepItem(ctx, it))) : h('p', { class: 'muted small' }, empty));
 }
 
+/**
+ * "Add a task with Ravi": write it, pick "I do it" (@Ravi) or "Waiting on Ravi", optionally when, then tap a project.
+ * It is saved as a step in that project, so it shows on the project and on this page.
+ */
+function taskBox(ctx, person) {
+  const { store, ui } = ctx;
+  const data = store.view.data;
+  const people = data.people || [];
+  if (!ui.personTask || ui.personTask.personId !== person.id) ui.personTask = { personId: person.id, mode: 'me', when: 0, find: '' };
+  const t = ui.personTask;
+  const first = person.name.split(/\s+/)[0];
+  const today = todayIndia();
+  const input = () => document.querySelector('.person-task [name=task]');
+  const textNow = () => (input()?.value || '').replace(/\s+/g, ' ').trim();
+  const keep = () => { t.text = input()?.value || t.text || ''; };
+  const mine = (p) => p.steps.some((st) => stepLinkedTo(st, person, people));
+  const all = awakeProjects(data, today);
+  const find = t.find.trim().toLowerCase();
+  const ordered = [...all.filter(mine), ...all.filter((p) => !mine(p)).sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''))];
+  const list = (find ? ordered.filter((p) => p.name.toLowerCase().includes(find)) : ordered).slice(0, find ? 8 : 5);
+  const add = (projectId, projectName) => {
+    let text = textNow();
+    if (!text) { ctx.toast(`Write the task with ${first} first`); input()?.focus(); return; }
+    if (t.mode === 'me' && !text.toLowerCase().includes('@' + person.name.toLowerCase())) text += ` @${person.name}`;
+    const stepId = newId();
+    if (!store.dispatch('addStep', { projectId, stepId, text })) return;
+    if (t.mode === 'wait') {
+      store.dispatch('setStepField', { projectId, stepId, field: 'waitingOn', value: person.name });
+      store.dispatch('setStepField', { projectId, stepId, field: 'waiting', value: true });
+    }
+    if (t.when) store.dispatch('remindStep', { projectId, stepId, date: addDays(today, t.when) });
+    ctx.toast(`Added to ${projectName}: ${textNow()}${t.mode === 'wait' ? ` · waiting on ${first}` : ''}${t.when ? ` · comes back ${fmtDay(addDays(today, t.when))}` : ''}`, 3500);
+    t.text = ''; t.find = ''; t.when = 0;
+    if (input()) input().value = '';
+    ctx.render();
+    input()?.focus();
+  };
+  const newProject = () => {
+    if (!textNow()) { ctx.toast(`Write the task with ${first} first`); input()?.focus(); return; }
+    const name = (prompt('Name of the new project:', '') || '').trim();
+    if (!name) return;
+    const projectId = newId();
+    if (store.dispatch('createProject', { projectId, name, groupId: data.groups[0] && data.groups[0].id })) add(projectId, name);
+  };
+  const chip = (on, label, onClick, title) => h('button', { class: 'chip' + (on ? ' on' : ''), type: 'button', title, onClick: () => { keep(); onClick(); ctx.render(); } }, label);
+  return h('form', {
+    class: 'person-task block', key: 'ptask-' + person.id,
+    onSubmit: (e) => { e.preventDefault(); if (list[0]) add(list[0].id, list[0].name); },
+  },
+  h('div', { class: 'person-task-head small' }, `Add a task with ${first}`, h('span', { class: 'muted' }, ' · Enter = add to the first project')),
+  h('input', { name: 'task', key: 'person-task-input', value: t.text || '', autocomplete: 'off', placeholder: `e.g. Send the burner quote by Thursday`, 'aria-label': `Task with ${first}`,
+    onInput: (e, el) => { t.text = el.value; } }), // kept, so a redraw never wipes what you typed
+  h('div', { class: 'person-task-row' },
+    chip(t.mode === 'me', 'I do it', () => { t.mode = 'me'; }, `Your task; ${first} is @mentioned`),
+    chip(t.mode === 'wait', `Waiting on ${first}`, () => { t.mode = 'wait'; }, `${first} has to do it: shows Waiting with a day count`),
+    h('span', { class: 'muted small' }, '· When:'),
+    [[0, 'Today'], [1, 'Tomorrow'], [7, '1 week']].map(([d, label]) => chip(t.when === d, label, () => { t.when = d; },
+      d ? `Hide it until ${fmtDay(addDays(today, d))}, then it comes back first` : 'From today'))),
+  h('div', { class: 'muted small' }, `In project (${first}'s projects first):`),
+  h('div', { class: 'person-task-row' },
+    list.map((p, i) => h('button', { class: 'chip' + (i === 0 ? ' first' : ''), type: 'button', key: 'ptp-' + p.id, onClick: () => add(p.id, p.name) }, p.name)),
+    h('input', { class: 'person-task-find', key: 'ptask-find', value: t.find, autocomplete: 'off', placeholder: 'Search…', 'aria-label': 'Search projects',
+      onInput: (e, el) => { keep(); t.find = el.value; ctx.render(); } }),
+    h('button', { class: 'chip', type: 'button', onClick: newProject }, '+ New project')));
+}
+
 export function renderPerson(ctx) {
   const { store, ui } = ctx;
   const data = store.view.data;
@@ -124,6 +190,7 @@ export function renderPerson(ctx) {
           },
         }, 'Remove'))),
     h('p', { class: 'meta-line static' }, 'Linked by @name in steps, or by "Waiting on".'),
+    taskBox(ctx, person),
     list(`Waiting on ${first}`, waiting, ctx, `Nothing waiting on ${first}. Tick "Waiting" on a step and pick ${first}.`),
     list(`To discuss with ${first}`, discuss, ctx, `Nothing to discuss. Type @${first} in any step.`),
     notes.length ? h('section', { class: 'block' }, h('h3', null, `Notes about ${first}`),

@@ -220,3 +220,11 @@ The folder `chrome-extension` is a small Chrome add-on. It adds the mail or page
 Shortcut: **Alt+Shift+D** (Mac: Option+Shift+D). After an update to the add-on files, open `chrome://extensions` and press ↻ on Daily Projects – Add.
 
 The add-on never holds your GitHub key. It only opens the app with the details filled in; the app saves as usual. Links open the mail only in a browser signed in to Outlook on the web (not the Outlook desktop app).
+
+## Add a task from a person's page
+
+On a person's page (People → a name), the blue box **Add a task with …** adds a step without opening the project:
+1. Write the task (press **N** on the page to jump to the box).
+2. **I do it** (they are @mentioned) or **Waiting on …** (shows Waiting with a day count, Chased, ✍ Draft).
+3. **When**: Today, Tomorrow or 1 week (later days hide it until then).
+4. Tap a project (their projects come first, or Search…, or + New project). Enter adds it to the first one.

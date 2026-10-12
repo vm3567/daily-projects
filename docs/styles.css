@@ -855,3 +855,12 @@ a.tag.link-chip:hover { text-decoration: underline; }
 .clip-people .person-chip .x:hover { background: #fee2e2; color: var(--red); }
 .clip-wait { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .clip-when .chip.on { border-color: var(--brand); background: var(--brand-soft); color: #1e40af; }
+
+/* v29: Add a task with a person (person page) */
+.person-task { display: grid; gap: 8px; border: 1px solid #c7d7fb; background: var(--brand-soft); border-radius: 10px; padding: 10px 12px; }
+.person-task-head { color: #1e40af; font-weight: 600; }
+.person-task > input { width: 100%; }
+.person-task-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.person-task .chip.on { border-color: var(--brand); background: #fff; color: #1e40af; }
+.person-task .chip.first { border-color: var(--brand); color: var(--brand); }
+.person-task-find { width: 120px; }
