@@ -864,3 +864,8 @@ a.tag.link-chip:hover { text-decoration: underline; }
 .person-task .chip.on { border-color: var(--brand); background: #fff; color: #1e40af; }
 .person-task .chip.first { border-color: var(--brand); color: var(--brand); }
 .person-task-find { width: 120px; }
+
+/* v30: person phone / email */
+.person-contact { display: flex; flex-wrap: wrap; gap: 10px; margin: 4px 0 2px; }
+.person-contact label { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); }
+.person-contact input { width: 210px; }

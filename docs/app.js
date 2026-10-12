@@ -142,7 +142,7 @@ const ctx = {
   draftFollowUp: (p, s) => draftFollowUp(p, s),
   openSummary: () => openSummary(),
   openPersonMessage: (person) => openSheet({
-    title: `Pending list for ${person.name}`, text: personMessageText(store.view.data, person, todayIndia()), subject: 'Pending items',
+    title: `Pending list for ${person.name}`, text: personMessageText(store.view.data, person, todayIndia()), subject: 'Pending items', to: person,
   }),
   openPerson: (id) => { pushNav(); go('people'); ctx.selectPerson(id); },
   goBack: () => goBack(),
@@ -274,7 +274,14 @@ async function withAi(job) {
 // ---------------------------------------------------------------- message sheet
 // A white panel over the page with an editable text, and Copy / WhatsApp / Email buttons.
 
-function openSheet({ title, text, busy = false, error = '', extra = null, subject = 'Update' }) {
+/** The saved person for a name (for their WhatsApp number and email). */
+function personNamed(name) {
+  const n = String(name || '').trim().toLowerCase();
+  return n ? (store.view.data.people || []).find((x) => x.name.toLowerCase() === n) || null : null;
+}
+
+/** to = a person: WhatsApp and Outlook open straight to them when their number / email is saved on their page. */
+function openSheet({ title, text, busy = false, error = '', extra = null, subject = 'Update', to = null }) {
   const v = document.getElementById('viewer');
   v.hidden = false;
   v.classList.add('sheet-mode');
@@ -284,17 +291,22 @@ function openSheet({ title, text, busy = false, error = '', extra = null, subjec
     try { await navigator.clipboard.writeText(area.value); toast('Copied ✓ — paste it in WhatsApp or email', 2500); }
     catch { area.select(); document.execCommand && document.execCommand('copy'); toast('Copied ✓', 2000); }
   };
-  const wa = () => window.open(`https://wa.me/?text=${encodeURIComponent(area.value)}`, '_blank', 'noopener');
-  const mail = () => { location.href = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(area.value)}`; };
+  const phone = to && to.phone;
+  const email = to && to.email;
+  const wa = () => window.open(`https://wa.me/${phone || ''}?text=${encodeURIComponent(area.value)}`, '_blank', 'noopener');
+  // Outlook on the web, new mail with To, subject and text filled in (you use Outlook in Chrome)
+  const outlook = () => window.open(`https://outlook.office.com/mail/deeplink/compose?to=${encodeURIComponent(email || '')}&subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(area.value)}`, '_blank', 'noopener');
+  const first = to ? to.name.split(/\s+/)[0] : '';
   v.replaceChildren(
     h('div', { class: 'sheet' },
       h('div', { class: 'sheet-head' }, h('strong', null, title), h('button', { class: 'icon', 'aria-label': 'Close', onClick: closeSheet }, '✕')),
       busy ? h('p', { class: 'muted' }, 'Writing…') : error ? h('p', { class: 'error' }, error) : area,
-      busy || error ? null : h('p', { class: 'muted small' }, 'You can change the words before sending.'),
+      busy || error ? null : h('p', { class: 'muted small' }, 'You can change the words before sending.',
+        to && (!phone || !email) ? ` Tip: save ${first}'s ${!phone && !email ? 'phone and email' : !phone ? 'phone' : 'email'} on ${first}'s page, and these buttons go straight to ${first}.` : ''),
       h('div', { class: 'row sheet-actions' },
-        busy || error ? null : h('button', { class: 'btn primary', onClick: copy }, '📋 Copy'),
-        busy || error ? null : h('button', { class: 'btn wa', onClick: wa }, 'WhatsApp'),
-        busy || error ? null : h('button', { class: 'btn', onClick: mail }, '✉ Email'),
+        busy || error ? null : h('button', { class: 'btn wa' + (phone ? ' primary' : ''), onClick: wa, title: phone ? `Opens WhatsApp chat with ${to.name}` : 'Opens WhatsApp; you pick the person' }, phone ? `WhatsApp ${first}` : 'WhatsApp'),
+        busy || error ? null : h('button', { class: 'btn' + (email ? ' primary' : ''), onClick: outlook, title: email ? `New Outlook mail to ${email}` : 'New Outlook mail; you add the person' }, email ? `✉ Outlook ${first}` : '✉ Outlook'),
+        busy || error ? null : h('button', { class: 'btn', onClick: copy }, '📋 Copy'),
         extra)));
   if (!busy && !error) setTimeout(() => area.focus(), 30);
 }
@@ -312,7 +324,7 @@ async function draftFollowUp(p, step) {
   try {
     const text = await withAi((provider, key) => ai.draftFollowUp(provider, key, { person: step.waitingOn, step, project: p, days: waitingDays(step) }));
     openSheet({
-      title, text, subject: step.text,
+      title, text, subject: step.text, to: personNamed(step.waitingOn),
       extra: h('button', { class: 'btn', title: 'Saves a work note and restarts the waiting count', onClick: () => { chase(p, step); closeSheet(); } }, 'Mark as chased'),
     });
   } catch (e) {

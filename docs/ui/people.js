@@ -189,6 +189,23 @@ export function renderPerson(ctx) {
             ui.person = null; ui.mobile = 'list'; ctx.render();
           },
         }, 'Remove'))),
+    h('div', { class: 'person-contact' },
+      h('label', null, '📞 ', h('input', {
+        key: 'pphone-' + person.id, type: 'tel', value: person.phone ? '+' + person.phone : '', placeholder: 'WhatsApp number', 'aria-label': 'WhatsApp number', autocomplete: 'off',
+        onChange: (e, el) => {
+          if (el.value.trim() === (person.phone ? '+' + person.phone : '')) return;
+          if (!store.dispatch('setPersonContact', { personId: person.id, phone: el.value })) { ctx.toast('That does not look like a phone number'); el.value = person.phone ? '+' + person.phone : ''; }
+          else ctx.toast(el.value.trim() ? `Saved — WhatsApp now goes straight to ${first}` : 'Number removed', 2000);
+        },
+      })),
+      h('label', null, '✉ ', h('input', {
+        key: 'pemail-' + person.id, type: 'email', value: person.email || '', placeholder: 'Email', 'aria-label': 'Email', autocomplete: 'off',
+        onChange: (e, el) => {
+          if (el.value.trim() === (person.email || '')) return;
+          if (!store.dispatch('setPersonContact', { personId: person.id, email: el.value })) { ctx.toast('That does not look like an email address'); el.value = person.email || ''; }
+          else ctx.toast(el.value.trim() ? `Saved — Outlook now writes to ${first}` : 'Email removed', 2000);
+        },
+      }))),
     h('p', { class: 'meta-line static' }, 'Linked by @name in steps, or by "Waiting on".'),
     taskBox(ctx, person),
     list(`Waiting on ${first}`, waiting, ctx, `Nothing waiting on ${first}. Tick "Waiting" on a step and pick ${first}.`),

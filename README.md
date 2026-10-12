@@ -228,3 +228,7 @@ On a person's page (People → a name), the blue box **Add a task with …** add
 2. **I do it** (they are @mentioned) or **Waiting on …** (shows Waiting with a day count, Chased, ✍ Draft).
 3. **When**: Today, Tomorrow or 1 week (later days hide it until then).
 4. Tap a project (their projects come first, or Search…, or + New project). Enter adds it to the first one.
+
+## WhatsApp and Outlook straight to a person
+
+On a person's page, fill in **📞 WhatsApp number** (10-digit Indian numbers get +91 by themselves) and **✉ Email**. Then **📋 Send pending list** and **✍ Draft** show **WhatsApp Ravi** and **✉ Outlook Ravi**: WhatsApp opens the chat with the message written; Outlook (on the web) opens a new mail with To, subject and text filled in. You only press Send. Without a number or email the buttons still work; you pick the person yourself.

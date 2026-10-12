@@ -69,6 +69,17 @@ function cleanDate(v) {
 }
 
 /** Only http and https links are allowed. Returns null if not allowed. */
+/** A phone number for WhatsApp: digits only, India (91) added to a 10-digit number. '' = none, null = not a phone number. */
+export function cleanPhone(v) {
+  const raw = String(v || '').trim();
+  if (!raw) return '';
+  let d = raw.replace(/[^\d]/g, '');
+  if (d.startsWith('00')) d = d.slice(2);
+  else if (d.length === 11 && d.startsWith('0')) d = '91' + d.slice(1);
+  if (d.length === 10 && !raw.startsWith('+')) d = '91' + d;
+  return d.length >= 8 && d.length <= 15 ? d : null;
+}
+
 /** { url, title } of the mail or web page a step came from, or null. */
 export function cleanLink(v) {
   const url = v && cleanUrl(v.url);
@@ -744,6 +755,24 @@ const handlers = {
     person.name = name;
     people.sort((x, y) => x.name.localeCompare(y.name));
     return true;
+  },
+
+  /** Phone (for WhatsApp) and email (for Outlook) of a person. Empty clears it. */
+  setPersonContact(state, op, a) {
+    const person = (state.data.people || []).find((x) => x.id === a.personId);
+    if (!person) return false;
+    let changed = false;
+    if ('phone' in a) {
+      const phone = cleanPhone(a.phone);
+      if (phone === null) return false;
+      if ((person.phone || '') !== phone) { person.phone = phone; changed = true; }
+    }
+    if ('email' in a) {
+      const email = cleanText(a.email, 120).trim();
+      if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return false;
+      if ((person.email || '') !== email) { person.email = email; changed = true; }
+    }
+    return changed;
   },
 
   deletePerson(state, op, a) {

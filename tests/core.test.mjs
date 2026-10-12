@@ -586,3 +586,18 @@ test('Chrome button: a step, Inbox item and new project keep the mail link; bad 
   applyOp(s, op('inboxToProject', { itemId: 'i2', projectId: 'p2', groupId: 'g2' }, '2026-10-02'));
   assert.equal(s.data.projects.find((p) => p.id === 'p2').links[0].url, mail.url);
 });
+
+test('person phone and email: cleaned, India code added, bad values refused', () => {
+  const s = fresh();
+  applyOp(s, op('addPerson', { personId: 'r', name: 'Ravi' }, '2026-10-02'));
+  assert.equal(applyOp(s, op('setPersonContact', { personId: 'r', phone: '98450 12345' }, '2026-10-02')), true);
+  assert.equal(s.data.people[0].phone, '919845012345');
+  assert.equal(applyOp(s, op('setPersonContact', { personId: 'r', phone: '+44 7700 900123' }, '2026-10-02')), true);
+  assert.equal(s.data.people[0].phone, '447700900123');
+  assert.equal(applyOp(s, op('setPersonContact', { personId: 'r', phone: 'abc' }, '2026-10-02')), false);
+  assert.equal(applyOp(s, op('setPersonContact', { personId: 'r', email: 'not-an-email' }, '2026-10-02')), false);
+  assert.equal(applyOp(s, op('setPersonContact', { personId: 'r', email: 'ravi@acton.in' }, '2026-10-02')), true);
+  assert.equal(applyOp(s, op('setPersonContact', { personId: 'r', email: 'ravi@acton.in' }, '2026-10-02')), false, 'no change');
+  assert.equal(applyOp(s, op('setPersonContact', { personId: 'r', phone: '' }, '2026-10-02')), true);
+  assert.equal(s.data.people[0].phone, '');
+});
