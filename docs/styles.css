@@ -836,3 +836,14 @@ input:not([type=checkbox]):not([type=radio]):not([type=range]), select, textarea
 /* v27: a change waiting over a minute — a clear red bar at the top */
 .unsent-bar { position: fixed; top: 8px; left: 50%; transform: translateX(-50%); z-index: 60; max-width: min(720px, calc(100vw - 32px)); background: #fef2f2; color: #991b1b; border: 1px solid #fca5a5; border-radius: 10px; padding: 10px 14px; font: inherit; font-size: 14px; line-height: 1.35; text-align: left; cursor: pointer; box-shadow: 0 4px 14px rgba(0,0,0,.12); }
 .unsent-bar:hover { background: #fee2e2; }
+
+/* v28: add from mail or page (Chrome button), Open mail chip */
+.capture.clip { display: grid; gap: 8px; }
+.capture.clip > input { width: 100%; }
+.clip-link { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.clip-label { margin-top: 4px; }
+.clip-projects { display: flex; flex-wrap: wrap; gap: 6px; }
+.clip-projects .chip.first { border-color: var(--brand); color: var(--brand); }
+.clip-other { gap: 8px; }
+a.tag.link-chip { text-decoration: none; background: var(--brand-soft); color: #1e40af; border-color: #c7d7fb; cursor: pointer; }
+a.tag.link-chip:hover { text-decoration: underline; }

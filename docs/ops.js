@@ -69,6 +69,13 @@ function cleanDate(v) {
 }
 
 /** Only http and https links are allowed. Returns null if not allowed. */
+/** { url, title } of the mail or web page a step came from, or null. */
+export function cleanLink(v) {
+  const url = v && cleanUrl(v.url);
+  if (!url) return null;
+  return { url, title: cleanText(v.title, 200).replace(/\s+/g, ' ').trim() || url };
+}
+
 export function cleanUrl(v) {
   try {
     const u = new URL(String(v).trim());
@@ -377,6 +384,8 @@ const handlers = {
       dueDate: cleanDate(a.dueDate), note: '', waiting: false, waitingOn: '',
       createdAt: op.at, updatedAt: op.at,
     };
+    const link = cleanLink(a.link);
+    if (link) step.link = link; // the mail or web page this step came from (✉ Open mail)
     // New steps go after the last unfinished step (above the Done section).
     let at = p.steps.length;
     for (let i = p.steps.length - 1; i >= 0; i--) if (!p.steps[i].done) { at = i + 1; break; }
@@ -632,7 +641,8 @@ const handlers = {
     const inbox = (state.data.inbox ||= []);
     const text = cleanText(a.text, 1000).replace(/\s+/g, ' ').trim();
     if (!text || inbox.some((x) => x.id === a.itemId)) return false;
-    inbox.push({ id: a.itemId, text, createdAt: op.at });
+    const link = cleanLink(a.link);
+    inbox.push({ id: a.itemId, text, createdAt: op.at, ...(link ? { link } : {}) });
     return true;
   },
 
@@ -666,7 +676,8 @@ const handlers = {
     }
     if (!inbox.some((x) => x.id === it.id)) {
       const text = cleanText(it.text, 1000).trim();
-      if (text) inbox.splice(Math.min(Math.max(0, a.index ?? inbox.length), inbox.length), 0, { id: it.id, text, createdAt: it.createdAt || op.at });
+      const link = cleanLink(it.link);
+      if (text) inbox.splice(Math.min(Math.max(0, a.index ?? inbox.length), inbox.length), 0, { id: it.id, text, createdAt: it.createdAt || op.at, ...(link ? { link } : {}) });
     }
     return true;
   },
@@ -675,7 +686,7 @@ const handlers = {
   inboxToStep(state, op, a) {
     const inbox = state.data.inbox || [];
     const item = inbox.find((x) => x.id === a.itemId);
-    if (!item || !handlers.addStep(state, op, { projectId: a.projectId, stepId: a.stepId, text: item.text })) return false;
+    if (!item || !handlers.addStep(state, op, { projectId: a.projectId, stepId: a.stepId, text: item.text, link: item.link })) return false;
     inbox.splice(inbox.indexOf(item), 1);
     return true;
   },
@@ -687,7 +698,9 @@ const handlers = {
     const long = item && item.text.length > 120;
     const name = long ? item.text.slice(0, 117).replace(/\s+\S*$/, '') + '…' : item && item.text;
     if (!item || !handlers.createProject(state, op, { projectId: a.projectId, name, groupId: a.groupId })) return false;
-    if (long) findProject(state.data, a.projectId).notes = item.text; // nothing is cut off: the full text goes into the notes
+    const made = findProject(state.data, a.projectId);
+    if (long) made.notes = item.text; // nothing is cut off: the full text goes into the notes
+    if (item.link) made.links.push({ id: a.projectId + '-link', ...item.link }); // the mail or page it came from
     inbox.splice(inbox.indexOf(item), 1);
     return true;
   },

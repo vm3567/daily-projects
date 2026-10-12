@@ -571,3 +571,18 @@ test('remind me: a step hides until its day, then comes back first; all steps wa
   applyOp(s, op('setStepField', { projectId: 'p1', stepId: 's2', field: 'dueDate', value: '2026-10-25' }, '2026-10-06'));
   assert.equal(p.steps.find((x) => x.id === 's2').snoozedUntil, '2026-10-20');
 });
+
+test('Chrome button: a step, Inbox item and new project keep the mail link; bad links are dropped', () => {
+  const s = withProject();
+  const mail = { url: 'https://outlook.office.com/mail/inbox/id/AAQkAD%2Fx', title: 'Glaze results – batch 14' };
+  assert.equal(applyOp(s, op('addStep', { projectId: 'p1', stepId: 's9', text: 'Confirm firing curve', link: mail }, '2026-10-02')), true);
+  assert.deepEqual(s.data.projects[0].steps.find((x) => x.id === 's9').link, mail);
+  applyOp(s, op('addStep', { projectId: 'p1', stepId: 's10', text: 'Bad', link: { url: 'javascript:alert(1)', title: 'x' } }, '2026-10-02'));
+  assert.equal(s.data.projects[0].steps.find((x) => x.id === 's10').link, undefined);
+  applyOp(s, op('addInbox', { itemId: 'i1', text: 'Reply to Ravi', link: mail }, '2026-10-02'));
+  applyOp(s, op('inboxToStep', { itemId: 'i1', projectId: 'p1', stepId: 's11' }, '2026-10-02'));
+  assert.deepEqual(s.data.projects[0].steps.find((x) => x.id === 's11').link, mail);
+  applyOp(s, op('addInbox', { itemId: 'i2', text: 'New kiln quote', link: mail }, '2026-10-02'));
+  applyOp(s, op('inboxToProject', { itemId: 'i2', projectId: 'p2', groupId: 'g2' }, '2026-10-02'));
+  assert.equal(s.data.projects.find((p) => p.id === 'p2').links[0].url, mail.url);
+});

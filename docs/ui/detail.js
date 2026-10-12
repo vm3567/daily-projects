@@ -101,6 +101,7 @@ function stepRow(ctx, p, s, box = null) {
   }
   if (s.dueDate && !s.done) tags.push(h('span', { class: 'tag' + (s.dueDate < today ? ' late' : '') }, `by ${fmtDay(s.dueDate)}`));
   if (s.note && !open) tags.push(h('span', { class: 'tag' }, 'note'));
+  if (s.link) tags.push(linkChip(s.link));
   if (s.repeat && !s.done) tags.push(h('span', { class: 'tag repeat', title: 'Repeats' }, `↻ ${REPEAT_WORD[s.repeat]}`));
   if (stepWaitsForReminder(s, today)) tags.push(h('span', { class: 'tag remind', title: 'Comes back on this day' }, `⏰ ${fmtDay(s.snoozedUntil)}`));
   else if (s.snoozedUntil && s.snoozedUntil > today && !s.done) tags.push(h('span', { class: 'tag' }, `from ${fmtDay(s.snoozedUntil)}`));
@@ -707,6 +708,18 @@ function metaLine(ctx, p, today) {
         onChange: (e, el) => store.dispatch('setProjectField', { projectId: p.id, field: 'deadline', value: el.value || null }),
       })),
     h('button', { class: 'btn small primary', onClick: () => { ui.editMeta = false; ctx.render(); } }, 'Done'));
+}
+
+/** "✉ Open mail" / "↗ Open page": goes back to the mail or web page a step came from (added with the Chrome button). */
+export function isMailLink(link) {
+  const url = link && cleanUrl(link.url);
+  return !!url && /(^|\.)(outlook\.office\.com|outlook\.office365\.com|outlook\.live\.com|mail\.google\.com)$/.test(new URL(url).hostname);
+}
+
+export function linkChip(link) {
+  const url = link && cleanUrl(link.url);
+  if (!url) return null;
+  return h('a', { class: 'tag link-chip', href: url, target: '_blank', rel: 'noopener noreferrer', title: link.title || url, key: 'lk' }, isMailLink(link) ? '✉ Open mail' : '↗ Open page');
 }
 
 export function renderDetail(ctx) {

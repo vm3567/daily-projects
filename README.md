@@ -194,3 +194,21 @@ These use the GitHub login already on the Mac. No extra key is needed.
 - Saving: `docs/store.js` keeps a queue of operations, writes one commit through the Git Data API, and replays the queue on top of fresh data if another device saved first.
 - Try it without GitHub: `npm run serve`, then open http://localhost:8080/?mock=1 (test mode, data kept in this browser only).
 - Tests: `npm test`.
+
+## Chrome button: add a mail or web page
+
+The folder `chrome-extension` is a small Chrome add-on. It adds the mail or page you are looking at to Daily Projects, with a link back to it.
+
+**Install (once on each computer):**
+1. In Chrome, open `chrome://extensions`.
+2. Turn on **Developer mode** (top right).
+3. Click **Load unpacked** and choose the `chrome-extension` folder.
+4. Click the puzzle piece 🧩 at the top of Chrome and pin **Daily Projects – Add**.
+
+**Use:**
+1. Open a mail in Outlook (in Chrome), or any web page. Select a line first if you want that line as the step.
+2. Click the blue ✓ button, or press **Alt+Shift+D**, or right-click → **Add to Daily Projects**.
+3. The app opens with the box filled in. Tap a project to add it as a step, or choose **+ New project** / **📥 To Inbox**.
+4. The step shows **✉ Open mail** (or **↗ Open page**). Click it to go straight back.
+
+The add-on never holds your GitHub key. It only opens the app with the details filled in; the app saves as usual. Links open the mail only in a browser signed in to Outlook on the web (not the Outlook desktop app).

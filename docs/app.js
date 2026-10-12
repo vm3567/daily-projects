@@ -1,7 +1,7 @@
 // Daily Projects — main app: start-up, menu, project list, Today box, Diary, Settings, key screen.
 
 import { h, morph, installEvents, fmtDay, fmtLongDay, fmtTime, keyHint, withKey } from './ui/dom.js';
-import { renderDetail } from './ui/detail.js';
+import { renderDetail, linkChip, isMailLink } from './ui/detail.js';
 import { renderPeopleList, renderPerson, peopleByFollowUp } from './ui/people.js';
 import { installMentions } from './ui/mention.js';
 import { installAutocorrect, setAutocorrect, autocorrectOn } from './ui/autocorrect.js';
@@ -15,7 +15,7 @@ import { MockRepo } from './mockrepo.js';
 import { device } from './device.js';
 import { DATA_OWNER, DATA_REPO, DATA_BRANCH, REFRESH_MS, AI_DAILY_LIMIT, BRIEF_CLAIM_MINUTES, WAIT_RED_DAYS, NO_WORK_NOTE_DAYS } from './config.js';
 import { dotColour, isSnoozed, restUntil, awakeProjects, nextStep, todayIndia, isSundayIndia, colourCounts, isOverdue, indiaDate, waitingDays, daysWithoutWork, dayScore, greenStreak, addDays, monthOf, fmtMinutes } from './rules.js';
-import { newId, clone, opMonth, groupHasTimer } from './ops.js';
+import { newId, clone, opMonth, groupHasTimer, cleanLink } from './ops.js';
 import * as ai from './ai.js';
 
 const root = document.getElementById('app');
@@ -769,7 +769,82 @@ function openCapture() {
 }
 
 /** The quick capture box: type, Enter, it is in the Inbox. Esc or ✕ closes it. */
+/**
+ * From the Chrome button: the app opens with #add={text, title, url}. The add box shows it filled in;
+ * one tap on a project adds it as a step (with ✉ Open mail), or New project / To Inbox.
+ */
+function takeClipFromHash() {
+  if (!location.hash.startsWith('#add=')) return;
+  let clip = null;
+  try { clip = JSON.parse(decodeURIComponent(location.hash.slice(5))); } catch { clip = null; }
+  history.replaceState(null, '', location.pathname + location.search); // a refresh must not add it twice
+  if (!clip || typeof clip !== 'object') return;
+  const link = cleanLink({ url: clip.url, title: clip.title });
+  const text = String(clip.text || clip.title || '').replace(/\s+/g, ' ').trim().slice(0, 1000);
+  if (!text && !link) return;
+  ui.capture = { text: text || (link && link.title) || '', link, find: '' };
+  ui.rowMenu = null;
+  ui.menuOpen = false;
+  if (store && store.view) { render(); focusKey('capture-input'); }
+}
+
+function clipBox() {
+  const clip = ui.capture;
+  const { data } = store.view;
+  const close = () => { ui.capture = false; render(); };
+  const textNow = () => (document.querySelector('.capture [name=text]')?.value || clip.text).replace(/\s+/g, ' ').trim();
+  const find = clip.find.trim().toLowerCase();
+  const all = awakeProjects(data, todayIndia());
+  const sugg = inboxSuggestions(`${clip.text} ${clip.link ? clip.link.title : ''}`);
+  const recent = all.slice().sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
+  const list = find ? all.filter((p) => p.name.toLowerCase().includes(find)).slice(0, 8)
+    : [...sugg, ...recent.filter((p) => !sugg.includes(p))].slice(0, 6);
+  const addTo = (p) => {
+    const text = textNow();
+    if (!text) { toast('Write the step first'); return; }
+    if (store.dispatch('addStep', { projectId: p.id, stepId: newId(), text, link: clip.link })) {
+      ui.capture = false;
+      toast(`Added to ${p.name}: ${text}`, 3000);
+      select(p.id);
+    }
+  };
+  const newProject = () => {
+    const text = textNow();
+    if (!text) { toast('Write the name first'); return; }
+    const projectId = newId();
+    const groupId = data.groups[0] && data.groups[0].id;
+    const ok = store.dispatch('createProject', { projectId, name: text, groupId });
+    if (ok && clip.link) store.dispatch('addLink', { projectId, linkId: newId(), title: clip.link.title, url: clip.link.url });
+    if (ok) { ui.capture = false; toast(`New project: ${text}`, 3000); select(projectId); }
+  };
+  const toInbox = () => {
+    const text = textNow();
+    if (!text) { toast('Write something first'); return; }
+    if (store.dispatch('addInbox', { itemId: newId(), text, link: clip.link })) { ui.capture = false; toast(`📥 In your Inbox: ${text}`, 2500); render(); }
+  };
+  return h('div', { class: 'capture-wrap', key: 'capture', onClick: (e, el) => { if (e.target === el) close(); } },
+    h('form', {
+      class: 'capture clip', role: 'dialog', 'aria-label': 'Add from mail or page',
+      onSubmit: (e) => { e.preventDefault(); if (list[0]) addTo(list[0]); else toInbox(); },
+    },
+    h('div', { class: 'capture-head' }, h('strong', null, isMailLink(clip.link) ? '✉ Add from mail' : '↗ Add from page'),
+      h('span', { class: 'muted small' }, 'Enter = add to the first project · Esc = close'),
+      h('button', { class: 'icon', type: 'button', 'aria-label': 'Close', onClick: close }, '✕')),
+    h('input', { name: 'text', key: 'capture-input', value: clip.text, autocomplete: 'off', 'aria-label': 'Step', placeholder: 'What is the next step?', 'data-mention': '1' }),
+    clip.link ? h('div', { class: 'clip-link muted small', title: clip.link.url }, '🔗 ', clip.link.title) : null,
+    h('div', { class: 'clip-label muted small' }, 'Add as a step to:'),
+    h('input', { class: 'clip-find', key: 'clip-find', value: clip.find, autocomplete: 'off', placeholder: 'Search projects…', 'aria-label': 'Search projects',
+      onInput: (e, el) => { clip.text = textNow() || clip.text; clip.find = el.value; render(); } }),
+    h('div', { class: 'clip-projects' },
+      list.length ? list.map((p, i) => h('button', { class: 'chip' + (i === 0 ? ' first' : ''), type: 'button', key: 'cp-' + p.id, onClick: () => addTo(p) }, p.name))
+        : h('span', { class: 'muted small' }, find ? 'No project with that name.' : 'No projects yet — use + New project.')),
+    h('div', { class: 'row clip-other' },
+      h('button', { class: 'btn', type: 'button', onClick: newProject }, '+ New project'),
+      h('button', { class: 'btn', type: 'button', onClick: toInbox }, '📥 To Inbox'))));
+}
+
 function captureBox() {
+  if (ui.capture && typeof ui.capture === 'object') return clipBox();
   return h('div', { class: 'capture-wrap', key: 'capture', onClick: (e, el) => { if (e.target === el) { ui.capture = false; render(); } } },
     h('form', {
       class: 'capture', role: 'dialog', 'aria-label': 'Quick capture',
@@ -810,7 +885,7 @@ function inboxSuggestions(text) {
 function inboxAct(type, args, item, message) {
   const inbox = store.view.data.inbox || [];
   const index = inbox.findIndex((x) => x.id === item.id);
-  const saved = { id: item.id, text: item.text, createdAt: item.createdAt };
+  const saved = { id: item.id, text: item.text, createdAt: item.createdAt, ...(item.link ? { link: item.link } : {}) };
   const before = args.projectId && type === 'inboxToStep' ? store.view.data.projects.find((p) => p.id === args.projectId) : null;
   const snapshot = before ? clone(before) : null;
   const op = store.dispatch(type, args);
@@ -838,7 +913,7 @@ function renderInbox() {
     items.length ? h('ul', { class: 'inbox-list' }, items.map((item) => {
       const sugg = inboxSuggestions(item.text);
       return h('li', { key: 'ib-' + item.id },
-        h('div', { class: 'inbox-text' }, item.text, h('span', { class: 'muted small' }, ` · ${fmtDay(indiaDate(item.createdAt))}`)),
+        h('div', { class: 'inbox-text' }, item.text, h('span', { class: 'muted small' }, ` · ${fmtDay(indiaDate(item.createdAt))} `), linkChip(item.link)),
         h('div', { class: 'inbox-actions' },
           sugg.map((p) => h('button', { class: 'chip sugg', key: 'sg-' + p.id, title: `Add as a step in ${p.name}`, onClick: () => toStep(item, p) }, `→ ${p.name}`)),
           h('select', {
@@ -2043,6 +2118,7 @@ async function doRefresh(force) {
 let started = false;
 
 function start() {
+  takeClipFromHash();
   const key = device.githubKey();
   if (!isMock && !key) { showKeyScreen(); return; }
   const repo = isMock ? new MockRepo() : new GitHubRepo(key, DATA_OWNER, DATA_REPO, DATA_BRANCH);
@@ -2061,7 +2137,7 @@ function start() {
     render(); // put ticked boxes and menus back to the real data
   });
   render();
-  store.init().then(() => { render(); shareLocalKeys(); markShownOpened(); makeBrief(); recordPastScores(); });
+  store.init().then(() => { render(); if (ui.capture) focusKey('capture-input'); shareLocalKeys(); markShownOpened(); makeBrief(); recordPastScores(); });
   if (started) return;
   started = true;
   // redraw now and then: the running timer, and the "not sent yet" bar appearing after a minute
@@ -2078,7 +2154,8 @@ function start() {
     if (document.visibilityState === 'visible') doRefresh(false);
     else { saveTypedText(); rememberScroll(); sendNow(); } // leaving the app: send waiting changes at once, not after the usual pause
   });
-  window.addEventListener('focus', () => doRefresh(false)); // back to this window from another app
+  window.addEventListener('focus', () => doRefresh(false));
+  window.addEventListener('hashchange', takeClipFromHash); // the Chrome button, when the app is already open // back to this window from another app
   window.addEventListener('pagehide', () => { saveTypedText(); rememberScroll(); sendNow(); });
   // Closing the app while changes are still being sent: ask first, so nothing stays only on this computer.
   window.addEventListener('beforeunload', (e) => {
