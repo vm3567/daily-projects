@@ -211,4 +211,12 @@ The folder `chrome-extension` is a small Chrome add-on. It adds the mail or page
 3. The app opens with the box filled in. Tap a project to add it as a step, or choose **+ New project** / **📥 To Inbox**.
 4. The step shows **✉ Open mail** (or **↗ Open page**). Click it to go straight back.
 
+**In the box:**
+- **⚠︎ Already in …** — this mail was added before (even if it is now in another folder). Tap **Open** to go there.
+- **People** — names from the mail (sender first). Tap ✕ on anyone you do not want. The rest are added to People and @mentioned in the step.
+- **Waiting for a reply from** — tick it: the step shows Waiting on that person (Chased / ✍ Draft follow-up work as usual).
+- **When** — Today, Tomorrow, In 2 days, 1 week. Later days hide the step until then (like ⏰ Remind me).
+
+Shortcut: **Alt+Shift+D** (Mac: Option+Shift+D). After an update to the add-on files, open `chrome://extensions` and press ↻ on Daily Projects – Add.
+
 The add-on never holds your GitHub key. It only opens the app with the details filled in; the app saves as usual. Links open the mail only in a browser signed in to Outlook on the web (not the Outlook desktop app).

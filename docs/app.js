@@ -782,10 +782,42 @@ function takeClipFromHash() {
   const link = cleanLink({ url: clip.url, title: clip.title });
   const text = String(clip.text || clip.title || '').replace(/\s+/g, ' ').trim().slice(0, 1000);
   if (!text && !link) return;
-  ui.capture = { text: text || (link && link.title) || '', link, find: '' };
+  const nameOf = (n) => String(n || '').replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim().slice(0, 60);
+  const seen = new Set();
+  const people = [clip.from, ...(Array.isArray(clip.people) ? clip.people : [])].map(nameOf)
+    .filter((n) => n && !seen.has(n.toLowerCase()) && seen.add(n.toLowerCase())).slice(0, 8);
+  ui.capture = { text: text || (link && link.title) || '', link, find: '', people, waitOn: '', when: 0 };
   ui.rowMenu = null;
   ui.menuOpen = false;
   if (store && store.view) { render(); focusKey('capture-input'); }
+}
+
+/** Same mail or page = same key (Outlook: the message id, which stays the same in every folder). */
+function linkKey(url) {
+  const m = /\/id\/([^/?#]+)/.exec(url || '');
+  if (m && /outlook\./.test(url)) { try { return 'mail:' + decodeURIComponent(m[1]); } catch { return 'mail:' + m[1]; } }
+  return String(url || '').replace(/#.*$/, '').replace(/\/$/, '');
+}
+
+/** Where this mail or page was already added: [{ project, step?, inbox? }]. */
+function alreadyAdded(link) {
+  if (!link) return [];
+  const key = linkKey(link.url);
+  const out = [];
+  for (const p of store.view.data.projects) {
+    for (const st of p.steps) if (st.link && linkKey(st.link.url) === key) out.push({ project: p, step: st });
+    if (!out.some((x) => x.project === p) && (p.links || []).some((l) => linkKey(l.url) === key)) out.push({ project: p });
+  }
+  for (const it of store.view.data.inbox || []) if (it.link && linkKey(it.link.url) === key) out.push({ inbox: it });
+  return out;
+}
+
+/** Add any new names to People (names already there are matched, ignoring capitals). */
+function ensurePeople(names) {
+  const people = store.view.data.people || [];
+  for (const name of names) {
+    if (!people.some((x) => x.name.toLowerCase() === name.toLowerCase())) store.dispatch('addPerson', { personId: newId(), name });
+  }
 }
 
 function clipBox() {
@@ -799,12 +831,23 @@ function clipBox() {
   const recent = all.slice().sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
   const list = find ? all.filter((p) => p.name.toLowerCase().includes(find)).slice(0, 8)
     : [...sugg, ...recent.filter((p) => !sugg.includes(p))].slice(0, 6);
+  const today = todayIndia();
   const addTo = (p) => {
-    const text = textNow();
+    let text = textNow();
     if (!text) { toast('Write the step first'); return; }
-    if (store.dispatch('addStep', { projectId: p.id, stepId: newId(), text, link: clip.link })) {
+    ensurePeople(clip.people);
+    // the people you kept are @mentioned (they show on the People page); the one you wait on is linked by "Waiting"
+    for (const n of clip.people) if (n !== clip.waitOn && !text.toLowerCase().includes('@' + n.toLowerCase())) text += ` @${n}`;
+    const stepId = newId();
+    if (store.dispatch('addStep', { projectId: p.id, stepId, text, link: clip.link })) {
+      if (clip.waitOn) {
+        store.dispatch('setStepField', { projectId: p.id, stepId, field: 'waitingOn', value: clip.waitOn });
+        store.dispatch('setStepField', { projectId: p.id, stepId, field: 'waiting', value: true });
+      }
+      if (clip.when) store.dispatch('remindStep', { projectId: p.id, stepId, date: addDays(today, clip.when) });
       ui.capture = false;
-      toast(`Added to ${p.name}: ${text}`, 3000);
+      const extra = clip.when ? ` · comes back ${fmtDay(addDays(today, clip.when))}` : clip.waitOn ? ` · waiting on ${clip.waitOn}` : '';
+      toast(`Added to ${p.name}: ${textNow()}${extra}`, 3500);
       select(p.id);
     }
   };
@@ -814,6 +857,7 @@ function clipBox() {
     const projectId = newId();
     const groupId = data.groups[0] && data.groups[0].id;
     const ok = store.dispatch('createProject', { projectId, name: text, groupId });
+    if (ok) ensurePeople(clip.people);
     if (ok && clip.link) store.dispatch('addLink', { projectId, linkId: newId(), title: clip.link.title, url: clip.link.url });
     if (ok) { ui.capture = false; toast(`New project: ${text}`, 3000); select(projectId); }
   };
@@ -832,6 +876,30 @@ function clipBox() {
       h('button', { class: 'icon', type: 'button', 'aria-label': 'Close', onClick: close }, '✕')),
     h('input', { name: 'text', key: 'capture-input', value: clip.text, autocomplete: 'off', 'aria-label': 'Step', placeholder: 'What is the next step?', 'data-mention': '1' }),
     clip.link ? h('div', { class: 'clip-link muted small', title: clip.link.url }, '🔗 ', clip.link.title) : null,
+    ...alreadyAdded(clip.link).slice(0, 3).map((x, i) => h('div', { class: 'clip-already', key: 'al' + i },
+      x.inbox ? `⚠︎ Already in your Inbox: ${x.inbox.text}` : `⚠︎ Already in ${x.project.name}${x.step ? `: ${x.step.text}${x.step.done ? ' (done)' : ''}` : ' (project link)'}`,
+      x.project ? h('button', { class: 'chip', type: 'button', onClick: () => { ui.capture = false; select(x.project.id); } }, 'Open') : h('button', { class: 'chip', type: 'button', onClick: () => { ui.capture = false; go('inbox'); } }, 'Open'))),
+    clip.people.length ? h('div', { class: 'clip-people' },
+      h('span', { class: 'muted small' }, 'People (✕ to remove):'),
+      clip.people.map((n) => h('span', { class: 'person-chip', key: 'pp-' + n }, n,
+        h('button', { type: 'button', class: 'x', 'aria-label': `Remove ${n}`, onClick: () => {
+          clip.text = textNow() || clip.text;
+          clip.people = clip.people.filter((x) => x !== n);
+          if (clip.waitOn === n) clip.waitOn = '';
+          render();
+        } }, '✕')))) : null,
+    clip.people.length ? h('label', { class: 'clip-wait small' },
+      h('input', { type: 'checkbox', checked: !!clip.waitOn, onChange: (e, el) => { clip.text = textNow() || clip.text; clip.waitOn = el.checked ? clip.people[0] : ''; render(); } }),
+      ' Waiting for a reply from ',
+      h('select', { 'aria-label': 'Waiting on', value: clip.waitOn || clip.people[0], onChange: (e, el) => { clip.text = textNow() || clip.text; clip.waitOn = el.value; render(); } },
+        clip.people.map((n) => h('option', { value: n }, n)))) : null,
+    h('div', { class: 'clip-when' },
+      h('span', { class: 'muted small' }, 'When:'),
+      [[0, 'Today'], [1, 'Tomorrow'], [2, 'In 2 days'], [7, '1 week']].map(([d, label]) => h('button', {
+        class: 'chip' + (clip.when === d ? ' on' : ''), type: 'button', key: 'w' + d,
+        title: d ? `Hide it until ${fmtDay(addDays(today, d))}, then it comes back first` : 'Work on it from today',
+        onClick: () => { clip.text = textNow() || clip.text; clip.when = d; render(); },
+      }, label))),
     h('div', { class: 'clip-label muted small' }, 'Add as a step to:'),
     h('input', { class: 'clip-find', key: 'clip-find', value: clip.find, autocomplete: 'off', placeholder: 'Search projects…', 'aria-label': 'Search projects',
       onInput: (e, el) => { clip.text = textNow() || clip.text; clip.find = el.value; render(); } }),

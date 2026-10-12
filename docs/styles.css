@@ -847,3 +847,11 @@ input:not([type=checkbox]):not([type=radio]):not([type=range]), select, textarea
 .clip-other { gap: 8px; }
 a.tag.link-chip { text-decoration: none; background: var(--brand-soft); color: #1e40af; border-color: #c7d7fb; cursor: pointer; }
 a.tag.link-chip:hover { text-decoration: underline; }
+
+.clip-already { display: flex; align-items: center; gap: 8px; justify-content: space-between; background: #fffbeb; color: #92400e; border: 1px solid #fcd34d; border-radius: 8px; padding: 6px 10px; font-size: 13px; }
+.clip-people, .clip-when { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.clip-people .person-chip { display: inline-flex; align-items: center; gap: 4px; border: 1px solid var(--line); border-radius: 999px; padding: 2px 4px 2px 10px; font-size: 13px; background: var(--panel); }
+.clip-people .person-chip .x { border: 0; background: none; cursor: pointer; color: var(--muted); font-size: 12px; padding: 2px 6px; border-radius: 999px; }
+.clip-people .person-chip .x:hover { background: #fee2e2; color: var(--red); }
+.clip-wait { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.clip-when .chip.on { border-color: var(--brand); background: var(--brand-soft); color: #1e40af; }
