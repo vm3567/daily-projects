@@ -14,9 +14,10 @@ import { GitHubRepo } from './github.js';
 import { MockRepo } from './mockrepo.js';
 import { device } from './device.js';
 import { DATA_OWNER, DATA_REPO, DATA_BRANCH, REFRESH_MS, AI_DAILY_LIMIT, BRIEF_CLAIM_MINUTES, WAIT_RED_DAYS, NO_WORK_NOTE_DAYS } from './config.js';
-import { dotColour, isSnoozed, restUntil, awakeProjects, nextStep, todayIndia, isSundayIndia, colourCounts, isOverdue, indiaDate, waitingDays, daysWithoutWork, dayScore, greenStreak, addDays, monthOf, fmtMinutes } from './rules.js';
+import { dotColour, isSnoozed, restUntil, awakeProjects, activeProjects, nextStep, todayIndia, isSundayIndia, colourCounts, isOverdue, indiaDate, waitingDays, daysWithoutWork, dayScore, greenStreak, addDays, monthOf, fmtMinutes } from './rules.js';
 import { newId, clone, opMonth, groupHasTimer, cleanLink } from './ops.js';
 import * as ai from './ai.js';
+import { parseVoice } from './voice.js';
 
 const root = document.getElementById('app');
 const isMock = new URLSearchParams(location.search).has('mock')
@@ -802,6 +803,62 @@ function takeClipFromHash() {
   ui.rowMenu = null;
   ui.menuOpen = false;
   if (store && store.view) { render(); focusKey('capture-input'); }
+}
+
+/**
+ * From Siri (an iPhone Shortcut): the app opens with #say=<what you said>. It is kept on this device
+ * first, so it is not lost if the app is still loading or the key is missing, then saved at once.
+ */
+const VOICE_KEY = 'dp.voice';
+let voiceReady = false;
+
+function readVoice() {
+  try { const v = JSON.parse(localStorage.getItem(VOICE_KEY) || '[]'); return Array.isArray(v) ? v : []; } catch { return []; }
+}
+function keepVoice(list) {
+  try { if (list.length) localStorage.setItem(VOICE_KEY, JSON.stringify(list)); else localStorage.removeItem(VOICE_KEY); } catch { /* blocked */ }
+}
+
+function takeVoiceFromHash() {
+  if (!location.hash.startsWith('#say=')) return;
+  let said = '';
+  try { said = decodeURIComponent(location.hash.slice(5).replace(/\+/g, ' ')); } catch { said = ''; }
+  history.replaceState(null, '', location.pathname + location.search); // a refresh must not add it twice
+  said = said.replace(/\s+/g, ' ').trim().slice(0, 1000);
+  if (said) keepVoice([...readVoice(), { said, at: new Date().toISOString() }]);
+  if (voiceReady) runVoice();
+}
+
+function runVoice() {
+  const list = readVoice();
+  if (!list.length || !store || !store.canEdit()) return;
+  const left = [];
+  let last = null;
+  for (const item of list) {
+    const { data } = store.view;
+    const v = parseVoice(item.said, { projects: activeProjects(data), people: data.people || [], today: todayIndia() });
+    if (!v) continue;
+    if (v.project) {
+      if (v.waitOn) ensurePeople([v.waitOn]);
+      const stepId = newId();
+      const steps = [['addStep', { projectId: v.project.id, stepId, text: v.text }]];
+      if (v.waitOn) steps.push(['setStepField', { projectId: v.project.id, stepId, field: 'waitingOn', value: v.waitOn }], ['setStepField', { projectId: v.project.id, stepId, field: 'waiting', value: true }]);
+      if (v.date) steps.push(['remindStep', { projectId: v.project.id, stepId, date: v.date }]);
+      const extra = (v.waitOn ? ` · waiting on ${v.waitOn}` : '') + (v.date ? ` · comes back ${fmtDay(v.date)}` : '');
+      const done = actMany(v.project.id, steps, `🎤 Added to ${v.project.name}: ${v.text}${extra}`);
+      if (done) last = { project: v.project }; else left.push(item);
+    } else {
+      const itemId = newId();
+      if (store.dispatch('addInbox', { itemId, text: v.text })) {
+        last = { inbox: true };
+        toast(`🎤 In your Inbox: ${v.text}${v.missed ? ` (no project called “${v.missed}”)` : ''}`, 8000,
+          () => { if (store.dispatch('removeInbox', { itemId })) toast('Undone', 1500); });
+      } else left.push(item);
+    }
+  }
+  keepVoice(left);
+  if (last && last.project) select(last.project.id);
+  else if (last) go('inbox');
 }
 
 /** Same mail or page = same key (Outlook: the message id, which stays the same in every folder). */
@@ -2201,6 +2258,7 @@ let started = false;
 
 function start() {
   takeClipFromHash();
+  takeVoiceFromHash();
   const key = device.githubKey();
   if (!isMock && !key) { showKeyScreen(); return; }
   const repo = isMock ? new MockRepo() : new GitHubRepo(key, DATA_OWNER, DATA_REPO, DATA_BRANCH);
@@ -2219,7 +2277,7 @@ function start() {
     render(); // put ticked boxes and menus back to the real data
   });
   render();
-  store.init().then(() => { render(); if (ui.capture) focusKey('capture-input'); shareLocalKeys(); markShownOpened(); makeBrief(); recordPastScores(); });
+  store.init().then(() => { render(); if (ui.capture) focusKey('capture-input'); voiceReady = true; runVoice(); shareLocalKeys(); markShownOpened(); makeBrief(); recordPastScores(); });
   if (started) return;
   started = true;
   // redraw now and then: the running timer, and the "not sent yet" bar appearing after a minute
@@ -2237,7 +2295,7 @@ function start() {
     else { saveTypedText(); rememberScroll(); sendNow(); } // leaving the app: send waiting changes at once, not after the usual pause
   });
   window.addEventListener('focus', () => doRefresh(false));
-  window.addEventListener('hashchange', takeClipFromHash); // the Chrome button, when the app is already open // back to this window from another app
+  window.addEventListener('hashchange', () => { takeClipFromHash(); takeVoiceFromHash(); }); // the Chrome button, when the app is already open // back to this window from another app
   window.addEventListener('pagehide', () => { saveTypedText(); rememberScroll(); sendNow(); });
   // Closing the app while changes are still being sent: ask first, so nothing stays only on this computer.
   window.addEventListener('beforeunload', (e) => {

@@ -232,3 +232,24 @@ On a person's page (People → a name), the blue box **Add a task with …** add
 ## WhatsApp and Outlook straight to a person
 
 On a person's page, fill in **📞 WhatsApp number** (10-digit Indian numbers get +91 by themselves) and **✉ Email**. Then **📋 Send pending list** and **✍ Draft** show **WhatsApp Ravi** and **✉ Outlook Ravi**: WhatsApp opens the chat with the message written; Outlook (on the web) opens a new mail with To, subject and text filled in. You only press Send. Without a number or email the buttons still work; you pick the person yourself.
+
+## Siri: add by voice (iPhone)
+
+Say **"Hey Siri, Daily add"**, then say what to add. The app opens and saves it.
+
+- "Check kiln burner" → goes to the 📥 Inbox.
+- "Order clay **for Kiln trial**" (or "for the Kiln trial project") → a step in that project.
+- "… **waiting on Ravi**" → marked as waiting for Ravi.
+- "… **tomorrow**" / "in 2 days" / "next week" / "on Monday" → it comes back on that day.
+- If it cannot find the project, it goes to the Inbox and says which name it did not find. Nothing is lost.
+- Every add shows **Undo** for a few seconds.
+
+**Set up once on the iPhone (Shortcuts app):**
+1. Open the app link in **Safari** and check your projects show (the GitHub key must be saved in Safari).
+2. Shortcuts → **+** → add **Ask for Input** (Text, prompt "What should I add?").
+3. Add **URL Encode** (Encode, Provided Input).
+4. Add **Text**: `https://vm3567.github.io/daily-projects/#say=` followed by the URL Encoded Text.
+5. Add **Open URLs**.
+6. Name the shortcut **Daily add**.
+
+If the app is still loading or the key is missing, the words are kept on the phone and saved as soon as the app is ready.
