@@ -764,3 +764,5 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && state.user && !state.user.mustChange && state.view === 'today' && !Object.keys(state.drafts).some((k) => state.drafts[k].note)) loadView();
 });
 start();
+// Installable as an app (Android: Chrome menu → Install app); keeps the screens for fast opening.
+if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
