@@ -275,3 +275,4 @@ On a project: **👥 Give project** → pick the person. They see its open steps
 - **Right-click a project → 👥 Give project to…** (or Take back).
 - **📷 Photo needed to finish:** tick it when giving a task or a project; staff cannot tap Finished without a photo.
 - **📎 Instructions:** add photos or PDFs to a task (Give a task form, or open the task → 📎 Add instruction photo / PDF). Staff see them on the task.
+- **↔ Move a task:** open the task → **↔ Move to…** → pick the person. Its updates stay; both see a note. A step of a given project moves the whole project (your project's blue bar follows). **People → ↔ Move all tasks to…** hands over everything when someone is on leave.

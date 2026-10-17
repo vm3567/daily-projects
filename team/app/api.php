@@ -34,9 +34,31 @@ function photos_of(array $updateIds): array {
   return $out;
 }
 
+function user_name(int $id): string {
+  static $names = null;
+  if ($names === null) { $names = []; foreach (all('SELECT id, name FROM users') as $r) $names[(int)$r['id']] = $r['name']; }
+  return $names[$id] ?? '';
+}
+
 function update_out(?array $u, array $photos = []): ?array {
   if (!$u) return null;
-  return ['id' => (int)$u['id'], 'day' => $u['day'], 'note' => $u['note'], 'state' => $u['state'], 'at' => $u['updated_at'], 'photos' => $photos[$u['id']] ?? []];
+  return ['id' => (int)$u['id'], 'day' => $u['day'], 'note' => $u['note'], 'state' => $u['state'], 'at' => $u['updated_at'], 'photos' => $photos[$u['id']] ?? [],
+    'byId' => (int)$u['user_id'], 'by' => user_name((int)$u['user_id'])];
+}
+
+/** Hand open tasks to another person: history stays, and both see a note on the task. Returns how many moved. */
+function move_tasks(array $me, array $tasks, int $toId): int {
+  $to = one("SELECT id, name, active FROM users WHERE id = ?", [$toId]);
+  if (!$to || !$to['active']) throw new ApiError('Choose who takes it over.');
+  $n = 0;
+  foreach ($tasks as $t) {
+    if ((int)$t['assignee_id'] === $toId || $t['status'] !== 'open') continue;
+    q('UPDATE tasks SET assignee_id = ?, updated_at = ? WHERE id = ?', [$toId, now(), $t['id']]);
+    q('INSERT INTO comments (task_id, user_id, text, at) VALUES (?, ?, ?, ?)', [$t['id'], $me['id'], '↔ Moved from ' . user_name((int)$t['assignee_id']) . ' to ' . $to['name'] . '.', now()]);
+    audit($me['id'], 'task_moved', "#{$t['id']} → {$to['name']}");
+    $n++;
+  }
+  return $n;
 }
 
 /** Tasks with their update for today and the one before, ready for the screen. */
@@ -266,6 +288,18 @@ function handle(string $a, array $in): array {
       foreach ($open as $t) if (!isset($keep[$t['step_ref']])) q("UPDATE tasks SET status = 'done', done_at = ?, updated_at = ? WHERE id = ?", [now(), now(), $t['id']]);
       audit($me['id'], 'project_given', "$name → #$who");
       return ['tasks' => tasks_out(all(TASK_SELECT . " WHERE t.project_ref = ? AND t.seq IS NOT NULL AND t.status = 'open' ORDER BY t.seq", [$ref]), $day)];
+    }
+    case 'task.move': { // one task — or, for a step of a given project, all its open steps
+      $t = own_task($me, (int)($in['id'] ?? 0));
+      $tasks = $t['seq'] !== null && $t['project_ref']
+        ? all("SELECT * FROM tasks WHERE project_ref = ? AND seq IS NOT NULL AND status = 'open'", [$t['project_ref']])
+        : [$t];
+      return ['moved' => move_tasks($me, $tasks, (int)($in['toId'] ?? 0))];
+    }
+    case 'tasks.moveAll': { // someone on leave or leaving: all their open tasks to another person
+      $from = (int)($in['fromId'] ?? 0);
+      if ($from === (int)($in['toId'] ?? 0)) throw new ApiError('Choose a different person.');
+      return ['moved' => move_tasks($me, all("SELECT * FROM tasks WHERE assignee_id = ? AND status = 'open'", [$from]), (int)($in['toId'] ?? 0))];
     }
     case 'task.file.add': // manager: an instruction photo / PDF on the task, for the person doing it
       return ['fileId' => add_task_file($me, own_task($me, (int)($in['taskId'] ?? 0)))];

@@ -2390,6 +2390,10 @@ async function syncGivenProjects() {
   try { m = JSON.parse(localStorage.getItem(SYNC_KEY) || '{}'); } catch { m = {}; }
   for (const p of store.view.data.projects) {
     if (!p.team) continue;
+    // moved on Work Task (↔ Move to…): follow the new person instead of moving the steps back
+    const onTeam = [...team.byStep.values()].filter((t) => t.projectRef === p.id && t.seq !== null && t.status === 'open');
+    const moved = onTeam.length && onTeam.every((t) => t.assignee.id === onTeam[0].assignee.id) && onTeam[0].assignee.id !== p.team.userId ? onTeam[0].assignee : null;
+    if (moved) store.dispatch('setProjectTeam', { projectId: p.id, userId: moved.id, name: moved.name, needsPhoto: !!p.team.needsPhoto });
     const sig = JSON.stringify([p.team.userId, p.name, p.state === 'active' ? projectSteps(p) : [], !!p.team.needsPhoto]);
     if (m[p.id] === sig) continue;
     try {

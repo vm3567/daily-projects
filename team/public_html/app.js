@@ -166,7 +166,10 @@ async function loadView() {
     if (state.view === 'today') state.data = await api(me.role === 'admin' ? 'team.today' : 'my.today');
     else if (state.view === 'tasks') state.data = await api('tasks.list', { status: state.closed ? 'closed' : 'open' });
     else if (state.view === 'people') state.data = await api('users.list');
-    else if (state.view.startsWith('task:')) state.data = await api('task.get', { id: Number(state.view.slice(5)) });
+    else if (state.view.startsWith('task:')) {
+      state.data = await api('task.get', { id: Number(state.view.slice(5)) });
+      if (me.role === 'admin') state.people = (await api('users.list')).users.filter((u) => u.active);
+    }
     else if (state.view === 'give' || state.view.startsWith('edit:')) {
       state.people = (await api('users.list')).users.filter((u) => u.active);
       state.data = state.view.startsWith('edit:') ? await api('task.get', { id: Number(state.view.slice(5)) }) : null;
@@ -536,16 +539,38 @@ function taskDetail() {
       el('span', { class: 'tag' }, `💡 Suggested by ${t.assignee.name}`),
       el('button', { class: 'primary', onClick: async () => { try { await api('task.approve', { id: t.id }); toast('Added ✓'); loadView(); } catch (ex) { toast(ex.message, 5000); } } }, '✓ Yes, add it'),
       el('button', { onClick: async () => { const why = prompt('Not now — why (optional):', ''); if (why === null) return; try { await api('task.decline', { id: t.id, reason: why }); toast('Answered'); loadView(); } catch (ex) { toast(ex.message, 5000); } } }, 'Not now')) : null,
+    admin && t.status === 'open' ? moveBox(t) : null,
     admin && t.status !== 'suggested' ? el('div', { class: 'row' },
       el('button', { onClick: () => go('edit:' + t.id) }, '✎ Edit'),
+      t.status === 'open' ? el('button', { onClick: () => { state.moving = state.moving === t.id ? 0 : t.id; render(); } }, '↔ Move to…') : null,
       t.status === 'open' ? [el('button', { onClick: () => setStatus('done') }, '✓ Mark done'), el('button', { onClick: () => { if (confirm('Cancel this task?')) setStatus('cancelled'); } }, 'Cancel task')]
         : el('button', { onClick: () => setStatus('open') }, 'Open again')) : null,
     messagesBlock(t.id, comments),
     el('h2', null, 'Updates'),
     updates.length ? updates.map((u) => el('div', { class: 'card' },
-      el('div', { class: 'row small' }, el('strong', null, fmtDay(u.day)), el('span', { class: 'muted' }, fmtTime(u.at)), stateTag(u.state)),
+      el('div', { class: 'row small' }, el('strong', null, fmtDay(u.day)), el('span', { class: 'muted' }, fmtTime(u.at)), stateTag(u.state),
+        u.byId !== t.assignee.id ? el('span', { class: 'muted' }, `by ${u.by}`) : null),
       el('div', { class: 'pre' }, u.note), thumbs(u.photos))) : el('p', { class: 'muted' }, 'No updates yet.'),
   ];
+}
+
+/** ↔ Move to…: the people to hand this task to. A step of a given project moves the whole project. */
+function moveBox(t) {
+  if (state.moving !== t.id) return null;
+  const others = state.people.filter((p) => p.id !== t.assignee.id);
+  const whole = t.seq !== null && t.seq !== undefined;
+  return el('div', { class: 'card stack' },
+    el('strong', null, whole ? `Move the whole project "${t.project}" (all its open steps) to:` : `Move "${t.title}" to:`),
+    el('p', { class: 'muted small' }, 'Updates so far stay with the task. Both people see a note about the move.'),
+    el('div', { class: 'row' }, others.length ? others.map((p) => el('button', { class: 'chip', onClick: async () => {
+      try {
+        const out = await api('task.move', { id: t.id, toId: p.id });
+        state.moving = 0;
+        toast(`${out.moved} task${out.moved === 1 ? '' : 's'} moved to ${p.name} ✓`);
+        loadView();
+      } catch (ex) { toast(ex.message, 5000); }
+    } }, p.name)) : el('span', { class: 'muted' }, 'Add another person first (People).'),
+    el('button', { class: 'link', onClick: () => { state.moving = 0; render(); } }, 'Cancel')));
 }
 
 function taskForm() {
@@ -658,7 +683,15 @@ function peopleScreen() {
       u.id === state.user.id ? null : el('div', { class: 'row' },
         el('button', { onClick: () => rename(u) }, '✎ Name'),
         el('button', { onClick: () => reset(u) }, '🔑 New password'),
-        el('button', { onClick: () => toggle(u) }, u.active ? 'Switch off' : 'Switch on')))),
+        el('button', { onClick: () => toggle(u) }, u.active ? 'Switch off' : 'Switch on'),
+        u.active ? el('button', { onClick: () => { state.movingAll = state.movingAll === u.id ? 0 : u.id; render(); } }, '↔ Move all tasks to…') : null),
+      state.movingAll === u.id ? el('div', { class: 'row' }, el('span', { class: 'small muted' }, `All of ${u.name}'s open tasks go to:`),
+        users.filter((x) => x.active && x.id !== u.id).map((x) => el('button', { class: 'chip', onClick: async () => {
+          if (!confirm(`Move all of ${u.name}'s open tasks to ${x.name}?`)) return;
+          try { const out = await api('tasks.moveAll', { fromId: u.id, toId: x.id }); state.movingAll = 0; toast(`${out.moved} task${out.moved === 1 ? '' : 's'} moved to ${x.name} ✓`); loadView(); }
+          catch (ex) { toast(ex.message, 5000); }
+        } }, x.name)),
+        el('button', { class: 'link', onClick: () => { state.movingAll = 0; render(); } }, 'Cancel')) : null)),
     el('h2', null, 'Add a person'),
     el('form', { class: 'card stack', onSubmit: async (e) => {
       e.preventDefault();
