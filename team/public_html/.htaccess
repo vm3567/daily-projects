@@ -1,0 +1,30 @@
+# Work Task: always use the padlock (https), safe browser rules, no folder listings.
+Options -Indexes
+
+RewriteEngine On
+RewriteCond %{HTTPS} !=on
+RewriteCond %{HTTP:X-Forwarded-Proto} !=https
+RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
+
+# Pass the sign-in line through to PHP (some servers drop it)
+RewriteCond %{HTTP:Authorization} .
+RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+
+<IfModule mod_headers.c>
+  Header always set Strict-Transport-Security "max-age=31536000"
+  Header always set X-Content-Type-Options "nosniff"
+  Header always set Referrer-Policy "no-referrer"
+  Header always set X-Frame-Options "DENY"
+  Header always set Permissions-Policy "geolocation=(), microphone=(), camera=(self)"
+  Header always set Content-Security-Policy "default-src 'self'; img-src 'self' blob: data:; style-src 'self'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
+</IfModule>
+
+# Never serve hidden files
+<FilesMatch "^\.">
+  Require all denied
+</FilesMatch>
+
+# The app files change often: always check for a newer copy
+<FilesMatch "\.(html|js|css)$">
+  Header set Cache-Control "no-cache"
+</FilesMatch>

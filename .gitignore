@@ -10,3 +10,8 @@ data/
 # Mac / tools
 .DS_Store
 node_modules/
+
+# Team server: settings with the database password, the one-time setup code, staff photos
+team/app/config.php
+team/app/setup-code.txt
+team/uploads/

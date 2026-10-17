@@ -1,0 +1,162 @@
+<?php
+// Team server: shared start for every request. This folder is OUTSIDE the website folder,
+// so nobody can open these files from the internet.
+declare(strict_types=1);
+
+date_default_timezone_set('Asia/Kolkata');
+
+const APP_DIR = __DIR__;
+define('ROOT_DIR', dirname(__DIR__));
+define('UPLOAD_DIR', ROOT_DIR . '/uploads');
+const CONFIG_FILE = APP_DIR . '/config.php';
+
+const MAX_FAILS = 5;            // wrong passwords before a pause
+const LOCK_MINUTES = 15;        // the pause
+const TOKEN_DAYS = 60;          // stay signed in this long without using the app
+const MAX_PHOTOS = 5;           // per update
+const MAX_UPLOAD_BYTES = 15 * 1024 * 1024;
+
+function now(): string { return date('Y-m-d H:i:s'); }
+function today(): string { return date('Y-m-d'); }
+
+function config(): ?array {
+  static $c = null;
+  if ($c === null && is_file(CONFIG_FILE)) $c = require CONFIG_FILE;
+  return $c ?: null;
+}
+
+function db(): PDO {
+  static $pdo = null;
+  if ($pdo) return $pdo;
+  $c = config();
+  if (!$c) throw new ApiError('The server is not set up yet.', 503);
+  $pdo = connect_db($c['db_host'], $c['db_name'], $c['db_user'], $c['db_pass']);
+  migrate($pdo);
+  return $pdo;
+}
+
+function connect_db(string $host, string $name, string $user, string $pass): PDO {
+  $pdo = new PDO("mysql:host=$host;dbname=$name;charset=utf8mb4", $user, $pass, [
+    PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+    PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+    PDO::ATTR_EMULATE_PREPARES => false,
+  ]);
+  $pdo->exec("SET time_zone = '+05:30'");
+  return $pdo;
+}
+
+class ApiError extends Exception {
+  public int $status;
+  public function __construct(string $message, int $status = 400) { parent::__construct($message); $this->status = $status; }
+}
+
+function q(string $sql, array $args = []): PDOStatement {
+  $st = db()->prepare($sql);
+  $st->execute($args);
+  return $st;
+}
+function one(string $sql, array $args = []): ?array { $r = q($sql, $args)->fetch(); return $r ?: null; }
+function all(string $sql, array $args = []): array { return q($sql, $args)->fetchAll(); }
+
+function setting(string $key, string $default = ''): string {
+  $r = one('SELECT v FROM settings WHERE k = ?', [$key]);
+  return $r ? $r['v'] : $default;
+}
+function set_setting(string $key, string $value): void {
+  q('INSERT INTO settings (k, v) VALUES (?, ?) ON DUPLICATE KEY UPDATE v = VALUES(v)', [$key, $value]);
+}
+
+function audit(?int $userId, string $action, string $detail = ''): void {
+  q('INSERT INTO audit (user_id, action, detail, at) VALUES (?, ?, ?, ?)', [$userId, $action, mb_substr($detail, 0, 500), now()]);
+}
+
+/**
+ * The tables. Each step runs once; the number of steps done is kept in settings.schema.
+ * To change the tables later: ADD a new step at the end, never edit an old one.
+ */
+function migrate(PDO $pdo): void {
+  $steps = [
+    "CREATE TABLE IF NOT EXISTS settings (k VARCHAR(40) PRIMARY KEY, v TEXT NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+    "CREATE TABLE IF NOT EXISTS users (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      username VARCHAR(40) NOT NULL UNIQUE,
+      name VARCHAR(80) NOT NULL,
+      role ENUM('admin','staff') NOT NULL DEFAULT 'staff',
+      pass_hash VARCHAR(255) NOT NULL,
+      must_change TINYINT(1) NOT NULL DEFAULT 1,
+      active TINYINT(1) NOT NULL DEFAULT 1,
+      created_at DATETIME NOT NULL,
+      last_login DATETIME NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+    "CREATE TABLE IF NOT EXISTS tokens (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      user_id INT NOT NULL,
+      token_hash CHAR(64) NOT NULL UNIQUE,
+      device VARCHAR(160) NOT NULL DEFAULT '',
+      created_at DATETIME NOT NULL,
+      last_used DATETIME NOT NULL,
+      INDEX (user_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+    "CREATE TABLE IF NOT EXISTS login_fails (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      k VARCHAR(120) NOT NULL,
+      at DATETIME NOT NULL,
+      INDEX (k, at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+    "CREATE TABLE IF NOT EXISTS tasks (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      title VARCHAR(300) NOT NULL,
+      details TEXT NULL,
+      assignee_id INT NOT NULL,
+      created_by INT NOT NULL,
+      repeat_kind ENUM('daily','weekly','once') NOT NULL DEFAULT 'daily',
+      skip_sunday TINYINT(1) NOT NULL DEFAULT 1,
+      weekday TINYINT NULL,
+      due_date DATE NULL,
+      start_date DATE NOT NULL,
+      project VARCHAR(200) NULL,
+      project_ref VARCHAR(80) NULL,
+      step_ref VARCHAR(80) NULL,
+      status ENUM('open','done','cancelled') NOT NULL DEFAULT 'open',
+      created_at DATETIME NOT NULL,
+      updated_at DATETIME NOT NULL,
+      done_at DATETIME NULL,
+      INDEX (assignee_id, status)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+    "CREATE TABLE IF NOT EXISTS updates (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      task_id INT NOT NULL,
+      user_id INT NOT NULL,
+      day DATE NOT NULL,
+      note TEXT NOT NULL,
+      state ENUM('progress','stuck','finished') NOT NULL DEFAULT 'progress',
+      created_at DATETIME NOT NULL,
+      updated_at DATETIME NOT NULL,
+      UNIQUE KEY one_a_day (task_id, day),
+      INDEX (day)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+    "CREATE TABLE IF NOT EXISTS photos (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      update_id INT NOT NULL,
+      file VARCHAR(120) NOT NULL,
+      size INT NOT NULL,
+      created_at DATETIME NOT NULL,
+      INDEX (update_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+    "CREATE TABLE IF NOT EXISTS audit (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      user_id INT NULL,
+      action VARCHAR(40) NOT NULL,
+      detail VARCHAR(500) NOT NULL DEFAULT '',
+      at DATETIME NOT NULL,
+      INDEX (at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+  ];
+  $pdo->exec($steps[0]);
+  $done = (int)($pdo->query("SELECT v FROM settings WHERE k = 'schema'")->fetchColumn() ?: 0);
+  for ($i = max($done, 1); $i < count($steps); $i++) $pdo->exec($steps[$i]);
+  if ($done < count($steps)) {
+    $st = $pdo->prepare("INSERT INTO settings (k, v) VALUES ('schema', ?) ON DUPLICATE KEY UPDATE v = VALUES(v)");
+    $st->execute([(string)count($steps)]);
+  }
+}
