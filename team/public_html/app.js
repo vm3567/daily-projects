@@ -104,6 +104,7 @@ async function outbox(mode, fn) {
     const req = fn(tx.objectStore('outbox'));
     tx.oncomplete = () => resolve(req && req.result);
     tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error || new Error('Could not save on this phone.')); // e.g. phone storage full
   });
 }
 async function loadOutbox() {
@@ -114,22 +115,28 @@ const newClientId = () => (crypto.randomUUID ? crypto.randomUUID() : Array.from(
 
 async function queue(item) {
   // clientId: the server keeps a message or photo only once, even if a lost reply makes the phone send it again
-  await outbox('readwrite', (s) => s.add({ ...item, clientId: newClientId(), userId: state.user.id, at: new Date().toISOString() }));
+  // an online send that lost its reply keeps its clientId, so the server sees the repeat
+  await outbox('readwrite', (s) => s.add({ ...item, clientId: item.clientId || newClientId(), userId: state.user.id, at: new Date().toISOString() }));
   await loadOutbox();
   refreshBar();
 }
-const keep = (it) => outbox('readwrite', (s) => s.put(it)); // remember how far an item got
+// remember how far an item got; only while it is still there (another tab may have sent and removed it)
+const keep = (it) => outbox('readwrite', (s) => { s.get(it.id).onsuccess = (e) => { if (e.target.result) s.put(it); }; });
+const KEEP_FAIL = 'Could not keep this on the phone. Try again when online.';
 const istDay = (at) => new Date(at).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
 
 /** Send one waiting item. Each step is remembered, so a cut-off send does not repeat what already went. */
 async function sendItem(it, tok) {
   const day = istDay(it.at); // the day it was written, not the day it is sent
   const mine = () => { if (state.token !== tok) throw new AuthError('Signed out.'); }; // never send with the next person's sign-in
+  if (it.kind === 'update' && !it.updateId && daysBetween(day, istDay(new Date())) > 2) // the server would save it as today's update
+    throw new Error(`This update was written on ${fmtDay(day)}, too long ago to send. Please write it again for today`);
   if (it.kind === 'comment') { await api('comment.add', { taskId: it.taskId, text: it.text, day, clientId: it.clientId }); return; }
   if (it.kind === 'update' && !it.updateId) {
-    const twoSteps = it.state === 'finished' && it.needsPhoto && it.files && it.files.length;
+    const twoSteps = it.state === 'finished' && it.needsPhoto && it.files && it.files.length && !it.hadPhoto;
     const out = await api('update.save', { taskId: it.taskId, note: it.note, state: twoSteps ? 'progress' : it.state, day });
     it.updateId = out.update.id; it.thenFinish = !!twoSteps;
+    if (twoSteps) it.note = out.update.note; // keep the earlier person's words (after a move) for the Finished save
     await keep(it);
   }
   while ((it.files || []).length) { // kind 'update' or 'photos'
@@ -148,11 +155,30 @@ async function sendItem(it, tok) {
   if (it.thenFinish) await api('update.save', { taskId: it.taskId, note: it.note, state: 'finished', day });
 }
 
-let flushing = false;
-/** Send what waited on this phone, oldest first. Stops at the first "still offline". */
-async function flushOutbox() {
-  if (flushing || !state.user) return;
-  flushing = true;
+let flushP = null;
+/** Send what waited on this phone, oldest first. Stops at the first "still offline".
+ *  One send at a time: a second call waits for the one already going. */
+function flushOutbox() {
+  if (flushP) return flushP;
+  if (!state.user) return Promise.resolve();
+  // two tabs (or the installed app and a browser tab) must not send the same items
+  const run = navigator.locks ? navigator.locks.request('wt-outbox', { ifAvailable: true }, (lock) => (lock ? doFlush() : null)) : doFlush();
+  flushP = Promise.resolve(run).catch(() => {}).finally(() => { flushP = null; });
+  return flushP;
+}
+
+/** A waiting item is given up on: put the text (and photos) back in the box, so nothing written is lost. */
+function giveBack(it, why) {
+  if (it.kind === 'comment') { if (!state.drafts['m' + it.taskId]) state.drafts['m' + it.taskId] = it.text; }
+  else if (it.kind === 'update' && !it.updateId && !state.drafts[it.taskId]) {
+    state.drafts[it.taskId] = { note: it.note, state: it.state }; state.editing[it.taskId] = true;
+    if ((it.files || []).length) state.files[it.taskId] = it.files.slice(0, 5);
+  }
+  toast(`Could not send "${(it.note || it.text || '').slice(0, 40)}": ${String(why).replace(/\.$/, '')}.${it.kind === 'photos' ? '' : ' Your text is back in the box.'}`, 10000);
+}
+
+async function doFlush() {
+  if (!state.user) return;
   let sent = 0;
   const uid = state.user.id, tok = state.token;
   const stuck = new Set(); // tasks with an item the server keeps failing on: later items for them wait behind it
@@ -171,7 +197,7 @@ async function flushOutbox() {
           it.tries = (it.tries || 0) + 1;
           if (it.tries >= 20 && Date.now() - new Date(it.at) > 12 * 3600000) { // failing for half a day: give up on it
             await outbox('readwrite', (s) => s.delete(it.id));
-            toast(`Could not send "${(it.note || it.text || '').slice(0, 40)}": ${ex.message}`, 8000);
+            giveBack(it, ex.message);
             continue;
           }
           await keep(it);
@@ -180,16 +206,17 @@ async function flushOutbox() {
           continue;
         }
         await outbox('readwrite', (s) => s.delete(it.id)); // refused by the server (e.g. task closed): say so, do not retry forever
-        toast(`Could not send "${(it.note || it.text || '').slice(0, 40)}": ${ex.message}`, 8000);
+        giveBack(it, ex.message);
       }
     }
   } finally {
-    flushing = false;
     await loadOutbox();
     if (sent) toast(`✓ ${sent} waiting item${sent > 1 ? 's' : ''} sent`);
     // reload only screens that show the sent items: a reload would wipe a form being typed
-    const v = state.view;
-    if (sent && state.user && !state.user.mustChange && (v === 'today' || v === 'tasks' || v.startsWith('task:'))) loadView(); else refreshBar();
+    const v = state.view, a = document.activeElement;
+    const typing = a && /^(TEXTAREA|INPUT|SELECT)$/.test(a.tagName) && document.getElementById('app').contains(a);
+    if (sent && typing) state.reloadLater = true; // reload once they stop typing (next screen, or back to the app)
+    if (sent && !typing && state.user && !state.user.mustChange && (v === 'today' || v === 'tasks' || v.startsWith('task:'))) loadView(); else refreshBar();
   }
 }
 
@@ -208,16 +235,20 @@ async function api(a, body = {}, form = false) {
   if (tok) headers.Authorization = 'Bearer ' + tok;
   if (!form) headers['Content-Type'] = 'application/json';
   let res;
+  // weak signal (connected, but nothing moves): give up after a while and treat it as offline
+  const ac = typeof AbortController === 'function' ? new AbortController() : null;
+  const timer = ac ? setTimeout(() => ac.abort(), form ? 60000 : 15000) : 0;
   try {
-    res = await fetch('api/?a=' + encodeURIComponent(a), { method: 'POST', headers, body: form ? body : JSON.stringify(body) });
+    res = await fetch('api/?a=' + encodeURIComponent(a), { method: 'POST', headers, body: form ? body : JSON.stringify(body), signal: ac ? ac.signal : undefined });
   } catch {
+    clearTimeout(timer);
     setOffline(true);
     if (READS.has(a)) { const c = readCache(a, body); if (c) return { ...c, fromCache: true }; }
     throw new OfflineError('You are offline. Try again when the internet is back.');
   }
   setOffline(false);
   let out = null;
-  try { out = await res.json(); } catch { out = null; }
+  try { out = await res.json(); } catch { out = null; } finally { clearTimeout(timer); }
   if (res.status === 428) { // must choose their own password first: keep waiting work, show the password screen
     if (state.user && !state.user.mustChange) { state.user.mustChange = true; render(); }
     throw new AuthError(out?.error || 'Choose your own password first.');
@@ -324,10 +355,14 @@ let loadSeq = 0;
 async function loadView() {
   const me = state.user, view = state.view, n = ++loadSeq;
   if (!me) return;
-  state.busy = true;
+  state.busy = true; state.reloadLater = false;
   let data = state.data, people = state.people, failed = null;
   try {
-    if (view === 'today') data = await api(me.role === 'admin' ? 'team.today' : 'my.today');
+    if (view === 'today') {
+      data = await api(me.role === 'admin' ? 'team.today' : 'my.today');
+      // offline next morning: yesterday's copy must not show yesterday's updates as sent today
+      if (data && data.fromCache && data.today !== istDay(new Date())) data = { ...data, stale: true, late: false, tasks: data.tasks.map((t) => ({ ...t, last: t.today || t.last, today: null })) };
+    }
     else if (view === 'tasks') data = await api('tasks.list', { status: state.closed ? 'closed' : 'open' });
     else if (view === 'people') data = await api('users.list');
     else if (view.startsWith('task:')) {
@@ -341,10 +376,12 @@ async function loadView() {
   } catch (e) { failed = e; }
   if (state.user !== me) { state.busy = false; return; } // signed out meanwhile
   if (n !== loadSeq) return; // a newer load started (another screen, or Open / Done on the same one): this answer is old
+  // Give a task is already on screen: redraw only if the people changed (a redraw wipes what is typed)
+  const same = view === 'give' && state.view === 'give' && state.people.length && JSON.stringify(people) === JSON.stringify(state.people);
   state.data = data; state.people = people; state.busy = false;
   state.loadFailed = !!failed && !data;
   if (failed) toast(failed.message, 5000);
-  render();
+  if (!same) render();
 }
 
 function go(view) {
@@ -368,7 +405,8 @@ function render() {
   if (state.user.mustChange || state.view === 'password') { root.replaceChildren(header(), passwordScreen()); return; }
   const bar = offlineBar();
   let body;
-  if (!state.data && state.view !== 'settings' && state.view !== 'give' && state.view !== 'suggest') {
+  // Give a task waits for the people list (a form drawn without it is redrawn, wiping what was typed)
+  if ((!state.data && state.view !== 'settings' && state.view !== 'give' && state.view !== 'suggest') || (state.view === 'give' && !state.people.length)) {
     body = state.loadFailed ? el('p', { class: 'muted' }, 'No saved copy on this phone yet. ', el('button', { class: 'link', onClick: () => loadView() }, 'Try again'))
       : el('p', { class: 'muted' }, 'Loading…');
   }
@@ -384,7 +422,8 @@ function render() {
 
 function header() {
   const me = state.user;
-  const tab = (v, label) => el('button', { class: state.view === v ? 'on' : '', onClick: () => go(v) }, label);
+  // a tab means they now work in the Team pages: Back / Cancel stay here, not the projects
+  const tab = (v, label) => el('button', { class: state.view === v ? 'on' : '', onClick: () => { state.fromProjects = false; go(v); } }, label);
   return el('header', { class: 'top' }, el('div', { class: 'bar' },
     el('span', { class: 'brand' }, 'Work Task'),
     me.role === 'admin' && !me.mustChange ? el('nav', null, me.owner ? el('a', { class: 'btn', href: 'projects/' }, '📋 My projects') : null,
@@ -478,7 +517,8 @@ function myToday() {
   const sent = d.tasks.filter((t) => t.today).length;
   return [
     el('div', { class: 'row spread' }, el('h1', null, 'My tasks today'), el('button', { onClick: () => go('suggest') }, '💡 Suggest a task')),
-    el('p', { class: 'muted small' }, `${fmtDay(d.today)} · ${sent} of ${d.tasks.length} sent · please send by ${d.fillBy}`),
+    d.stale ? el('p', { class: 'small warn' }, `📴 Saved copy from ${fmtDay(d.today)} — today's updates are not shown yet.`)
+      : el('p', { class: 'muted small' }, `${fmtDay(d.today)} · ${sent} of ${d.tasks.length} sent · please send by ${d.fillBy}`),
     d.tasks.length ? d.tasks.map((t) => myTask(t, d.today)) : el('div', { class: 'card muted' }, 'No tasks for today. 🎉'),
     d.other.length ? [el('h2', null, 'Coming next / other tasks'), d.other.map((t) => el('div', { class: 'card' },
       el('h3', null, t.title), el('div', { class: 'meta' }, [t.project, repeatLabel(t, d.today)].filter(Boolean).join(' · ')), messageLine(t)))] : null,
@@ -529,11 +569,14 @@ function photoPicker(t, direct) {
   const input = el('input', { type: 'file', accept: 'image/*', class: 'hidden-file', multiple: true, onChange: async () => {
     const files = [...input.files].slice(0, 5);
     if (direct) {
-      const left = await uploadPhotos(t.today.id, files);
+      const cid = newClientId(); // the same id online and in the outbox: a photo whose reply was lost is not kept twice
+      const left = await uploadPhotos(t.today.id, files, cid);
       if (left.length) { // offline: keep the photos on the phone
         const blobs = [];
         for (const f of left) blobs.push(await shrink(f));
-        await queue({ kind: 'photos', taskId: t.id, updateId: t.today.id, note: t.today.note, state: t.today.state, files: blobs });
+        try {
+          await queue({ kind: 'photos', taskId: t.id, updateId: t.today.id, note: t.today.note, state: t.today.state, files: blobs, clientId: cid, photoNo: files.length - left.length });
+        } catch { toast(KEEP_FAIL, 6000); return; }
         toast('📴 Saved on this phone — it will be sent when you are online', 5000);
         render();
         return;
@@ -554,17 +597,22 @@ function updateForm(t) {
   const btn = el('button', { class: 'primary', disabled: !!state.sending[t.id], onClick: async () => {
     if (state.sending[t.id]) return; // already going (the screen was redrawn meanwhile)
     if (!d.note.trim()) { err.textContent = 'Write what you did first.'; err.hidden = false; return; }
-    const havePhotos = (t.today && t.today.photos.length) || files.length;
+    const havePhotos = (t.today && t.today.photos.length) || files.length || d.photosSent;
     if (d.state === 'finished' && t.needsPhoto && !havePhotos) { err.textContent = '📷 Add a photo to finish this task.'; err.hidden = false; return; }
     btn.disabled = true; state.sending[t.id] = true;
-    // photo needed to finish: save as "working", add the photos, then mark finished
-    const twoSteps = d.state === 'finished' && t.needsPhoto && files.length;
+    // photo needed to finish: save as "working", add the photos, then mark finished.
+    // Not when today's update already has a photo: "working" would open a finished task again.
+    const hadPhoto = !!((t.today && t.today.photos && t.today.photos.length) || d.photosSent);
+    const twoSteps = d.state === 'finished' && t.needsPhoto && files.length && !hadPhoto;
+    const cid = newClientId(); // the same id online and in the outbox: a photo whose reply was lost is not kept twice
     let updateId = 0; // set once the update itself is on the server
     try {
       const out = await api('update.save', { taskId: t.id, note: d.note, state: twoSteps ? 'progress' : d.state });
       updateId = out.update.id;
-      const left = files.length ? await uploadPhotos(updateId, files) : [];
-      if (left.length) throw Object.assign(new OfflineError('offline'), { left });
+      if (twoSteps) d.note = out.update.note; // after a move the server put the earlier person's words above: keep them for the Finished save
+      const left = files.length ? await uploadPhotos(updateId, files, cid) : [];
+      if (left.length) throw Object.assign(new OfflineError('offline'), { left, sentPhotos: files.length - left.length });
+      if (files.length) { files.length = 0; delete state.files[t.id]; d.photosSent = true; } // the photos went: a second Send only repeats the last step
       if (twoSteps) await api('update.save', { taskId: t.id, note: d.note, state: 'finished' });
       delete state.drafts[t.id]; delete state.files[t.id]; delete state.editing[t.id];
       toast('Sent ✓');
@@ -574,15 +622,28 @@ function updateForm(t) {
         const blobs = [];
         for (const f of updateId ? ex.left || [] : files) blobs.push(await shrink(f));
         // only what did not go yet: the photos left, then "finished"
-        await queue(updateId ? { kind: 'photos', taskId: t.id, updateId, note: d.note, state: d.state, thenFinish: !!twoSteps, files: blobs }
-          : { kind: 'update', taskId: t.id, note: d.note, state: d.state, needsPhoto: !!t.needsPhoto, files: blobs });
+        try {
+          await queue(updateId ? { kind: 'photos', taskId: t.id, updateId, note: d.note, state: d.state, thenFinish: !!twoSteps, files: blobs, clientId: cid, photoNo: ex.sentPhotos || 0 }
+            : { kind: 'update', taskId: t.id, note: d.note, state: d.state, needsPhoto: !!t.needsPhoto, hadPhoto, files: blobs, clientId: cid });
+        } catch { // could not keep it on the phone (storage full or blocked): the text stays in the box
+          delete state.sending[t.id];
+          render(); toast(KEEP_FAIL, 6000);
+          return;
+        }
         delete state.drafts[t.id]; delete state.files[t.id]; delete state.editing[t.id];
+        delete state.sending[t.id];
         toast('📴 Saved on this phone — it will be sent when you are online', 5000);
         render();
         return;
       }
       err.textContent = ex.message; err.hidden = false; btn.disabled = false;
-    } finally { delete state.sending[t.id]; }
+    } finally {
+      delete state.sending[t.id];
+      if (!document.contains(btn)) { // redrawn while sending: the new Send button was drawn greyed out
+        if (!err.hidden) toast(err.textContent, 6000);
+        if (state.view === 'today') render();
+      }
+    }
   } }, 'Send');
   return [
     el('textarea', { placeholder: 'What did you do today? (you can tap 🎤 on the keyboard to speak)', value: d.note, onInput: (e) => { d.note = e.target.value; err.hidden = true; } }),
@@ -617,23 +678,31 @@ function messagesBlock(taskId, comments) {
     if (state.sending[key]) return; // already going (the screen was redrawn meanwhile)
     if (!box.value.trim()) { err.textContent = 'Write the message first.'; err.hidden = false; return; }
     btn.disabled = true; state.sending[key] = true;
+    const cid = newClientId(); // the same id online and in the outbox: a message whose reply was lost is not kept twice
+    const text = box.value;
     try {
-      const out = await api('comment.add', { taskId, text: box.value });
-      delete state.drafts['m' + taskId];
+      const out = await api('comment.add', { taskId, text, clientId: cid });
+      delete state.drafts['m' + taskId]; delete state.sending[key]; // before the redraw, so the new button is not greyed out
       toast('Sent ✓');
       // only if this task is still open on screen (the user may have gone to another one)
       if (state.view === 'task:' + taskId && state.data && state.data.task && state.data.task.id === taskId) { state.data.comments = out.comments; render(); }
     } catch (ex) {
       if (ex instanceof OfflineError) {
-        const text = box.value;
-        delete state.drafts['m' + taskId]; // empty the box, so a second tap does not send it twice
-        await queue({ kind: 'comment', taskId, text });
+        try { await queue({ kind: 'comment', taskId, text, clientId: cid }); }
+        catch { delete state.sending[key]; render(); toast(KEEP_FAIL, 6000); return; } // the text stays in the box
+        delete state.drafts['m' + taskId]; delete state.sending[key]; // empty the box, so a second tap does not send it twice
         toast('📴 Saved on this phone — it will be sent when you are online', 5000);
         render();
         return;
       }
       err.textContent = ex.message; err.hidden = false; btn.disabled = false;
-    } finally { delete state.sending[key]; }
+    } finally {
+      delete state.sending[key];
+      if (!document.contains(btn)) { // redrawn while sending: the new button was drawn greyed out
+        if (!err.hidden) toast(err.textContent, 6000);
+        if (state.view === 'task:' + taskId) render();
+      }
+    }
   } }, 'Send message');
   return [
     el('h2', null, '💬 Messages'),
@@ -666,11 +735,12 @@ function suggestForm() {
 }
 
 /** Returns the photos not sent because the internet (or the server) dropped, so they can be kept on the phone. */
-async function uploadPhotos(updateId, files) {
+async function uploadPhotos(updateId, files, cid) {
   for (let i = 0; i < files.length; i++) {
     const fd = new FormData();
     fd.append('updateId', String(updateId));
     fd.append('file', await shrink(files[i]), 'photo.jpg');
+    if (cid) fd.append('clientId', `${cid}-p${i}`); // the outbox goes on from the same number, so a repeat is kept once
     try { await api('photo.add', fd, true); } catch (ex) {
       if (ex instanceof OfflineError || ex instanceof RetryError) return files.slice(i);
       toast(ex.message, 5000);
@@ -689,7 +759,8 @@ function teamToday() {
   for (const t of d.tasks) if (!people.some((p) => p.id === t.assignee.id)) people.push({ id: t.assignee.id, name: t.assignee.name });
   return [
     el('div', { class: 'row spread' }, el('div', null, el('h1', null, 'Team today'),
-      el('p', { class: 'muted small' }, `${fmtDay(d.today)} · updates due by ${d.fillBy}`)),
+      d.stale ? el('p', { class: 'small warn' }, `📴 Saved copy from ${fmtDay(d.today)} — today's updates are not shown yet.`)
+        : el('p', { class: 'muted small' }, `${fmtDay(d.today)} · updates due by ${d.fillBy}`)),
     el('button', { class: 'primary', onClick: () => go('give') }, '+ Give a task')),
     needsYou(d),
     people.length ? null : el('div', { class: 'card' }, 'No team members yet. ', el('button', { class: 'link', onClick: () => go('people') }, 'Add a person')),
@@ -833,6 +904,8 @@ function taskForm() {
   const err = el('p', { class: 'err', hidden: true });
   const person = el('select', { required: true }, el('option', { value: '' }, 'Choose a person…'),
     state.people.map((p) => el('option', { value: String(p.id) }, p.name + (p.role === 'admin' ? ' (manager)' : ''))));
+  // a person who was switched off: keep them, so a small change does not force choosing someone else
+  if (t && !state.people.some((p) => p.id === t.assignee.id)) person.append(el('option', { value: String(t.assignee.id) }, t.assignee.name + ' (switched off)'));
   if (t) person.value = String(t.assignee.id);
   else if (state.people.filter((p) => p.role === 'staff').length === 1) person.value = String(state.people.find((p) => p.role === 'staff').id);
   const title = el('input', { value: t ? t.title : pre.title || '', required: true, placeholder: 'Record kiln 3 temperature' });
@@ -980,7 +1053,7 @@ function settingsScreen() {
 /** From Daily Projects: worktask.in/#new={"title":…,"project":…,"projectRef":…,"stepRef":…} opens "Give a task" filled in. */
 function takePrefill() {
   const m = /^#task=(\d+)$/.exec(location.hash); // from Daily Projects: open this team task
-  if (m || location.hash.startsWith('#new=')) state.fromProjects = true; // Back / Cancel return to the projects
+  state.fromProjects = !!m || location.hash.startsWith('#new='); // Back / Cancel return to the projects
   if (m) { state.openTask = Number(m[1]); history.replaceState(null, '', location.pathname + location.search); return; }
   if (!location.hash.startsWith('#new=')) return;
   try { const p = JSON.parse(decodeURIComponent(location.hash.slice(5))); if (p && typeof p === 'object') state.prefill = p; } catch { /* ignore */ }
@@ -1022,7 +1095,10 @@ window.addEventListener('hashchange', () => {
   else if (state.openTask && state.user) { const id = state.openTask; state.openTask = 0; go('task:' + id); }
 });
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible' && state.user && !state.user.mustChange && state.view === 'today' && !Object.keys(state.drafts).some((k) => state.drafts[k].note)) loadView();
+  if (document.visibilityState !== 'visible' || !state.user || state.user.mustChange) return;
+  const v = state.view;
+  if (state.reloadLater && (v === 'today' || v === 'tasks' || v.startsWith('task:'))) { loadView(); return; } // items were sent while they typed
+  if (v === 'today' && !Object.keys(state.drafts).some((k) => state.drafts[k].note)) loadView();
 });
 start();
 // Installable as an app (Android: Chrome menu → Install app); keeps the screens for fast opening.

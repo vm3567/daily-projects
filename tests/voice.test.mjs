@@ -32,6 +32,10 @@ test('Siri: the longest project name wins, and words Siri changed still find one
 test('Siri: days of the week, in N days, next week', () => {
   assert.equal(say('Call supplier for Kiln trial on Monday').date, '2026-10-19');
   assert.equal(say('Call supplier for Kiln trial Thursday').date, '2026-10-22');
+  const same = say('Call supplier for Kiln trial this Thursday'); // said on a Thursday: today, no reminder
+  assert.equal(same.date, null);
+  assert.equal(same.text, 'Call supplier');
+  assert.equal(say('Call supplier for Kiln trial next Thursday').date, '2026-10-22');
   assert.equal(say('Call supplier for Kiln trial in two days').date, '2026-10-17');
   assert.equal(say('Call supplier for Kiln trial next week').date, '2026-10-22');
   assert.equal(say('Call supplier for Kiln trial today').date, null);

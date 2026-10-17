@@ -82,10 +82,12 @@ function findWhen(s, today) {
     return { rest: r[0], days };
   }
   if ((r = cut(s, /\b(?:by\s+|on\s+)?next week\b/i))[1]) return { rest: r[0], days: 7 };
-  if ((r = cut(s, /\b(?:(?:on|by|this|next|coming)\s+|(?<!\bthe\s+))(sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b(?![’']s\b)/i))[1]) {
-    const want = DAYS.indexOf(r[1][1].toLowerCase());
+  if ((r = cut(s, /\b(?:(on|by|this|next|coming)\s+|(?<!\bthe\s+))(sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b(?![’']s\b)/i))[1]) {
+    const want = DAYS.indexOf(r[1][2].toLowerCase());
     const now = new Date(`${today}T00:00:00Z`).getUTCDay();
-    return { rest: r[0], days: ((want - now + 7) % 7) || 7 };
+    const d = (want - now + 7) % 7;
+    // "this Thursday" said on a Thursday is today; a bare "Thursday" (or "next Thursday") then means next week
+    return { rest: r[0], days: d === 0 && /^this$/i.test(r[1][1] || '') ? 0 : d || 7 };
   }
   if ((r = cut(s, /\b(?:for\s+)?today\b(?![’']s\b)/i))[1]) return { rest: r[0], days: 0 };
   return { rest: s, days: 0 };

@@ -14,8 +14,12 @@ self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
   if (e.request.method !== 'GET' || url.origin !== location.origin || url.pathname.startsWith('/api/') || url.pathname.startsWith('/projects/')) return;
   // online: always the newest copy (and keep it); offline: the kept copy
-  e.respondWith(fetch(e.request).then((res) => {
-    if (res.ok) { const copy = res.clone(); caches.open(CACHE).then((c) => c.put(e.request, copy)); }
+  const net = fetch(e.request).then((res) => {
+    if (res.ok) { const copy = res.clone(); caches.open(CACHE).then((c) => c.put(e.request, copy)).catch(() => {}); }
     return res;
-  }).catch(() => caches.match(e.request).then((r) => r || caches.match('index.html'))));
+  });
+  const kept = () => caches.match(e.request).then((r) => r || caches.match('index.html'));
+  // weak signal (connected, but nothing moves): after 4 seconds use the kept copy, if there is one
+  const slow = new Promise((resolve) => setTimeout(() => caches.match(e.request).then(resolve, () => resolve(null)), 4000));
+  e.respondWith(Promise.race([net, slow.then((r) => r || net)]).catch(() => kept()));
 });

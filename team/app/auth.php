@@ -27,6 +27,11 @@ function dummy_hash(): string {
 }
 
 function clean_username(string $u): string { return strtolower(trim($u)); }
+/** Every real username looks like this (setup and new accounts allow nothing else). */
+function username_ok(string $u): bool { return preg_match('/^[a-z0-9._-]{3,40}$/', $u) === 1; }
+
+/** Too many wrong tries: the error, the same everywhere. */
+function too_many(): ApiError { return new ApiError('Too many wrong tries. Wait ' . LOCK_MINUTES . ' minutes and try again.', 429); }
 
 function check_password_rules(string $p): void {
   if (mb_strlen($p) < 8) throw new ApiError('The password needs at least 8 characters.');
@@ -36,15 +41,24 @@ function check_password_rules(string $p): void {
 function login(string $username, string $password, string $device): array {
   $username = clean_username($username);
   if ($username === '' || $password === '') throw new ApiError('Type your username and password.');
-  if (locked($username)) throw new ApiError('Too many wrong tries. Wait ' . LOCK_MINUTES . ' minutes and try again.', 429);
+  // a name no account can have (accents, '|', spaces…): only this computer's try is counted, so it can never
+  // find a real account by a look-alike spelling, nor fill someone else's count
+  if (!username_ok($username)) {
+    if (locked('')) throw too_many();
+    q('INSERT INTO login_fails (k, at) VALUES (?, ?)', ['ip:' . client_ip(), now()]);
+    password_verify($password, dummy_hash()); // the same slow check, so it takes as long as a real name
+    throw new ApiError('Wrong username or password.', 401);
+  }
+  if (locked($username)) throw too_many();
   // count this try first; it is taken off again below if the password is right
   $ids = [];
   foreach (['u:' . $username . '|' . client_ip(), 'u:' . $username, 'ip:' . client_ip()] as $k) {
     q('INSERT INTO login_fails (k, at) VALUES (?, ?)', [$k, now()]);
     $ids[] = (int)db()->lastInsertId();
   }
-  if (locked($username, 1)) throw new ApiError('Too many wrong tries. Wait ' . LOCK_MINUTES . ' minutes and try again.', 429);
+  if (locked($username, 1)) throw too_many();
   $user = one('SELECT * FROM users WHERE username = ?', [$username]);
+  if ($user && $user['username'] !== $username) $user = null; // the database ignores capitals and accents; only the exact name counts
   // the same slow check even for an unknown name, so nobody can find names by timing
   $ok = password_verify($password, $user['pass_hash'] ?? dummy_hash());
   if (!$user || !$ok) throw new ApiError('Wrong username or password.', 401);
@@ -88,7 +102,14 @@ function public_user(array $u): array {
 }
 
 function change_password(array $me, string $old, string $new): void {
-  if (!password_verify($old, $me['pass_hash'])) throw new ApiError('Your current password is not right.');
+  // the same limits as signing in, so a phone left signed in cannot be used to guess the password
+  $keys = ['u:' . $me['username'] . '|' . client_ip(), 'u:' . $me['username'], 'ip:' . client_ip()];
+  if (locked($me['username'])) throw too_many();
+  if (!password_verify($old, $me['pass_hash'])) {
+    foreach ($keys as $k) q('INSERT INTO login_fails (k, at) VALUES (?, ?)', [$k, now()]);
+    throw new ApiError('Your current password is not right.');
+  }
+  q('DELETE FROM login_fails WHERE k IN (?, ?)', [$keys[0], $keys[1]]);
   check_password_rules($new);
   if ($old === $new) throw new ApiError('Choose a new password, not the same one.');
   q('UPDATE users SET pass_hash = ?, must_change = 0 WHERE id = ?', [password_hash($new, PASSWORD_DEFAULT), $me['id']]);

@@ -5,6 +5,14 @@ import { AuthError, NetworkError, ClashError, GitHubError } from './github.js';
 
 export const SERVER_TOKEN_KEY = 'wt.token'; // shared with the Work Task sign-in page on the same site
 
+/** Text cut in the middle of an emoji leaves half a character, which the server cannot read: replace it. */
+export function wellFormed(v) {
+  if (typeof v === 'string') return v.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '\uFFFD');
+  if (Array.isArray(v)) return v.map(wellFormed);
+  if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, wellFormed(x)]));
+  return v;
+}
+
 export class ServerRepo {
   constructor(token, api = '../api/') {
     this.token = token;
@@ -18,14 +26,20 @@ export class ServerRepo {
         method,
         cache: 'no-store',
         headers: { Authorization: `Bearer ${this.token}`, ...(method === 'POST' ? { 'Content-Type': 'application/json' } : {}) },
-        body: method === 'POST' ? JSON.stringify(body || {}) : undefined,
+        body: method === 'POST' ? JSON.stringify(wellFormed(body || {})) : undefined,
       });
     } catch {
       throw new NetworkError('No connection');
     }
-    if (res.status === 401 || res.status === 403) {
+    if (res.status === 401) {
       const out = await res.json().catch(() => null);
       throw new AuthError(out?.error || 'Please sign in again');
+    }
+    // 403 is never 'signed out': our server uses it for 'not allowed', and the host's firewall answers some saves
+    // with its own page. Going to sign-in would come straight back and try the same save again, without end.
+    if (res.status === 403) {
+      const out = await res.json().catch(() => null);
+      throw new GitHubError(out?.error || `The server refused this save (${res.status}). Remove any code-like text you just added.`, 403);
     }
     if (res.status === 409) throw new ClashError('Another device saved first');
     if (method === 'GET') {

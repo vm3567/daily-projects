@@ -80,3 +80,89 @@ test('server: an empty data file is refused, never read as "no projects"', () =>
   assert.equal(r.ok, false); // stops with an error …
   assert.equal(JSON.parse(readFileSync(t.state, 'utf8')).files['data.json'], ''); // … and saves nothing over it
 });
+
+test('server: tick needs step words, and never guesses when several steps match', () => {
+  const t = setup();
+  t.run('new-project', 'Kiln trial', '--steps', 'Call Ravi about clay', 'Call supplier');
+  let r = t.run('tick', 'Kiln trial', 'call');
+  assert.equal(r.ok, false);
+  assert.match(r.out, /Several steps match "call": Call Ravi about clay \[.+\], Call supplier \[.+\]/);
+  r = t.run('tick', 'Kiln trial', '  ');
+  assert.equal(r.ok, false);
+  assert.match(r.out, /Give the step text or id/);
+  assert.equal(t.read().commits, 1); // nothing was ticked
+  r = t.run('tick', 'Kiln trial', 'call supplier'); // exact text wins
+  assert.ok(r.ok, r.out);
+  const steps = t.read().data.projects[0].steps;
+  assert.deepEqual(steps.map((s) => !!s.done), [false, true]);
+});
+
+test('server: new-project --steps stops at the next flag', () => {
+  const t = setup();
+  const r = t.run('new-project', 'Kiln trial', '--steps', 'Call Ravi', 'Call supplier', '--group', 'Personal', '--priority', 'high');
+  assert.ok(r.ok, r.out);
+  const p = t.read().data.projects[0];
+  assert.deepEqual(p.steps.map((s) => s.text), ['Call Ravi', 'Call supplier']);
+  assert.equal(p.groupId, emptyData().groups.find((g) => g.name === 'Personal').id);
+  assert.equal(p.priority, 'high');
+});
+
+// /restore: three versions — 1 Oct (empty), 5 Oct 23:59:59, and 6 Oct 00:00:00 (just after midnight India time)
+function restoreSetup() {
+  const t = setup();
+  const save = (at, files) => { // a version saved at that India time, made straight on the pretend server
+    const st = JSON.parse(readFileSync(t.state, 'utf8'));
+    st.now = at;
+    writeFileSync(t.state, JSON.stringify(st));
+    const changes = Object.entries(files).map(([path, content]) => (content === null ? { path, sha: null } : { path, content }));
+    execFileSync(process.execPath, [FAKE, 'commit'], { input: JSON.stringify({ parent: st.head, changes }), env: { ...process.env, FAKE_DP_STATE: t.state } });
+  };
+  const data = (names, key) => JSON.stringify({ ...emptyData(), projects: names.map((name, i) => ({ id: 'p' + i, name })), secrets: { gemini: key } });
+  save('2026-10-05 23:59:59', { 'data.json': data(['Kiln trial'], 'old-key'), 'history/2026-10.json': '["old"]', 'files/a.jpg': 'photo A', 'files/keep.pdf': 'pdf' });
+  save('2026-10-06 00:00:00', { 'data.json': data(['Kiln trial', 'Glaze test'], 'new-key'), 'history/2026-10.json': '["old","new"]', 'history/2026-11.json': '["later"]', 'files/a.jpg': null, 'files/b.jpg': 'photo B' });
+  return t;
+}
+
+test('server restore: brings back that day exactly, keeps today\'s AI keys', () => {
+  const t = restoreSetup();
+  const r = t.run('restore', '2026-10-05', '--yes');
+  assert.ok(r.ok, r.out);
+  assert.match(r.out, /Restored to the version from 2026-10-05/);
+  const s = t.read();
+  assert.deepEqual(s.data.projects.map((p) => p.name), ['Kiln trial']); // the 6 Oct 00:00 version is NOT 5 Oct
+  assert.deepEqual(s.data.secrets, { gemini: 'new-key' });
+  assert.equal(s.files['history/2026-10.json'], '["old"]');
+  assert.equal(s.files['files/a.jpg'], 'photo A'); // deleted after that day: back
+  assert.equal(s.files['files/keep.pdf'], 'pdf');
+  assert.ok(!('history/2026-11.json' in s.files)); // added after that day: gone
+  assert.ok(!('files/b.jpg' in s.files));
+  assert.equal(s.log.length, 4); // saved as a NEW version, the old ones are still there
+});
+
+test('server restore: without --yes it only shows that version', () => {
+  const t = restoreSetup();
+  const before = t.read();
+  const r = t.run('restore', '2026-10-05');
+  assert.ok(r.ok, r.out);
+  assert.match(r.out, /1 projects: Kiln trial/);
+  assert.match(r.out, /Nothing changed yet/);
+  assert.equal(t.read().head, before.head);
+});
+
+test('server restore: a date before the first version says so and changes nothing', () => {
+  const t = restoreSetup();
+  const before = t.read();
+  const r = t.run('restore', '2026-09-30', '--yes');
+  assert.equal(r.ok, false);
+  assert.match(r.out, /No saved version on or before 2026-09-30/);
+  assert.equal(t.read().head, before.head);
+});
+
+test('server restore: another device saved first — asks to run it again, nothing restored', () => {
+  const t = restoreSetup();
+  t.trouble('clash');
+  const r = t.run('restore', '2026-10-05', '--yes');
+  assert.equal(r.ok, false);
+  assert.match(r.out, /Run the restore again/);
+  assert.equal(t.read().data.projects.length, 2);
+});

@@ -117,7 +117,8 @@ function stepRow(ctx, p, s, box = null) {
   if (s.note && !open) tags.push(h('span', { class: 'tag' }, 'note'));
   if (s.link) tags.push(linkChip(s.link));
   const tt = ctx.teamTask ? ctx.teamTask(s.id) : null;
-  if (tt) tags.push(teamChip(tt, ctx.teamInfo()));
+  const live = !!tt && tt.status === 'open'; // a finished or cancelled task: the step can be given again
+  if (tt && (tt.status === 'open' || s.done)) tags.push(teamChip(tt, ctx.teamInfo())); // an old closed task on an open step: nothing to show
   if (s.repeat && !s.done) tags.push(h('span', { class: 'tag repeat', title: 'Repeats' }, `↻ ${REPEAT_WORD[s.repeat]}`));
   if (stepWaitsForReminder(s, today)) tags.push(h('span', { class: 'tag remind', title: 'Comes back on this day' }, `⏰ ${fmtDay(s.snoozedUntil)}`));
   else if (s.snoozedUntil && s.snoozedUntil > today && !s.done) tags.push(h('span', { class: 'tag' }, `from ${fmtDay(s.snoozedUntil)}`));
@@ -187,9 +188,9 @@ function stepRow(ctx, p, s, box = null) {
         (v) => store.dispatch('setStepField', { projectId: p.id, stepId: s.id, field: 'note', value: v })),
       ctx.onServer && !s.done ? h('a', {
         class: 'btn small',
-        href: tt ? `../#task=${tt.id}` : '../#new=' + encodeURIComponent(JSON.stringify({ title: s.text, project: p.name, projectRef: p.id, stepRef: s.id })),
-        title: tt ? 'See the daily updates for this step' : 'Give this step to a team member; their daily updates show here',
-      }, tt ? `👥 Team task: ${tt.assignee.name}` : '👥 Give to team') : null,
+        href: live ? `../#task=${tt.id}` : '../#new=' + encodeURIComponent(JSON.stringify({ title: s.text, project: p.name, projectRef: p.id, stepRef: s.id })),
+        title: live ? 'See the daily updates for this step' : 'Give this step to a team member; their daily updates show here',
+      }, live ? `👥 Team task: ${tt.assignee.name}` : '👥 Give to team') : null,
       h('button', {
         class: 'btn danger small',
         onClick: () => ctx.act('deleteStep', { projectId: p.id, stepId: s.id }, `Step deleted: ${s.text}`),
@@ -513,12 +514,13 @@ function teamBar(ctx, p) {
   }
   if (ui.giveOpen !== p.id) return null;
   const people = ctx.teamPeople();
+  const busy = ctx.teamBusy && ctx.teamBusy(p.id); // sending: a second tap must not give it twice
   return h('div', { class: 'banner team-banner', key: 'tg-' + p.id },
     h('span', null, `👥 Give "${p.name}" to:`),
     h('label', { class: 'check small', title: 'They must add a photo before tapping Finished on each step' },
       h('input', { type: 'checkbox', checked: !!ui.givePhoto, onChange: (e, el) => ctx.setGivePhoto(el.checked) }), ' 📷 Photo needed to finish'),
     people === null ? h('span', { class: 'muted small' }, 'Loading…')
-      : people.length ? people.map((u) => h('button', { class: 'chip', key: 'tp-' + u.id, onClick: () => ctx.giveProject(p, u) }, u.name))
+      : people.length ? people.map((u) => h('button', { class: 'chip', key: 'tp-' + u.id, disabled: busy ? true : undefined, onClick: () => ctx.giveProject(p, u) }, u.name))
         : h('a', { class: 'small', href: '../?team' }, 'Add a person first (Team → People)'),
     h('button', { class: 'link small', onClick: () => { ui.giveOpen = null; ui.givePhoto = false; ctx.render(); } }, 'Cancel'));
 }

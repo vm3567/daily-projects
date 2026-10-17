@@ -173,3 +173,18 @@ test('project page: ⏰ remind me options, and the step shows its return day', (
   text = renderDetail(fakeCtx(s, { selected: 'p1', update: {} })).textContent;
   assert.ok(text.includes('⏰'), 'reminder tag shown');
 });
+
+test('worktask.in: a step whose team task was cancelled or finished can be given again', () => {
+  const s = sampleState();
+  const ctx = fakeCtx(s, { selected: 'p1', update: {}, openStep: 's2' });
+  ctx.onServer = true;
+  ctx.teamInfo = () => ({ byStep: new Map(), fillBy: '18:00' });
+  ctx.teamPeople = () => [];
+  ctx.teamTask = (id) => (id === 's2' ? { id: 7, status: 'cancelled', assignee: { id: 2, name: 'Valar' }, stepRef: 's2' } : null);
+  const el = renderDetail(ctx);
+  const find = (node, f) => (f(node) ? node : (node.childNodes || []).map((c) => find(c, f)).find(Boolean));
+  const btn = find(el, (n) => n.nodeName === 'A' && /Give to team|Team task/.test(n.textContent));
+  assert.ok(btn, 'step team button shown');
+  assert.equal(btn.textContent, '👥 Give to team');
+  assert.ok(!el.textContent.includes('cancelled'), 'no old cancelled chip on an open step');
+});

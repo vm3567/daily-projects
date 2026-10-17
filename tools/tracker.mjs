@@ -286,8 +286,16 @@ try {
       const [query, stepQuery] = args;
       commitOps((state) => {
         const p = findProject(state.data, query);
-        const q = String(stepQuery || '').toLowerCase();
-        const s = p.steps.find((x) => !x.done && (x.id === stepQuery || x.text.toLowerCase().includes(q)));
+        const q = String(stepQuery || '').trim().toLowerCase();
+        if (!q) throw new Error('Give the step text or id.');
+        // exact id, then exact text, then "contains" — and never guess when several steps match
+        const open = p.steps.filter((x) => !x.done);
+        let s = open.find((x) => x.id === stepQuery.trim()) || open.find((x) => x.text.trim().toLowerCase() === q);
+        if (!s) {
+          const hits = open.filter((x) => x.text.toLowerCase().includes(q));
+          if (hits.length > 1) throw new Error(`Several steps match "${stepQuery}": ${hits.map((x) => `${x.text} [${x.id}]`).join(', ')}`);
+          s = hits[0];
+        }
         if (!s) throw new Error(`No open step matches "${stepQuery}" in ${p.name}.`);
         return [makeOp('tickStep', { projectId: p.id, stepId: s.id })];
       }, 'Tick step');
@@ -309,7 +317,9 @@ try {
       const groupName = argValue(args, '--group');
       const priority = argValue(args, '--priority');
       const si = args.indexOf('--steps');
-      const steps = si >= 0 ? args.slice(si + 1).filter((s) => !s.startsWith('--')) : [];
+      const rest = si >= 0 ? args.slice(si + 1) : [];
+      const end = rest.findIndex((s) => s.startsWith('--')); // steps stop at the next flag (--group …)
+      const steps = end < 0 ? rest : rest.slice(0, end);
       commitOps((state) => {
         const g = groupName
           ? state.data.groups.find((x) => x.name.toLowerCase() === groupName.toLowerCase())

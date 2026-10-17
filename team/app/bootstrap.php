@@ -186,6 +186,8 @@ function migrate(PDO $pdo): void {
     // v5: a message or photo sent twice from the outbox (reply lost on a weak signal) is kept once
     "ALTER TABLE comments ADD COLUMN client_id VARCHAR(40) NULL, ADD UNIQUE KEY comment_once (user_id, client_id)",
     "ALTER TABLE photos ADD COLUMN client_id VARCHAR(40) NULL, ADD UNIQUE KEY photo_once (update_id, client_id)",
+    // v6: who closed a task by their own Finished (empty when the manager closed it), so only they can undo it
+    "ALTER TABLE tasks ADD COLUMN closed_by INT NULL",
   ];
   $pdo->exec($steps[0]);
   $done = (int)($pdo->query("SELECT v FROM settings WHERE k = 'schema'")->fetchColumn() ?: 0);

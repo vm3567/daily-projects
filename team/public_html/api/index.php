@@ -30,8 +30,13 @@ try {
   if ($a === 'task.file' && ($_SERVER['REQUEST_METHOD'] ?? '') === 'GET') { send_task_file((int)($_GET['id'] ?? 0)); exit; }
   if ($a === 'dp.blob' && ($_SERVER['REQUEST_METHOD'] ?? '') === 'GET') { send_dp_blob_safe((string)($_GET['sha'] ?? '')); exit; }
   if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST') throw new ApiError('Use POST.', 405);
-  $in = str_starts_with($_SERVER['CONTENT_TYPE'] ?? '', 'multipart/form-data') ? $_POST : json_decode((string)file_get_contents('php://input'), true);
-  if (!is_array($in)) $in = [];
+  if (str_starts_with($_SERVER['CONTENT_TYPE'] ?? '', 'multipart/form-data')) $in = $_POST;
+  else {
+    $raw = (string)file_get_contents('php://input');
+    $in = trim($raw) === '' ? [] : json_decode($raw, true);
+    // never carry on with nothing in place of what was sent (a cut emoji, for example): say so instead
+    if (!is_array($in)) throw new ApiError('The server could not read this request.', 400);
+  }
   $out = handle($a, $in);
   header('Content-Type: application/json; charset=utf-8');
   echo json_encode(['ok' => true] + $out, JSON_UNESCAPED_UNICODE);

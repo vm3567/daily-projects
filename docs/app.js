@@ -171,6 +171,7 @@ const ctx = {
   onServer,
   teamTask: (stepId) => team.byStep.get(stepId) || null,
   teamPeople: () => teamPeople(),
+  teamBusy: (id) => team.busy.has(id),
   giveProject: (p, person) => giveProject(p, person),
   takeBackProject: (p) => giveProject(p, null),
   setGivePhoto: (on) => { ui.givePhoto = on; render(); },
@@ -859,7 +860,7 @@ function runVoice() {
   for (const item of list) {
     try { // one note that goes wrong is dropped; it must not stop the others or add them twice
       const { data } = store.view;
-      const v = parseVoice(item.said, { projects: activeProjects(data), people: data.people || [], today: todayIndia() });
+      const v = parseVoice(item.said, { projects: activeProjects(data), people: data.people || [], today: item.at ? indiaDate(item.at) : todayIndia() }); // 'tomorrow' from the day it was said
       if (!v) continue;
       if (v.project) {
         if (v.waitOn) ensurePeople([v.waitOn]);
@@ -1632,6 +1633,8 @@ function showMoved() {
     h('a', { class: 'btn primary', href: carry, onClick: () => { try { localStorage.setItem('dp.pending.moved', JSON.stringify(all)); localStorage.removeItem('dp.pending'); } catch { /* kept */ } } }, `Open worktask.in with my ${waiting.length} change(s)`)));
 }
 
+const CARRIED_KEY = 'dp.carriedIds'; // ids of changes already taken from the old address
+
 /** From the old address: #ops=[…] are changes that never reached GitHub. Add them to this device's queue (no doubles). */
 function takeOpsFromHash() {
   if (!location.hash.startsWith('#ops=')) return;
@@ -1642,15 +1645,25 @@ function takeOpsFromHash() {
   let mine = [];
   try { mine = JSON.parse(localStorage.getItem('dp.pending') || '[]'); } catch { mine = []; }
   const have = new Set(mine.map((o) => o.id));
+  // changes carried before (and maybe saved since, so no longer waiting): never added a second time over newer edits
+  let carried = [];
+  try { carried = JSON.parse(localStorage.getItem(CARRIED_KEY) || '[]'); } catch { carried = []; }
+  if (!Array.isArray(carried)) carried = [];
+  const took = new Set(carried);
   // a link can come from anyone: only harmless kinds of change, and only after a yes
   const { ok, files, dropped } = carriedOps(ops);
-  const add = ok.filter((o) => !have.has(o.id));
+  const add = ok.filter((o) => !have.has(o.id) && !took.has(o.id));
   const filesMsg = (files ? ` ${files} photo(s)/file(s) could not come along: please add them again.` : '')
     + (dropped ? ` ${dropped} change(s) (deletes, team changes) could not come along: please do them again.` : '');
-  if (!add.length) { if (filesMsg) setTimeout(() => toast(filesMsg.trim(), 8000), 1500); return; }
+  if (!add.length) {
+    const msg = (ok.length ? 'These changes already arrived here ✓' : '') + filesMsg;
+    if (msg) setTimeout(() => toast(msg.trim(), 8000), 1500);
+    return;
+  }
   const kinds = [...new Set(add.map((o) => o.type))].join(', ');
   if (!confirm(`Add ${add.length} change(s) carried from the old address (kinds: ${kinds})?${filesMsg}\n\nSay No if you did not just come from the old address.`)) return;
   try { localStorage.setItem('dp.pending', JSON.stringify([...mine, ...add])); } catch { toast('Could not keep the changes on this device. Open the old address again to bring them.', 8000); return; }
+  try { localStorage.setItem(CARRIED_KEY, JSON.stringify([...carried, ...add.map((o) => o.id)].slice(-2000))); } catch { /* full */ }
   setTimeout(() => toast(`${add.length} change(s) from the old address added ✓${filesMsg}`, filesMsg ? 8000 : 5000), 1500);
 }
 
@@ -2386,7 +2399,7 @@ function sendNow() {
 // ---------------------------------------------------------------- team (worktask.in only)
 
 /** Team tasks given from a step, by step id, so each step can show the person's latest update. */
-const team = { byStep: new Map(), fillBy: '18:00', late: false, at: 0, gen: 0, syncErr: {}, alerts: { stuck: 0, unread: 0, suggestions: 0 } };
+const team = { byStep: new Map(), fillBy: '18:00', late: false, at: 0, gen: 0, syncErr: {}, busy: new Set(), loading: false, again: false, alerts: { stuck: 0, unread: 0, suggestions: 0 } };
 const TICKED_KEY = 'dp.teamTicked'; // team tasks already ticked on this device (so an un-tick by hand stays)
 
 /** 👥 in the top bar, with a red number when the team needs you (stuck, new messages, suggestions). */
@@ -2400,7 +2413,14 @@ function teamButton() {
 
 function teamApi(a, body = {}) {
   return fetch('../api/?a=' + a, { method: 'POST', cache: 'no-store', headers: { Authorization: 'Bearer ' + serverToken(), 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
-    .then((r) => r.json()).then((out) => { if (!out.ok) throw new Error(out.error || 'Server error'); return out; });
+    .catch(() => { throw new Error('No connection'); })
+    .then((r) => r.json().catch(() => { throw new Error(r.ok ? 'Server error' : 'Server busy, try again'); }))
+    .then((out) => { if (!out.ok) throw new Error(out.error || 'Server error'); return out; });
+}
+
+/** One project.sync at a time, also across tabs: two at once would put every step on the person's list twice. */
+function withSyncLock(fn) {
+  return navigator.locks && navigator.locks.request ? navigator.locks.request('dp.teamSync', fn) : fn();
 }
 
 /** Active team members to give a project to (loaded once). null while loading. */
@@ -2414,23 +2434,34 @@ function teamPeople() {
   return null;
 }
 
-/** What the server needs to know about a given project: its open steps, in order. */
-const projectSteps = (p) => p.steps.filter((x) => !x.done).map((x) => ({ stepRef: x.id, title: x.text, details: x.note || '' }));
+/** What the server needs to know about a given project: its open steps, in order. A step that comes back later
+ *  (snoozed, or the next copy of a repeating step) is sent on the day it comes back, not before. */
+const projectSteps = (p) => {
+  const today = todayIndia();
+  return p.steps.filter((x) => !x.done && !(x.snoozedUntil && x.snoozedUntil > today)).map((x) => ({ stepRef: x.id, title: x.text, details: x.note || '' }));
+};
 const SYNC_KEY = 'dp.teamSync'; // last steps sent per given project, so unchanged projects are not sent again
+const SYNC_RETRY = 'retry'; // never matches: sent again next time, but a deleted project is still taken back
 
 /** Give the whole project to a person (or take it back with person = null). */
 async function giveProject(p, person, needsPhoto = !!ui.givePhoto) {
+  if (team.busy.has(p.id)) return; // a double tap must not send it twice
+  team.busy.add(p.id);
+  render();
   try {
-    const out = await teamApi('project.sync', { projectRef: p.id, project: p.name, assigneeId: person ? person.id : 0, steps: person ? projectSteps(p) : [], needsPhoto });
-    team.gen++; // a list fetched before this change is old now: it must not move the project back
-    store.dispatch('setProjectTeam', { projectId: p.id, userId: person ? person.id : null, name: person ? person.name : '', needsPhoto });
-    ui.giveOpen = null;
-    ui.givePhoto = false;
-    toast(person ? `👥 ${p.name} given to ${person.name} ✓` : `Taken back: ${p.name}`);
-    // a step the server did not make yet (just finished): not remembered, so it is sent again later
-    rememberSync(p.id, person && !notSent(out, projectSteps(p)).length ? JSON.stringify([person.id, p.name, projectSteps(p), needsPhoto]) : null);
+    await withSyncLock(async () => {
+      const steps = person ? projectSteps(p) : [];
+      const out = await teamApi('project.sync', { projectRef: p.id, project: p.name, assigneeId: person ? person.id : 0, steps, needsPhoto });
+      team.gen++; // a list fetched before this change is old now: it must not move the project back
+      store.dispatch('setProjectTeam', { projectId: p.id, userId: person ? person.id : null, name: person ? person.name : '', needsPhoto });
+      ui.giveOpen = null;
+      ui.givePhoto = false;
+      toast(person ? `👥 ${p.name} given to ${person.name} ✓` : `Taken back: ${p.name}`);
+      // a step the server did not make yet (just finished): sent again later
+      rememberSync(p.id, !person ? null : notSent(out, steps).length ? SYNC_RETRY : JSON.stringify([person.id, p.name, steps, needsPhoto]));
+    });
     loadTeam(true);
-  } catch (e) { toast(e.message, 5000); }
+  } catch (e) { toast(e.message, 5000); } finally { team.busy.delete(p.id); render(); }
 }
 
 /** Steps sent with project.sync that are not on the person's list yet (the server waits 10 minutes after one was finished). */
@@ -2448,28 +2479,41 @@ function rememberSync(id, sig) {
 }
 
 /** Given projects: new, changed, ticked or deleted steps reach the person's list. */
-async function syncGivenProjects(gen = team.gen) {
+function syncGivenProjects(gen = team.gen) {
+  return withSyncLock(() => syncGivenNow(gen));
+}
+
+async function syncGivenNow(gen) {
   if (!store || !store.view) return;
   let m = {};
   try { m = JSON.parse(localStorage.getItem(SYNC_KEY) || '{}'); } catch { m = {}; }
-  for (const p of store.view.data.projects) {
-    if (!p.team) continue;
+  // store.view is replaced after each save: read every project fresh after each wait, never an old copy
+  const fresh = (id) => store.view.data.projects.find((x) => x.id === id);
+  for (const id of store.view.data.projects.filter((x) => x.team).map((x) => x.id)) {
+    let p = fresh(id);
+    if (!p || !p.team) continue;
     // moved on Work Task (↔ Move to…): follow the new person instead of moving the steps back
     const onTeam = gen === team.gen ? [...team.byStep.values()].filter((t) => t.projectRef === p.id && t.seq !== null && t.status === 'open') : [];
     const moved = onTeam.length && onTeam.every((t) => t.assignee.id === onTeam[0].assignee.id) && onTeam[0].assignee.id !== p.team.userId ? onTeam[0].assignee : null;
-    if (moved) store.dispatch('setProjectTeam', { projectId: p.id, userId: moved.id, name: moved.name, needsPhoto: !!p.team.needsPhoto });
-    const sig = JSON.stringify([p.team.userId, p.name, p.state === 'active' ? projectSteps(p) : [], !!p.team.needsPhoto]);
+    if (moved) {
+      store.dispatch('setProjectTeam', { projectId: p.id, userId: moved.id, name: moved.name, needsPhoto: !!p.team.needsPhoto });
+      p = fresh(id);
+      if (!p || !p.team) continue;
+    }
+    const steps = p.state === 'active' ? projectSteps(p) : [];
+    const sig = JSON.stringify([p.team.userId, p.name, steps, !!p.team.needsPhoto]);
     if (m[p.id] === sig) continue;
+    const name = p.name, who = p.team.name;
     try {
-      const steps = p.state === 'active' ? projectSteps(p) : [];
-      const out = await teamApi('project.sync', { projectRef: p.id, project: p.name, assigneeId: p.state === 'active' ? p.team.userId : 0, steps, needsPhoto: !!p.team.needsPhoto });
-      if (!notSent(out, steps).length) rememberSync(p.id, sig); // else: sent again next time (a re-opened step that was just finished)
-      delete team.syncErr[p.id];
+      const out = await teamApi('project.sync', { projectRef: p.id, project: name, assigneeId: p.state === 'active' ? p.team.userId : 0, steps, needsPhoto: !!p.team.needsPhoto });
+      // a re-opened step that was just finished is not made yet: sent again next time
+      rememberSync(id, notSent(out, steps).length ? SYNC_RETRY : sig);
+      delete team.syncErr[id];
     } catch (e) {
       // try again next time; say it once, so new steps do not quietly reach nobody
-      if (e.message !== 'No connection' && team.syncErr[p.id] !== e.message) {
-        team.syncErr[p.id] = e.message;
-        toast(`Could not send ${p.name} to ${p.team.name}: ${e.message} Use Change person.`, 8000);
+      if (e.message !== 'No connection' && team.syncErr[id] !== e.message) {
+        team.syncErr[id] = e.message;
+        toast(`Could not send ${name} to ${who}: ${e.message} Use Change person.`, 8000);
       }
     }
   }
@@ -2489,26 +2533,42 @@ function tickFinishedTeamTasks(tasks) {
   if (!store || !store.view || !store.canEdit()) return;
   let done = [];
   try { done = JSON.parse(localStorage.getItem(TICKED_KEY) || '[]'); } catch { done = []; }
+  if (!Array.isArray(done)) done = [];
   const seen = new Set(done);
   for (const t of tasks) {
     if (t.status !== 'done' || seen.has(t.id)) continue;
-    seen.add(t.id);
     const latest = team.byStep.get(t.stepRef); // the step was given again after this (re-opened): the old task must not tick it
-    if (latest && latest.id !== t.id) continue;
+    if (latest && latest.id !== t.id) { seen.add(t.id); continue; }
     const p = store.view.data.projects.find((x) => x.id === t.projectRef) || store.view.data.projects.find((x) => x.steps.some((st) => st.id === t.stepRef));
     const step = p && p.steps.find((st) => st.id === t.stepRef);
-    if (!step || step.done) continue;
+    if (!step) continue; // not here yet (data still loading): tried again next time
+    seen.add(t.id);
+    if (step.done) continue;
+    // handled on another device already (its note is saved with the data): an un-tick by hand there stays
+    if ((p.workNotes || []).some((n) => n.id === 'tn' + t.id)) continue;
     const words = (t.today || t.last) ? (t.today || t.last).note : '';
     actMany(p.id, [
       ['tickStep', { projectId: p.id, stepId: step.id }],
-      ...(words ? [['addWorkNote', { projectId: p.id, noteId: 'tn' + t.id, stepId: step.id, text: `👥 ${t.assignee.name} finished “${step.text}”: ${words}` }]] : []),
+      // always a note (same id on every device), so no other device ticks it again
+      ['addWorkNote', { projectId: p.id, noteId: 'tn' + t.id, stepId: step.id, text: `👥 ${t.assignee.name} finished “${step.text}”${words ? ': ' + words : '.'}` }],
     ], `✓ ${t.assignee.name} finished: ${step.text}`);
   }
-  try { localStorage.setItem(TICKED_KEY, JSON.stringify([...seen].slice(-500))); } catch { /* full */ }
+  // keep every id the server still sends (60 days), so none of them looks new again
+  const live = new Set(tasks.map((t) => t.id));
+  try { localStorage.setItem(TICKED_KEY, JSON.stringify([...seen].filter((id) => live.has(id)))); } catch { /* full */ }
 }
 
+/** One load at a time: a forced load asked for while one runs makes that one go round once more. */
 async function loadTeam(force = false) {
   if (!onServer || (!force && Date.now() - team.at < 60000)) return;
+  if (team.loading) { if (force) team.again = true; return; }
+  team.loading = true;
+  try {
+    do { team.again = false; await loadTeamOnce(); } while (team.again);
+  } finally { team.loading = false; }
+}
+
+async function loadTeamOnce() {
   team.at = Date.now();
   const gen = team.gen; // changed by giveProject while this list is on its way: the list is old
   try {
