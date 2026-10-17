@@ -28,3 +28,6 @@ RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
 <FilesMatch "\.(html|js|css)$">
   Header set Cache-Control "no-cache"
 </FilesMatch>
+
+# App manifest: the right file type for "Install app"
+AddType application/manifest+json .webmanifest

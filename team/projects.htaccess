@@ -7,3 +7,5 @@
 <FilesMatch "\.(html|js|css|webmanifest)$">
   Header set Cache-Control "no-cache"
 </FilesMatch>
+
+AddType application/manifest+json .webmanifest
