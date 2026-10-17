@@ -151,6 +151,23 @@ function migrate(PDO $pdo): void {
       at DATETIME NOT NULL,
       INDEX (at)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+    // v2: staff can suggest tasks; messages on a task; who has read them
+    "ALTER TABLE tasks MODIFY status ENUM('open','done','cancelled','suggested') NOT NULL DEFAULT 'open'",
+    "CREATE TABLE IF NOT EXISTS comments (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      task_id INT NOT NULL,
+      user_id INT NOT NULL,
+      text TEXT NOT NULL,
+      at DATETIME NOT NULL,
+      INDEX (task_id, at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+    "CREATE TABLE IF NOT EXISTS task_reads (
+      task_id INT NOT NULL,
+      user_id INT NOT NULL,
+      at DATETIME NOT NULL,
+      last_id INT NOT NULL DEFAULT 0,
+      PRIMARY KEY (task_id, user_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
   ];
   $pdo->exec($steps[0]);
   $done = (int)($pdo->query("SELECT v FROM settings WHERE k = 'schema'")->fetchColumn() ?: 0);

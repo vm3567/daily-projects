@@ -49,6 +49,17 @@ function tasks_out(array $tasks, string $day): array {
   $lasts = [];
   foreach (all("SELECT u.* FROM updates u JOIN (SELECT task_id, MAX(day) AS d FROM updates WHERE task_id IN ($in) AND day < ? GROUP BY task_id) m ON m.task_id = u.task_id AND m.d = u.day", [...$ids, $day]) as $u) $lasts[$u['task_id']] = $u;
   $photos = photos_of(array_map(fn($u) => (int)$u['id'], [...array_values($todays), ...array_values($lasts)]));
+  // messages on each task: how many, how many I have not read, and the newest one
+  $meId = (int)($GLOBALS['me']['id'] ?? 0);
+  $count = []; $unread = []; $lastMsg = [];
+  foreach (all("SELECT task_id, COUNT(*) AS n FROM comments WHERE task_id IN ($in) GROUP BY task_id", $ids) as $r) $count[$r['task_id']] = (int)$r['n'];
+  foreach (all("SELECT c.task_id, COUNT(*) AS n FROM comments c LEFT JOIN task_reads r ON r.task_id = c.task_id AND r.user_id = ?
+      WHERE c.task_id IN ($in) AND c.user_id <> ? AND c.id > COALESCE(r.last_id, 0) GROUP BY c.task_id", [$meId, ...$ids, $meId]) as $r) $unread[$r['task_id']] = (int)$r['n'];
+  $answered = []; // newest message from someone other than the person doing the task
+  foreach (all("SELECT c.task_id, MAX(c.at) AS at FROM comments c JOIN tasks t ON t.id = c.task_id WHERE c.task_id IN ($in) AND c.user_id <> t.assignee_id GROUP BY c.task_id", $ids) as $r) $answered[$r['task_id']] = $r['at'];
+  foreach (all("SELECT c.*, u.name FROM comments c JOIN users u ON u.id = c.user_id JOIN (SELECT task_id, MAX(id) AS mid FROM comments WHERE task_id IN ($in) GROUP BY task_id) m ON m.mid = c.id", $ids) as $c) {
+    $lastMsg[$c['task_id']] = ['by' => $c['name'], 'byId' => (int)$c['user_id'], 'text' => $c['text'], 'at' => $c['at'], 'mine' => (int)$c['user_id'] === $meId];
+  }
   return array_map(fn($t) => [
     'id' => (int)$t['id'], 'title' => $t['title'], 'details' => $t['details'] ?? '',
     'assignee' => ['id' => (int)$t['assignee_id'], 'name' => $t['assignee_name'] ?? ''],
@@ -57,7 +68,38 @@ function tasks_out(array $tasks, string $day): array {
     'status' => $t['status'], 'createdAt' => $t['created_at'], 'doneAt' => $t['done_at'],
     'dueToday' => $t['status'] === 'open' && due_on($t, $day),
     'today' => update_out($todays[$t['id']] ?? null, $photos), 'last' => update_out($lasts[$t['id']] ?? null, $photos),
+    'createdBy' => (int)$t['created_by'],
+    'messages' => $count[$t['id']] ?? 0, 'unread' => $unread[$t['id']] ?? 0, 'lastMessage' => $lastMsg[$t['id']] ?? null,
+    // stuck: the newest update says "Stuck" (and the manager has not answered since)
+    'stuck' => (function () use ($t, $todays, $lasts, $answered) {
+      $u = $todays[$t['id']] ?? $lasts[$t['id']] ?? null;
+      if (!$u || $u['state'] !== 'stuck' || $t['status'] !== 'open') return false;
+      return !(isset($answered[$t['id']]) && $answered[$t['id']] >= $u['updated_at']);
+    })(),
   ], $tasks);
+}
+
+function mark_read(array $taskIds, int $userId): void {
+  foreach (array_unique($taskIds) as $id) {
+    $last = (int)(one('SELECT MAX(id) AS m FROM comments WHERE task_id = ?', [(int)$id])['m'] ?? 0);
+    q('INSERT INTO task_reads (task_id, user_id, at, last_id) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE at = VALUES(at), last_id = GREATEST(last_id, VALUES(last_id))', [(int)$id, $userId, now(), $last]);
+  }
+}
+
+function comments_of(int $taskId): array {
+  $meId = (int)($GLOBALS['me']['id'] ?? 0);
+  return array_map(fn($c) => ['id' => (int)$c['id'], 'by' => $c['name'], 'byId' => (int)$c['user_id'], 'text' => $c['text'], 'at' => $c['at'], 'mine' => (int)$c['user_id'] === $meId],
+    all('SELECT c.*, u.name FROM comments c JOIN users u ON u.id = c.user_id WHERE c.task_id = ? ORDER BY c.id', [$taskId]));
+}
+
+/** What needs the manager: stuck, new messages from staff, suggestions waiting for a yes. */
+function team_attention(): array {
+  $open = tasks_out(all(TASK_SELECT . " WHERE t.status = 'open' ORDER BY t.id"), today());
+  return [
+    'stuck' => array_values(array_filter($open, fn($t) => $t['stuck'])),
+    'unread' => array_values(array_filter($open, fn($t) => $t['unread'] > 0 && !$t['stuck'])),
+    'suggestions' => tasks_out(all(TASK_SELECT . " WHERE t.status = 'suggested' ORDER BY t.id"), today()),
+  ];
 }
 
 const TASK_SELECT = 'SELECT t.*, u.name AS assignee_name FROM tasks t JOIN users u ON u.id = t.assignee_id';
@@ -73,6 +115,7 @@ function handle(string $a, array $in): array {
   if ($a === 'login') return login((string)($in['username'] ?? ''), (string)($in['password'] ?? ''), (string)($_SERVER['HTTP_USER_AGENT'] ?? ''));
 
   $me = current_user();
+  $GLOBALS['me'] = $me;
   $day = today();
   $dp = dp_handle($a, $in, $me);
   if ($dp !== null) return $dp;
@@ -92,7 +135,11 @@ function handle(string $a, array $in): array {
       $out = tasks_out($tasks, $day);
       $due = array_values(array_filter($out, fn($t) => $t['dueToday'] || ($t['today'] !== null)));
       $other = array_values(array_filter($out, fn($t) => !$t['dueToday'] && $t['today'] === null && $t['status'] === 'open'));
-      return ['today' => $day, 'tasks' => $due, 'other' => $other, 'fillBy' => setting('fill_by', '18:00')];
+      // my suggestions: waiting for a yes, or said no this week (with the reason in the messages)
+      $sugg = tasks_out(all(TASK_SELECT . " WHERE t.created_by = ? AND t.assignee_id = ? AND (t.status = 'suggested' OR (t.status = 'cancelled' AND t.updated_at >= ?)) ORDER BY t.id DESC",
+        [$me['id'], $me['id'], date('Y-m-d H:i:s', time() - 7 * 86400)]), $day);
+      mark_read(array_map(fn($t) => $t['id'], [...$due, ...$other, ...$sugg]), $me['id']); // shown now = read (the "new" marks above stay for this screen)
+      return ['today' => $day, 'tasks' => $due, 'other' => $other, 'suggestions' => $sugg, 'fillBy' => setting('fill_by', '18:00')];
     }
     case 'update.save': {
       $t = own_task($me, (int)($in['taskId'] ?? 0));
@@ -123,7 +170,26 @@ function handle(string $a, array $in): array {
       $t = own_task($me, (int)($in['id'] ?? 0));
       $ups = all('SELECT * FROM updates WHERE task_id = ? ORDER BY day DESC LIMIT 60', [$t['id']]);
       $photos = photos_of(array_map(fn($u) => (int)$u['id'], $ups));
-      return ['task' => tasks_out([$t], $day)[0], 'updates' => array_map(fn($u) => update_out($u, $photos), $ups)];
+      $out = ['task' => tasks_out([$t], $day)[0], 'updates' => array_map(fn($u) => update_out($u, $photos), $ups), 'comments' => comments_of((int)$t['id'])];
+      mark_read([(int)$t['id']], $me['id']);
+      return $out;
+    }
+    case 'comment.add': { // a message on a task: between the manager and the person doing it
+      $t = own_task($me, (int)($in['taskId'] ?? 0));
+      $text = txt($in['text'] ?? '', 2000, true, 'The message');
+      q('INSERT INTO comments (task_id, user_id, text, at) VALUES (?, ?, ?, ?)', [$t['id'], $me['id'], $text, now()]);
+      mark_read([(int)$t['id']], $me['id']);
+      return ['comments' => comments_of((int)$t['id'])];
+    }
+    case 'suggest': { // staff: "I think this should be done" — it waits for the manager's yes
+      $title = txt($in['title'] ?? '', 300, true, 'The task');
+      $kind = in_array($in['repeat'] ?? '', ['daily', 'weekly', 'once'], true) ? $in['repeat'] : 'once';
+      q("INSERT INTO tasks (title, details, assignee_id, created_by, repeat_kind, skip_sunday, weekday, due_date, start_date, status, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, 1, NULL, ?, ?, 'suggested', ?, ?)",
+        [$title, txt($in['details'] ?? '', 4000), $me['id'], $me['id'], $kind, $kind === 'once' ? date_or_null($in['dueDate'] ?? null) : null, $day, now(), now()]);
+      $id = (int)db()->lastInsertId();
+      audit($me['id'], 'task_suggested', "#$id $title");
+      return ['task' => tasks_out([own_task($me, $id)], $day)[0]];
     }
   }
 
@@ -135,18 +201,40 @@ function handle(string $a, array $in): array {
       $tasks = all(TASK_SELECT . " WHERE (t.status = 'open' OR t.done_at >= ?) ORDER BY t.id", [$day . ' 00:00:00']);
       $out = array_values(array_filter(tasks_out($tasks, $day), fn($t) => $t['dueToday'] || $t['today'] !== null));
       $fillBy = setting('fill_by', '18:00');
-      return ['today' => $day, 'fillBy' => $fillBy, 'late' => date('H:i') >= $fillBy, 'people' => array_map('public_user', $people), 'tasks' => $out];
+      return ['today' => $day, 'fillBy' => $fillBy, 'late' => date('H:i') >= $fillBy, 'people' => array_map('public_user', $people), 'tasks' => $out] + team_attention();
+    }
+    case 'task.approve': {
+      $t = own_task($me, (int)($in['id'] ?? 0));
+      if ($t['status'] !== 'suggested') throw new ApiError('This suggestion was already answered.');
+      $kind = in_array($in['repeat'] ?? '', ['daily', 'weekly', 'once'], true) ? $in['repeat'] : $t['repeat_kind'];
+      q("UPDATE tasks SET status = 'open', title = ?, repeat_kind = ?, skip_sunday = ?, weekday = ?, due_date = ?, start_date = ?, updated_at = ? WHERE id = ?", [
+        txt($in['title'] ?? $t['title'], 300, true, 'The task'), $kind, array_key_exists('skipSunday', $in) ? (empty($in['skipSunday']) ? 0 : 1) : (int)$t['skip_sunday'],
+        $kind === 'weekly' ? max(0, min(6, (int)($in['weekday'] ?? 1))) : null, $kind === 'once' ? date_or_null($in['dueDate'] ?? null) : null, $day, now(), $t['id']]);
+      if (trim((string)($in['note'] ?? '')) !== '') q('INSERT INTO comments (task_id, user_id, text, at) VALUES (?, ?, ?, ?)', [$t['id'], $me['id'], txt($in['note'], 2000), now()]);
+      audit($me['id'], 'task_approved', "#{$t['id']} {$t['title']}");
+      return ['task' => tasks_out([own_task($me, (int)$t['id'])], $day)[0]];
+    }
+    case 'task.decline': {
+      $t = own_task($me, (int)($in['id'] ?? 0));
+      if ($t['status'] !== 'suggested') throw new ApiError('This suggestion was already answered.');
+      q("UPDATE tasks SET status = 'cancelled', done_at = ?, updated_at = ? WHERE id = ?", [now(), now(), $t['id']]);
+      $why = txt($in['reason'] ?? '', 2000);
+      q('INSERT INTO comments (task_id, user_id, text, at) VALUES (?, ?, ?, ?)', [$t['id'], $me['id'], $why !== '' ? "Not now: $why" : 'Not now.', now()]);
+      audit($me['id'], 'task_declined', "#{$t['id']} {$t['title']}");
+      return [];
     }
     case 'tasks.list': {
       $closed = ($in['status'] ?? 'open') === 'closed';
-      $tasks = all(TASK_SELECT . ($closed ? " WHERE t.status <> 'open' ORDER BY t.updated_at DESC LIMIT 200" : " WHERE t.status = 'open' ORDER BY u.name, t.id"));
+      $tasks = all(TASK_SELECT . ($closed ? " WHERE t.status IN ('done', 'cancelled') ORDER BY t.updated_at DESC LIMIT 200" : " WHERE t.status = 'open' ORDER BY u.name, t.id"));
       return ['tasks' => tasks_out($tasks, $day)];
     }
     case 'tasks.linked': { // for Daily Projects: every team task given from a step (open, or closed this week)
       $since = date('Y-m-d H:i:s', time() - 7 * 86400);
       $tasks = all(TASK_SELECT . " WHERE t.step_ref IS NOT NULL AND (t.status = 'open' OR t.updated_at >= ?) ORDER BY t.id", [$since]);
       $fillBy = setting('fill_by', '18:00');
-      return ['today' => $day, 'fillBy' => $fillBy, 'late' => date('H:i') >= $fillBy, 'tasks' => tasks_out($tasks, $day)];
+      $att = team_attention();
+      return ['today' => $day, 'fillBy' => $fillBy, 'late' => date('H:i') >= $fillBy, 'tasks' => tasks_out($tasks, $day),
+        'alerts' => ['stuck' => count($att['stuck']), 'unread' => count($att['unread']), 'suggestions' => count($att['suggestions'])]];
     }
     case 'tasks.byRefs': { // for Daily Projects: the team tasks linked to these steps
       $refs = array_slice(array_filter(array_map('strval', (array)($in['stepRefs'] ?? []))), 0, 500);

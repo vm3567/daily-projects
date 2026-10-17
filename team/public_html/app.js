@@ -159,12 +159,13 @@ function render() {
   if (!state.token || !state.user) { root.replaceChildren(loginScreen()); return; }
   if (state.user.mustChange || state.view === 'password') { root.replaceChildren(header(), passwordScreen()); return; }
   let body;
-  if (!state.data && state.view !== 'settings' && state.view !== 'give') body = el('p', { class: 'muted' }, 'Loading…');
+  if (!state.data && state.view !== 'settings' && state.view !== 'give' && state.view !== 'suggest') body = el('p', { class: 'muted' }, 'Loading…');
   else if (state.view === 'today') body = state.user.role === 'admin' ? teamToday() : myToday();
   else if (state.view === 'tasks') body = allTasks();
   else if (state.view === 'people') body = peopleScreen();
   else if (state.view === 'settings') body = settingsScreen();
   else if (state.view === 'give' || state.view.startsWith('edit:')) body = taskForm();
+  else if (state.view === 'suggest') body = suggestForm();
   else if (state.view.startsWith('task:')) body = taskDetail();
   root.replaceChildren(header(), el('main', { class: 'narrow' }, body));
 }
@@ -243,11 +244,16 @@ function myToday() {
   const d = state.data;
   const sent = d.tasks.filter((t) => t.today).length;
   return [
-    el('h1', null, 'My tasks today'),
+    el('div', { class: 'row spread' }, el('h1', null, 'My tasks today'), el('button', { onClick: () => go('suggest') }, '💡 Suggest a task')),
     el('p', { class: 'muted small' }, `${fmtDay(d.today)} · ${sent} of ${d.tasks.length} sent · please send by ${d.fillBy}`),
     d.tasks.length ? d.tasks.map((t) => myTask(t, d.today)) : el('div', { class: 'card muted' }, 'No tasks for today. 🎉'),
     d.other.length ? [el('h2', null, 'Other tasks (not today)'), d.other.map((t) => el('div', { class: 'card' },
-      el('h3', null, t.title), el('div', { class: 'meta' }, [t.project, repeatLabel(t, d.today)].filter(Boolean).join(' · '))))] : null,
+      el('h3', null, t.title), el('div', { class: 'meta' }, [t.project, repeatLabel(t, d.today)].filter(Boolean).join(' · ')), messageLine(t)))] : null,
+    (d.suggestions || []).length ? [el('h2', null, 'My suggestions'), d.suggestions.map((t) => el('div', { class: 'card' },
+      el('div', { class: 'row spread' }, el('h3', null, t.title),
+        t.status === 'suggested' ? el('span', { class: 'tag amber' }, 'Waiting for a yes') : el('span', { class: 'tag grey' }, 'Not now')),
+      t.details ? el('div', { class: 'pre small muted' }, t.details) : null,
+      messageLine(t)))] : null,
   ];
 }
 
@@ -259,6 +265,7 @@ function myTask(t, today) {
     el('div', { class: 'meta' }, [t.project, repeatLabel(t, today)].filter(Boolean).join(' · ')),
     t.details ? el('div', { class: 'pre small muted' }, t.details) : null,
     t.last ? el('div', { class: 'last' }, `Last time (${fmtDay(t.last.day)}): `, el('span', { class: 'pre' }, t.last.note)) : null,
+    messageLine(t),
     el('div', { class: 'update' }, done ? sentView(t) : updateForm(t)));
 }
 
@@ -313,6 +320,59 @@ function updateForm(t) {
   ];
 }
 
+/** The newest message on a task (💬), with a way to answer. "New" when someone else wrote it and I have not seen it. */
+function messageLine(t) {
+  const m = t.lastMessage;
+  const open = () => go('task:' + t.id);
+  if (!m) return el('div', { class: 'row small' }, el('button', { class: 'link', onClick: open }, '💬 Send a message'));
+  return el('div', { class: 'msg-line' + (t.unread ? ' new' : ''), onClick: open },
+    t.unread ? el('span', { class: 'tag red' }, 'New') : null,
+    el('strong', null, `💬 ${m.mine ? 'You' : m.by}: `), el('span', { class: 'pre' }, m.text.length > 160 ? m.text.slice(0, 160) + '…' : m.text),
+    el('span', { class: 'muted small' }, ` · ${fmtDay(m.at)} ${fmtTime(m.at)}${t.messages > 1 ? ` · ${t.messages} messages` : ''} · reply`));
+}
+
+function messagesBlock(taskId, comments) {
+  const err = el('p', { class: 'err small', hidden: true });
+  const box = el('textarea', { placeholder: state.user.role === 'admin' ? 'Reply or give an instruction…' : 'Ask or reply to your manager…', value: state.drafts['m' + taskId] || '', onInput: (e) => { state.drafts['m' + taskId] = e.target.value; err.hidden = true; } });
+  const btn = el('button', { class: 'primary', onClick: async () => {
+    if (!box.value.trim()) { err.textContent = 'Write the message first.'; err.hidden = false; return; }
+    btn.disabled = true;
+    try {
+      const out = await api('comment.add', { taskId, text: box.value });
+      delete state.drafts['m' + taskId];
+      state.data.comments = out.comments;
+      toast('Sent ✓');
+      render();
+    } catch (ex) { err.textContent = ex.message; err.hidden = false; btn.disabled = false; }
+  } }, 'Send message');
+  return [
+    el('h2', null, '💬 Messages'),
+    comments.length ? comments.map((c) => el('div', { class: 'card msg' + (c.mine ? ' mine' : '') },
+      el('div', { class: 'row small' }, el('strong', null, c.mine ? 'You' : c.by), el('span', { class: 'muted' }, `${fmtDay(c.at)} ${fmtTime(c.at)}`)),
+      el('div', { class: 'pre' }, c.text))) : el('p', { class: 'muted small' }, 'No messages yet.'),
+    el('div', { class: 'card stack' }, box, err, el('div', { class: 'row' }, btn)),
+  ];
+}
+
+function suggestForm() {
+  const err = el('p', { class: 'err', hidden: true });
+  const title = el('input', { required: true, placeholder: 'Clean the dryer filters every week' });
+  const details = el('textarea', { placeholder: 'Why it is needed (optional)' });
+  const how = el('select', null, el('option', { value: 'once' }, 'One time'), el('option', { value: 'daily' }, 'Every day'), el('option', { value: 'weekly' }, 'Once a week'));
+  const btn = el('button', { class: 'primary', type: 'submit' }, 'Send to my manager');
+  return [
+    el('h1', null, '💡 Suggest a task'),
+    el('p', { class: 'muted' }, 'Your manager says yes or no. If yes, it comes on your list.'),
+    el('form', { class: 'card stack', onSubmit: async (e) => {
+      e.preventDefault();
+      btn.disabled = true; err.hidden = true;
+      try { await api('suggest', { title: title.value, details: details.value, repeat: how.value }); toast('Sent for a yes ✓'); go('today'); }
+      catch (ex) { err.textContent = ex.message; err.hidden = false; btn.disabled = false; }
+    } }, el('label', null, 'Task', title), el('label', null, 'Details', details), el('label', null, 'How often', how), err,
+    el('div', { class: 'row' }, btn, el('button', { type: 'button', onClick: () => go('today') }, 'Cancel'))),
+  ];
+}
+
 async function uploadPhotos(updateId, files) {
   for (const f of files) {
     const fd = new FormData();
@@ -334,6 +394,7 @@ function teamToday() {
     el('div', { class: 'row spread' }, el('div', null, el('h1', null, 'Team today'),
       el('p', { class: 'muted small' }, `${fmtDay(d.today)} · updates due by ${d.fillBy}`)),
     el('button', { class: 'primary', onClick: () => go('give') }, '+ Give a task')),
+    needsYou(d),
     people.length ? null : el('div', { class: 'card' }, 'No team members yet. ', el('button', { class: 'link', onClick: () => go('people') }, 'Add a person')),
     people.map((p) => {
       const tasks = byPerson.get(p.id) || [];
@@ -348,13 +409,47 @@ function teamToday() {
   ];
 }
 
+/** Top of Team today: what is waiting for the manager. */
+function needsYou(d) {
+  const stuck = d.stuck || []; const unread = d.unread || []; const sugg = d.suggestions || [];
+  if (!stuck.length && !unread.length && !sugg.length) return null;
+  const row = (t, what) => el('div', { class: 'trow', onClick: () => go('task:' + t.id) },
+    el('div', { class: 'row spread' }, el('strong', null, `${t.assignee.name}: ${t.title}`), what),
+    t.lastMessage && !t.lastMessage.mine ? el('div', { class: 'note2 small' }, `💬 ${t.lastMessage.text}`)
+      : (t.today || t.last) ? el('div', { class: 'note2 small' }, (t.today || t.last).note) : null);
+  const answer = async (t, yes) => {
+    try {
+      if (yes) { await api('task.approve', { id: t.id }); toast(`Added to ${t.assignee.name}'s list ✓`); }
+      else {
+        const why = prompt(`Not now — tell ${t.assignee.name} why (optional):`, '');
+        if (why === null) return;
+        await api('task.decline', { id: t.id, reason: why }); toast('Answered');
+      }
+      loadView();
+    } catch (ex) { toast(ex.message, 5000); }
+  };
+  return el('div', { class: 'card needs' },
+    el('h3', null, '⚠︎ Needs you'),
+    stuck.map((t) => row(t, el('span', { class: 'tag red' }, 'Stuck'))),
+    unread.map((t) => row(t, el('span', { class: 'tag amber' }, `💬 ${t.unread} new`))),
+    sugg.map((t) => el('div', { class: 'trow' },
+      el('div', null, el('span', { class: 'tag' }, '💡 Suggestion'), ' ', el('strong', null, `${t.assignee.name}: ${t.title}`)),
+      el('div', { class: 'meta' }, repeatLabel(t)),
+      t.details ? el('div', { class: 'pre small muted' }, t.details) : null,
+      el('div', { class: 'row' },
+        el('button', { class: 'primary', onClick: () => answer(t, true) }, '✓ Yes, add it'),
+        el('button', { onClick: () => answer(t, false) }, 'Not now'),
+        el('button', { onClick: () => go('task:' + t.id) }, '💬 Ask first')))));
+}
+
 function teamRow(t, d) {
   const u = t.today;
   return el('div', { class: 'trow', onClick: (e) => { if (e.target.tagName !== 'IMG') go('task:' + t.id); } },
     el('div', { class: 'row spread' }, el('strong', null, t.title), el('span', { class: 'meta' }, [t.project, repeatLabel(t, d.today)].filter(Boolean).join(' · '))),
     u ? [el('div', { class: 'row small' }, el('span', { class: 'ok' }, `✓ ${fmtTime(u.at)}`), stateTag(u.state)), el('div', { class: 'note2 pre small' }, u.note), thumbs(u.photos)]
       : el('div', { class: 'small ' + (d.late ? 'err' : 'warn') }, d.late ? '⚠︎ Not filled today' : 'Not filled yet'),
-    !u && t.last ? el('div', { class: 'last' }, `Last: ${fmtDay(t.last.day)} — ${t.last.note.slice(0, 120)}`) : null);
+    !u && t.last ? el('div', { class: 'last' }, `Last: ${fmtDay(t.last.day)} — ${t.last.note.slice(0, 120)}`) : null,
+    t.messages ? el('div', { class: 'small ' + (t.unread ? 'warn' : 'muted') }, `💬 ${t.messages} message${t.messages > 1 ? 's' : ''}${t.unread ? ` · ${t.unread} new` : ''}`) : null);
 }
 
 // ---------- manager: all tasks
@@ -377,7 +472,7 @@ function allTasks() {
 }
 
 function taskDetail() {
-  const { task: t, updates } = state.data;
+  const { task: t, updates, comments = [] } = state.data;
   const admin = state.user.role === 'admin';
   const setStatus = async (status) => {
     try { await api('task.status', { id: t.id, status }); toast(status === 'open' ? 'Opened again' : status === 'done' ? 'Marked done ✓' : 'Cancelled'); loadView(); } catch (ex) { toast(ex.message, 5000); }
@@ -387,10 +482,15 @@ function taskDetail() {
     el('h1', null, t.title),
     el('p', { class: 'meta' }, [t.assignee.name, t.project, repeatLabel(t), t.status !== 'open' ? (t.status === 'done' ? 'Done' : 'Cancelled') : null].filter(Boolean).join(' · ')),
     t.details ? el('div', { class: 'card pre' }, t.details) : null,
-    admin ? el('div', { class: 'row' },
+    admin && t.status === 'suggested' ? el('div', { class: 'row' },
+      el('span', { class: 'tag' }, `💡 Suggested by ${t.assignee.name}`),
+      el('button', { class: 'primary', onClick: async () => { try { await api('task.approve', { id: t.id }); toast('Added ✓'); loadView(); } catch (ex) { toast(ex.message, 5000); } } }, '✓ Yes, add it'),
+      el('button', { onClick: async () => { const why = prompt('Not now — why (optional):', ''); if (why === null) return; try { await api('task.decline', { id: t.id, reason: why }); toast('Answered'); loadView(); } catch (ex) { toast(ex.message, 5000); } } }, 'Not now')) : null,
+    admin && t.status !== 'suggested' ? el('div', { class: 'row' },
       el('button', { onClick: () => go('edit:' + t.id) }, '✎ Edit'),
       t.status === 'open' ? [el('button', { onClick: () => setStatus('done') }, '✓ Mark done'), el('button', { onClick: () => { if (confirm('Cancel this task?')) setStatus('cancelled'); } }, 'Cancel task')]
         : el('button', { onClick: () => setStatus('open') }, 'Open again')) : null,
+    messagesBlock(t.id, comments),
     el('h2', null, 'Updates'),
     updates.length ? updates.map((u) => el('div', { class: 'card' },
       el('div', { class: 'row small' }, el('strong', null, fmtDay(u.day)), el('span', { class: 'muted' }, fmtTime(u.at)), stateTag(u.state)),

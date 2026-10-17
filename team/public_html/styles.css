@@ -87,3 +87,9 @@ header.top nav button.on { background: var(--accent-bg); color: var(--accent); }
 .viewer { position: fixed; inset: 0; background: rgba(0,0,0,.88); z-index: 30; display: flex; align-items: center; justify-content: center; }
 .viewer img { max-width: 96vw; max-height: 92vh; }
 [hidden] { display: none !important; }
+
+/* v2: messages, needs-you, suggestions */
+.msg-line { margin-top: 8px; padding: 8px 10px; border-radius: 8px; background: var(--bg); font-size: 14px; cursor: pointer; }
+.msg-line.new { background: var(--amber-bg); }
+.card.msg.mine { background: var(--accent-bg); border-color: transparent; }
+.card.needs { border-color: var(--amber); }

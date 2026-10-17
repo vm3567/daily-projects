@@ -1290,7 +1290,7 @@ function renderListColumn() {
     statusText(),
     h('button', { class: 'icon', title: 'Quick capture: write down an idea or task (key: q)', 'aria-label': 'Quick capture', onClick: openCapture }, '📥'),
     h('button', { class: 'icon', title: 'Jump to a project, person or page (Ctrl+K)', 'aria-label': 'Jump', onClick: openJump }, '🔍'),
-    onServer ? h('a', { class: 'icon', href: '../', title: 'Team: tasks you gave and their daily updates', 'aria-label': 'Team' }, '👥') : null,
+    onServer ? teamButton() : null,
     h('button', { class: 'icon', title: 'Get latest', 'aria-label': 'Refresh', onClick: () => doRefresh(true) }, '↻'));
   const mobileSearch = h('input', {
     class: 'search mobile-only', type: 'search', placeholder: withKey('Search…', '/'), value: ui.search, key: 'search-mobile', 'aria-label': 'Search',
@@ -2307,7 +2307,38 @@ function sendNow() {
 // ---------------------------------------------------------------- team (worktask.in only)
 
 /** Team tasks given from a step, by step id, so each step can show the person's latest update. */
-const team = { byStep: new Map(), fillBy: '18:00', late: false, at: 0 };
+const team = { byStep: new Map(), fillBy: '18:00', late: false, at: 0, alerts: { stuck: 0, unread: 0, suggestions: 0 } };
+const TICKED_KEY = 'dp.teamTicked'; // team tasks already ticked on this device (so an un-tick by hand stays)
+
+/** 👥 in the top bar, with a red number when the team needs you (stuck, new messages, suggestions). */
+function teamButton() {
+  const a = team.alerts;
+  const n = a.stuck + a.unread + a.suggestions;
+  const why = [a.stuck && `${a.stuck} stuck`, a.unread && `${a.unread} with new messages`, a.suggestions && `${a.suggestions} suggestion(s)`].filter(Boolean).join(', ');
+  return h('a', { class: 'icon team-btn', href: '../', title: n ? `Team needs you: ${why}` : 'Team: tasks you gave and their daily updates', 'aria-label': n ? `Team, ${n} need you` : 'Team' },
+    '👥', n ? h('span', { class: 'team-count' }, String(n)) : null);
+}
+
+/** A team task given from a step was finished: tick the step (once), with the person's last words as a work note. */
+function tickFinishedTeamTasks(tasks) {
+  if (!store || !store.view || !store.canEdit()) return;
+  let done = [];
+  try { done = JSON.parse(localStorage.getItem(TICKED_KEY) || '[]'); } catch { done = []; }
+  const seen = new Set(done);
+  for (const t of tasks) {
+    if (t.status !== 'done' || seen.has(t.id)) continue;
+    seen.add(t.id);
+    const p = store.view.data.projects.find((x) => x.id === t.projectRef) || store.view.data.projects.find((x) => x.steps.some((st) => st.id === t.stepRef));
+    const step = p && p.steps.find((st) => st.id === t.stepRef);
+    if (!step || step.done) continue;
+    const words = (t.today || t.last) ? (t.today || t.last).note : '';
+    actMany(p.id, [
+      ['tickStep', { projectId: p.id, stepId: step.id }],
+      ...(words ? [['addWorkNote', { projectId: p.id, noteId: newId(), stepId: step.id, text: `👥 ${t.assignee.name} finished “${step.text}”: ${words}` }]] : []),
+    ], `✓ ${t.assignee.name} finished: ${step.text}`);
+  }
+  try { localStorage.setItem(TICKED_KEY, JSON.stringify([...seen].slice(-500))); } catch { /* full */ }
+}
 
 async function loadTeam(force = false) {
   if (!onServer || (!force && Date.now() - team.at < 60000)) return;
@@ -2319,6 +2350,8 @@ async function loadTeam(force = false) {
     team.byStep = new Map(out.tasks.map((t) => [t.stepRef, t]));
     team.fillBy = out.fillBy;
     team.late = out.late;
+    if (out.alerts) team.alerts = out.alerts;
+    tickFinishedTeamTasks(out.tasks);
     render();
   } catch { /* no connection: try again next time */ }
 }
