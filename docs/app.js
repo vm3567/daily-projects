@@ -171,6 +171,8 @@ const ctx = {
   onServer,
   teamTask: (stepId) => team.byStep.get(stepId) || null,
   teamPeople: () => teamPeople(),
+  teamDaily: (p) => teamDaily(p),
+  moreDaily: (p) => { const e = daily.get(p.id); teamDaily(p, (e ? e.days : 30) + 30); },
   teamBusy: (id) => team.busy.has(id),
   giveProject: (p, person) => giveProject(p, person),
   takeBackProject: (p) => giveProject(p, null),
@@ -2423,6 +2425,22 @@ function withSyncLock(fn) {
   return navigator.locks && navigator.locks.request ? navigator.locks.request('dp.teamSync', fn) : fn();
 }
 
+/** 📅 Daily updates per project: loaded when the project is opened, again after a minute (or on ↻). */
+const daily = new Map(); // projectId -> { at, days, data, loading }
+function teamDaily(p, days) {
+  if (!onServer) return null;
+  let e = daily.get(p.id);
+  const want = days || (e ? e.days : 30);
+  if (!e || (!e.loading && (Date.now() - e.at > 60000 || want !== e.days))) {
+    e = { ...(e || {}), days: want, loading: true, at: Date.now() };
+    daily.set(p.id, e);
+    teamApi('project.updates', { projectRef: p.id, days: want })
+      .then((out) => { e.data = out; e.loading = false; e.at = Date.now(); render(); })
+      .catch(() => { e.loading = false; });
+  }
+  return e;
+}
+
 /** Active team members to give a project to (loaded once). null while loading. */
 function teamPeople() {
   if (team.people) return team.people;
@@ -2560,6 +2578,7 @@ function tickFinishedTeamTasks(tasks) {
 
 /** One load at a time: a forced load asked for while one runs makes that one go round once more. */
 async function loadTeam(force = false) {
+  if (force) for (const e of daily.values()) e.at = 0; // ↻ also brings the newest daily updates
   if (!onServer || (!force && Date.now() - team.at < 60000)) return;
   if (team.loading) { if (force) team.again = true; return; }
   team.loading = true;

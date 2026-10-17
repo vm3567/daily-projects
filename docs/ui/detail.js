@@ -872,6 +872,8 @@ export function renderDetail(ctx) {
         ui.showDone && doneSteps.length > (ui.doneLimit || 10)
           ? h('button', { class: 'link small', onClick: () => { ui.doneLimit = (ui.doneLimit || 10) + 30; ctx.render(); } }, `Show older (${doneSteps.length - (ui.doneLimit || 10)})`) : null) : null),
 
+    dailyLog(ctx, p),
+
     // Calm page: work notes, notes, links, files and history wait under "More" (opened once, it stays open).
     moreFold(ctx, p, [
       p.workNotes.length ? section('Work notes', notesLog(ctx, p, notesShown)) : null,
@@ -882,6 +884,56 @@ export function renderDetail(ctx) {
       show.notes && show.links && show.files && show.history ? null : h('div', { class: 'chips', key: 'chips-' + p.id },
         chip('notes', '+ Notes'), chip('links', '+ Link'), chip('files', '+ File'), chip('history', 'History')),
     ]));
+}
+
+/**
+ * 📅 Daily updates (worktask.in): one line per day, newest first, from the day the team got work on this project.
+ * Under each day: what the person sent (and your own notes). A working day with nothing sent says "No update".
+ */
+function dailyLog(ctx, p) {
+  if (!ctx.onServer || !ctx.teamDaily) return null;
+  const d = ctx.teamDaily(p);
+  if (!d || !d.data || !d.data.tasks.length) return null;
+  const { today, from, since, tasks, updates, fillBy } = d.data;
+  const byTask = new Map(tasks.map((t) => [t.id, t]));
+  const people = [...new Set(tasks.filter((t) => t.status === 'open').map((t) => t.assignee))];
+  const sundaysOff = tasks.every((t) => t.repeat !== 'daily' || t.skipSunday);
+  const oldest = updates.length ? updates[updates.length - 1].day : since; // an update written offline before the task was given
+  const first = oldest < since ? oldest : since;
+  const start = first > from ? first : from;
+  const days = [];
+  for (let day = today; day >= start; day = addDays(day, -1)) days.push(day);
+  const nowHm = new Date().toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' });
+  const open = (taskId) => { location.href = `../?team#task=${taskId}`; };
+  const stateWord = { stuck: 'Stuck', finished: 'Finished', progress: '' };
+  return section(`📅 Daily updates${people.length ? ` — ${people.join(', ')}` : ''}`,
+    h('ul', { class: 'daily-log', key: 'dl-' + p.id }, days.map((day) => {
+      const ups = updates.filter((u) => u.day === day);
+      const mine = p.workNotes.filter((n) => indiaDate(n.createdAt) === day && !n.text.startsWith('👥 '));
+      const sunday = new Date(day + 'T00:00:00Z').getUTCDay() === 0;
+      let empty = null;
+      if (!ups.length) {
+        if (sunday && sundaysOff) empty = h('span', { class: 'muted small' }, 'Sunday');
+        else if (day === today && nowHm < fillBy) empty = h('span', { class: 'daily-none wait' }, `No update yet (due by ${fillBy})`);
+        else empty = h('span', { class: 'daily-none' }, 'No update');
+      }
+      return h('li', { class: 'daily-day' + (ups.length ? ' has' : ''), key: 'dd-' + day },
+        h('div', { class: 'daily-date' }, day === today ? 'Today' : ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][new Date(day + 'T00:00:00Z').getUTCDay()],
+          h('span', { class: 'muted small' }, ` ${fmtDay(day)}`)),
+        h('div', { class: 'daily-items' },
+          ups.map((u) => {
+            const t = byTask.get(u.taskId);
+            return h('button', { class: 'daily-item', type: 'button', key: 'du-' + u.id, title: 'Open the task, its messages and photos', onClick: () => open(u.taskId) },
+              h('strong', null, `👥 ${u.by}`), t ? h('span', { class: 'muted small' }, ` · ${t.title}`) : null,
+              stateWord[u.state] ? h('span', { class: 'tag' + (u.state === 'stuck' ? ' late' : '') }, stateWord[u.state]) : null,
+              h('span', { class: 'muted small' }, ` · ${fmtTime(u.at.replace(' ', 'T') + '+05:30')}`),
+              h('div', { class: 'daily-note' }, u.note),
+              u.photos && u.photos.length ? h('span', { class: 'muted small' }, `📷 ${u.photos.length} photo${u.photos.length > 1 ? 's' : ''}`) : null);
+          }),
+          empty,
+          mine.map((n) => h('div', { class: 'daily-mine', key: 'dm-' + n.id }, h('strong', null, 'You: '), n.text))));
+    })),
+    d.data.from > since ? h('button', { class: 'link small', onClick: () => ctx.moreDaily(p) }, 'Show older days') : null);
 }
 
 /** "▸ More — 3 work notes · notes · 2 files": the less-used parts of a project, folded. */

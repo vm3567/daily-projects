@@ -380,6 +380,24 @@ function handle(string $a, array $in): array {
       $tasks = all(TASK_SELECT . ($closed ? " WHERE t.status IN ('done', 'cancelled') ORDER BY t.updated_at DESC LIMIT 200" : " WHERE t.status = 'open' ORDER BY u.name, t.id"));
       return ['tasks' => tasks_out($tasks, $day)];
     }
+    case 'project.updates': { // Daily Projects: everything the team wrote on one project, day by day (newest first)
+      $ref = txt($in['projectRef'] ?? '', 80, true, 'The project');
+      $days = max(7, min(120, (int)($in['days'] ?? 30)));
+      $from = date('Y-m-d', strtotime($day . ' -' . ($days - 1) . ' days'));
+      $tasks = all(TASK_SELECT . ' WHERE t.project_ref = ? ORDER BY t.id', [$ref]);
+      if (!$tasks) return ['today' => $day, 'from' => $from, 'since' => null, 'tasks' => [], 'updates' => [], 'fillBy' => setting('fill_by', '18:00')];
+      $ids = array_map(fn($t) => (int)$t['id'], $tasks);
+      $inq = implode(',', array_fill(0, count($ids), '?'));
+      $ups = all("SELECT * FROM updates WHERE task_id IN ($inq) AND day >= ? ORDER BY day DESC, updated_at DESC", [...$ids, $from]);
+      $photos = photos_of(array_map(fn($u) => (int)$u['id'], $ups));
+      return [
+        'today' => $day, 'from' => $from, 'fillBy' => setting('fill_by', '18:00'),
+        'since' => min(array_map(fn($t) => $t['start_date'], $tasks)), // first day the team had work here
+        'tasks' => array_map(fn($t) => ['id' => (int)$t['id'], 'title' => $t['title'], 'stepRef' => $t['step_ref'], 'status' => $t['status'],
+          'assignee' => $t['assignee_name'], 'startDate' => $t['start_date'], 'doneAt' => $t['done_at'], 'repeat' => $t['repeat_kind'], 'skipSunday' => (bool)$t['skip_sunday']], $tasks),
+        'updates' => array_map(fn($u) => ['taskId' => (int)$u['task_id']] + update_out($u, $photos), $ups),
+      ];
+    }
     case 'tasks.linked': { // for Daily Projects: every team task given from a step (open, or closed this week)
       // finished ones for longer, so a step finished while Daily Projects was not opened still ticks itself (and is never made again)
       $since = date('Y-m-d H:i:s', time() - 7 * 86400);

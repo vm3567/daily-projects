@@ -284,3 +284,4 @@ On a project: **👥 Give project** → pick the person. They see its open steps
 
 ### Tests
 `npm test` runs everything (about 130 checks, ~10 seconds): the app's rules, the projects storage, Claude's commands against a pretend server, quick PHP tests (`team/tests/unit.php`) and the full Work Task server — each run starts its own throwaway MySQL and PHP server, runs the setup, and tests sign-in, tasks, messages, photos, moves, giving projects, owner protection, projects storage and the command tool. Needs `php` and `mysqld` (Homebrew); without them the server tests are skipped.
+- **📅 Daily updates on a project:** a project with team work shows one line per day (newest first): what the person sent that day (tap it for messages and photos), your own notes, or **No update** in red. Today shows "No update yet" until the due time. Sundays are skipped when the tasks skip Sunday. "Show older days" goes further back.
