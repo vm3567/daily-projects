@@ -168,6 +168,8 @@ function migrate(PDO $pdo): void {
       last_id INT NOT NULL DEFAULT 0,
       PRIMARY KEY (task_id, user_id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+    // v3: a whole project given to a person: its steps in order (only the first open one is due each day)
+    "ALTER TABLE tasks ADD COLUMN seq INT NULL",
   ];
   $pdo->exec($steps[0]);
   $done = (int)($pdo->query("SELECT v FROM settings WHERE k = 'schema'")->fetchColumn() ?: 0);

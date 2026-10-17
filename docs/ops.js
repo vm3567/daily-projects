@@ -407,6 +407,21 @@ const handlers = {
     return true;
   },
 
+  /** worktask.in: the whole project is given to a team member ({userId, name}), or taken back (userId null). */
+  setProjectTeam(state, op, a) {
+    const p = findProject(state.data, a.projectId);
+    if (!p) return false;
+    const userId = Number.isInteger(a.userId) && a.userId > 0 ? a.userId : null;
+    const name = cleanText(a.name || '', 80).trim();
+    if (userId ? (p.team && p.team.userId === userId && p.team.name === name) : !p.team) return false;
+    const old = p.team;
+    if (userId) p.team = { userId, name, since: indiaDate(op.at) };
+    else delete p.team;
+    touch(p, op);
+    addEvent(state, op, p, 'edited', userId ? `Given to ${name}` : `Taken back from ${old.name}`);
+    return true;
+  },
+
   setStepField(state, op, a) {
     const p = findProject(state.data, a.projectId);
     const s = p && p.steps.find((x) => x.id === a.stepId);

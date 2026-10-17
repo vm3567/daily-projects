@@ -601,3 +601,13 @@ test('person phone and email: cleaned, India code added, bad values refused', ()
   assert.equal(applyOp(s, op('setPersonContact', { personId: 'r', phone: '' }, '2026-10-02')), true);
   assert.equal(s.data.people[0].phone, '');
 });
+
+test('a whole project can be given to a team member and taken back', () => {
+  const s = withProject();
+  assert.ok(applyOp(s, op('setProjectTeam', { projectId: 'p1', userId: 2, name: 'Valar' }, '2026-10-17')));
+  assert.deepEqual(s.data.projects[0].team, { userId: 2, name: 'Valar', since: '2026-10-17' });
+  assert.equal(applyOp(s, op('setProjectTeam', { projectId: 'p1', userId: 2, name: 'Valar' }, '2026-10-17')), false); // same again = no change
+  assert.ok(applyOp(s, op('setProjectTeam', { projectId: 'p1', userId: null }, '2026-10-18')));
+  assert.equal(s.data.projects[0].team, undefined);
+  assert.equal(applyOp(s, op('setProjectTeam', { projectId: 'p1', userId: 'x', name: 'Bad' }, '2026-10-18')), false);
+});

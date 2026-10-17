@@ -92,6 +92,7 @@ function teamChip(t, info) {
   let text; let cls = 'tag team';
   if (t.status !== 'open') { text = `👥 ${t.assignee.name} · ${t.status === 'done' ? 'finished ✓' : 'cancelled'}`; cls += ' done'; }
   else if (u) { text = `👥 ${t.assignee.name} · ✓ ${time(u.at)}${u.state === 'stuck' ? ' · stuck' : ''}`; if (u.state === 'stuck') cls += ' late'; }
+  else if (t.queued) text = `👥 ${t.assignee.name} · coming next`;
   else if (t.dueToday) { text = `👥 ${t.assignee.name} · not filled today`; if (info.late) cls += ' late'; }
   else text = `👥 ${t.assignee.name}${t.last ? ` · last ${fmtDay(t.last.day)}` : ''}`;
   const note = u ? u.note : t.last ? t.last.note : '';
@@ -497,6 +498,28 @@ function snoozeBar(ctx, p) {
   h('button', { class: 'link small', type: 'button', onClick: () => { ui.snoozeOpen = null; ctx.render(); } }, 'Cancel'));
 }
 
+/** worktask.in: "Given to Valar" (with Change / Take back), or the people to choose from after "👥 Give project". */
+function teamBar(ctx, p) {
+  const { ui } = ctx;
+  if (!ctx.onServer || p.state !== 'active') return null;
+  if (p.team && ui.giveOpen !== p.id) {
+    const open = p.steps.filter((x) => !x.done).length;
+    return h('div', { class: 'banner team-banner', key: 'tm-' + p.id },
+      h('span', null, `👥 Given to ${p.team.name} since ${fmtDay(p.team.since)}. `,
+        h('span', { class: 'muted small' }, `They see the ${open} open step${open === 1 ? '' : 's'} in order and send a daily update on the current one. New steps you add go to them too.`)),
+      h('button', { class: 'btn small', onClick: () => { ui.giveOpen = p.id; ctx.render(); } }, 'Change person'),
+      h('button', { class: 'btn small', onClick: () => { if (confirm(`Take "${p.name}" back from ${p.team.name}? Their open steps are removed from their list.`)) ctx.takeBackProject(p); } }, 'Take back'));
+  }
+  if (ui.giveOpen !== p.id) return null;
+  const people = ctx.teamPeople();
+  return h('div', { class: 'banner team-banner', key: 'tg-' + p.id },
+    h('span', null, `👥 Give "${p.name}" to:`),
+    people === null ? h('span', { class: 'muted small' }, 'Loading…')
+      : people.length ? people.map((u) => h('button', { class: 'chip', key: 'tp-' + u.id, onClick: () => ctx.giveProject(p, u) }, u.name))
+        : h('a', { class: 'small', href: '../' }, 'Add a person first (Team → People)'),
+    h('button', { class: 'link small', onClick: () => { ui.giveOpen = null; ctx.render(); } }, 'Cancel'));
+}
+
 const notesTimers = {}; // one save timer per project, kept across screen updates
 
 function notesBox(ctx, p) {
@@ -637,6 +660,10 @@ function stateButtons(ctx, p) {
         class: 'btn' + (ui.snoozeOpen === p.id ? ' on' : ''), title: 'Hide from Today for some days',
         onClick: () => { ui.snoozeOpen = ui.snoozeOpen === p.id ? null : p.id; ctx.render(); setTimeout(() => { const n = document.querySelector(`[data-key="snooze-${p.id}"]`); if (n) { n.focus(); n.select(); } }, 30); },
       }, '💤 Snooze'),
+      ctx.onServer && !p.team ? h('button', {
+        class: 'btn' + (ui.giveOpen === p.id ? ' on' : ''), title: 'Give the whole project to a team member: they see its open steps in order',
+        onClick: () => { ui.giveOpen = ui.giveOpen === p.id ? null : p.id; ctx.render(); },
+      }, '👥 Give project') : null,
       h('button', { class: 'btn', onClick: () => ctx.act('pause', { projectId: p.id }, `Paused: ${p.name}`) }, 'Pause'),
       h('button', {
         class: 'btn',
@@ -800,6 +827,7 @@ export function renderDetail(ctx) {
       }, '✎'),
       h('div', { class: 'state-buttons' }, stateButtons(ctx, p))),
     snoozeBar(ctx, p),
+    teamBar(ctx, p),
     navBar(ctx, p),
     statusLine(ctx, p),
     metaLine(ctx, p, today),

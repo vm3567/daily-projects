@@ -47,6 +47,7 @@ function fmtTime(dt) {
 function daysBetween(a, b) { return Math.round((new Date(b + 'T00:00:00') - new Date(a + 'T00:00:00')) / 86400000); }
 
 function repeatLabel(t, today) {
+  if (t.seq !== null && t.seq !== undefined && t.status === 'open') return t.queued ? 'Coming next' : 'Current step — send an update each day';
   if (t.repeat === 'daily') return t.skipSunday ? 'Every day (Mon–Sat)' : 'Every day';
   if (t.repeat === 'weekly') return `Every ${LONG_DAYS[t.weekday ?? 1]}`;
   if (!t.dueDate) return 'One time';
@@ -247,7 +248,7 @@ function myToday() {
     el('div', { class: 'row spread' }, el('h1', null, 'My tasks today'), el('button', { onClick: () => go('suggest') }, '💡 Suggest a task')),
     el('p', { class: 'muted small' }, `${fmtDay(d.today)} · ${sent} of ${d.tasks.length} sent · please send by ${d.fillBy}`),
     d.tasks.length ? d.tasks.map((t) => myTask(t, d.today)) : el('div', { class: 'card muted' }, 'No tasks for today. 🎉'),
-    d.other.length ? [el('h2', null, 'Other tasks (not today)'), d.other.map((t) => el('div', { class: 'card' },
+    d.other.length ? [el('h2', null, 'Coming next / other tasks'), d.other.map((t) => el('div', { class: 'card' },
       el('h3', null, t.title), el('div', { class: 'meta' }, [t.project, repeatLabel(t, d.today)].filter(Boolean).join(' · ')), messageLine(t)))] : null,
     (d.suggestions || []).length ? [el('h2', null, 'My suggestions'), d.suggestions.map((t) => el('div', { class: 'card' },
       el('div', { class: 'row spread' }, el('h3', null, t.title),

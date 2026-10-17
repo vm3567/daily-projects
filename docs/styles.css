@@ -876,3 +876,4 @@ a.tag.team:hover { text-decoration: underline; }
 .tag.team.done { opacity: .7; }
 a.team-btn { position: relative; text-decoration: none; }
 .team-count { position: absolute; top: -2px; right: -4px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: #d93025; color: #fff; font-size: 11px; line-height: 16px; text-align: center; }
+.team-banner { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }

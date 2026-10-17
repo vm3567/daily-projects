@@ -60,13 +60,23 @@ function tasks_out(array $tasks, string $day): array {
   foreach (all("SELECT c.*, u.name FROM comments c JOIN users u ON u.id = c.user_id JOIN (SELECT task_id, MAX(id) AS mid FROM comments WHERE task_id IN ($in) GROUP BY task_id) m ON m.mid = c.id", $ids) as $c) {
     $lastMsg[$c['task_id']] = ['by' => $c['name'], 'byId' => (int)$c['user_id'], 'text' => $c['text'], 'at' => $c['at'], 'mine' => (int)$c['user_id'] === $meId];
   }
+  // whole projects given to a person: only the first open step (lowest seq) is due; the rest wait their turn
+  $firstSeq = [];
+  $refs = array_values(array_unique(array_filter(array_map(fn($t) => $t['seq'] !== null ? $t['project_ref'] : null, $tasks))));
+  if ($refs) {
+    $rin = implode(',', array_fill(0, count($refs), '?'));
+    foreach (all("SELECT project_ref, assignee_id, MIN(seq) AS m FROM tasks WHERE status = 'open' AND seq IS NOT NULL AND project_ref IN ($rin) GROUP BY project_ref, assignee_id", $refs) as $r) {
+      $firstSeq[$r['project_ref'] . '|' . $r['assignee_id']] = (int)$r['m'];
+    }
+  }
+  $queued = fn($t) => $t['seq'] !== null && $t['status'] === 'open' && (int)$t['seq'] > ($firstSeq[$t['project_ref'] . '|' . $t['assignee_id']] ?? PHP_INT_MAX);
   return array_map(fn($t) => [
-    'id' => (int)$t['id'], 'title' => $t['title'], 'details' => $t['details'] ?? '',
+    'id' => (int)$t['id'], 'title' => $t['title'], 'queued' => $queued($t), 'seq' => $t['seq'] === null ? null : (int)$t['seq'], 'details' => $t['details'] ?? '',
     'assignee' => ['id' => (int)$t['assignee_id'], 'name' => $t['assignee_name'] ?? ''],
     'repeat' => $t['repeat_kind'], 'skipSunday' => (bool)$t['skip_sunday'], 'weekday' => $t['weekday'] === null ? null : (int)$t['weekday'],
     'dueDate' => $t['due_date'], 'startDate' => $t['start_date'], 'project' => $t['project'] ?? '', 'projectRef' => $t['project_ref'], 'stepRef' => $t['step_ref'],
     'status' => $t['status'], 'createdAt' => $t['created_at'], 'doneAt' => $t['done_at'],
-    'dueToday' => $t['status'] === 'open' && due_on($t, $day),
+    'dueToday' => $t['status'] === 'open' && due_on($t, $day) && !$queued($t),
     'today' => update_out($todays[$t['id']] ?? null, $photos), 'last' => update_out($lasts[$t['id']] ?? null, $photos),
     'createdBy' => (int)$t['created_by'],
     'messages' => $count[$t['id']] ?? 0, 'unread' => $unread[$t['id']] ?? 0, 'lastMessage' => $lastMsg[$t['id']] ?? null,
@@ -131,7 +141,7 @@ function handle(string $a, array $in): array {
 
     // ---------- staff: my tasks ----------
     case 'my.today': {
-      $tasks = all(TASK_SELECT . " WHERE t.assignee_id = ? AND (t.status = 'open' OR t.done_at >= ?) ORDER BY t.repeat_kind = 'once', t.due_date IS NULL, t.due_date, t.id", [$me['id'], $day . ' 00:00:00']);
+      $tasks = all(TASK_SELECT . " WHERE t.assignee_id = ? AND (t.status = 'open' OR t.done_at >= ?) ORDER BY t.repeat_kind = 'once', t.due_date IS NULL, t.due_date, t.project_ref, t.seq, t.id", [$me['id'], $day . ' 00:00:00']);
       $out = tasks_out($tasks, $day);
       $due = array_values(array_filter($out, fn($t) => $t['dueToday'] || ($t['today'] !== null)));
       $other = array_values(array_filter($out, fn($t) => !$t['dueToday'] && $t['today'] === null && $t['status'] === 'open'));
@@ -202,6 +212,50 @@ function handle(string $a, array $in): array {
       $out = array_values(array_filter(tasks_out($tasks, $day), fn($t) => $t['dueToday'] || $t['today'] !== null));
       $fillBy = setting('fill_by', '18:00');
       return ['today' => $day, 'fillBy' => $fillBy, 'late' => date('H:i') >= $fillBy, 'people' => array_map('public_user', $people), 'tasks' => $out] + team_attention();
+    }
+    case 'project.sync': {
+      // Daily Projects: "this whole project is given to <person>". steps = the project's open steps, in order.
+      // Makes a task for each new step, keeps titles and order up to date, moves them to a new person,
+      // and closes tasks whose step is gone (ticked or deleted by the manager). assigneeId 0 = take the project back.
+      $ref = txt($in['projectRef'] ?? '', 80, true, 'The project');
+      $name = txt($in['project'] ?? '', 200);
+      $who = (int)($in['assigneeId'] ?? 0);
+      $open = all("SELECT * FROM tasks WHERE project_ref = ? AND seq IS NOT NULL AND status = 'open'", [$ref]);
+      if (!$who) {
+        foreach ($open as $t) q("UPDATE tasks SET status = 'cancelled', done_at = ?, updated_at = ? WHERE id = ?", [now(), now(), $t['id']]);
+        audit($me['id'], 'project_taken_back', $name);
+        return ['tasks' => []];
+      }
+      $person = one('SELECT id, active FROM users WHERE id = ?', [$who]);
+      if (!$person || !$person['active']) throw new ApiError('Choose who will do it.');
+      $byStep = [];
+      foreach ($open as $t) $byStep[$t['step_ref']] = $t;
+      $steps = array_slice((array)($in['steps'] ?? []), 0, 300);
+      $keep = [];
+      foreach (array_values($steps) as $i => $st) {
+        $stepRef = txt($st['stepRef'] ?? '', 80);
+        $title = txt($st['title'] ?? '', 300);
+        if ($stepRef === '' || $title === '') continue;
+        $keep[$stepRef] = true;
+        if (isset($byStep[$stepRef])) {
+          $t = $byStep[$stepRef];
+          if ($t['title'] !== $title || (int)$t['seq'] !== $i || (int)$t['assignee_id'] !== $who || ($t['project'] ?? '') !== $name) {
+            q('UPDATE tasks SET title = ?, seq = ?, assignee_id = ?, project = ?, updated_at = ? WHERE id = ?', [$title, $i, $who, $name ?: null, now(), $t['id']]);
+          }
+          continue;
+        }
+        // finished by the person already (the manager's step will tick itself): do not make it again
+        if (one("SELECT id FROM tasks WHERE step_ref = ? AND status = 'done' AND updated_at >= ?", [$stepRef, date('Y-m-d H:i:s', time() - 30 * 86400)])) continue;
+        // a single step given earlier: it becomes part of the project hand-over
+        $single = one("SELECT id FROM tasks WHERE step_ref = ? AND status = 'open' AND seq IS NULL", [$stepRef]);
+        if ($single) { q('UPDATE tasks SET seq = ?, assignee_id = ?, title = ?, project = ?, project_ref = ?, repeat_kind = ?, updated_at = ? WHERE id = ?', [$i, $who, $title, $name ?: null, $ref, 'once', now(), $single['id']]); continue; }
+        q("INSERT INTO tasks (title, details, assignee_id, created_by, repeat_kind, skip_sunday, weekday, due_date, start_date, project, project_ref, step_ref, status, seq, created_at, updated_at)
+           VALUES (?, ?, ?, ?, 'once', 1, NULL, NULL, ?, ?, ?, ?, 'open', ?, ?, ?)",
+          [$title, txt($st['details'] ?? '', 4000), $who, $me['id'], $day, $name ?: null, $ref, $stepRef, $i, now(), now()]);
+      }
+      foreach ($open as $t) if (!isset($keep[$t['step_ref']])) q("UPDATE tasks SET status = 'done', done_at = ?, updated_at = ? WHERE id = ?", [now(), now(), $t['id']]);
+      audit($me['id'], 'project_given', "$name → #$who");
+      return ['tasks' => tasks_out(all(TASK_SELECT . " WHERE t.project_ref = ? AND t.seq IS NOT NULL AND t.status = 'open' ORDER BY t.seq", [$ref]), $day)];
     }
     case 'task.approve': {
       $t = own_task($me, (int)($in['id'] ?? 0));

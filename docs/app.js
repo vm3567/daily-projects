@@ -170,6 +170,9 @@ const ctx = {
   chase: (p, s) => chase(p, s),
   onServer,
   teamTask: (stepId) => team.byStep.get(stepId) || null,
+  teamPeople: () => teamPeople(),
+  giveProject: (p, person) => giveProject(p, person),
+  takeBackProject: (p) => giveProject(p, null),
   teamInfo: () => team,
   afterTick: (id, where, undo) => afterTick(id, where, undo),
   selectPerson: (id) => { ui.person = id; ui.mobile = 'detail'; render(); const d = document.getElementById('detail'); if (d) d.scrollTop = 0; },
@@ -2319,6 +2322,61 @@ function teamButton() {
     '👥', n ? h('span', { class: 'team-count' }, String(n)) : null);
 }
 
+function teamApi(a, body = {}) {
+  return fetch('../api/?a=' + a, { method: 'POST', cache: 'no-store', headers: { Authorization: 'Bearer ' + serverToken(), 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+    .then((r) => r.json()).then((out) => { if (!out.ok) throw new Error(out.error || 'Server error'); return out; });
+}
+
+/** Active team members to give a project to (loaded once). null while loading. */
+function teamPeople() {
+  if (team.people) return team.people;
+  if (!team.peopleLoading) {
+    team.peopleLoading = true;
+    teamApi('users.list').then((out) => { team.people = out.users.filter((u) => u.active && !u.owner); render(); })
+      .catch((e) => { team.peopleLoading = false; toast(e.message); });
+  }
+  return null;
+}
+
+/** What the server needs to know about a given project: its open steps, in order. */
+const projectSteps = (p) => p.steps.filter((x) => !x.done).map((x) => ({ stepRef: x.id, title: x.text, details: x.note || '' }));
+const SYNC_KEY = 'dp.teamSync'; // last steps sent per given project, so unchanged projects are not sent again
+
+/** Give the whole project to a person (or take it back with person = null). */
+async function giveProject(p, person) {
+  try {
+    await teamApi('project.sync', { projectRef: p.id, project: p.name, assigneeId: person ? person.id : 0, steps: person ? projectSteps(p) : [] });
+    store.dispatch('setProjectTeam', { projectId: p.id, userId: person ? person.id : null, name: person ? person.name : '' });
+    ui.giveOpen = null;
+    toast(person ? `👥 ${p.name} given to ${person.name} ✓` : `Taken back: ${p.name}`);
+    rememberSync(p.id, person ? JSON.stringify([person.id, p.name, projectSteps(p)]) : null);
+    loadTeam(true);
+  } catch (e) { toast(e.message, 5000); }
+}
+
+function rememberSync(id, sig) {
+  let m = {};
+  try { m = JSON.parse(localStorage.getItem(SYNC_KEY) || '{}'); } catch { m = {}; }
+  if (sig) m[id] = sig; else delete m[id];
+  try { localStorage.setItem(SYNC_KEY, JSON.stringify(m)); } catch { /* full */ }
+}
+
+/** Given projects: new, changed, ticked or deleted steps reach the person's list. */
+async function syncGivenProjects() {
+  if (!store || !store.view) return;
+  let m = {};
+  try { m = JSON.parse(localStorage.getItem(SYNC_KEY) || '{}'); } catch { m = {}; }
+  for (const p of store.view.data.projects) {
+    if (!p.team) continue;
+    const sig = JSON.stringify([p.team.userId, p.name, p.state === 'active' ? projectSteps(p) : []]);
+    if (m[p.id] === sig) continue;
+    try {
+      await teamApi('project.sync', { projectRef: p.id, project: p.name, assigneeId: p.state === 'active' ? p.team.userId : 0, steps: p.state === 'active' ? projectSteps(p) : [] });
+      rememberSync(p.id, sig);
+    } catch { /* try again next time */ }
+  }
+}
+
 /** A team task given from a step was finished: tick the step (once), with the person's last words as a work note. */
 function tickFinishedTeamTasks(tasks) {
   if (!store || !store.view || !store.canEdit()) return;
@@ -2352,6 +2410,7 @@ async function loadTeam(force = false) {
     team.late = out.late;
     if (out.alerts) team.alerts = out.alerts;
     tickFinishedTeamTasks(out.tasks);
+    await syncGivenProjects();
     render();
   } catch { /* no connection: try again next time */ }
 }

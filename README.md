@@ -265,3 +265,7 @@ Everything now lives on **https://worktask.in** (Hostinger), with a username and
 - The old address (vm3567.github.io/daily-projects) forwards to worktask.in. Siri and the Chrome button keep working.
 - Claude's /today, /add, /review-projects and /restore use the server over SSH (`tools/tracker.mjs`).
 - To publish code changes: `sh tools/deploy-worktask.sh`.
+
+### Give a whole project to a person
+
+On a project: **👥 Give project** → pick the person. They see its open steps in order; only the **current** step needs a daily update, the rest show as "Coming next". When they tap Finished, your step ticks itself and the next step becomes current. Steps you add later go to them; steps you tick or delete leave their list. **Change person** or **Take back** on the blue bar.
