@@ -174,7 +174,8 @@ function header() {
   const tab = (v, label) => el('button', { class: state.view === v ? 'on' : '', onClick: () => go(v) }, label);
   return el('header', { class: 'top' }, el('div', { class: 'bar' },
     el('span', { class: 'brand' }, 'Work Task'),
-    me.role === 'admin' && !me.mustChange ? el('nav', null, tab('today', 'Today'), tab('tasks', 'Tasks'), tab('people', 'People'), tab('settings', 'Settings')) : null,
+    me.role === 'admin' && !me.mustChange ? el('nav', null, me.owner ? el('a', { class: 'btn', href: 'projects/' }, '📋 My projects') : null,
+      tab('today', 'Team today'), tab('tasks', 'Tasks'), tab('people', 'People'), tab('settings', 'Settings')) : null,
     el('button', { class: 'link', onClick: () => go('password') }, me.name),
     el('button', { class: 'link', onClick: signOut }, 'Sign out')));
 }
@@ -200,6 +201,7 @@ function loginScreen() {
         state.token = out.token; state.user = out.user;
         save(TOKEN_KEY, out.token);
         state.view = 'today';
+        if (out.user.owner && !out.user.mustChange) { location.href = 'projects/'; return; } // straight to your projects
         render();
         if (!out.user.mustChange) loadView();
       } catch (ex) {
@@ -225,6 +227,7 @@ function passwordScreen() {
         const out = await api('password', { old: old.value, new: n1.value });
         state.user = out.user;
         toast('Password changed ✓');
+        if (out.user.owner && wantsProjects) { location.href = 'projects/'; return; }
         go('today');
       } catch (ex) { err.textContent = ex.message; err.hidden = false; }
     } },
@@ -380,7 +383,7 @@ function taskDetail() {
     try { await api('task.status', { id: t.id, status }); toast(status === 'open' ? 'Opened again' : status === 'done' ? 'Marked done ✓' : 'Cancelled'); loadView(); } catch (ex) { toast(ex.message, 5000); }
   };
   return [
-    el('button', { class: 'link', onClick: () => go(state.back || 'today') }, '← Back'),
+    el('button', { class: 'link', onClick: () => { if (state.fromProjects && state.user.owner) location.href = 'projects/'; else go(state.back || 'today'); } }, '← Back'),
     el('h1', null, t.title),
     el('p', { class: 'meta' }, [t.assignee.name, t.project, repeatLabel(t), t.status !== 'open' ? (t.status === 'done' ? 'Done' : 'Cancelled') : null].filter(Boolean).join(' · ')),
     t.details ? el('div', { class: 'card pre' }, t.details) : null,
@@ -433,14 +436,16 @@ function taskForm() {
           repeat: how.value === 'daily7' ? 'daily' : how.value, skipSunday: how.value === 'daily', weekday: Number(weekday.value), dueDate: due.value,
           projectRef: t ? t.projectRef : pre.projectRef, stepRef: t ? t.stepRef : pre.stepRef,
         });
+        const fromProjects = !editing && pre.stepRef && state.user.owner;
         state.prefill = null;
         toast(editing ? 'Saved ✓' : `Given to ${out.task.assignee.name} ✓`);
+        if (fromProjects) { setTimeout(() => { location.href = 'projects/'; }, 900); return; }
         go(editing ? 'task:' + out.task.id : 'today');
       } catch (ex) { err.textContent = ex.message; err.hidden = false; btn.disabled = false; }
     } },
     el('label', null, 'Who', person), el('label', null, 'Task', title), el('label', null, 'Details', details),
     el('label', null, 'Project', project), el('label', null, 'How often', how), wLabel, dLabel, err,
-    el('div', { class: 'row' }, btn, el('button', { type: 'button', onClick: () => { state.prefill = null; go(editing ? 'task:' + t.id : 'today'); } }, 'Cancel'))),
+    el('div', { class: 'row' }, btn, el('button', { type: 'button', onClick: () => { state.prefill = null; if (!editing && state.fromProjects && state.user.owner) { location.href = 'projects/'; return; } go(editing ? 'task:' + t.id : 'today'); } }, 'Cancel'))),
   ];
 }
 
@@ -534,13 +539,19 @@ function settingsScreen() {
 
 /** From Daily Projects: worktask.in/#new={"title":…,"project":…,"projectRef":…,"stepRef":…} opens "Give a task" filled in. */
 function takePrefill() {
+  const m = /^#task=(\d+)$/.exec(location.hash); // from Daily Projects: open this team task
+  if (m || location.hash.startsWith('#new=')) state.fromProjects = true; // Back / Cancel return to the projects
+  if (m) { state.openTask = Number(m[1]); history.replaceState(null, '', location.pathname + location.search); return; }
   if (!location.hash.startsWith('#new=')) return;
   try { const p = JSON.parse(decodeURIComponent(location.hash.slice(5))); if (p && typeof p === 'object') state.prefill = p; } catch { /* ignore */ }
   history.replaceState(null, '', location.pathname + location.search);
 }
 
+const wantsProjects = new URLSearchParams(location.search).get('next') === 'projects';
+
 async function start() {
   takePrefill();
+  if (wantsProjects) history.replaceState(null, '', location.pathname + location.hash);
   if (!state.token) { render(); return; }
   try {
     state.user = (await api('me')).user;
@@ -549,12 +560,18 @@ async function start() {
     render();
     return;
   }
+  if (wantsProjects && state.user.owner && !state.user.mustChange) { location.href = 'projects/'; return; }
   if (state.prefill && state.user.role === 'admin' && !state.user.mustChange) { go('give'); return; }
+  if (state.openTask && !state.user.mustChange) { const id = state.openTask; state.openTask = 0; go('task:' + id); return; }
   render();
   if (!state.user.mustChange) loadView();
 }
 
-window.addEventListener('hashchange', () => { takePrefill(); if (state.prefill && state.user?.role === 'admin') go('give'); });
+window.addEventListener('hashchange', () => {
+  takePrefill();
+  if (state.prefill && state.user?.role === 'admin') go('give');
+  else if (state.openTask && state.user) { const id = state.openTask; state.openTask = 0; go('task:' + id); }
+});
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && state.user && !state.user.mustChange && state.view === 'today' && !Object.keys(state.drafts).some((k) => state.drafts[k].note)) loadView();
 });

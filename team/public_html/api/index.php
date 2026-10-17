@@ -6,6 +6,7 @@ $app = dirname(__DIR__, 2) . '/app';
 require $app . '/bootstrap.php';
 require $app . '/auth.php';
 require $app . '/api.php';
+require $app . '/dp.php';
 
 // Daily Projects (the manager's own app) may ask too, with the manager's sign-in.
 $allowed = ['https://vm3567.github.io', 'http://127.0.0.1:8080', 'http://localhost:8080'];
@@ -23,8 +24,10 @@ header('X-Content-Type-Options: nosniff');
 header('Cache-Control: no-store');
 
 $a = (string)($_GET['a'] ?? '');
+function send_dp_blob_safe(string $sha): void { dp_migrate(); dp_send_blob($sha); }
 try {
   if ($a === 'photo' && ($_SERVER['REQUEST_METHOD'] ?? '') === 'GET') { send_photo((int)($_GET['id'] ?? 0)); exit; }
+  if ($a === 'dp.blob' && ($_SERVER['REQUEST_METHOD'] ?? '') === 'GET') { send_dp_blob_safe((string)($_GET['sha'] ?? '')); exit; }
   if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST') throw new ApiError('Use POST.', 405);
   $in = str_starts_with($_SERVER['CONTENT_TYPE'] ?? '', 'multipart/form-data') ? $_POST : json_decode((string)file_get_contents('php://input'), true);
   if (!is_array($in)) $in = [];

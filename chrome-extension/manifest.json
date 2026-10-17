@@ -1,13 +1,13 @@
 {
   "manifest_version": 3,
   "name": "Daily Projects – Add",
-  "version": "1.0",
+  "version": "1.1",
   "description": "Add the mail or web page you are looking at to Daily Projects, with a link back to it.",
   "action": { "default_title": "Add to Daily Projects (Alt+Shift+D)", "default_icon": { "16": "icon16.png", "48": "icon48.png", "128": "icon128.png" } },
   "icons": { "16": "icon16.png", "48": "icon48.png", "128": "icon128.png" },
   "background": { "service_worker": "background.js" },
   "permissions": ["activeTab", "scripting", "contextMenus"],
-  "host_permissions": ["https://vm3567.github.io/daily-projects/*"],
+  "host_permissions": ["https://worktask.in/projects/*", "https://vm3567.github.io/daily-projects/*"],
   "commands": {
     "_execute_action": { "suggested_key": { "default": "Alt+Shift+D", "mac": "Alt+Shift+D" }, "description": "Add this mail or page to Daily Projects" }
   }

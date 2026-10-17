@@ -66,6 +66,7 @@ header.top .bar { max-width: 720px; margin: 0 auto; padding: 8px 16px; display: 
 header.top .brand { font-weight: 600; margin-right: auto; }
 header.top nav { display: flex; gap: 4px; flex-wrap: wrap; }
 header.top nav button { border: 0; background: none; min-height: 36px; padding: 4px 10px; }
+header.top nav .btn { min-height: 36px; padding: 4px 10px; margin-right: 6px; }
 header.top nav button.on { background: var(--accent-bg); color: var(--accent); }
 
 .task-head { display: flex; justify-content: space-between; gap: 8px; align-items: flex-start; }

@@ -11,9 +11,10 @@ import { projectMatches, diaryEntries, backupPayload, summaryText, personMessage
 import { closeViewer, uploadBlob } from './ui/files.js';
 import { Store } from './store.js';
 import { GitHubRepo } from './github.js';
+import { ServerRepo, SERVER_TOKEN_KEY } from './serverrepo.js';
 import { MockRepo } from './mockrepo.js';
 import { device } from './device.js';
-import { DATA_OWNER, DATA_REPO, DATA_BRANCH, REFRESH_MS, AI_DAILY_LIMIT, BRIEF_CLAIM_MINUTES, WAIT_RED_DAYS, NO_WORK_NOTE_DAYS } from './config.js';
+import { DATA_OWNER, DATA_REPO, DATA_BRANCH, MOVED_TO, REFRESH_MS, AI_DAILY_LIMIT, BRIEF_CLAIM_MINUTES, WAIT_RED_DAYS, NO_WORK_NOTE_DAYS } from './config.js';
 import { dotColour, isSnoozed, restUntil, awakeProjects, activeProjects, nextStep, todayIndia, isSundayIndia, colourCounts, isOverdue, indiaDate, waitingDays, daysWithoutWork, dayScore, greenStreak, addDays, monthOf, fmtMinutes } from './rules.js';
 import { newId, clone, opMonth, groupHasTimer, cleanLink } from './ops.js';
 import * as ai from './ai.js';
@@ -22,6 +23,13 @@ import { parseVoice } from './voice.js';
 const root = document.getElementById('app');
 const isMock = new URLSearchParams(location.search).has('mock')
   && ['localhost', '127.0.0.1'].includes(location.hostname);
+// On worktask.in the data lives on the Work Task server (sign in with username and password), not on GitHub.
+// On this Mac, the local Work Task test server (port 8090) works the same way.
+const onServer = ['worktask.in', 'www.worktask.in'].includes(location.hostname)
+  || (location.port === '8090' && ['localhost', '127.0.0.1'].includes(location.hostname));
+const serverToken = () => { try { return localStorage.getItem(SERVER_TOKEN_KEY) || ''; } catch { return ''; } };
+/** To the Work Task sign-in page; it comes back here after signing in. */
+function toSignIn() { location.href = '../?next=projects'; }
 
 const saved = device.ui();
 const ui = {
@@ -160,6 +168,9 @@ const ctx = {
   act: (type, args, message) => act(type, args, message),
   actMany: (projectId, steps, message) => actMany(projectId, steps, message),
   chase: (p, s) => chase(p, s),
+  onServer,
+  teamTask: (stepId) => team.byStep.get(stepId) || null,
+  teamInfo: () => team,
   afterTick: (id, where, undo) => afterTick(id, where, undo),
   selectPerson: (id) => { ui.person = id; ui.mobile = 'detail'; render(); const d = document.getElementById('detail'); if (d) d.scrollTop = 0; },
   openProject: (id) => {
@@ -1279,6 +1290,7 @@ function renderListColumn() {
     statusText(),
     h('button', { class: 'icon', title: 'Quick capture: write down an idea or task (key: q)', 'aria-label': 'Quick capture', onClick: openCapture }, '📥'),
     h('button', { class: 'icon', title: 'Jump to a project, person or page (Ctrl+K)', 'aria-label': 'Jump', onClick: openJump }, '🔍'),
+    onServer ? h('a', { class: 'icon', href: '../', title: 'Team: tasks you gave and their daily updates', 'aria-label': 'Team' }, '👥') : null,
     h('button', { class: 'icon', title: 'Get latest', 'aria-label': 'Refresh', onClick: () => doRefresh(true) }, '↻'));
   const mobileSearch = h('input', {
     class: 'search mobile-only', type: 'search', placeholder: withKey('Search…', '/'), value: ui.search, key: 'search-mobile', 'aria-label': 'Search',
@@ -1432,10 +1444,12 @@ function renderSettings() {
   const provider = data.settings.aiProvider || 'claude';
   const usage = data.aiUsage.date === todayIndia() ? data.aiUsage.count : 0;
   return h('div', { class: 'settings' },
-    h('section', { class: 'block' }, h('h3', null, 'GitHub access key'),
-      h('p', null, isMock ? 'Test mode (no real GitHub).' : 'Connected to your private data ✓'),
+    h('section', { class: 'block' }, h('h3', null, onServer ? 'Account' : 'GitHub access key'),
+      h('p', null, isMock ? 'Test mode (no real GitHub).' : onServer ? 'Signed in to Work Task ✓ Your projects are private to you.' : 'Connected to your private data ✓'),
       h('div', { class: 'row' },
-        isMock ? null : h('button', { class: 'btn', onClick: () => showKeyScreen('Paste your new GitHub access key.') }, 'Change key'),
+        isMock || onServer ? null : h('button', { class: 'btn', onClick: () => showKeyScreen('Paste your new GitHub access key.') }, 'Change key'),
+        onServer ? h('a', { class: 'btn', href: '../' }, '👥 Team') : null,
+        onServer ? h('button', { class: 'btn', onClick: signOutServer }, 'Sign out') : null,
         h('button', {
           class: 'btn danger',
           onClick: () => {
@@ -1492,10 +1506,19 @@ function renderSettings() {
             },
           }, '+ Tag'))))),
     h('section', { class: 'block' }, h('h3', null, 'Backup'),
-      h('p', { class: 'muted' }, 'Every save is kept as a version on GitHub. You can also download a copy.'),
+      h('p', { class: 'muted' }, 'Every save is kept as a version, so nothing is lost. You can also download a copy.'),
       h('button', { class: 'btn', onClick: downloadBackup }, 'Download backup')),
     h('section', { class: 'block' }, h('h3', null, 'iPhone'),
-      h('p', null, 'Always open Daily Projects from its home-screen icon. In Safari: Share → "Add to Home Screen". Then paste your keys inside the icon app.')));
+      h('p', null, onServer ? 'Open worktask.in in Safari and sign in. Share → "Add to Home Screen" puts it on your phone like an app.'
+        : 'Always open Daily Projects from its home-screen icon. In Safari: Share → "Add to Home Screen". Then paste your keys inside the icon app.')));
+}
+
+async function signOutServer() {
+  const waiting = store.pending.length;
+  if (waiting && !confirm(`${waiting} change(s) are not saved yet and will be lost. Sign out anyway?`)) return;
+  try { await fetch('../api/?a=logout', { method: 'POST', headers: { Authorization: 'Bearer ' + serverToken() } }); } catch { /* signed out anyway */ }
+  try { localStorage.removeItem(SERVER_TOKEN_KEY); localStorage.removeItem('dp.pending'); localStorage.removeItem('dp.snapshot'); } catch { /* blocked */ }
+  location.href = '../';
 }
 
 // ---------------------------------------------------------------- key screen
@@ -1531,6 +1554,40 @@ function showKeyScreen(message = '') {
   h('button', { class: 'btn primary', type: 'submit' }, 'Open'),
   h('p', { class: 'key-msg muted' }),
   h('p', { class: 'muted small' }, 'The key stays only on this device.')));
+}
+
+/** The old address (GitHub Pages) after the move: send people to worktask.in. Waiting changes stay on this device. */
+function showMoved() {
+  let waiting = [];
+  try { waiting = JSON.parse(localStorage.getItem('dp.pending') || '[]'); } catch { waiting = []; }
+  // Siri (#say=) and the Chrome button (#add=) still work with the old address: pass them on.
+  if (!waiting.length) { location.replace(MOVED_TO + location.hash); return; }
+  const screen = document.getElementById('keyscreen');
+  screen.hidden = false;
+  root.hidden = true;
+  // changes made on this device that never reached GitHub: carry them to the new address (it adds them to its queue)
+  const carry = MOVED_TO + '#ops=' + encodeURIComponent(JSON.stringify(waiting));
+  screen.replaceChildren(h('div', { class: 'key-card' },
+    h('img', { src: 'icons/icon-192.png', alt: '', width: 64, height: 64 }),
+    h('h1', null, 'Daily Projects has moved'),
+    h('p', null, 'Your projects are now at worktask.in. Sign in there with your username and password.'),
+    h('p', null, `⚠︎ ${waiting.length} change(s) made on this device were not sent before the move. The button below takes them with you.`),
+    h('a', { class: 'btn primary', href: carry, onClick: () => { try { localStorage.setItem('dp.pending.moved', localStorage.getItem('dp.pending')); localStorage.removeItem('dp.pending'); } catch { /* kept */ } } }, `Open worktask.in with my ${waiting.length} change(s)`)));
+}
+
+/** From the old address: #ops=[…] are changes that never reached GitHub. Add them to this device's queue (no doubles). */
+function takeOpsFromHash() {
+  if (!location.hash.startsWith('#ops=')) return;
+  let ops = [];
+  try { ops = JSON.parse(decodeURIComponent(location.hash.slice(5))); } catch { ops = []; }
+  history.replaceState(null, '', location.pathname + location.search);
+  if (!Array.isArray(ops) || !ops.length) return;
+  let mine = [];
+  try { mine = JSON.parse(localStorage.getItem('dp.pending') || '[]'); } catch { mine = []; }
+  const have = new Set(mine.map((o) => o.id));
+  const add = ops.filter((o) => o && typeof o === 'object' && typeof o.id === 'string' && typeof o.type === 'string' && !have.has(o.id));
+  try { localStorage.setItem('dp.pending', JSON.stringify([...mine, ...add])); } catch { return; }
+  if (add.length) setTimeout(() => toast(`${add.length} change(s) from the old address added ✓`, 5000), 1500);
 }
 
 // ---------------------------------------------------------------- render
@@ -1614,7 +1671,7 @@ function unsentBar() {
   const why = store.status === 'offline' ? ' — no internet. Keep this computer on; they send when the internet is back. Tap to try now.'
     : store.saving ? ' — sending now…' : ' — your other computer cannot see them. Tap to send.';
   return h('button', {
-    class: 'unsent-bar', key: 'unsent', type: 'button', title: 'Send waiting changes to GitHub now',
+    class: 'unsent-bar', key: 'unsent', type: 'button', title: 'Send waiting changes now',
     onClick: () => doRefresh(true).then(() => { if (!store.pending.length) toast('All sent ✓'); render(); }),
   }, '⚠︎ ', h('b', null, what), why);
 }
@@ -2247,7 +2304,27 @@ function sendNow() {
   if (store && store.pending.length && !store.saving && store.status !== 'auth' && store.status !== 'checking') store.flush();
 }
 
+// ---------------------------------------------------------------- team (worktask.in only)
+
+/** Team tasks given from a step, by step id, so each step can show the person's latest update. */
+const team = { byStep: new Map(), fillBy: '18:00', late: false, at: 0 };
+
+async function loadTeam(force = false) {
+  if (!onServer || (!force && Date.now() - team.at < 60000)) return;
+  team.at = Date.now();
+  try {
+    const res = await fetch('../api/?a=tasks.linked', { method: 'POST', cache: 'no-store', headers: { Authorization: 'Bearer ' + serverToken(), 'Content-Type': 'application/json' }, body: '{}' });
+    const out = await res.json();
+    if (!out.ok) return;
+    team.byStep = new Map(out.tasks.map((t) => [t.stepRef, t]));
+    team.fillBy = out.fillBy;
+    team.late = out.late;
+    render();
+  } catch { /* no connection: try again next time */ }
+}
+
 async function doRefresh(force) {
+  loadTeam(force);
   if (!store || store.status === 'auth') return;
   await store.refresh(force);
   if (force && store.status === 'saved') toast('Up to date ✓');
@@ -2259,13 +2336,17 @@ let started = false;
 function start() {
   takeClipFromHash();
   takeVoiceFromHash();
+  if (!isMock && !onServer && MOVED_TO) { showMoved(); return; }
+  if (onServer) takeOpsFromHash(); // before the store starts: it reads the waiting changes once
+  if (onServer && !serverToken()) { toSignIn(); return; }
   const key = device.githubKey();
-  if (!isMock && !key) { showKeyScreen(); return; }
-  const repo = isMock ? new MockRepo() : new GitHubRepo(key, DATA_OWNER, DATA_REPO, DATA_BRANCH);
+  if (!isMock && !onServer && !key) { showKeyScreen(); return; }
+  const repo = isMock ? new MockRepo() : onServer ? new ServerRepo(serverToken(), '../api/') : new GitHubRepo(key, DATA_OWNER, DATA_REPO, DATA_BRANCH);
   store = new Store(repo);
   store.addEventListener('change', () => render());
   store.addEventListener('status', (e) => {
     // Only build the key screen when it is not already showing, so a pasted key is not wiped.
+    if (e.detail.status === 'auth' && onServer) { toSignIn(); return; } // changes waiting on this device are kept and sent after signing in
     if (e.detail.status === 'auth' && document.getElementById('keyscreen').hidden) {
       showKeyScreen('Your GitHub key stopped working. Paste a new one. Your unsaved changes are kept.');
     }
@@ -2277,7 +2358,7 @@ function start() {
     render(); // put ticked boxes and menus back to the real data
   });
   render();
-  store.init().then(() => { render(); if (ui.capture) focusKey('capture-input'); voiceReady = true; runVoice(); shareLocalKeys(); markShownOpened(); makeBrief(); recordPastScores(); });
+  store.init().then(() => { render(); if (ui.capture) focusKey('capture-input'); voiceReady = true; runVoice(); loadTeam(true); shareLocalKeys(); markShownOpened(); makeBrief(); recordPastScores(); });
   if (started) return;
   started = true;
   // redraw now and then: the running timer, and the "not sent yet" bar appearing after a minute
@@ -2315,8 +2396,9 @@ function start() {
 installEvents(document.body);
 installSwipe();
 // Keep the app's files on the device so it opens without internet (not in test mode on this Mac).
-if ('serviceWorker' in navigator && !isMock) navigator.serviceWorker.register('sw.js').catch(() => {});
+if ('serviceWorker' in navigator && !isMock && !(onServer && !['worktask.in', 'www.worktask.in'].includes(location.hostname))) navigator.serviceWorker.register('sw.js').catch(() => {});
 installMentions(() => ctx);
 installAutocorrect(device.autocorrect());
 if (isMock) document.title = 'Daily Projects (test mode)';
+else if (onServer && location.hostname !== 'worktask.in' && location.hostname !== 'www.worktask.in') document.title = 'Daily Projects (server test)';
 start();

@@ -15,3 +15,4 @@ node_modules/
 team/app/config.php
 team/app/setup-code.txt
 team/uploads/
+team/dpdata/

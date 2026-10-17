@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Command-line helper used by the Claude commands /review-projects, /add, /today and /restore.
-// Works on the local copy of the private data repository in ../data, using git and the
-// Mac's existing GitHub login. Uses the SAME rules and operations as the app.
+// Since the move to worktask.in it works on the Work Task server, over SSH with the Mac's
+// worktask key (~/.ssh/hostinger_dp). Before the move (or in tests) it used the local copy of the
+// private GitHub data repository in ../data. Uses the SAME rules and operations as the app.
 //
 //   node tools/tracker.mjs pull
 //   node tools/tracker.mjs summary
@@ -21,10 +22,39 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { applyOps, makeOp, newId, emptyData } from '../docs/ops.js';
 import { dotColour, nextStep, todayIndia, isOverdue, colourCounts, isSnoozed, restUntil, awakeProjects } from '../docs/rules.js';
-import { DATA_OWNER, DATA_REPO } from '../docs/config.js';
+import { DATA_OWNER, DATA_REPO, MOVED_TO } from '../docs/config.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const DATA = process.env.DP_DATA_DIR || join(ROOT, 'data'); // DP_DATA_DIR is only for tests
+
+// ---- Work Task server (after the move) ----
+const SERVER = !process.env.DP_DATA_DIR && (!!MOVED_TO || !!process.env.DP_SERVER_LOCAL);
+const SSH = ['-i', join(process.env.HOME || '', '.ssh', 'hostinger_dp'), '-o', 'IdentitiesOnly=yes', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=20', '-p', '65002', 'u578596396@145.79.25.173'];
+const CLI = 'domains/worktask.in/app/dp-cli.php';
+let server = null; // { head, data, history } from the last export
+
+function serverRun(args, input) {
+  const opts = { encoding: 'utf8', input, stdio: ['pipe', 'pipe', 'pipe'], maxBuffer: 64 * 1024 * 1024 };
+  const quoted = args.map((a) => `'${String(a).replace(/'/g, "'\\''")}'`).join(' ');
+  try {
+    return process.env.DP_SERVER_LOCAL // testing on this Mac: the local copy of the server
+      ? execFileSync('php', [join(ROOT, 'team', 'app', 'dp-cli.php'), ...args], opts)
+      : execFileSync('ssh', [...SSH, `php ${CLI} ${quoted}`], opts);
+  } catch (e) {
+    if (e.status === 3) { const err = new Error('clash'); err.clash = true; throw err; }
+    throw new Error((e.stderr || e.message || '').toString().trim() || 'The server did not answer.');
+  }
+}
+
+function serverPull() {
+  const out = JSON.parse(serverRun(['export']));
+  const history = {};
+  for (const [path, text] of Object.entries(out.files)) {
+    const m = /^history\/(\d{4}-\d{2})\.json$/.exec(path);
+    if (m) history[m[1]] = JSON.parse(text);
+  }
+  server = { head: out.head, data: out.files['data.json'] ? JSON.parse(out.files['data.json']) : emptyData(), history };
+}
 
 function git(...args) {
   return execFileSync('git', ['-C', DATA, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
@@ -36,12 +66,14 @@ function ensureClone() {
 }
 
 function pull() {
+  if (SERVER) { serverPull(); return; }
   ensureClone();
   git('fetch', '-q', 'origin');
   git('reset', '-q', '--hard', 'origin/main'); // the local copy never keeps its own changes
 }
 
 function readState() {
+  if (SERVER) return JSON.parse(JSON.stringify({ data: server.data, history: server.history }));
   const dataFile = join(DATA, 'data.json');
   const data = existsSync(dataFile) ? JSON.parse(readFileSync(dataFile, 'utf8')) : emptyData();
   const history = {};
@@ -74,6 +106,20 @@ function commitOps(buildOps, message) {
     const ops = buildOps(state);
     const applied = applyOps(state, ops);
     if (!applied.length) { console.log('Nothing changed.'); return state; }
+    if (SERVER) {
+      const changes = [{ path: 'data.json', content: JSON.stringify(state.data, null, 1) + '\n' }];
+      for (const [m, list] of Object.entries(state.history)) {
+        if (JSON.stringify(before.history[m] || []) !== JSON.stringify(list)) changes.push({ path: `history/${m}.json`, content: JSON.stringify(list, null, 1) + '\n' });
+      }
+      try {
+        serverRun(['commit'], JSON.stringify({ parent: server.head, changes, message: `${message} (via Claude)` }));
+        console.log(`Saved to worktask.in: ${message}`);
+        return state;
+      } catch (e) {
+        if (!e.clash) throw e;
+        continue; // another device saved first: get the latest, replay
+      }
+    }
     writeState(before, state);
     git('add', '-A');
     git('commit', '-q', '-m', `${message} (via Claude)`);
@@ -86,6 +132,34 @@ function commitOps(buildOps, message) {
     }
   }
   throw new Error('Could not save after 3 tries. Try again in a minute.');
+}
+
+/** /restore on the server: the version from that day comes back as a NEW version (today's AI keys are kept). */
+function serverRestore(date, yes) {
+  const v = JSON.parse(serverRun(['before', date]));
+  if (!v) throw new Error(`No saved version on or before ${date}.`);
+  const old = JSON.parse(serverRun(['cat', v.commit, 'data.json']));
+  if (!yes) {
+    console.log(`Version from ${date} (${v.commit.slice(0, 7)}, saved ${v.at}):`);
+    console.log(`  ${old.projects.length} projects: ${old.projects.map((p) => p.name).slice(0, 12).join(', ')}${old.projects.length > 12 ? ' …' : ''}`);
+    console.log('Nothing changed yet. To restore, run the same command with --yes');
+    return;
+  }
+  const oldTree = JSON.parse(serverRun(['tree', v.commit]));
+  const nowTree = JSON.parse(serverRun(['tree', server.head]));
+  const ours = (p) => p === 'data.json' || p.startsWith('history/') || p.startsWith('files/');
+  const changes = [];
+  for (const p of Object.keys(nowTree)) if (ours(p) && !(p in oldTree)) changes.push({ path: p, sha: null });
+  for (const [p, sha] of Object.entries(oldTree)) if (ours(p) && p !== 'data.json' && nowTree[p] !== sha) changes.push({ path: p, sha });
+  if (server.data.secrets) old.secrets = server.data.secrets; else delete old.secrets;
+  changes.push({ path: 'data.json', content: JSON.stringify(old, null, 1) + '\n' });
+  try {
+    serverRun(['commit'], JSON.stringify({ parent: server.head, changes, message: `Restore to ${date} (${v.commit.slice(0, 7)}) (via Claude)` }));
+  } catch (e) {
+    if (e.clash) throw new Error('Another device saved just now. Run the restore again in a moment.');
+    throw e;
+  }
+  console.log(`Restored to the version from ${date} (${v.commit.slice(0, 7)}). Saved as a new version.`);
 }
 
 function findProject(data, query) {
@@ -138,7 +212,7 @@ try {
   switch (cmd) {
     case 'pull': {
       pull();
-      console.log(`Up to date (${git('log', '-1', '--format=%h %s')}).`);
+      console.log(SERVER ? `Up to date (version ${server.head.slice(0, 7)}).` : `Up to date (${git('log', '-1', '--format=%h %s')}).`);
       break;
     }
     case 'summary': {
@@ -240,6 +314,7 @@ try {
       const date = args[0];
       if (!/^\d{4}-\d{2}-\d{2}$/.test(date || '')) throw new Error('Give a date like 2026-10-09.');
       pull();
+      if (SERVER) { serverRestore(date, args.includes('--yes')); break; }
       const commit = git('rev-list', '-1', `--before=${date} 23:59:59 +0530`, 'HEAD');
       if (!commit) throw new Error(`No saved version on or before ${date}.`);
       if (!args.includes('--yes')) {

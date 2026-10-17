@@ -64,6 +64,7 @@ function public_user(array $u): array {
   return [
     'id' => (int)$u['id'], 'username' => $u['username'], 'name' => $u['name'], 'role' => $u['role'],
     'mustChange' => (bool)$u['must_change'], 'active' => (bool)$u['active'], 'lastLogin' => $u['last_login'] ?? null,
+    'owner' => (int)$u['id'] === (int)setting('dp_owner', '0'), // owns the Daily Projects
   ];
 }
 

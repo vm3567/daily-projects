@@ -74,6 +74,8 @@ function handle(string $a, array $in): array {
 
   $me = current_user();
   $day = today();
+  $dp = dp_handle($a, $in, $me);
+  if ($dp !== null) return $dp;
   switch ($a) {
     case 'me':
       return ['user' => public_user($me), 'today' => $day];
@@ -139,6 +141,12 @@ function handle(string $a, array $in): array {
       $closed = ($in['status'] ?? 'open') === 'closed';
       $tasks = all(TASK_SELECT . ($closed ? " WHERE t.status <> 'open' ORDER BY t.updated_at DESC LIMIT 200" : " WHERE t.status = 'open' ORDER BY u.name, t.id"));
       return ['tasks' => tasks_out($tasks, $day)];
+    }
+    case 'tasks.linked': { // for Daily Projects: every team task given from a step (open, or closed this week)
+      $since = date('Y-m-d H:i:s', time() - 7 * 86400);
+      $tasks = all(TASK_SELECT . " WHERE t.step_ref IS NOT NULL AND (t.status = 'open' OR t.updated_at >= ?) ORDER BY t.id", [$since]);
+      $fillBy = setting('fill_by', '18:00');
+      return ['today' => $day, 'fillBy' => $fillBy, 'late' => date('H:i') >= $fillBy, 'tasks' => tasks_out($tasks, $day)];
     }
     case 'tasks.byRefs': { // for Daily Projects: the team tasks linked to these steps
       $refs = array_slice(array_filter(array_map('strval', (array)($in['stepRefs'] ?? []))), 0, 500);

@@ -14,7 +14,12 @@
       "runtimeExecutable": "env",
       "runtimeArgs": [
         "WT_DB_HOST=127.0.0.1;port=3307",
-        "php", "-S", "127.0.0.1:8090", "-t", "team/public_html"
+        "php",
+        "-S",
+        "127.0.0.1:8090",
+        "-t",
+        "team/public_html",
+        "team/dev-router.php"
       ],
       "port": 8090
     }

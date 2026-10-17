@@ -4,6 +4,9 @@ export const DATA_OWNER = 'vm3567';
 export const DATA_REPO = 'daily-projects-data';
 export const DATA_BRANCH = 'main';
 
+// After the move to worktask.in: the old GitHub Pages address shows "moved" and links here. Empty = not moved yet.
+export const MOVED_TO = '';
+
 export const TIME_ZONE = 'Asia/Kolkata';
 
 // AI model names live here, so they are easy to update.

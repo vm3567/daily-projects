@@ -253,3 +253,15 @@ Say **"Hey Siri, Daily add"**, then say what to add. The app opens and saves it.
 6. Name the shortcut **Daily add**.
 
 If the app is still loading or the key is missing, the words are kept on the phone and saved as soon as the app is ready.
+
+## One place: worktask.in (projects + team)
+
+Everything now lives on **https://worktask.in** (Hostinger), with a username and password for everyone.
+
+- **You** sign in and go straight to your projects (worktask.in/projects/). The 👥 button opens the Team pages.
+- **Staff** sign in and see only "My tasks today". They never see your projects.
+- On a step: ⋯ → **👥 Give to team**. The step then shows the person's latest update (✓ time, or "not filled today").
+- Your projects are saved on the server as versions (like GitHub was): nothing is lost, two computers never overwrite each other.
+- The old address (vm3567.github.io/daily-projects) forwards to worktask.in. Siri and the Chrome button keep working.
+- Claude's /today, /add, /review-projects and /restore use the server over SSH (`tools/tracker.mjs`).
+- To publish code changes: `sh tools/deploy-worktask.sh`.

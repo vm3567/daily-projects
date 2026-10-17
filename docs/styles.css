@@ -869,3 +869,8 @@ a.tag.link-chip:hover { text-decoration: underline; }
 .person-contact { display: flex; flex-wrap: wrap; gap: 10px; margin: 4px 0 2px; }
 .person-contact label { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); }
 .person-contact input { width: 210px; }
+
+/* v31: 👥 team task on a step (worktask.in) */
+a.tag.team { text-decoration: none; color: inherit; cursor: pointer; }
+a.tag.team:hover { text-decoration: underline; }
+.tag.team.done { opacity: .7; }

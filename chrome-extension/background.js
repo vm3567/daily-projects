@@ -1,7 +1,7 @@
 // Daily Projects – Add: sends the mail or page you are looking at to the Daily Projects app.
 // It never holds your GitHub key: it only opens the app with the details filled in (#add=…), and the app saves as usual.
 
-const APP = 'https://vm3567.github.io/daily-projects/';
+const APP = 'https://worktask.in/projects/'; // moved from vm3567.github.io/daily-projects (the old address forwards here)
 
 chrome.runtime.onInstalled.addListener(() => {
   chrome.contextMenus.create({ id: 'dp-add', title: 'Add to Daily Projects', contexts: ['page', 'selection', 'link'] });

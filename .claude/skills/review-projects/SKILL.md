@@ -9,7 +9,7 @@ The user is not a programmer. Use short, plain English. One idea per sentence. N
 
 ## Tool
 
-Use only this helper (it reads and saves the private data on GitHub, with the Mac's GitHub login):
+Use only this helper (it reads and saves the private data on worktask.in over SSH; before the move it used GitHub):
 
 ```bash
 node tools/tracker.mjs summary

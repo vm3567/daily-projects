@@ -85,6 +85,19 @@ function stepNotes(p, s) {
   return h('div', { class: 'step-notes' }, notes.map((n) => h('div', { key: 'sn-' + n.id }, `📝 ${fmtDay(indiaDate(n.createdAt))}: ${n.text}`)));
 }
 
+/** 👥 on a step given to the team: who, and today's update (or that it is missing). Opens the team task. */
+function teamChip(t, info) {
+  const u = t.today;
+  const time = (at) => { const [hh, mm] = at.slice(11, 16).split(':').map(Number); return `${((hh + 11) % 12) + 1}:${String(mm).padStart(2, '0')} ${hh < 12 ? 'am' : 'pm'}`; };
+  let text; let cls = 'tag team';
+  if (t.status !== 'open') { text = `👥 ${t.assignee.name} · ${t.status === 'done' ? 'finished ✓' : 'cancelled'}`; cls += ' done'; }
+  else if (u) { text = `👥 ${t.assignee.name} · ✓ ${time(u.at)}${u.state === 'stuck' ? ' · stuck' : ''}`; if (u.state === 'stuck') cls += ' late'; }
+  else if (t.dueToday) { text = `👥 ${t.assignee.name} · not filled today`; if (info.late) cls += ' late'; }
+  else text = `👥 ${t.assignee.name}${t.last ? ` · last ${fmtDay(t.last.day)}` : ''}`;
+  const note = u ? u.note : t.last ? t.last.note : '';
+  return h('a', { class: cls, href: `../#task=${t.id}`, title: note ? `${note.slice(0, 300)}\n\nClick to see all updates and photos.` : 'Click to see the team task.' }, text);
+}
+
 function stepRow(ctx, p, s, box = null) {
   const { store, ui } = ctx;
   const open = ui.openStep === s.id;
@@ -102,6 +115,8 @@ function stepRow(ctx, p, s, box = null) {
   if (s.dueDate && !s.done) tags.push(h('span', { class: 'tag' + (s.dueDate < today ? ' late' : '') }, `by ${fmtDay(s.dueDate)}`));
   if (s.note && !open) tags.push(h('span', { class: 'tag' }, 'note'));
   if (s.link) tags.push(linkChip(s.link));
+  const tt = ctx.teamTask ? ctx.teamTask(s.id) : null;
+  if (tt) tags.push(teamChip(tt, ctx.teamInfo()));
   if (s.repeat && !s.done) tags.push(h('span', { class: 'tag repeat', title: 'Repeats' }, `↻ ${REPEAT_WORD[s.repeat]}`));
   if (stepWaitsForReminder(s, today)) tags.push(h('span', { class: 'tag remind', title: 'Comes back on this day' }, `⏰ ${fmtDay(s.snoozedUntil)}`));
   else if (s.snoozedUntil && s.snoozedUntil > today && !s.done) tags.push(h('span', { class: 'tag' }, `from ${fmtDay(s.snoozedUntil)}`));
@@ -169,6 +184,11 @@ function stepRow(ctx, p, s, box = null) {
         (v) => store.dispatch('setStepField', { projectId: p.id, stepId: s.id, field: 'waitingOn', value: v })) : null,
       autoField('textarea', { placeholder: 'Small note for this step', value: s.note, rows: 2, key: 'sn-' + s.id, 'data-mention': '1' },
         (v) => store.dispatch('setStepField', { projectId: p.id, stepId: s.id, field: 'note', value: v })),
+      ctx.onServer && !s.done ? h('a', {
+        class: 'btn small',
+        href: tt ? `../#task=${tt.id}` : '../#new=' + encodeURIComponent(JSON.stringify({ title: s.text, project: p.name, projectRef: p.id, stepRef: s.id })),
+        title: tt ? 'See the daily updates for this step' : 'Give this step to a team member; their daily updates show here',
+      }, tt ? `👥 Team task: ${tt.assignee.name}` : '👥 Give to team') : null,
       h('button', {
         class: 'btn danger small',
         onClick: () => ctx.act('deleteStep', { projectId: p.id, stepId: s.id }, `Step deleted: ${s.text}`),
@@ -290,7 +310,7 @@ function filesBlock(ctx, p) {
     h('button', {
       class: 'icon', title: 'Remove file',
       onClick: () => {
-        if (confirm(`Remove "${f.name}"?\n\nNote: GitHub keeps old versions, so this does not free space.`)) {
+        if (confirm(`Remove "${f.name}"?\n\nNote: old versions are kept, so this does not free space.`)) {
           store.dispatch('removeFile', { projectId: p.id, fileId: f.id });
         }
       },
