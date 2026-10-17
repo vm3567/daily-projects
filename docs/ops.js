@@ -413,9 +413,10 @@ const handlers = {
     if (!p) return false;
     const userId = Number.isInteger(a.userId) && a.userId > 0 ? a.userId : null;
     const name = cleanText(a.name || '', 80).trim();
-    if (userId ? (p.team && p.team.userId === userId && p.team.name === name) : !p.team) return false;
+    const needsPhoto = !!a.needsPhoto;
+    if (userId ? (p.team && p.team.userId === userId && p.team.name === name && !!p.team.needsPhoto === needsPhoto) : !p.team) return false;
     const old = p.team;
-    if (userId) p.team = { userId, name, since: indiaDate(op.at) };
+    if (userId) p.team = { userId, name, since: old && old.userId === userId ? old.since : indiaDate(op.at), ...(needsPhoto ? { needsPhoto: true } : {}) };
     else delete p.team;
     touch(p, op);
     addEvent(state, op, p, 'edited', userId ? `Given to ${name}` : `Taken back from ${old.name}`);

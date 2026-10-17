@@ -173,6 +173,7 @@ const ctx = {
   teamPeople: () => teamPeople(),
   giveProject: (p, person) => giveProject(p, person),
   takeBackProject: (p) => giveProject(p, null),
+  setGivePhoto: (on) => { ui.givePhoto = on; render(); },
   teamInfo: () => team,
   afterTick: (id, where, undo) => afterTick(id, where, undo),
   selectPerson: (id) => { ui.person = id; ui.mobile = 'detail'; render(); const d = document.getElementById('detail'); if (d) d.scrollTop = 0; },
@@ -1122,6 +1123,9 @@ function rowMenu() {
     p.state === 'active' && groupHasTimer(g || {}) ? item(timing ? '⏹' : '▶', timing ? 'Stop timer' : 'Start timer', () => (timing ? stopTimer() : startTimer(p))) : null,
     p.state === 'active' ? item('⏸', 'Pause project', () => act('pause', { projectId: p.id }, `Paused: ${p.name}`))
       : p.state === 'paused' ? item('▶', 'Unpause project', () => act('unpause', { projectId: p.id }, `Back on Today: ${p.name}`)) : null,
+    onServer && p.state === 'active' ? (p.team
+      ? item('👥', `Take back from ${p.team.name}`, () => { if (confirm(`Take "${p.name}" back from ${p.team.name}? Their open steps are removed from their list.`)) giveProject(p, null); })
+      : item('👥', 'Give project to…', () => { select(p.id); ui.giveOpen = p.id; })) : null,
     item('↗', 'Open', () => select(p.id)),
     item('🗑', 'Delete project…', () => {
       if (!confirm(`Delete "${p.name}"?\n\nYou can press Undo for a few seconds after.`)) return;
@@ -1241,6 +1245,22 @@ function progressLine(today) {
     bar);
 }
 
+/** Today: one line about the team — sent / due, stuck, new messages, who has not filled. Opens Team today. */
+function teamLine() {
+  if (!onServer || !team.summary) return null;
+  const s = team.summary; const a = team.alerts;
+  if (!s.due && !a.stuck && !a.unread && !a.suggestions) return null;
+  const bits = [];
+  if (s.due) bits.push(`${s.sent} of ${s.due} sent`);
+  if (a.stuck) bits.push(`${a.stuck} stuck`);
+  if (a.unread) bits.push(`${a.unread} new message${a.unread > 1 ? 's' : ''}`);
+  if (a.suggestions) bits.push(`${a.suggestions} suggestion${a.suggestions > 1 ? 's' : ''}`);
+  const missing = s.notFilled.length ? ` · ${team.late ? 'not filled' : 'waiting'}: ${s.notFilled.join(', ')}` : '';
+  const bad = a.stuck || (team.late && s.notFilled.length);
+  return h('a', { class: 'team-line' + (bad ? ' late' : s.due && s.sent === s.due ? ' ok' : ''), href: '../', key: 'team-line', title: 'Open Team today' },
+    `👥 Team: ${bits.join(' · ')}${missing}`);
+}
+
 function newProjectForm() {
   if (!ui.adding) {
     return h('button', { class: 'btn primary new-project', onClick: () => { ui.adding = true; render(); focusKey('new-name'); } }, '+ New project', keyHint('N'));
@@ -1319,6 +1339,7 @@ function renderListColumn() {
     mobileSearch,
     ui.view === 'today' && !ui.search ? celebration() : null,
     ui.view === 'today' && !ui.search ? progressLine(today) : null,
+    ui.view === 'today' && !ui.search ? teamLine() : null,
     ui.view === 'today' && !ui.search ? followUpRow() : null,
     ui.view === 'today' && !ui.search ? inboxReminder() : null,
     ui.view === 'today' && !ui.search ? renderBrief() : null,
@@ -2343,13 +2364,14 @@ const projectSteps = (p) => p.steps.filter((x) => !x.done).map((x) => ({ stepRef
 const SYNC_KEY = 'dp.teamSync'; // last steps sent per given project, so unchanged projects are not sent again
 
 /** Give the whole project to a person (or take it back with person = null). */
-async function giveProject(p, person) {
+async function giveProject(p, person, needsPhoto = !!ui.givePhoto) {
   try {
-    await teamApi('project.sync', { projectRef: p.id, project: p.name, assigneeId: person ? person.id : 0, steps: person ? projectSteps(p) : [] });
-    store.dispatch('setProjectTeam', { projectId: p.id, userId: person ? person.id : null, name: person ? person.name : '' });
+    await teamApi('project.sync', { projectRef: p.id, project: p.name, assigneeId: person ? person.id : 0, steps: person ? projectSteps(p) : [], needsPhoto });
+    store.dispatch('setProjectTeam', { projectId: p.id, userId: person ? person.id : null, name: person ? person.name : '', needsPhoto });
     ui.giveOpen = null;
+    ui.givePhoto = false;
     toast(person ? `👥 ${p.name} given to ${person.name} ✓` : `Taken back: ${p.name}`);
-    rememberSync(p.id, person ? JSON.stringify([person.id, p.name, projectSteps(p)]) : null);
+    rememberSync(p.id, person ? JSON.stringify([person.id, p.name, projectSteps(p), needsPhoto]) : null);
     loadTeam(true);
   } catch (e) { toast(e.message, 5000); }
 }
@@ -2368,10 +2390,10 @@ async function syncGivenProjects() {
   try { m = JSON.parse(localStorage.getItem(SYNC_KEY) || '{}'); } catch { m = {}; }
   for (const p of store.view.data.projects) {
     if (!p.team) continue;
-    const sig = JSON.stringify([p.team.userId, p.name, p.state === 'active' ? projectSteps(p) : []]);
+    const sig = JSON.stringify([p.team.userId, p.name, p.state === 'active' ? projectSteps(p) : [], !!p.team.needsPhoto]);
     if (m[p.id] === sig) continue;
     try {
-      await teamApi('project.sync', { projectRef: p.id, project: p.name, assigneeId: p.state === 'active' ? p.team.userId : 0, steps: p.state === 'active' ? projectSteps(p) : [] });
+      await teamApi('project.sync', { projectRef: p.id, project: p.name, assigneeId: p.state === 'active' ? p.team.userId : 0, steps: p.state === 'active' ? projectSteps(p) : [], needsPhoto: !!p.team.needsPhoto });
       rememberSync(p.id, sig);
     } catch { /* try again next time */ }
   }
@@ -2409,6 +2431,7 @@ async function loadTeam(force = false) {
     team.fillBy = out.fillBy;
     team.late = out.late;
     if (out.alerts) team.alerts = out.alerts;
+    if (out.summary) team.summary = out.summary;
     tickFinishedTeamTasks(out.tasks);
     await syncGivenProjects();
     render();

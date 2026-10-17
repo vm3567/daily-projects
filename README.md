@@ -269,3 +269,9 @@ Everything now lives on **https://worktask.in** (Hostinger), with a username and
 ### Give a whole project to a person
 
 On a project: **👥 Give project** → pick the person. They see its open steps in order; only the **current** step needs a daily update, the rest show as "Coming next". When they tap Finished, your step ticks itself and the next step becomes current. Steps you add later go to them; steps you tick or delete leave their list. **Change person** or **Take back** on the blue bar.
+
+### More team tools
+- **Team line on Today:** "👥 Team: 3 of 5 sent · 1 stuck · not filled: Valar" — tap it to open Team today.
+- **Right-click a project → 👥 Give project to…** (or Take back).
+- **📷 Photo needed to finish:** tick it when giving a task or a project; staff cannot tap Finished without a photo.
+- **📎 Instructions:** add photos or PDFs to a task (Give a task form, or open the task → 📎 Add instruction photo / PDF). Staff see them on the task.

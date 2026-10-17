@@ -101,6 +101,40 @@ function thumbs(ids) {
   }));
 }
 
+const fileUrls = new Map();
+async function taskFileUrl(id) {
+  if (fileUrls.has(id)) return fileUrls.get(id);
+  const res = await fetch('api/?a=task.file&id=' + id, { headers: { Authorization: 'Bearer ' + state.token } });
+  if (!res.ok) throw new Error('file');
+  const url = URL.createObjectURL(await res.blob());
+  fileUrls.set(id, url);
+  return url;
+}
+
+/** 📎 Instruction photos / PDFs from the manager. Tap to open. The manager can remove them (✕). */
+function taskFiles(t, canRemove = false) {
+  if (!t.files || !t.files.length) return null;
+  return el('div', { class: 'files' }, el('div', { class: 'small muted' }, '📎 Instructions'), el('div', { class: 'thumbs' }, t.files.map((f) => {
+    const open = async () => { try { const u = await taskFileUrl(f.id); if (f.image) { const v = document.getElementById('viewer'); v.replaceChildren(el('img', { src: u, alt: f.name })); v.hidden = false; v.onclick = () => { v.hidden = true; v.replaceChildren(); }; } else window.open(u, '_blank', 'noopener'); } catch { toast('Could not open the file'); } };
+    const box = f.image ? el('img', { alt: f.name, title: f.name, onClick: open }) : el('button', { class: 'file-chip', title: f.name, onClick: open }, '📄 ' + (f.name.length > 18 ? f.name.slice(0, 16) + '…' : f.name));
+    if (f.image) taskFileUrl(f.id).then((u) => { box.src = u; }).catch(() => {});
+    if (!canRemove) return box;
+    return el('span', { class: 'file-wrap' }, box, el('button', { class: 'link small', title: 'Remove', onClick: async () => {
+      if (!confirm(`Remove ${f.name}?`)) return;
+      try { await api('task.file.delete', { id: f.id }); loadView(); } catch (ex) { toast(ex.message, 5000); }
+    } }, '✕'));
+  })));
+}
+
+async function uploadTaskFiles(taskId, files) {
+  for (const f of files) {
+    const fd = new FormData();
+    fd.append('taskId', String(taskId));
+    fd.append('file', f.type.startsWith('image/') ? await shrink(f) : f, f.type.startsWith('image/') ? 'photo.jpg' : f.name);
+    try { await api('task.file.add', fd, true); } catch (ex) { toast(`${f.name}: ${ex.message}`, 5000); }
+  }
+}
+
 function openPhoto(id) {
   const v = document.getElementById('viewer');
   const img = el('img', { alt: 'Photo' });
@@ -265,6 +299,8 @@ function myTask(t, today) {
     el('div', { class: 'task-head' }, el('h3', null, t.title), done ? el('span', { class: 'tag green' }, '✓ Sent') : null),
     el('div', { class: 'meta' }, [t.project, repeatLabel(t, today)].filter(Boolean).join(' · ')),
     t.details ? el('div', { class: 'pre small muted' }, t.details) : null,
+    taskFiles(t),
+    t.needsPhoto && t.status === 'open' ? el('div', { class: 'small warn' }, '📷 A photo is needed to finish this task') : null,
     t.last ? el('div', { class: 'last' }, `Last time (${fmtDay(t.last.day)}): `, el('span', { class: 'pre' }, t.last.note)) : null,
     messageLine(t),
     el('div', { class: 'update' }, done ? sentView(t) : updateForm(t)));
@@ -298,10 +334,15 @@ function updateForm(t) {
   const files = state.files[t.id] || [];
   const btn = el('button', { class: 'primary', onClick: async () => {
     if (!d.note.trim()) { err.textContent = 'Write what you did first.'; err.hidden = false; return; }
+    const havePhotos = (t.today && t.today.photos.length) || files.length;
+    if (d.state === 'finished' && t.needsPhoto && !havePhotos) { err.textContent = '📷 Add a photo to finish this task.'; err.hidden = false; return; }
     btn.disabled = true;
     try {
-      const out = await api('update.save', { taskId: t.id, note: d.note, state: d.state });
+      // photo needed to finish: save as "working", add the photos, then mark finished
+      const twoSteps = d.state === 'finished' && t.needsPhoto && files.length;
+      const out = await api('update.save', { taskId: t.id, note: d.note, state: twoSteps ? 'progress' : d.state });
       if (files.length) await uploadPhotos(out.update.id, files);
+      if (twoSteps) await api('update.save', { taskId: t.id, note: d.note, state: 'finished' });
       delete state.drafts[t.id]; delete state.files[t.id]; delete state.editing[t.id];
       toast('Sent ✓');
       loadView();
@@ -483,6 +524,14 @@ function taskDetail() {
     el('h1', null, t.title),
     el('p', { class: 'meta' }, [t.assignee.name, t.project, repeatLabel(t), t.status !== 'open' ? (t.status === 'done' ? 'Done' : 'Cancelled') : null].filter(Boolean).join(' · ')),
     t.details ? el('div', { class: 'card pre' }, t.details) : null,
+    taskFiles(t, admin),
+    t.needsPhoto ? el('p', { class: 'small warn' }, '📷 Photo needed to finish') : null,
+    admin && t.status === 'open' ? (() => {
+      const input = el('input', { type: 'file', accept: 'image/*,application/pdf', multiple: true, class: 'hidden-file', onChange: async () => {
+        await uploadTaskFiles(t.id, [...input.files].slice(0, 10)); toast('Added ✓'); loadView();
+      } });
+      return el('label', { class: 'btn' }, '📎 Add instruction photo / PDF', input);
+    })() : null,
     admin && t.status === 'suggested' ? el('div', { class: 'row' },
       el('span', { class: 'tag' }, `💡 Suggested by ${t.assignee.name}`),
       el('button', { class: 'primary', onClick: async () => { try { await api('task.approve', { id: t.id }); toast('Added ✓'); loadView(); } catch (ex) { toast(ex.message, 5000); } } }, '✓ Yes, add it'),
@@ -520,6 +569,8 @@ function taskForm() {
   const weekday = el('select', null, LONG_DAYS.map((n, i) => el('option', { value: String(i) }, n)));
   weekday.value = String(t && t.weekday !== null ? t.weekday : 1);
   const due = el('input', { type: 'date', value: t && t.dueDate ? t.dueDate : '' });
+  const needsPhoto = el('input', { type: 'checkbox', checked: t ? t.needsPhoto : false });
+  const files = el('input', { type: 'file', accept: 'image/*,application/pdf', multiple: true });
   const wLabel = el('label', null, 'On', weekday);
   const dLabel = el('label', null, 'By (date, optional)', due);
   const sync = () => { wLabel.hidden = how.value !== 'weekly'; dLabel.hidden = how.value !== 'once'; };
@@ -535,8 +586,9 @@ function taskForm() {
         const out = await api('task.save', {
           id: t ? t.id : 0, assigneeId: Number(person.value), title: title.value, details: details.value, project: project.value,
           repeat: how.value === 'daily7' ? 'daily' : how.value, skipSunday: how.value === 'daily', weekday: Number(weekday.value), dueDate: due.value,
-          projectRef: t ? t.projectRef : pre.projectRef, stepRef: t ? t.stepRef : pre.stepRef,
+          projectRef: t ? t.projectRef : pre.projectRef, stepRef: t ? t.stepRef : pre.stepRef, needsPhoto: needsPhoto.checked,
         });
+        if (files.files.length) await uploadTaskFiles(out.task.id, [...files.files].slice(0, 10));
         const fromProjects = !editing && pre.stepRef && state.user.owner;
         state.prefill = null;
         toast(editing ? 'Saved ✓' : `Given to ${out.task.assignee.name} ✓`);
@@ -545,7 +597,9 @@ function taskForm() {
       } catch (ex) { err.textContent = ex.message; err.hidden = false; btn.disabled = false; }
     } },
     el('label', null, 'Who', person), el('label', null, 'Task', title), el('label', null, 'Details', details),
-    el('label', null, 'Project', project), el('label', null, 'How often', how), wLabel, dLabel, err,
+    el('label', null, 'Project', project), el('label', null, 'How often', how), wLabel, dLabel,
+    el('label', { class: 'check' }, needsPhoto, ' 📷 Photo needed to finish'),
+    el('label', null, '📎 Instruction photos / PDF (optional)', files), err,
     el('div', { class: 'row' }, btn, el('button', { type: 'button', onClick: () => { state.prefill = null; if (!editing && state.fromProjects && state.user.owner) { location.href = 'projects/'; return; } go(editing ? 'task:' + t.id : 'today'); } }, 'Cancel'))),
   ];
 }

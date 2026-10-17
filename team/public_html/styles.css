@@ -93,3 +93,8 @@ header.top nav button.on { background: var(--accent-bg); color: var(--accent); }
 .msg-line.new { background: var(--amber-bg); }
 .card.msg.mine { background: var(--accent-bg); border-color: transparent; }
 .card.needs { border-color: var(--amber); }
+
+/* v4: instruction files */
+.files { margin-top: 8px; }
+.file-chip { min-height: 64px; font-size: 13px; }
+.file-wrap { display: inline-flex; align-items: flex-start; }

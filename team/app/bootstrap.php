@@ -170,6 +170,19 @@ function migrate(PDO $pdo): void {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
     // v3: a whole project given to a person: its steps in order (only the first open one is due each day)
     "ALTER TABLE tasks ADD COLUMN seq INT NULL",
+    // v4: "photo needed to finish"; instruction files from the manager on a task
+    "ALTER TABLE tasks ADD COLUMN needs_photo TINYINT(1) NOT NULL DEFAULT 0",
+    "CREATE TABLE IF NOT EXISTS task_files (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      task_id INT NOT NULL,
+      user_id INT NOT NULL,
+      file VARCHAR(160) NOT NULL,
+      name VARCHAR(200) NOT NULL,
+      mime VARCHAR(60) NOT NULL,
+      size INT NOT NULL,
+      at DATETIME NOT NULL,
+      INDEX (task_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
   ];
   $pdo->exec($steps[0]);
   $done = (int)($pdo->query("SELECT v FROM settings WHERE k = 'schema'")->fetchColumn() ?: 0);

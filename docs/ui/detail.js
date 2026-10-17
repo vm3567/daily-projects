@@ -507,13 +507,16 @@ function teamBar(ctx, p) {
     return h('div', { class: 'banner team-banner', key: 'tm-' + p.id },
       h('span', null, `👥 Given to ${p.team.name} since ${fmtDay(p.team.since)}. `,
         h('span', { class: 'muted small' }, `They see the ${open} open step${open === 1 ? '' : 's'} in order and send a daily update on the current one. New steps you add go to them too.`)),
-      h('button', { class: 'btn small', onClick: () => { ui.giveOpen = p.id; ctx.render(); } }, 'Change person'),
+      p.team.needsPhoto ? h('span', { class: 'tag' }, '📷 photo to finish') : null,
+      h('button', { class: 'btn small', onClick: () => { ui.giveOpen = p.id; ui.givePhoto = !!p.team.needsPhoto; ctx.render(); } }, 'Change person'),
       h('button', { class: 'btn small', onClick: () => { if (confirm(`Take "${p.name}" back from ${p.team.name}? Their open steps are removed from their list.`)) ctx.takeBackProject(p); } }, 'Take back'));
   }
   if (ui.giveOpen !== p.id) return null;
   const people = ctx.teamPeople();
   return h('div', { class: 'banner team-banner', key: 'tg-' + p.id },
     h('span', null, `👥 Give "${p.name}" to:`),
+    h('label', { class: 'check small', title: 'They must add a photo before tapping Finished on each step' },
+      h('input', { type: 'checkbox', checked: !!ui.givePhoto, onChange: (e, el) => ctx.setGivePhoto(el.checked) }), ' 📷 Photo needed to finish'),
     people === null ? h('span', { class: 'muted small' }, 'Loading…')
       : people.length ? people.map((u) => h('button', { class: 'chip', key: 'tp-' + u.id, onClick: () => ctx.giveProject(p, u) }, u.name))
         : h('a', { class: 'small', href: '../' }, 'Add a person first (Team → People)'),
