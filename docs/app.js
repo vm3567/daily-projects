@@ -1257,7 +1257,7 @@ function teamLine() {
   if (a.suggestions) bits.push(`${a.suggestions} suggestion${a.suggestions > 1 ? 's' : ''}`);
   const missing = s.notFilled.length ? ` · ${team.late ? 'not filled' : 'waiting'}: ${s.notFilled.join(', ')}` : '';
   const bad = a.stuck || (team.late && s.notFilled.length);
-  return h('a', { class: 'team-line' + (bad ? ' late' : s.due && s.sent === s.due ? ' ok' : ''), href: '../', key: 'team-line', title: 'Open Team today' },
+  return h('a', { class: 'team-line' + (bad ? ' late' : s.due && s.sent === s.due ? ' ok' : ''), href: '../?team', key: 'team-line', title: 'Open Team today' },
     `👥 Team: ${bits.join(' · ')}${missing}`);
 }
 
@@ -1472,7 +1472,7 @@ function renderSettings() {
       h('p', null, isMock ? 'Test mode (no real GitHub).' : onServer ? 'Signed in to Work Task ✓ Your projects are private to you.' : 'Connected to your private data ✓'),
       h('div', { class: 'row' },
         isMock || onServer ? null : h('button', { class: 'btn', onClick: () => showKeyScreen('Paste your new GitHub access key.') }, 'Change key'),
-        onServer ? h('a', { class: 'btn', href: '../' }, '👥 Team') : null,
+        onServer ? h('a', { class: 'btn', href: '../?team' }, '👥 Team') : null,
         onServer ? h('button', { class: 'btn', onClick: signOutServer }, 'Sign out') : null,
         h('button', {
           class: 'btn danger',
@@ -1673,6 +1673,7 @@ function render() {
   wide ? null : h('section', { id: 'detail' }, ui.round ? renderRound() : ui.view === 'people' && !ui.search ? renderPerson(ctx) : renderDetail(ctx)),
   ui.showKeys ? keysHelp() : null,
   ui.capture ? captureBox() : null,
+  offlineBar(),
   unsentBar(),
   tabBar());
   const moves = takePositions();
@@ -1686,8 +1687,21 @@ function render() {
 
 /** A red bar when a change has waited over a minute without reaching GitHub (so it would be missing on the other computer). */
 const UNSENT_AFTER_MS = 60 * 1000;
+/** No internet: say so at once, and that work goes on (changes wait on this device). */
+function offlineBar() {
+  if (!store || store.status !== 'offline') return null;
+  const n = store.pending.length;
+  return h('button', {
+    class: 'offline-bar', key: 'offline', type: 'button', title: 'Try to connect now',
+    onClick: () => doRefresh(true).then(() => { if (store.status !== 'offline') toast(store.pending.length ? 'Back online — sending…' : 'Back online ✓'); render(); }),
+  }, '📴 ', h('b', null, 'Offline'), ' — you can keep working. ',
+  n ? (n === 1 ? '1 change waits on this device and is sent when you are back online.' : `${n} changes wait on this device and are sent when you are back online.`)
+    : 'Changes you make are kept here and sent when you are back online.',
+  store.snapshotAt ? ` (Data as of ${fmtTime(store.snapshotAt)}.)` : '');
+}
+
 function unsentBar() {
-  if (!store || !store.pending.length || store.status === 'auth') return null;
+  if (!store || !store.pending.length || store.status === 'auth' || store.status === 'offline') return null;
   const oldest = Date.parse(store.pending[0].at);
   if (!(Date.now() - oldest > UNSENT_AFTER_MS)) return null;
   const n = store.pending.length;
@@ -2339,7 +2353,7 @@ function teamButton() {
   const a = team.alerts;
   const n = a.stuck + a.unread + a.suggestions;
   const why = [a.stuck && `${a.stuck} stuck`, a.unread && `${a.unread} with new messages`, a.suggestions && `${a.suggestions} suggestion(s)`].filter(Boolean).join(', ');
-  return h('a', { class: 'icon team-btn', href: '../', title: n ? `Team needs you: ${why}` : 'Team: tasks you gave and their daily updates', 'aria-label': n ? `Team, ${n} need you` : 'Team' },
+  return h('a', { class: 'icon team-btn', href: '../?team', title: n ? `Team needs you: ${why}` : 'Team: tasks you gave and their daily updates', 'aria-label': n ? `Team, ${n} need you` : 'Team' },
     '👥', n ? h('span', { class: 'team-count' }, String(n)) : null);
 }
 

@@ -519,7 +519,7 @@ function teamBar(ctx, p) {
       h('input', { type: 'checkbox', checked: !!ui.givePhoto, onChange: (e, el) => ctx.setGivePhoto(el.checked) }), ' 📷 Photo needed to finish'),
     people === null ? h('span', { class: 'muted small' }, 'Loading…')
       : people.length ? people.map((u) => h('button', { class: 'chip', key: 'tp-' + u.id, onClick: () => ctx.giveProject(p, u) }, u.name))
-        : h('a', { class: 'small', href: '../' }, 'Add a person first (Team → People)'),
+        : h('a', { class: 'small', href: '../?team' }, 'Add a person first (Team → People)'),
     h('button', { class: 'link small', onClick: () => { ui.giveOpen = null; ctx.render(); } }, 'Cancel'));
 }
 

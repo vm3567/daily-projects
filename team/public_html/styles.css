@@ -98,3 +98,8 @@ header.top nav button.on { background: var(--accent-bg); color: var(--accent); }
 .files { margin-top: 8px; }
 .file-chip { min-height: 64px; font-size: 13px; }
 .file-wrap { display: inline-flex; align-items: flex-start; }
+
+/* offline */
+.offline-bar { margin: 0 0 10px; padding: 8px 12px; border-radius: 8px; background: var(--amber-bg); color: var(--amber); font-size: 14px; }
+.offline-bar.waiting { background: var(--accent-bg); color: var(--accent); }
+.card.waiting { border-color: var(--amber); border-style: dashed; }

@@ -60,6 +60,92 @@ const stateTag = (s) => el('span', { class: 'tag ' + (s === 'stuck' ? 'red' : s 
 
 // ---------------------------------------------------------------- talking to the server
 
+// ---------------------------------------------------------------- offline
+// Lists are kept on the phone (last copy) so the app opens without internet. Updates and messages sent
+// while offline wait in the phone's outbox (IndexedDB, photos included) and go out when the internet is back.
+
+class OfflineError extends Error {}
+const READS = new Set(['me', 'my.today', 'team.today', 'tasks.list', 'users.list', 'task.get']);
+const cacheKey = (a, body) => 'wt.c.' + a + ':' + JSON.stringify(body || {});
+function readCache(a, body) { try { return JSON.parse(localStorage.getItem(cacheKey(a, body)) || 'null'); } catch { return null; } }
+function writeCache(a, body, out) { try { localStorage.setItem(cacheKey(a, body), JSON.stringify(out)); } catch { /* phone storage full: still works online */ } }
+function clearCache() { try { for (const k of Object.keys(localStorage)) if (k.startsWith('wt.c.')) localStorage.removeItem(k); } catch { /* blocked */ } }
+
+function setOffline(on) {
+  if (state.offline === on) return;
+  state.offline = on;
+  render();
+  if (!on) flushOutbox();
+}
+
+function idb() {
+  return new Promise((resolve, reject) => {
+    const r = indexedDB.open('worktask', 1);
+    r.onupgradeneeded = () => r.result.createObjectStore('outbox', { keyPath: 'id', autoIncrement: true });
+    r.onsuccess = () => resolve(r.result);
+    r.onerror = () => reject(r.error);
+  });
+}
+async function outbox(mode, fn) {
+  const db = await idb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('outbox', mode);
+    const req = fn(tx.objectStore('outbox'));
+    tx.oncomplete = () => resolve(req && req.result);
+    tx.onerror = () => reject(tx.error);
+  });
+}
+async function loadOutbox() {
+  try { state.outbox = ((await outbox('readonly', (s) => s.getAll())) || []).filter((x) => state.user && x.userId === state.user.id); }
+  catch { state.outbox = []; }
+}
+async function queue(item) {
+  await outbox('readwrite', (s) => s.add({ ...item, userId: state.user.id, at: new Date().toISOString() }));
+  await loadOutbox();
+  render();
+}
+
+let flushing = false;
+/** Send what waited on this phone, oldest first. Stops at the first "still offline". */
+async function flushOutbox() {
+  if (flushing || !state.user) return;
+  flushing = true;
+  let sent = 0;
+  try {
+    await loadOutbox();
+    for (const it of [...state.outbox].sort((x, y) => x.id - y.id)) {
+      try {
+        if (it.kind === 'update') {
+          const twoSteps = it.state === 'finished' && it.needsPhoto && it.files && it.files.length;
+          const out = await api('update.save', { taskId: it.taskId, note: it.note, state: twoSteps ? 'progress' : it.state });
+          for (const f of it.files || []) { const fd = new FormData(); fd.append('updateId', String(out.update.id)); fd.append('file', f, 'photo.jpg'); await api('photo.add', fd, true); }
+          if (twoSteps) await api('update.save', { taskId: it.taskId, note: it.note, state: 'finished' });
+        } else if (it.kind === 'comment') await api('comment.add', { taskId: it.taskId, text: it.text });
+        await outbox('readwrite', (s) => s.delete(it.id));
+        sent++;
+      } catch (ex) {
+        if (ex instanceof OfflineError) break;
+        await outbox('readwrite', (s) => s.delete(it.id)); // refused by the server (e.g. task closed): say so, do not retry forever
+        toast(`Could not send "${(it.note || it.text || '').slice(0, 40)}": ${ex.message}`, 8000);
+      }
+    }
+  } finally {
+    flushing = false;
+    await loadOutbox();
+    if (sent) { toast(`✓ ${sent} waiting item${sent > 1 ? 's' : ''} sent`); loadView(); } else render();
+  }
+}
+
+/** The bar at the top: offline, and / or things waiting to be sent. */
+function offlineBar() {
+  const n = (state.outbox || []).length;
+  if (!state.offline && !n) return null;
+  return el('div', { class: 'offline-bar' + (state.offline ? '' : ' waiting') },
+    el('span', null, state.offline ? '📴 Offline — showing the last saved copy. What you send is kept on this phone and goes out when you are online.' : ''),
+    n ? el('strong', null, ` ⏳ ${n} waiting to send`) : null,
+    n && !state.offline ? el('button', { class: 'link', onClick: () => flushOutbox() }, 'Send now') : null);
+}
+
 async function api(a, body = {}, form = false) {
   const headers = {};
   if (state.token) headers.Authorization = 'Bearer ' + state.token;
@@ -68,18 +154,23 @@ async function api(a, body = {}, form = false) {
   try {
     res = await fetch('api/?a=' + encodeURIComponent(a), { method: 'POST', headers, body: form ? body : JSON.stringify(body) });
   } catch {
-    throw new Error('No internet connection. Try again.');
+    setOffline(true);
+    if (READS.has(a)) { const c = readCache(a, body); if (c) return { ...c, fromCache: true }; }
+    throw new OfflineError('You are offline. Try again when the internet is back.');
   }
+  setOffline(false);
   let out = null;
   try { out = await res.json(); } catch { out = null; }
   if (res.status === 401 && a !== 'login' && a !== 'password') { signedOut(); throw new Error(out?.error || 'Please sign in.'); }
   if (!out || !out.ok) throw new Error(out?.error || 'Something went wrong. Try again.');
+  if (READS.has(a) && !form) writeCache(a, body, out);
   return out;
 }
 
 function signedOut() {
   state.token = ''; state.user = null; state.data = null;
   save(TOKEN_KEY, '');
+  clearCache();
   render();
 }
 
@@ -196,6 +287,7 @@ function render() {
   const root = document.getElementById('app');
   if (!state.token || !state.user) { root.replaceChildren(loginScreen()); return; }
   if (state.user.mustChange || state.view === 'password') { root.replaceChildren(header(), passwordScreen()); return; }
+  const bar = offlineBar();
   let body;
   if (!state.data && state.view !== 'settings' && state.view !== 'give' && state.view !== 'suggest') body = el('p', { class: 'muted' }, 'Loading…');
   else if (state.view === 'today') body = state.user.role === 'admin' ? teamToday() : myToday();
@@ -205,7 +297,7 @@ function render() {
   else if (state.view === 'give' || state.view.startsWith('edit:')) body = taskForm();
   else if (state.view === 'suggest') body = suggestForm();
   else if (state.view.startsWith('task:')) body = taskDetail();
-  root.replaceChildren(header(), el('main', { class: 'narrow' }, body));
+  root.replaceChildren(header(), el('main', { class: 'narrow' }, bar, body));
 }
 
 function header() {
@@ -296,6 +388,15 @@ function myToday() {
 }
 
 function myTask(t, today) {
+  const waiting = (state.outbox || []).filter((x) => x.kind === 'update' && x.taskId === t.id).pop();
+  if (waiting && !state.editing[t.id]) {
+    return el('div', { class: 'card waiting' },
+      el('div', { class: 'task-head' }, el('h3', null, t.title), el('span', { class: 'tag amber' }, '⏳ Waiting to send')),
+      el('div', { class: 'meta' }, [t.project, repeatLabel(t, today)].filter(Boolean).join(' · ')),
+      el('div', { class: 'update' }, el('div', { class: 'row small' }, stateTag(waiting.state), (waiting.files || []).length ? el('span', { class: 'muted' }, `📷 ${waiting.files.length}`) : null),
+        el('div', { class: 'pre' }, waiting.note),
+        el('p', { class: 'muted small' }, 'Kept on this phone. It is sent by itself when the internet is back.')));
+  }
   const done = t.today && !state.editing[t.id];
   const late = t.repeat === 'once' && t.dueDate && t.dueDate < today;
   return el('div', { class: 'card' + (done ? ' sent' : late ? ' late' : '') },
@@ -349,7 +450,18 @@ function updateForm(t) {
       delete state.drafts[t.id]; delete state.files[t.id]; delete state.editing[t.id];
       toast('Sent ✓');
       loadView();
-    } catch (ex) { err.textContent = ex.message; err.hidden = false; btn.disabled = false; }
+    } catch (ex) {
+      if (ex instanceof OfflineError) { // keep it on the phone; it goes out when online
+        const blobs = [];
+        for (const f of files) blobs.push(await shrink(f));
+        await queue({ kind: 'update', taskId: t.id, note: d.note, state: d.state, needsPhoto: !!t.needsPhoto, files: blobs });
+        delete state.drafts[t.id]; delete state.files[t.id]; delete state.editing[t.id];
+        toast('📴 Saved on this phone — it will be sent when you are online', 5000);
+        render();
+        return;
+      }
+      err.textContent = ex.message; err.hidden = false; btn.disabled = false;
+    }
   } }, 'Send');
   return [
     el('textarea', { placeholder: 'What did you do today? (you can tap 🎤 on the keyboard to speak)', value: d.note, onInput: (e) => { d.note = e.target.value; err.hidden = true; } }),
@@ -388,13 +500,23 @@ function messagesBlock(taskId, comments) {
       state.data.comments = out.comments;
       toast('Sent ✓');
       render();
-    } catch (ex) { err.textContent = ex.message; err.hidden = false; btn.disabled = false; }
+    } catch (ex) {
+      if (ex instanceof OfflineError) {
+        await queue({ kind: 'comment', taskId, text: box.value });
+        delete state.drafts['m' + taskId];
+        toast('📴 Saved on this phone — it will be sent when you are online', 5000);
+        return;
+      }
+      err.textContent = ex.message; err.hidden = false; btn.disabled = false;
+    }
   } }, 'Send message');
   return [
     el('h2', null, '💬 Messages'),
     comments.length ? comments.map((c) => el('div', { class: 'card msg' + (c.mine ? ' mine' : '') },
       el('div', { class: 'row small' }, el('strong', null, c.mine ? 'You' : c.by), el('span', { class: 'muted' }, `${fmtDay(c.at)} ${fmtTime(c.at)}`)),
       el('div', { class: 'pre' }, c.text))) : el('p', { class: 'muted small' }, 'No messages yet.'),
+    (state.outbox || []).filter((x) => x.kind === 'comment' && x.taskId === taskId).map((x) => el('div', { class: 'card msg mine' },
+      el('div', { class: 'row small' }, el('strong', null, 'You'), el('span', { class: 'tag amber' }, '⏳ Waiting to send')), el('div', { class: 'pre' }, x.text))),
     el('div', { class: 'card stack' }, box, err, el('div', { class: 'row' }, btn)),
   ];
 }
@@ -742,18 +864,25 @@ async function start() {
   if (wantsProjects) history.replaceState(null, '', location.pathname + location.hash);
   if (!state.token) { render(); return; }
   try {
-    state.user = (await api('me')).user;
+    state.user = (await api('me')).user; // offline: the copy kept on this phone
   } catch (e) {
-    if (state.token) { toast(e.message, 5000); } // no connection: keep the sign-in, try again later
+    if (state.token) { toast(e.message, 5000); } // offline and never opened here before: keep the sign-in, try again later
     render();
     return;
   }
-  if (wantsProjects && state.user.owner && !state.user.mustChange) { location.href = 'projects/'; return; }
+  await loadOutbox();
+  // the owner opens the app on their projects; worktask.in/?team shows the Team pages
+  const teamWanted = new URLSearchParams(location.search).has('team');
+  if (state.user.owner && !state.user.mustChange && !teamWanted && !state.prefill && !state.openTask) { location.href = 'projects/'; return; }
   if (state.prefill && state.user.role === 'admin' && !state.user.mustChange) { go('give'); return; }
   if (state.openTask && !state.user.mustChange) { const id = state.openTask; state.openTask = 0; go('task:' + id); return; }
   render();
   if (!state.user.mustChange) loadView();
 }
+
+window.addEventListener('online', () => { setOffline(false); flushOutbox(); });
+window.addEventListener('offline', () => setOffline(true));
+setInterval(() => { if ((state.outbox || []).length) flushOutbox(); }, 30000); // weak signal: keep trying
 
 window.addEventListener('hashchange', () => {
   takePrefill();

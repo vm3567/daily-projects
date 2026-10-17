@@ -276,3 +276,8 @@ On a project: **👥 Give project** → pick the person. They see its open steps
 - **📷 Photo needed to finish:** tick it when giving a task or a project; staff cannot tap Finished without a photo.
 - **📎 Instructions:** add photos or PDFs to a task (Give a task form, or open the task → 📎 Add instruction photo / PDF). Staff see them on the task.
 - **↔ Move a task:** open the task → **↔ Move to…** → pick the person. Its updates stay; both see a note. A step of a given project moves the whole project (your project's blue bar follows). **People → ↔ Move all tasks to…** hands over everything when someone is on leave.
+
+### Offline
+- **Projects:** works without internet. An orange **📴 Offline** bar says so; your changes wait on the device and are sent by themselves when the internet is back (tap the bar to try at once).
+- **Staff app:** opens with the last saved list. Updates (with photos) and messages sent offline show **⏳ Waiting to send** and go out by themselves when online.
+- The installed app opens on your projects; the 👥 button opens the Team pages (worktask.in/?team).

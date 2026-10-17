@@ -880,3 +880,5 @@ a.team-btn { position: relative; text-decoration: none; }
 a.team-line { display: block; margin: 6px 0 4px; padding: 6px 10px; border-radius: 8px; background: var(--brand-soft); border: 1px solid var(--line); color: var(--text); text-decoration: none; font-size: 14px; }
 a.team-line.late { border-color: var(--red); color: var(--red); }
 a.team-line.ok { border-color: var(--green); }
+.offline-bar { display: block; width: 100%; text-align: left; margin: 0; padding: 8px 14px; border: 0; border-bottom: 1px solid var(--orange); background: #fff7e6; color: #7a4b00; font: inherit; font-size: 14px; cursor: pointer; }
+@media (prefers-color-scheme: dark) { .offline-bar { background: #2b2311; color: #e3b341; } }
