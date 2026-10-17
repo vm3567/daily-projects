@@ -45,8 +45,12 @@ try {
     case 'before': {
       $date = $argv[2] ?? '';
       if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) fail('Give a date like 2026-10-09.');
-      $c = one('SELECT id, at FROM dp_commits WHERE at <= ? ORDER BY at DESC LIMIT 1', [$date . ' 23:59:59']);
-      out($c ? ['commit' => $c['id'], 'at' => $c['at']] : null);
+      // follow the versions back from the newest (two saves in the same second keep their real order)
+      for ($id = dp_head($owner), $c = null; $id; $id = $c['parent']) {
+        $c = one('SELECT id, parent, at FROM dp_commits WHERE id = ?', [$id]);
+        if (!$c || $c['at'] <= $date . ' 23:59:59') break;
+      }
+      out($c && $c['at'] <= $date . ' 23:59:59' ? ['commit' => $c['id'], 'at' => $c['at']] : null);
       break;
     }
     case 'tree': {

@@ -4,7 +4,7 @@
 const TOKEN_KEY = 'wt.token';
 const state = {
   token: load(TOKEN_KEY), user: null, view: 'today', data: null, people: [], closed: false,
-  drafts: {}, editing: {}, files: {}, busy: false, prefill: null, newPerson: null,
+  drafts: {}, editing: {}, files: {}, sending: {}, busy: false, prefill: null, newPerson: null,
 };
 const photoUrls = new Map();
 
@@ -110,8 +110,11 @@ async function loadOutbox() {
   try { state.outbox = ((await outbox('readonly', (s) => s.getAll())) || []).filter((x) => state.user && x.userId === state.user.id); }
   catch { state.outbox = []; }
 }
+const newClientId = () => (crypto.randomUUID ? crypto.randomUUID() : Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join(''));
+
 async function queue(item) {
-  await outbox('readwrite', (s) => s.add({ ...item, userId: state.user.id, at: new Date().toISOString() }));
+  // clientId: the server keeps a message or photo only once, even if a lost reply makes the phone send it again
+  await outbox('readwrite', (s) => s.add({ ...item, clientId: newClientId(), userId: state.user.id, at: new Date().toISOString() }));
   await loadOutbox();
   refreshBar();
 }
@@ -119,9 +122,10 @@ const keep = (it) => outbox('readwrite', (s) => s.put(it)); // remember how far 
 const istDay = (at) => new Date(at).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
 
 /** Send one waiting item. Each step is remembered, so a cut-off send does not repeat what already went. */
-async function sendItem(it) {
+async function sendItem(it, tok) {
   const day = istDay(it.at); // the day it was written, not the day it is sent
-  if (it.kind === 'comment') { await api('comment.add', { taskId: it.taskId, text: it.text, day }); return; }
+  const mine = () => { if (state.token !== tok) throw new AuthError('Signed out.'); }; // never send with the next person's sign-in
+  if (it.kind === 'comment') { await api('comment.add', { taskId: it.taskId, text: it.text, day, clientId: it.clientId }); return; }
   if (it.kind === 'update' && !it.updateId) {
     const twoSteps = it.state === 'finished' && it.needsPhoto && it.files && it.files.length;
     const out = await api('update.save', { taskId: it.taskId, note: it.note, state: twoSteps ? 'progress' : it.state, day });
@@ -129,8 +133,10 @@ async function sendItem(it) {
     await keep(it);
   }
   while ((it.files || []).length) { // kind 'update' or 'photos'
+    mine();
     const fd = new FormData(); fd.append('updateId', String(it.updateId)); fd.append('file', it.files[0], 'photo.jpg');
-    try { await api('photo.add', fd, true); it.files.shift(); }
+    if (it.clientId) fd.append('clientId', `${it.clientId}-p${it.photoNo || 0}`);
+    try { await api('photo.add', fd, true); it.files.shift(); it.photoNo = (it.photoNo || 0) + 1; }
     catch (ex) {
       if (ex instanceof OfflineError || ex instanceof AuthError || ex instanceof RetryError) throw ex;
       if (/^Up to \d+ photos/.test(ex.message)) it.files = []; // already full: the photos went before
@@ -138,6 +144,7 @@ async function sendItem(it) {
     }
     await keep(it);
   }
+  mine();
   if (it.thenFinish) await api('update.save', { taskId: it.taskId, note: it.note, state: 'finished', day });
 }
 
@@ -147,16 +154,31 @@ async function flushOutbox() {
   if (flushing || !state.user) return;
   flushing = true;
   let sent = 0;
+  const uid = state.user.id, tok = state.token;
+  const stuck = new Set(); // tasks with an item the server keeps failing on: later items for them wait behind it
   try {
     await loadOutbox();
     for (const it of [...state.outbox].sort((x, y) => x.id - y.id)) {
-      if (!state.user) break;
+      if (!state.user || state.user.id !== uid || state.token !== tok || it.userId !== uid) break; // signed out, or someone else signed in
+      if (stuck.has(it.taskId)) continue;
       try {
-        await sendItem(it);
+        await sendItem(it, tok);
         await outbox('readwrite', (s) => s.delete(it.id));
         sent++;
       } catch (ex) {
-        if (ex instanceof OfflineError || ex instanceof AuthError || ex instanceof RetryError) break; // keep it: try again later
+        if (ex instanceof OfflineError || ex instanceof AuthError) break; // keep it: try again later
+        if (ex instanceof RetryError) { // a server error: keep it, but after a few tries let the items behind it go first
+          it.tries = (it.tries || 0) + 1;
+          if (it.tries >= 20 && Date.now() - new Date(it.at) > 12 * 3600000) { // failing for half a day: give up on it
+            await outbox('readwrite', (s) => s.delete(it.id));
+            toast(`Could not send "${(it.note || it.text || '').slice(0, 40)}": ${ex.message}`, 8000);
+            continue;
+          }
+          await keep(it);
+          if (it.tries < 5) break;
+          stuck.add(it.taskId);
+          continue;
+        }
         await outbox('readwrite', (s) => s.delete(it.id)); // refused by the server (e.g. task closed): say so, do not retry forever
         toast(`Could not send "${(it.note || it.text || '').slice(0, 40)}": ${ex.message}`, 8000);
       }
@@ -164,7 +186,10 @@ async function flushOutbox() {
   } finally {
     flushing = false;
     await loadOutbox();
-    if (sent) { toast(`✓ ${sent} waiting item${sent > 1 ? 's' : ''} sent`); loadView(); } else refreshBar();
+    if (sent) toast(`✓ ${sent} waiting item${sent > 1 ? 's' : ''} sent`);
+    // reload only screens that show the sent items: a reload would wipe a form being typed
+    const v = state.view;
+    if (sent && state.user && !state.user.mustChange && (v === 'today' || v === 'tasks' || v.startsWith('task:'))) loadView(); else refreshBar();
   }
 }
 
@@ -179,8 +204,8 @@ function offlineBar() {
 }
 
 async function api(a, body = {}, form = false) {
-  const headers = {};
-  if (state.token) headers.Authorization = 'Bearer ' + state.token;
+  const headers = {}, tok = state.token;
+  if (tok) headers.Authorization = 'Bearer ' + tok;
   if (!form) headers['Content-Type'] = 'application/json';
   let res;
   try {
@@ -193,15 +218,27 @@ async function api(a, body = {}, form = false) {
   setOffline(false);
   let out = null;
   try { out = await res.json(); } catch { out = null; }
-  if (res.status === 401 && a !== 'login' && a !== 'password') { signedOut(); throw new AuthError(out?.error || 'Please sign in.'); }
-  if (res.status >= 500 || !out) throw new RetryError(out?.error || 'Something went wrong. Try again.');
-  if (!out || !out.ok) throw new Error(out?.error || 'Something went wrong. Try again.');
+  if (res.status === 428) { // must choose their own password first: keep waiting work, show the password screen
+    if (state.user && !state.user.mustChange) { state.user.mustChange = true; render(); }
+    throw new AuthError(out?.error || 'Choose your own password first.');
+  }
+  if (res.status === 401 && a !== 'login' && a !== 'password') {
+    if (state.token === tok) signedOut(); // an old sign-in's answer must not sign out the person now here
+    throw new AuthError(out?.error || 'Please sign in.');
+  }
+  // a hiccup (server error, too busy, or a page that is not an answer): try again later
+  if (res.status >= 500 || res.status === 408 || res.status === 429 || (!out && res.status < 400)) throw new RetryError(out?.error || 'Something went wrong. Try again.');
+  if (!out) throw new Error(`The server refused this (${res.status}).`); // e.g. the host's firewall: trying again will not help
+  if (!out.ok) throw new Error(out.error || 'Something went wrong. Try again.');
   if (READS.has(a) && !form) writeCache(a, body, out);
   return out;
 }
 
 function signedOut() {
   state.token = ''; state.user = null; state.data = null; state.outbox = [];
+  // nothing typed or picked carries over to the next person on this phone
+  state.drafts = {}; state.files = {}; state.editing = {}; state.sending = {}; state.newPerson = null;
+  state.back = ''; state.moving = 0; state.view = 'today'; state.closed = false;
   save(TOKEN_KEY, '');
   clearCache();
   render();
@@ -283,8 +320,9 @@ async function shrink(file) {
 
 // ---------------------------------------------------------------- loading
 
+let loadSeq = 0;
 async function loadView() {
-  const me = state.user, view = state.view;
+  const me = state.user, view = state.view, n = ++loadSeq;
   if (!me) return;
   state.busy = true;
   let data = state.data, people = state.people, failed = null;
@@ -302,7 +340,7 @@ async function loadView() {
     } else data = null;
   } catch (e) { failed = e; }
   if (state.user !== me) { state.busy = false; return; } // signed out meanwhile
-  if (state.view !== view) return; // a newer screen is loading: this answer is for the old one
+  if (n !== loadSeq) return; // a newer load started (another screen, or Open / Done on the same one): this answer is old
   state.data = data; state.people = people; state.busy = false;
   state.loadFailed = !!failed && !data;
   if (failed) toast(failed.message, 5000);
@@ -357,7 +395,17 @@ function header() {
 
 async function signOut() {
   try { await api('logout'); } catch { /* signed out anyway */ }
+  state.prefill = null; state.openTask = 0;
+  try { localStorage.removeItem('dp.snapshot'); } catch { /* blocked */ } // the owner's projects copy (changes not sent yet are kept)
   signedOut();
+}
+
+/** The owner goes to their projects, but only once nothing waits to be sent: the waiting bar is only on these pages. */
+async function toProjects() {
+  if ((state.outbox || []).length) await flushOutbox();
+  if ((state.outbox || []).length) { toast('⏳ Something is still waiting to send. It goes by itself when the internet is back.', 6000); return false; }
+  location.href = 'projects/';
+  return true;
 }
 
 function loginScreen() {
@@ -379,7 +427,7 @@ function loginScreen() {
         await loadOutbox();
         const ready = !out.user.mustChange, teamWanted = new URLSearchParams(location.search).has('team');
         // straight to your projects, unless a Give to team / task link is waiting
-        if (out.user.owner && ready && !teamWanted && !state.prefill && !state.openTask) { location.href = 'projects/'; return; }
+        if (out.user.owner && ready && !teamWanted && !state.prefill && !state.openTask && await toProjects()) return;
         flushOutbox();
         if (ready && state.prefill && out.user.role === 'admin') { go('give'); return; }
         if (ready && state.openTask) { const id = state.openTask; state.openTask = 0; go('task:' + id); return; }
@@ -408,7 +456,12 @@ function passwordScreen() {
         const out = await api('password', { old: old.value, new: n1.value });
         state.user = out.user;
         toast('Password changed ✓');
-        if (out.user.owner && wantsProjects) { location.href = 'projects/'; return; }
+        flushOutbox(); // work that waited for the new password goes out now
+        if (out.user.owner && wantsProjects && await toProjects()) return;
+        // a Give to team / task link that waited for the new password
+        if (state.prefill && out.user.role === 'admin') { go('give'); return; }
+        state.prefill = null;
+        if (state.openTask) { const id = state.openTask; state.openTask = 0; go('task:' + id); return; }
         go('today');
       } catch (ex) { err.textContent = ex.message; err.hidden = false; }
     } },
@@ -498,11 +551,12 @@ function updateForm(t) {
   const d = (state.drafts[t.id] ||= { note: '', state: 'progress' });
   const err = el('p', { class: 'err small', hidden: true });
   const files = state.files[t.id] || [];
-  const btn = el('button', { class: 'primary', onClick: async () => {
+  const btn = el('button', { class: 'primary', disabled: !!state.sending[t.id], onClick: async () => {
+    if (state.sending[t.id]) return; // already going (the screen was redrawn meanwhile)
     if (!d.note.trim()) { err.textContent = 'Write what you did first.'; err.hidden = false; return; }
     const havePhotos = (t.today && t.today.photos.length) || files.length;
     if (d.state === 'finished' && t.needsPhoto && !havePhotos) { err.textContent = '📷 Add a photo to finish this task.'; err.hidden = false; return; }
-    btn.disabled = true;
+    btn.disabled = true; state.sending[t.id] = true;
     // photo needed to finish: save as "working", add the photos, then mark finished
     const twoSteps = d.state === 'finished' && t.needsPhoto && files.length;
     let updateId = 0; // set once the update itself is on the server
@@ -528,7 +582,7 @@ function updateForm(t) {
         return;
       }
       err.textContent = ex.message; err.hidden = false; btn.disabled = false;
-    }
+    } finally { delete state.sending[t.id]; }
   } }, 'Send');
   return [
     el('textarea', { placeholder: 'What did you do today? (you can tap 🎤 on the keyboard to speak)', value: d.note, onInput: (e) => { d.note = e.target.value; err.hidden = true; } }),
@@ -558,15 +612,17 @@ function messageLine(t) {
 function messagesBlock(taskId, comments) {
   const err = el('p', { class: 'err small', hidden: true });
   const box = el('textarea', { placeholder: state.user.role === 'admin' ? 'Reply or give an instruction…' : 'Ask or reply to your manager…', value: state.drafts['m' + taskId] || '', onInput: (e) => { state.drafts['m' + taskId] = e.target.value; err.hidden = true; } });
-  const btn = el('button', { class: 'primary', onClick: async () => {
+  const key = 'm' + taskId;
+  const btn = el('button', { class: 'primary', disabled: !!state.sending[key], onClick: async () => {
+    if (state.sending[key]) return; // already going (the screen was redrawn meanwhile)
     if (!box.value.trim()) { err.textContent = 'Write the message first.'; err.hidden = false; return; }
-    btn.disabled = true;
+    btn.disabled = true; state.sending[key] = true;
     try {
       const out = await api('comment.add', { taskId, text: box.value });
       delete state.drafts['m' + taskId];
-      state.data.comments = out.comments;
       toast('Sent ✓');
-      render();
+      // only if this task is still open on screen (the user may have gone to another one)
+      if (state.view === 'task:' + taskId && state.data && state.data.task && state.data.task.id === taskId) { state.data.comments = out.comments; render(); }
     } catch (ex) {
       if (ex instanceof OfflineError) {
         const text = box.value;
@@ -577,7 +633,7 @@ function messagesBlock(taskId, comments) {
         return;
       }
       err.textContent = ex.message; err.hidden = false; btn.disabled = false;
-    }
+    } finally { delete state.sending[key]; }
   } }, 'Send message');
   return [
     el('h2', null, '💬 Messages'),
@@ -719,7 +775,7 @@ function taskDetail() {
     try { await api('task.status', { id: t.id, status }); toast(status === 'open' ? 'Opened again' : status === 'done' ? 'Marked done ✓' : 'Cancelled'); loadView(); } catch (ex) { toast(ex.message, 5000); }
   };
   return [
-    el('button', { class: 'link', onClick: () => { if (state.fromProjects && state.user.owner) location.href = 'projects/'; else go(state.back || 'today'); } }, '← Back'),
+    el('button', { class: 'link', onClick: async () => { if (state.fromProjects && state.user.owner && await toProjects()) return; go(state.back || 'today'); } }, '← Back'),
     el('h1', null, t.title),
     el('p', { class: 'meta' }, [t.assignee.name, t.project, repeatLabel(t), t.status !== 'open' ? (t.status === 'done' ? 'Done' : 'Cancelled') : null].filter(Boolean).join(' · ')),
     t.details ? el('div', { class: 'card pre' }, t.details) : null,
@@ -813,7 +869,7 @@ function taskForm() {
         const fromProjects = !editing && pre.stepRef && state.user.owner;
         state.prefill = null;
         toast(editing ? 'Saved ✓' : `Given to ${out.task.assignee.name} ✓`);
-        if (fromProjects) { setTimeout(() => { location.href = 'projects/'; }, 900); return; }
+        if (fromProjects) { setTimeout(async () => { if (!(await toProjects())) go('today'); }, 900); return; }
         go(editing ? 'task:' + out.task.id : 'today');
       } catch (ex) { err.textContent = ex.message; err.hidden = false; btn.disabled = false; }
     } },
@@ -821,7 +877,7 @@ function taskForm() {
     el('label', null, 'Project', project), el('label', null, 'How often', how), wLabel, dLabel,
     el('label', { class: 'check' }, needsPhoto, ' 📷 Photo needed to finish'),
     el('label', null, '📎 Instruction photos / PDF (optional)', files), err,
-    el('div', { class: 'row' }, btn, el('button', { type: 'button', onClick: () => { state.prefill = null; if (!editing && state.fromProjects && state.user.owner) { location.href = 'projects/'; return; } go(editing ? 'task:' + t.id : 'today'); } }, 'Cancel'))),
+    el('div', { class: 'row' }, btn, el('button', { type: 'button', onClick: async () => { state.prefill = null; if (!editing && state.fromProjects && state.user.owner && await toProjects()) return; go(editing ? 'task:' + t.id : 'today'); } }, 'Cancel'))),
   ];
 }
 
@@ -947,7 +1003,7 @@ async function start() {
   await loadOutbox();
   // the owner opens the app on their projects; worktask.in/?team shows the Team pages
   const teamWanted = new URLSearchParams(location.search).has('team');
-  if (state.user.owner && !state.user.mustChange && !teamWanted && !state.prefill && !state.openTask) { location.href = 'projects/'; return; }
+  if (state.user.owner && !state.user.mustChange && !teamWanted && !state.prefill && !state.openTask && await toProjects()) return;
   if (state.prefill && state.user.role === 'admin' && !state.user.mustChange) { go('give'); return; }
   if (state.openTask && !state.user.mustChange) { const id = state.openTask; state.openTask = 0; go('task:' + id); return; }
   render();

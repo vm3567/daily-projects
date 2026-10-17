@@ -3,6 +3,7 @@
 // Anything it is not sure about stays in the words and goes to the Inbox, so nothing is lost.
 
 import { addDays } from './rules.js';
+import { MAX_SNOOZE_DAYS } from './ops.js';
 
 const NUMBERS = { a: 1, an: 1, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10 };
 const DAYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
@@ -47,19 +48,23 @@ function findWaitOn(s, people) {
   const m = /\b(?:waiting|wait)\s+(?:on|for)\s+/i.exec(s);
   if (!m) return { rest: s, name: '' };
   const after = s.slice(m.index + m[0].length);
-  const low = after.toLowerCase();
+  const title = (/^(?:mr|mrs|ms|dr|sir)\.?\s+/i.exec(after) || [''])[0].length; // "Mr. Rao": the name is Rao
   let name = '';
   let len = 0;
   for (const p of people) { // a saved person: full name, or a first name only one person has
     const full = p.name.toLowerCase();
-    if (low.startsWith(full) && !/[a-z]/i.test(after[full.length] || '') && full.length > len) { name = p.name; len = full.length; }
+    for (const at of [0, title]) {
+      const low = after.slice(at).toLowerCase();
+      if (low.startsWith(full) && !/[a-z]/i.test(after[at + full.length] || '') && at + full.length > len) { name = p.name; len = at + full.length; }
+    }
   }
   if (!name) {
-    const first = /^([a-z][\w'-]*)/i.exec(after);
+    const first = /^([a-z][\w'-]*)/i.exec(after.slice(title));
     if (first) {
       const same = people.filter((p) => p.name.split(/\s+/)[0].toLowerCase() === first[1].toLowerCase());
-      if (same.length === 1) { name = same[0].name; len = first[1].length; }
-      else if (/^[A-Z]/.test(first[1]) && !NOT_NAMES.has(first[1].toLowerCase())) { name = first[1]; len = first[1].length; } // a new name (Siri writes names with a capital)
+      if (same.length === 1) { name = same[0].name; len = title + first[1].length; }
+      // a new name (Siri writes names with a capital); two saved people with this first name: not sure, so it stays in the words
+      else if (!same.length && /^[A-Z]/.test(first[1]) && !NOT_NAMES.has(first[1].toLowerCase())) { name = first[1]; len = title + first[1].length; }
     }
   }
   if (!name) return { rest: s, name: '' };
@@ -72,8 +77,9 @@ function findWhen(s, today) {
   if ((r = cut(s, /\b(?:on\s+|by\s+)?(?:the\s+)?day after tomorrow\b(?![’']s\b)/i))[1]) return { rest: r[0], days: 2 };
   if ((r = cut(s, /\b(?:on\s+|by\s+)?tomorrow\b(?![’']s\b)/i))[1]) return { rest: r[0], days: 1 };
   if ((r = cut(s, /\b(?:in|after)\s+(\d+|a|an|one|two|three|four|five|six|seven|eight|nine|ten)\s+(days?|weeks?)\b/i))[1]) {
-    const n = num(r[1][1]);
-    return { rest: r[0], days: n * (/week/i.test(r[1][2]) ? 7 : 1) };
+    const days = num(r[1][1]) * (/week/i.test(r[1][2]) ? 7 : 1);
+    if (days > MAX_SNOOZE_DAYS) return { rest: s, days: 0 }; // too far to come back: the words stay in the step
+    return { rest: r[0], days };
   }
   if ((r = cut(s, /\b(?:by\s+|on\s+)?next week\b/i))[1]) return { rest: r[0], days: 7 };
   if ((r = cut(s, /\b(?:(?:on|by|this|next|coming)\s+|(?<!\bthe\s+))(sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b(?![’']s\b)/i))[1]) {

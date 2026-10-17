@@ -28,6 +28,15 @@ foreach ($it as $f) {
   $files[$rel] = dp_put_blob((string)file_get_contents($f->getPathname()));
 }
 if (!isset($files['data.json'])) { fwrite(STDERR, "No data.json in that folder.\n"); exit(1); }
+// data.json names each attached file by GitHub's fingerprint; here files are kept by sha1 of their bytes, so point it at those
+$data = json_decode(dp_get_blob($files['data.json'])); // as objects, so empty {} stay {} when written back
+$fixed = 0;
+foreach ((is_object($data) && is_array($data->projects ?? null) ? $data->projects : []) as $p) {
+  foreach ((is_object($p) && is_array($p->files ?? null) ? $p->files : []) as $f) {
+    if (is_object($f) && is_string($f->path ?? null) && isset($files[$f->path]) && ($f->sha ?? '') !== $files[$f->path]) { $f->sha = $files[$f->path]; $fixed++; }
+  }
+}
+if ($fixed) $files['data.json'] = dp_put_blob(json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRESERVE_ZERO_FRACTION) . "\n");
 $parent = dp_head((int)$user['id']);
 $changes = [];
 $old = dp_tree_files(one('SELECT tree FROM dp_commits WHERE id = ?', [$parent])['tree']);

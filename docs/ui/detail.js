@@ -520,7 +520,7 @@ function teamBar(ctx, p) {
     people === null ? h('span', { class: 'muted small' }, 'Loading…')
       : people.length ? people.map((u) => h('button', { class: 'chip', key: 'tp-' + u.id, onClick: () => ctx.giveProject(p, u) }, u.name))
         : h('a', { class: 'small', href: '../?team' }, 'Add a person first (Team → People)'),
-    h('button', { class: 'link small', onClick: () => { ui.giveOpen = null; ctx.render(); } }, 'Cancel'));
+    h('button', { class: 'link small', onClick: () => { ui.giveOpen = null; ui.givePhoto = false; ctx.render(); } }, 'Cancel'));
 }
 
 const notesTimers = {}; // one save timer per project, kept across screen updates
@@ -665,7 +665,7 @@ function stateButtons(ctx, p) {
       }, '💤 Snooze'),
       ctx.onServer && !p.team ? h('button', {
         class: 'btn' + (ui.giveOpen === p.id ? ' on' : ''), title: 'Give the whole project to a team member: they see its open steps in order',
-        onClick: () => { ui.giveOpen = ui.giveOpen === p.id ? null : p.id; ctx.render(); },
+        onClick: () => { ui.giveOpen = ui.giveOpen === p.id ? null : p.id; ui.givePhoto = false; ctx.render(); },
       }, '👥 Give project') : null,
       h('button', { class: 'btn', onClick: () => ctx.act('pause', { projectId: p.id }, `Paused: ${p.name}`) }, 'Pause'),
       h('button', {

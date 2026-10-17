@@ -139,14 +139,21 @@ function dp_handle(string $a, array $in, array $me): ?array {
       return ['commit' => $id, 'tree' => $c['tree'], 'entries' => (object)dp_tree_files($c['tree'])];
     }
     case 'dp.blobPut': {
-      $bytes = base64_decode((string)($in['base64'] ?? ''), true);
+      // no file at all (the request was cut off or too big for the server): an error, never an empty file
+      $bytes = is_string($in['base64'] ?? null) ? base64_decode($in['base64'], true) : false;
       if ($bytes === false) throw new ApiError('The file did not arrive. Try again.');
       return ['sha' => dp_put_blob($bytes)];
     }
     case 'dp.commit':
       return dp_commit($me, (string)($in['parent'] ?? ''), (array)($in['changes'] ?? []), (string)($in['message'] ?? ''));
-    case 'dp.versions': { // for "go back to an earlier day"
-      $rows = all('SELECT id, message, at FROM dp_commits ORDER BY at DESC LIMIT ' . max(1, min(500, (int)($in['limit'] ?? 100))));
+    case 'dp.versions': { // for "go back to an earlier day": newest first, by following each version to the one before
+      $rows = [];
+      $id = dp_head($me['id']);
+      for ($n = max(1, min(500, (int)($in['limit'] ?? 100))); $id && count($rows) < $n; $id = $c['parent']) {
+        $c = one('SELECT id, parent, message, at FROM dp_commits WHERE id = ?', [$id]);
+        if (!$c) break;
+        $rows[] = ['id' => $c['id'], 'message' => $c['message'], 'at' => $c['at']];
+      }
       return ['versions' => $rows];
     }
   }

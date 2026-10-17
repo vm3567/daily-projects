@@ -61,3 +61,25 @@ test('Siri: day words inside the sentence stay in the step', () => {
   assert.equal(v.date, null);
   assert.equal(say('Call Ravi for Kiln trial Monday').date, '2026-10-19'); // a bare day is still a day
 });
+
+test('Siri: a first name two saved people share is not made into a new person', () => {
+  const v = parseVoice('Check burner for Kiln trial waiting on Ravi tomorrow', { projects, people: [{ name: 'Ravi Kumar' }, { name: 'Ravi Shankar' }], today });
+  assert.equal(v.waitOn, '');
+  assert.equal(v.text, 'Check burner waiting on Ravi');
+  assert.equal(v.date, '2026-10-16');
+});
+
+test('Siri: a title (Mr., Dr.) is not taken as the name', () => {
+  const v = say('Ship for Kiln trial waiting on Mr. Rao');
+  assert.equal(v.waitOn, 'Rao');
+  assert.equal(v.text, 'Ship');
+  assert.equal(say('Ship for Kiln trial waiting on Dr Ravi').waitOn, 'Ravi Kumar');
+});
+
+test('Siri: a day too far away is left in the words, not a broken date', () => {
+  const v = say('Order clay for Kiln trial in 99999999 days');
+  assert.equal(v.date, null);
+  assert.equal(v.text, 'Order clay in 99999999 days');
+  assert.equal(say('Check kiln for Kiln trial in 60 weeks').date, null);
+  assert.equal(say('Check kiln for Kiln trial in 2 weeks').date, '2026-10-29');
+});

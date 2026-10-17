@@ -117,8 +117,18 @@ function commitOps(buildOps, message) {
         console.log(`Saved to worktask.in: ${message}`);
         return state;
       } catch (e) {
-        if (!e.clash) throw e;
-        continue; // another device saved first: get the latest, replay
+        if (e.clash) continue; // another device saved first: get the latest, replay
+        // The line may have dropped AFTER the server saved: look before saying it failed,
+        // because running the command again would add the new steps or notes a second time.
+        const sent = server.head;
+        let looked = false;
+        try { serverPull(); looked = true; } catch { /* still no answer */ }
+        if (looked && server.head !== sent && JSON.stringify(server.data) === JSON.stringify(state.data)) {
+          console.log(`Saved to worktask.in: ${message}`);
+          return state;
+        }
+        if (looked && server.head === sent) throw e; // nothing new on the server: it was not saved
+        throw new Error(`The server did not answer clearly. The save may or may not have gone through. Check with /today before trying again. (${e.message})`);
       }
     }
     writeState(before, state);

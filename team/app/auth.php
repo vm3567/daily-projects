@@ -2,7 +2,12 @@
 // Sign in, sign out, passwords. Passwords are stored scrambled (password_hash); nobody can read them back.
 declare(strict_types=1);
 
-function client_ip(): string { return substr($_SERVER['REMOTE_ADDR'] ?? '', 0, 60); }
+/** The computer's internet address. A phone or home line on IPv6 gets a whole block of addresses (a /64), so it counts as one place. */
+function client_ip(): string {
+  $ip = (string)($_SERVER['REMOTE_ADDR'] ?? '');
+  if (!str_contains($ip, '.') && filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6)) $ip = inet_ntop(substr(inet_pton($ip), 0, 8) . str_repeat("\0", 8)) . '/64';
+  return substr($ip, 0, 60);
+}
 
 /** True while this name from this computer, this name from anywhere, or this computer has had too many wrong passwords.
  *  $extra: tries already written for this attempt (counted before the slow password check, so tries sent at the same moment all count). */

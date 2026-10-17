@@ -183,6 +183,9 @@ function migrate(PDO $pdo): void {
       at DATETIME NOT NULL,
       INDEX (task_id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+    // v5: a message or photo sent twice from the outbox (reply lost on a weak signal) is kept once
+    "ALTER TABLE comments ADD COLUMN client_id VARCHAR(40) NULL, ADD UNIQUE KEY comment_once (user_id, client_id)",
+    "ALTER TABLE photos ADD COLUMN client_id VARCHAR(40) NULL, ADD UNIQUE KEY photo_once (update_id, client_id)",
   ];
   $pdo->exec($steps[0]);
   $done = (int)($pdo->query("SELECT v FROM settings WHERE k = 'schema'")->fetchColumn() ?: 0);

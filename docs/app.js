@@ -801,8 +801,14 @@ function openCapture() {
  * From the Chrome button: the app opens with #add={text, title, url}. The add box shows it filled in;
  * one tap on a project adds it as a step (with ✉ Open mail), or New project / To Inbox.
  */
+const CLIP_KEY = 'dp.clip';
+
 function takeClipFromHash() {
-  if (!location.hash.startsWith('#add=')) return;
+  if (!location.hash.startsWith('#add=')) {
+    // a page from the Chrome button that was not added yet (the app went to sign in first): show it again
+    try { const c = JSON.parse(localStorage.getItem(CLIP_KEY) || 'null'); if (c && typeof c === 'object' && !ui.capture) ui.capture = c; } catch { /* none */ }
+    return;
+  }
   let clip = null;
   try { clip = JSON.parse(decodeURIComponent(location.hash.slice(5))); } catch { clip = null; }
   history.replaceState(null, '', location.pathname + location.search); // a refresh must not add it twice
@@ -815,6 +821,7 @@ function takeClipFromHash() {
   const people = [clip.from, ...(Array.isArray(clip.people) ? clip.people : [])].map(nameOf)
     .filter((n) => n && !seen.has(n.toLowerCase()) && seen.add(n.toLowerCase())).slice(0, 8);
   ui.capture = { text: text || (link && link.title) || '', link, find: '', people, waitOn: '', when: 0 };
+  try { localStorage.setItem(CLIP_KEY, JSON.stringify(ui.capture)); } catch { /* blocked */ } // kept if signing in is needed first
   ui.rowMenu = null;
   ui.menuOpen = false;
   if (store && store.view) { render(); focusKey('capture-input'); }
@@ -850,26 +857,32 @@ function runVoice() {
   const left = [];
   let last = null;
   for (const item of list) {
-    const { data } = store.view;
-    const v = parseVoice(item.said, { projects: activeProjects(data), people: data.people || [], today: todayIndia() });
-    if (!v) continue;
-    if (v.project) {
-      if (v.waitOn) ensurePeople([v.waitOn]);
-      const stepId = newId();
-      const steps = [['addStep', { projectId: v.project.id, stepId, text: v.text }]];
-      if (v.waitOn) steps.push(['setStepField', { projectId: v.project.id, stepId, field: 'waitingOn', value: v.waitOn }], ['setStepField', { projectId: v.project.id, stepId, field: 'waiting', value: true }]);
-      if (v.date) steps.push(['remindStep', { projectId: v.project.id, stepId, date: v.date }]);
-      const extra = (v.waitOn ? ` · waiting on ${v.waitOn}` : '') + (v.date ? ` · comes back ${fmtDay(v.date)}` : '');
-      const done = actMany(v.project.id, steps, `🎤 Added to ${v.project.name}: ${v.text}${extra}`);
-      if (done) last = { project: v.project }; else left.push(item);
-    } else {
-      const itemId = newId();
-      if (store.dispatch('addInbox', { itemId, text: v.text })) {
-        last = { inbox: true };
-        toast(`🎤 In your Inbox: ${v.text}${v.missed ? ` (no project called “${v.missed}”)` : ''}`, 8000,
-          () => { if (store.dispatch('removeInbox', { itemId })) toast('Undone', 1500); });
-      } else left.push(item);
-    }
+    try { // one note that goes wrong is dropped; it must not stop the others or add them twice
+      const { data } = store.view;
+      const v = parseVoice(item.said, { projects: activeProjects(data), people: data.people || [], today: todayIndia() });
+      if (!v) continue;
+      if (v.project) {
+        if (v.waitOn) ensurePeople([v.waitOn]);
+        const stepId = newId();
+        const steps = [['addStep', { projectId: v.project.id, stepId, text: v.text }]];
+        if (v.waitOn) steps.push(['setStepField', { projectId: v.project.id, stepId, field: 'waitingOn', value: v.waitOn }], ['setStepField', { projectId: v.project.id, stepId, field: 'waiting', value: true }]);
+        if (v.date) steps.push(['remindStep', { projectId: v.project.id, stepId, date: v.date }]);
+        const done = actMany(v.project.id, steps, null);
+        if (done) {
+          // "comes back" only when the reminder was really set
+          const extra = (v.waitOn ? ` · waiting on ${v.waitOn}` : '') + (v.date && done.ops.some((o) => o.type === 'remindStep') ? ` · comes back ${fmtDay(v.date)}` : '');
+          toast(`🎤 Added to ${v.project.name}: ${v.text}${extra}`, 5000, done.undo);
+          last = { project: v.project };
+        } else left.push(item);
+      } else {
+        const itemId = newId();
+        if (store.dispatch('addInbox', { itemId, text: v.text })) {
+          last = { inbox: true };
+          toast(`🎤 In your Inbox: ${v.text}${v.missed ? ` (no project called “${v.missed}”)` : ''}`, 8000,
+            () => { if (store.dispatch('removeInbox', { itemId })) toast('Undone', 1500); });
+        } else left.push(item);
+      }
+    } catch { /* this note could not be read: dropped */ }
   }
   keepVoice(left);
   if (last && last.project) select(last.project.id);
@@ -1125,7 +1138,7 @@ function rowMenu() {
       : p.state === 'paused' ? item('▶', 'Unpause project', () => act('unpause', { projectId: p.id }, `Back on Today: ${p.name}`)) : null,
     onServer && p.state === 'active' ? (p.team
       ? item('👥', `Take back from ${p.team.name}`, () => { if (confirm(`Take "${p.name}" back from ${p.team.name}? Their open steps are removed from their list.`)) giveProject(p, null); })
-      : item('👥', 'Give project to…', () => { select(p.id); ui.giveOpen = p.id; })) : null,
+      : item('👥', 'Give project to…', () => { select(p.id); ui.giveOpen = p.id; ui.givePhoto = false; })) : null,
     item('↗', 'Open', () => select(p.id)),
     item('🗑', 'Delete project…', () => {
       if (!confirm(`Delete "${p.name}"?\n\nYou can press Undo for a few seconds after.`)) return;
@@ -1586,21 +1599,37 @@ function showKeyScreen(message = '') {
 function showMoved() {
   let waiting = [];
   try { waiting = JSON.parse(localStorage.getItem('dp.pending') || '[]'); } catch { waiting = []; }
+  let moved = [];
+  try { moved = JSON.parse(localStorage.getItem('dp.pending.moved') || '[]'); } catch { moved = []; }
+  if (!Array.isArray(moved)) moved = [];
   // Siri (#say=) and the Chrome button (#add=) still work with the old address: pass them on.
   // A Siri note or Chrome-button page goes on at once; changes still waiting here stay on this device
   // and are offered (the button below) the next time this old address is opened.
-  if (!waiting.length || /^#(say|add)=/.test(location.hash)) { location.replace(MOVED_TO + location.hash); return; }
+  if ((!waiting.length && !moved.length) || /^#(say|add)=/.test(location.hash)) { location.replace(MOVED_TO + location.hash); return; }
   const screen = document.getElementById('keyscreen');
   screen.hidden = false;
   root.hidden = true;
+  if (!waiting.length) {
+    // changes taken across before: offered again until you say they arrived (the new address adds each one only once)
+    screen.replaceChildren(h('div', { class: 'key-card' },
+      h('img', { src: 'icons/icon-192.png', alt: '', width: 64, height: 64 }),
+      h('h1', null, 'Daily Projects has moved'),
+      h('p', null, `${moved.length} change(s) from this device were taken to worktask.in. If they did not arrive there, take them again.`),
+      h('a', { class: 'btn primary', href: MOVED_TO + '#ops=' + encodeURIComponent(JSON.stringify(moved)) }, `Take my ${moved.length} change(s) again`),
+      h('p', null, h('button', { class: 'btn', type: 'button', onClick: () => { try { localStorage.removeItem('dp.pending.moved'); } catch { /* blocked */ } location.replace(MOVED_TO); } }, 'Done, they arrived'))));
+    return;
+  }
   // changes made on this device that never reached GitHub: carry them to the new address (it adds them to its queue)
-  const carry = MOVED_TO + '#ops=' + encodeURIComponent(JSON.stringify(waiting));
+  // (with any taken across before that were not yet said to have arrived: the new address adds each one only once)
+  const ids = new Set(waiting.map((o) => o && o.id));
+  const all = [...moved.filter((o) => !(o && ids.has(o.id))), ...waiting];
+  const carry = MOVED_TO + '#ops=' + encodeURIComponent(JSON.stringify(all));
   screen.replaceChildren(h('div', { class: 'key-card' },
     h('img', { src: 'icons/icon-192.png', alt: '', width: 64, height: 64 }),
     h('h1', null, 'Daily Projects has moved'),
     h('p', null, 'Your projects are now at worktask.in. Sign in there with your username and password.'),
     h('p', null, `⚠︎ ${waiting.length} change(s) made on this device were not sent before the move. The button below takes them with you.`),
-    h('a', { class: 'btn primary', href: carry, onClick: () => { try { localStorage.setItem('dp.pending.moved', localStorage.getItem('dp.pending')); localStorage.removeItem('dp.pending'); } catch { /* kept */ } } }, `Open worktask.in with my ${waiting.length} change(s)`)));
+    h('a', { class: 'btn primary', href: carry, onClick: () => { try { localStorage.setItem('dp.pending.moved', JSON.stringify(all)); localStorage.removeItem('dp.pending'); } catch { /* kept */ } } }, `Open worktask.in with my ${waiting.length} change(s)`)));
 }
 
 /** From the old address: #ops=[…] are changes that never reached GitHub. Add them to this device's queue (no doubles). */
@@ -1614,14 +1643,15 @@ function takeOpsFromHash() {
   try { mine = JSON.parse(localStorage.getItem('dp.pending') || '[]'); } catch { mine = []; }
   const have = new Set(mine.map((o) => o.id));
   // a link can come from anyone: only harmless kinds of change, and only after a yes
-  const { ok, files } = carriedOps(ops);
+  const { ok, files, dropped } = carriedOps(ops);
   const add = ok.filter((o) => !have.has(o.id));
-  const filesMsg = files ? ` ${files} photo(s)/file(s) could not come along: please add them again.` : '';
-  if (!add.length) { if (files) setTimeout(() => toast(filesMsg.trim(), 8000), 1500); return; }
+  const filesMsg = (files ? ` ${files} photo(s)/file(s) could not come along: please add them again.` : '')
+    + (dropped ? ` ${dropped} change(s) (deletes, team changes) could not come along: please do them again.` : '');
+  if (!add.length) { if (filesMsg) setTimeout(() => toast(filesMsg.trim(), 8000), 1500); return; }
   const kinds = [...new Set(add.map((o) => o.type))].join(', ');
-  if (!confirm(`Add ${add.length} change(s) carried from the old address (kinds: ${kinds})?\n\nSay No if you did not just come from the old address.`)) return;
-  try { localStorage.setItem('dp.pending', JSON.stringify([...mine, ...add])); } catch { return; }
-  setTimeout(() => toast(`${add.length} change(s) from the old address added ✓${filesMsg}`, files ? 8000 : 5000), 1500);
+  if (!confirm(`Add ${add.length} change(s) carried from the old address (kinds: ${kinds})?${filesMsg}\n\nSay No if you did not just come from the old address.`)) return;
+  try { localStorage.setItem('dp.pending', JSON.stringify([...mine, ...add])); } catch { toast('Could not keep the changes on this device. Open the old address again to bring them.', 8000); return; }
+  setTimeout(() => toast(`${add.length} change(s) from the old address added ✓${filesMsg}`, filesMsg ? 8000 : 5000), 1500);
 }
 
 // ---------------------------------------------------------------- render
@@ -1673,6 +1703,7 @@ function render() {
     return;
   }
   if (ui.selected && !store.view.data.projects.some((p) => p.id === ui.selected)) ui.selected = null;
+  if (!(ui.capture && typeof ui.capture === 'object')) { try { localStorage.removeItem(CLIP_KEY); } catch { /* blocked */ } } // added or closed
   const wide = ['diary', 'settings', 'dashboard', 'time'].includes(ui.view) && !ui.search;
   const next = h('div', {
     class: ['layout', wide ? 'wide' : '', ui.mobile === 'detail' && !wide ? 'show-detail' : '', ui.menuOpen ? 'menu-open' : ''].join(' ').trim(),
@@ -2390,15 +2421,23 @@ const SYNC_KEY = 'dp.teamSync'; // last steps sent per given project, so unchang
 /** Give the whole project to a person (or take it back with person = null). */
 async function giveProject(p, person, needsPhoto = !!ui.givePhoto) {
   try {
-    await teamApi('project.sync', { projectRef: p.id, project: p.name, assigneeId: person ? person.id : 0, steps: person ? projectSteps(p) : [], needsPhoto });
+    const out = await teamApi('project.sync', { projectRef: p.id, project: p.name, assigneeId: person ? person.id : 0, steps: person ? projectSteps(p) : [], needsPhoto });
     team.gen++; // a list fetched before this change is old now: it must not move the project back
     store.dispatch('setProjectTeam', { projectId: p.id, userId: person ? person.id : null, name: person ? person.name : '', needsPhoto });
     ui.giveOpen = null;
     ui.givePhoto = false;
     toast(person ? `👥 ${p.name} given to ${person.name} ✓` : `Taken back: ${p.name}`);
-    rememberSync(p.id, person ? JSON.stringify([person.id, p.name, projectSteps(p), needsPhoto]) : null);
+    // a step the server did not make yet (just finished): not remembered, so it is sent again later
+    rememberSync(p.id, person && !notSent(out, projectSteps(p)).length ? JSON.stringify([person.id, p.name, projectSteps(p), needsPhoto]) : null);
     loadTeam(true);
   } catch (e) { toast(e.message, 5000); }
+}
+
+/** Steps sent with project.sync that are not on the person's list yet (the server waits 10 minutes after one was finished). */
+function notSent(out, steps) {
+  if (Array.isArray(out.skipped)) return out.skipped;
+  const on = new Set((out.tasks || []).map((t) => t.stepRef));
+  return steps.filter((x) => x.title && !on.has(x.stepRef)).map((x) => x.stepRef);
 }
 
 function rememberSync(id, sig) {
@@ -2422,8 +2461,9 @@ async function syncGivenProjects(gen = team.gen) {
     const sig = JSON.stringify([p.team.userId, p.name, p.state === 'active' ? projectSteps(p) : [], !!p.team.needsPhoto]);
     if (m[p.id] === sig) continue;
     try {
-      await teamApi('project.sync', { projectRef: p.id, project: p.name, assigneeId: p.state === 'active' ? p.team.userId : 0, steps: p.state === 'active' ? projectSteps(p) : [], needsPhoto: !!p.team.needsPhoto });
-      rememberSync(p.id, sig);
+      const steps = p.state === 'active' ? projectSteps(p) : [];
+      const out = await teamApi('project.sync', { projectRef: p.id, project: p.name, assigneeId: p.state === 'active' ? p.team.userId : 0, steps, needsPhoto: !!p.team.needsPhoto });
+      if (!notSent(out, steps).length) rememberSync(p.id, sig); // else: sent again next time (a re-opened step that was just finished)
       delete team.syncErr[p.id];
     } catch (e) {
       // try again next time; say it once, so new steps do not quietly reach nobody
@@ -2453,6 +2493,8 @@ function tickFinishedTeamTasks(tasks) {
   for (const t of tasks) {
     if (t.status !== 'done' || seen.has(t.id)) continue;
     seen.add(t.id);
+    const latest = team.byStep.get(t.stepRef); // the step was given again after this (re-opened): the old task must not tick it
+    if (latest && latest.id !== t.id) continue;
     const p = store.view.data.projects.find((x) => x.id === t.projectRef) || store.view.data.projects.find((x) => x.steps.some((st) => st.id === t.stepRef));
     const step = p && p.steps.find((st) => st.id === t.stepRef);
     if (!step || step.done) continue;
