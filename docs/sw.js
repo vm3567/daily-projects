@@ -3,7 +3,7 @@
 // Offline or very slow: the copy on the device.
 // Your data is NOT handled here (it goes to GitHub directly; the app keeps its own data copy).
 
-const CACHE = 'daily-projects-app';
+const CACHE = 'daily-projects-app-2'; // new name: drops the old copy, which also held data files (../api/)
 const FILES = [
   './', 'index.html', 'styles.css', 'manifest.webmanifest',
   'app.js', 'ai.js', 'config.js', 'device.js', 'github.js', 'mockrepo.js', 'ops.js', 'reports.js', 'rules.js', 'store.js', 'voice.js', 'serverrepo.js',
@@ -17,13 +17,16 @@ self.addEventListener('install', (event) => {
 });
 
 self.addEventListener('activate', (event) => {
-  event.waitUntil(self.clients.claim());
+  event.waitUntil(caches.keys()
+    .then((keys) => Promise.all(keys.filter((k) => k.startsWith('daily-projects-app') && k !== CACHE).map((k) => caches.delete(k))))
+    .then(() => self.clients.claim()));
 });
 
 self.addEventListener('fetch', (event) => {
   const req = event.request;
   const url = new URL(req.url);
   if (req.method !== 'GET' || url.origin !== self.location.origin) return; // GitHub / AI calls are not touched
+  if (!url.pathname.startsWith(new URL('./', self.location).pathname)) return; // only the app's own files: never data (../api/)
   event.respondWith(networkFirst(req, url));
 });
 

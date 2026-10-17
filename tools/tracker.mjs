@@ -53,7 +53,8 @@ function serverPull() {
     const m = /^history\/(\d{4}-\d{2})\.json$/.exec(path);
     if (m) history[m[1]] = JSON.parse(text);
   }
-  server = { head: out.head, data: out.files['data.json'] ? JSON.parse(out.files['data.json']) : emptyData(), history };
+  // a data.json that is there but empty or broken must stop here (JSON.parse throws), never become "no projects"
+  server = { head: out.head, data: 'data.json' in out.files ? JSON.parse(out.files['data.json']) : emptyData(), history };
 }
 
 function git(...args) {

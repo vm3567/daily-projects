@@ -953,9 +953,29 @@ function setState(state, op, a, from, to, kind) {
 export const OP_TYPES = Object.keys(handlers);
 
 export function applyOp(state, op) {
-  const h = handlers[op.type];
-  if (!h) return false;
-  return h(state, op, op.args || {});
+  // own keys only ('__proto__', 'toString'… are not changes); a broken change is skipped, never stops the app
+  if (typeof op?.type !== 'string' || !Object.prototype.hasOwnProperty.call(handlers, op.type)) return false;
+  try { return handlers[op.type](state, op, op.args || {}); } catch { return false; }
+}
+
+// Changes that may not come in through a link: they delete, give away, plant data or swap the AI key.
+// addFile from the old address points at a GitHub file the server does not have, so its save would always fail.
+const NOT_CARRIED = new Set(['deleteProject', 'restoreProject', 'deleteStep', 'setProjectTeam', 'addFile', 'setAiKey', 'setAiProvider']);
+
+/** Changes carried from the old address (#ops=): keeps only known, harmless ones. Returns { ok, files, dropped }. */
+export function carriedOps(list) {
+  const out = { ok: [], files: 0, dropped: 0 };
+  if (!Array.isArray(list)) return out;
+  for (const o of list.slice(0, 500)) {
+    const good = o && typeof o === 'object' && typeof o.id === 'string' && typeof o.type === 'string'
+      && Object.prototype.hasOwnProperty.call(handlers, o.type) && typeof o.at === 'string' && !Number.isNaN(Date.parse(o.at))
+      && (o.args === undefined || (o.args && typeof o.args === 'object' && !Array.isArray(o.args)));
+    if (good && o.type === 'addFile') out.files++;
+    else if (good && !NOT_CARRIED.has(o.type) && !(o.args && o.args.sha)) out.ok.push(o);
+    else out.dropped++;
+  }
+  out.dropped += Math.max(0, list.length - 500);
+  return out;
 }
 
 export function applyOps(state, ops) {

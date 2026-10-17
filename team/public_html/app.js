@@ -65,6 +65,8 @@ const stateTag = (s) => el('span', { class: 'tag ' + (s === 'stuck' ? 'red' : s 
 // while offline wait in the phone's outbox (IndexedDB, photos included) and go out when the internet is back.
 
 class OfflineError extends Error {}
+class AuthError extends Error {} // signed out (password reset, sign-in too old)
+class RetryError extends Error {} // the server had a hiccup: try again later
 const READS = new Set(['me', 'my.today', 'team.today', 'tasks.list', 'users.list', 'task.get']);
 const cacheKey = (a, body) => 'wt.c.' + a + ':' + JSON.stringify(body || {});
 function readCache(a, body) { try { return JSON.parse(localStorage.getItem(cacheKey(a, body)) || 'null'); } catch { return null; } }
@@ -74,8 +76,17 @@ function clearCache() { try { for (const k of Object.keys(localStorage)) if (k.s
 function setOffline(on) {
   if (state.offline === on) return;
   state.offline = on;
-  render();
-  if (!on) flushOutbox();
+  refreshBar();
+  if (on) return;
+  flushOutbox();
+  // a screen that had no saved copy: load it now the internet is back
+  if (state.user && !state.user.mustChange && !state.data && !state.busy && !['settings', 'give', 'suggest', 'password'].includes(state.view)) loadView();
+}
+
+/** Redraw only the offline bar (a whole redraw would wipe what is being typed). */
+function refreshBar() {
+  const h = document.getElementById('bar');
+  if (h) h.replaceChildren(offlineBar() || '');
 }
 
 function idb() {
@@ -102,7 +113,32 @@ async function loadOutbox() {
 async function queue(item) {
   await outbox('readwrite', (s) => s.add({ ...item, userId: state.user.id, at: new Date().toISOString() }));
   await loadOutbox();
-  render();
+  refreshBar();
+}
+const keep = (it) => outbox('readwrite', (s) => s.put(it)); // remember how far an item got
+const istDay = (at) => new Date(at).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+
+/** Send one waiting item. Each step is remembered, so a cut-off send does not repeat what already went. */
+async function sendItem(it) {
+  const day = istDay(it.at); // the day it was written, not the day it is sent
+  if (it.kind === 'comment') { await api('comment.add', { taskId: it.taskId, text: it.text, day }); return; }
+  if (it.kind === 'update' && !it.updateId) {
+    const twoSteps = it.state === 'finished' && it.needsPhoto && it.files && it.files.length;
+    const out = await api('update.save', { taskId: it.taskId, note: it.note, state: twoSteps ? 'progress' : it.state, day });
+    it.updateId = out.update.id; it.thenFinish = !!twoSteps;
+    await keep(it);
+  }
+  while ((it.files || []).length) { // kind 'update' or 'photos'
+    const fd = new FormData(); fd.append('updateId', String(it.updateId)); fd.append('file', it.files[0], 'photo.jpg');
+    try { await api('photo.add', fd, true); it.files.shift(); }
+    catch (ex) {
+      if (ex instanceof OfflineError || ex instanceof AuthError || ex instanceof RetryError) throw ex;
+      if (/^Up to \d+ photos/.test(ex.message)) it.files = []; // already full: the photos went before
+      else { it.files.shift(); toast(`A photo was not sent: ${ex.message}`, 8000); }
+    }
+    await keep(it);
+  }
+  if (it.thenFinish) await api('update.save', { taskId: it.taskId, note: it.note, state: 'finished', day });
 }
 
 let flushing = false;
@@ -114,17 +150,13 @@ async function flushOutbox() {
   try {
     await loadOutbox();
     for (const it of [...state.outbox].sort((x, y) => x.id - y.id)) {
+      if (!state.user) break;
       try {
-        if (it.kind === 'update') {
-          const twoSteps = it.state === 'finished' && it.needsPhoto && it.files && it.files.length;
-          const out = await api('update.save', { taskId: it.taskId, note: it.note, state: twoSteps ? 'progress' : it.state });
-          for (const f of it.files || []) { const fd = new FormData(); fd.append('updateId', String(out.update.id)); fd.append('file', f, 'photo.jpg'); await api('photo.add', fd, true); }
-          if (twoSteps) await api('update.save', { taskId: it.taskId, note: it.note, state: 'finished' });
-        } else if (it.kind === 'comment') await api('comment.add', { taskId: it.taskId, text: it.text });
+        await sendItem(it);
         await outbox('readwrite', (s) => s.delete(it.id));
         sent++;
       } catch (ex) {
-        if (ex instanceof OfflineError) break;
+        if (ex instanceof OfflineError || ex instanceof AuthError || ex instanceof RetryError) break; // keep it: try again later
         await outbox('readwrite', (s) => s.delete(it.id)); // refused by the server (e.g. task closed): say so, do not retry forever
         toast(`Could not send "${(it.note || it.text || '').slice(0, 40)}": ${ex.message}`, 8000);
       }
@@ -132,7 +164,7 @@ async function flushOutbox() {
   } finally {
     flushing = false;
     await loadOutbox();
-    if (sent) { toast(`✓ ${sent} waiting item${sent > 1 ? 's' : ''} sent`); loadView(); } else render();
+    if (sent) { toast(`✓ ${sent} waiting item${sent > 1 ? 's' : ''} sent`); loadView(); } else refreshBar();
   }
 }
 
@@ -161,14 +193,15 @@ async function api(a, body = {}, form = false) {
   setOffline(false);
   let out = null;
   try { out = await res.json(); } catch { out = null; }
-  if (res.status === 401 && a !== 'login' && a !== 'password') { signedOut(); throw new Error(out?.error || 'Please sign in.'); }
+  if (res.status === 401 && a !== 'login' && a !== 'password') { signedOut(); throw new AuthError(out?.error || 'Please sign in.'); }
+  if (res.status >= 500 || !out) throw new RetryError(out?.error || 'Something went wrong. Try again.');
   if (!out || !out.ok) throw new Error(out?.error || 'Something went wrong. Try again.');
   if (READS.has(a) && !form) writeCache(a, body, out);
   return out;
 }
 
 function signedOut() {
-  state.token = ''; state.user = null; state.data = null;
+  state.token = ''; state.user = null; state.data = null; state.outbox = [];
   save(TOKEN_KEY, '');
   clearCache();
   render();
@@ -251,31 +284,35 @@ async function shrink(file) {
 // ---------------------------------------------------------------- loading
 
 async function loadView() {
-  const me = state.user;
+  const me = state.user, view = state.view;
+  if (!me) return;
   state.busy = true;
+  let data = state.data, people = state.people, failed = null;
   try {
-    if (state.view === 'today') state.data = await api(me.role === 'admin' ? 'team.today' : 'my.today');
-    else if (state.view === 'tasks') state.data = await api('tasks.list', { status: state.closed ? 'closed' : 'open' });
-    else if (state.view === 'people') state.data = await api('users.list');
-    else if (state.view.startsWith('task:')) {
-      state.data = await api('task.get', { id: Number(state.view.slice(5)) });
-      if (me.role === 'admin') state.people = (await api('users.list')).users.filter((u) => u.active);
+    if (view === 'today') data = await api(me.role === 'admin' ? 'team.today' : 'my.today');
+    else if (view === 'tasks') data = await api('tasks.list', { status: state.closed ? 'closed' : 'open' });
+    else if (view === 'people') data = await api('users.list');
+    else if (view.startsWith('task:')) {
+      data = await api('task.get', { id: Number(view.slice(5)) });
+      if (me.role === 'admin') people = (await api('users.list')).users.filter((u) => u.active);
     }
-    else if (state.view === 'give' || state.view.startsWith('edit:')) {
-      state.people = (await api('users.list')).users.filter((u) => u.active);
-      state.data = state.view.startsWith('edit:') ? await api('task.get', { id: Number(state.view.slice(5)) }) : null;
-    } else state.data = null;
-  } catch (e) {
-    toast(e.message, 5000);
-  }
-  state.busy = false;
+    else if (view === 'give' || view.startsWith('edit:')) {
+      people = (await api('users.list')).users.filter((u) => u.active);
+      data = view.startsWith('edit:') ? await api('task.get', { id: Number(view.slice(5)) }) : null;
+    } else data = null;
+  } catch (e) { failed = e; }
+  if (state.user !== me) { state.busy = false; return; } // signed out meanwhile
+  if (state.view !== view) return; // a newer screen is loading: this answer is for the old one
+  state.data = data; state.people = people; state.busy = false;
+  state.loadFailed = !!failed && !data;
+  if (failed) toast(failed.message, 5000);
   render();
 }
 
 function go(view) {
   if (view.startsWith('task:') && !state.view.startsWith('task:') && !state.view.startsWith('edit:')) state.back = state.view;
   state.view = view;
-  state.data = null;
+  state.data = null; state.loadFailed = false;
   window.scrollTo(0, 0);
   render();
   loadView();
@@ -285,11 +322,18 @@ function go(view) {
 
 function render() {
   const root = document.getElementById('app');
+  if (state.token && !state.user && state.retryMe) { // offline (or the server is down) on opening: try again by itself
+    root.replaceChildren(el('main', { class: 'narrow' }, el('h1', null, 'Work Task'), el('p', { class: 'muted' }, '📴 Could not reach Work Task. Trying again…')));
+    return;
+  }
   if (!state.token || !state.user) { root.replaceChildren(loginScreen()); return; }
   if (state.user.mustChange || state.view === 'password') { root.replaceChildren(header(), passwordScreen()); return; }
   const bar = offlineBar();
   let body;
-  if (!state.data && state.view !== 'settings' && state.view !== 'give' && state.view !== 'suggest') body = el('p', { class: 'muted' }, 'Loading…');
+  if (!state.data && state.view !== 'settings' && state.view !== 'give' && state.view !== 'suggest') {
+    body = state.loadFailed ? el('p', { class: 'muted' }, 'No saved copy on this phone yet. ', el('button', { class: 'link', onClick: () => loadView() }, 'Try again'))
+      : el('p', { class: 'muted' }, 'Loading…');
+  }
   else if (state.view === 'today') body = state.user.role === 'admin' ? teamToday() : myToday();
   else if (state.view === 'tasks') body = allTasks();
   else if (state.view === 'people') body = peopleScreen();
@@ -297,7 +341,7 @@ function render() {
   else if (state.view === 'give' || state.view.startsWith('edit:')) body = taskForm();
   else if (state.view === 'suggest') body = suggestForm();
   else if (state.view.startsWith('task:')) body = taskDetail();
-  root.replaceChildren(header(), el('main', { class: 'narrow' }, bar, body));
+  root.replaceChildren(header(), el('main', { class: 'narrow' }, el('div', { id: 'bar' }, bar), body));
 }
 
 function header() {
@@ -332,9 +376,15 @@ function loginScreen() {
         state.token = out.token; state.user = out.user;
         save(TOKEN_KEY, out.token);
         state.view = 'today';
-        if (out.user.owner && !out.user.mustChange) { location.href = 'projects/'; return; } // straight to your projects
+        await loadOutbox();
+        const ready = !out.user.mustChange, teamWanted = new URLSearchParams(location.search).has('team');
+        // straight to your projects, unless a Give to team / task link is waiting
+        if (out.user.owner && ready && !teamWanted && !state.prefill && !state.openTask) { location.href = 'projects/'; return; }
+        flushOutbox();
+        if (ready && state.prefill && out.user.role === 'admin') { go('give'); return; }
+        if (ready && state.openTask) { const id = state.openTask; state.openTask = 0; go('task:' + id); return; }
         render();
-        if (!out.user.mustChange) loadView();
+        if (ready) loadView();
       } catch (ex) {
         err.textContent = ex.message; err.hidden = false; btn.disabled = false;
       }
@@ -388,7 +438,7 @@ function myToday() {
 }
 
 function myTask(t, today) {
-  const waiting = (state.outbox || []).filter((x) => x.kind === 'update' && x.taskId === t.id).pop();
+  const waiting = (state.outbox || []).filter((x) => (x.kind === 'update' || x.kind === 'photos') && x.taskId === t.id).pop();
   if (waiting && !state.editing[t.id]) {
     return el('div', { class: 'card waiting' },
       el('div', { class: 'task-head' }, el('h3', null, t.title), el('span', { class: 'tag amber' }, '⏳ Waiting to send')),
@@ -425,7 +475,19 @@ function sentView(t) {
 function photoPicker(t, direct) {
   const input = el('input', { type: 'file', accept: 'image/*', class: 'hidden-file', multiple: true, onChange: async () => {
     const files = [...input.files].slice(0, 5);
-    if (direct) { await uploadPhotos(t.today.id, files); loadView(); return; }
+    if (direct) {
+      const left = await uploadPhotos(t.today.id, files);
+      if (left.length) { // offline: keep the photos on the phone
+        const blobs = [];
+        for (const f of left) blobs.push(await shrink(f));
+        await queue({ kind: 'photos', taskId: t.id, updateId: t.today.id, note: t.today.note, state: t.today.state, files: blobs });
+        toast('📴 Saved on this phone — it will be sent when you are online', 5000);
+        render();
+        return;
+      }
+      loadView();
+      return;
+    }
     state.files[t.id] = [...(state.files[t.id] || []), ...files].slice(0, 5);
     render();
   } });
@@ -441,11 +503,14 @@ function updateForm(t) {
     const havePhotos = (t.today && t.today.photos.length) || files.length;
     if (d.state === 'finished' && t.needsPhoto && !havePhotos) { err.textContent = '📷 Add a photo to finish this task.'; err.hidden = false; return; }
     btn.disabled = true;
+    // photo needed to finish: save as "working", add the photos, then mark finished
+    const twoSteps = d.state === 'finished' && t.needsPhoto && files.length;
+    let updateId = 0; // set once the update itself is on the server
     try {
-      // photo needed to finish: save as "working", add the photos, then mark finished
-      const twoSteps = d.state === 'finished' && t.needsPhoto && files.length;
       const out = await api('update.save', { taskId: t.id, note: d.note, state: twoSteps ? 'progress' : d.state });
-      if (files.length) await uploadPhotos(out.update.id, files);
+      updateId = out.update.id;
+      const left = files.length ? await uploadPhotos(updateId, files) : [];
+      if (left.length) throw Object.assign(new OfflineError('offline'), { left });
       if (twoSteps) await api('update.save', { taskId: t.id, note: d.note, state: 'finished' });
       delete state.drafts[t.id]; delete state.files[t.id]; delete state.editing[t.id];
       toast('Sent ✓');
@@ -453,8 +518,10 @@ function updateForm(t) {
     } catch (ex) {
       if (ex instanceof OfflineError) { // keep it on the phone; it goes out when online
         const blobs = [];
-        for (const f of files) blobs.push(await shrink(f));
-        await queue({ kind: 'update', taskId: t.id, note: d.note, state: d.state, needsPhoto: !!t.needsPhoto, files: blobs });
+        for (const f of updateId ? ex.left || [] : files) blobs.push(await shrink(f));
+        // only what did not go yet: the photos left, then "finished"
+        await queue(updateId ? { kind: 'photos', taskId: t.id, updateId, note: d.note, state: d.state, thenFinish: !!twoSteps, files: blobs }
+          : { kind: 'update', taskId: t.id, note: d.note, state: d.state, needsPhoto: !!t.needsPhoto, files: blobs });
         delete state.drafts[t.id]; delete state.files[t.id]; delete state.editing[t.id];
         toast('📴 Saved on this phone — it will be sent when you are online', 5000);
         render();
@@ -502,9 +569,11 @@ function messagesBlock(taskId, comments) {
       render();
     } catch (ex) {
       if (ex instanceof OfflineError) {
-        await queue({ kind: 'comment', taskId, text: box.value });
-        delete state.drafts['m' + taskId];
+        const text = box.value;
+        delete state.drafts['m' + taskId]; // empty the box, so a second tap does not send it twice
+        await queue({ kind: 'comment', taskId, text });
         toast('📴 Saved on this phone — it will be sent when you are online', 5000);
+        render();
         return;
       }
       err.textContent = ex.message; err.hidden = false; btn.disabled = false;
@@ -540,13 +609,18 @@ function suggestForm() {
   ];
 }
 
+/** Returns the photos not sent because the internet (or the server) dropped, so they can be kept on the phone. */
 async function uploadPhotos(updateId, files) {
-  for (const f of files) {
+  for (let i = 0; i < files.length; i++) {
     const fd = new FormData();
     fd.append('updateId', String(updateId));
-    fd.append('file', await shrink(f), 'photo.jpg');
-    try { await api('photo.add', fd, true); } catch (ex) { toast(ex.message, 5000); }
+    fd.append('file', await shrink(files[i]), 'photo.jpg');
+    try { await api('photo.add', fd, true); } catch (ex) {
+      if (ex instanceof OfflineError || ex instanceof RetryError) return files.slice(i);
+      toast(ex.message, 5000);
+    }
   }
+  return [];
 }
 
 // ---------- manager: team today
@@ -866,7 +940,7 @@ async function start() {
   try {
     state.user = (await api('me')).user; // offline: the copy kept on this phone
   } catch (e) {
-    if (state.token) { toast(e.message, 5000); } // offline and never opened here before: keep the sign-in, try again later
+    if (state.token) { state.retryMe = true; toast(e.message, 5000); } // offline and never opened here before: keep the sign-in, try again later
     render();
     return;
   }
@@ -880,7 +954,9 @@ async function start() {
   if (!state.user.mustChange) loadView();
 }
 
-window.addEventListener('online', () => { setOffline(false); flushOutbox(); });
+function retryStart() { if (state.token && !state.user && state.retryMe) { state.retryMe = false; start(); } }
+window.addEventListener('online', () => { setOffline(false); flushOutbox(); retryStart(); });
+setInterval(retryStart, 15000);
 window.addEventListener('offline', () => setOffline(true));
 setInterval(() => { if ((state.outbox || []).length) flushOutbox(); }, 30000); // weak signal: keep trying
 

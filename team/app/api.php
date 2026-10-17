@@ -13,7 +13,9 @@ function txt($v, int $max, bool $required = false, string $what = 'This'): strin
 function date_or_null($v): ?string {
   $v = (string)($v ?? '');
   if ($v === '') return null;
-  if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $v) || !strtotime($v)) throw new ApiError('That date is not right.');
+  if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $v)) throw new ApiError('That date is not right.');
+  [$y, $m, $d] = array_map('intval', explode('-', $v));
+  if (!checkdate($m, $d, $y)) throw new ApiError('That date is not right.'); // like 30 February
   return $v;
 }
 
@@ -54,6 +56,9 @@ function move_tasks(array $me, array $tasks, int $toId): int {
   foreach ($tasks as $t) {
     if ((int)$t['assignee_id'] === $toId || $t['status'] !== 'open') continue;
     q('UPDATE tasks SET assignee_id = ?, updated_at = ? WHERE id = ?', [$toId, now(), $t['id']]);
+    // the old messages count as read for the new person: only the move note shows as new
+    $prev = (int)(one('SELECT MAX(id) AS m FROM comments WHERE task_id = ?', [$t['id']])['m'] ?? 0);
+    q('INSERT INTO task_reads (task_id, user_id, at, last_id) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE last_id = GREATEST(last_id, VALUES(last_id))', [$t['id'], $toId, now(), $prev]);
     q('INSERT INTO comments (task_id, user_id, text, at) VALUES (?, ?, ?, ?)', [$t['id'], $me['id'], '↔ Moved from ' . user_name((int)$t['assignee_id']) . ' to ' . $to['name'] . '.', now()]);
     audit($me['id'], 'task_moved', "#{$t['id']} → {$to['name']}");
     $n++;
@@ -77,8 +82,11 @@ function tasks_out(array $tasks, string $day): array {
   foreach (all("SELECT task_id, COUNT(*) AS n FROM comments WHERE task_id IN ($in) GROUP BY task_id", $ids) as $r) $count[$r['task_id']] = (int)$r['n'];
   foreach (all("SELECT c.task_id, COUNT(*) AS n FROM comments c LEFT JOIN task_reads r ON r.task_id = c.task_id AND r.user_id = ?
       WHERE c.task_id IN ($in) AND c.user_id <> ? AND c.id > COALESCE(r.last_id, 0) GROUP BY c.task_id", [$meId, ...$ids, $meId]) as $r) $unread[$r['task_id']] = (int)$r['n'];
-  $answered = []; // newest message from someone other than the person doing the task
-  foreach (all("SELECT c.task_id, MAX(c.at) AS at FROM comments c JOIN tasks t ON t.id = c.task_id WHERE c.task_id IN ($in) AND c.user_id <> t.assignee_id GROUP BY c.task_id", $ids) as $r) $answered[$r['task_id']] = $r['at'];
+  $answered = []; // newest message from someone other than the person who wrote the newest update (a move note is not an answer)
+  foreach (all("SELECT c.task_id, MAX(c.at) AS at FROM comments c
+      JOIN (SELECT task_id, MAX(day) AS d FROM updates WHERE task_id IN ($in) GROUP BY task_id) m ON m.task_id = c.task_id
+      JOIN updates u ON u.task_id = m.task_id AND u.day = m.d
+      WHERE c.user_id <> u.user_id AND c.text NOT LIKE '↔ Moved%' GROUP BY c.task_id", $ids) as $r) $answered[$r['task_id']] = $r['at'];
   foreach (all("SELECT c.*, u.name FROM comments c JOIN users u ON u.id = c.user_id JOIN (SELECT task_id, MAX(id) AS mid FROM comments WHERE task_id IN ($in) GROUP BY task_id) m ON m.mid = c.id", $ids) as $c) {
     $lastMsg[$c['task_id']] = ['by' => $c['name'], 'byId' => (int)$c['user_id'], 'text' => $c['text'], 'at' => $c['at'], 'mine' => (int)$c['user_id'] === $meId];
   }
@@ -179,21 +187,28 @@ function handle(string $a, array $in): array {
     case 'update.save': {
       $t = own_task($me, (int)($in['taskId'] ?? 0));
       if ((int)$t['assignee_id'] !== $me['id']) throw new ApiError('Only the person doing the task can write its update.', 403);
-      if ($t['status'] !== 'open' && !($t['done_at'] && substr($t['done_at'], 0, 10) === $day)) throw new ApiError('This task is closed.');
+      // a closed task can only be changed by the person who finished it today (to fix or undo their own Finished);
+      // never when the manager cancelled it, took it back, or marked it done
+      $mine = $t['status'] === 'done' && $t['done_at'] && substr($t['done_at'], 0, 10) === $day
+        && ($fin = one('SELECT state FROM updates WHERE task_id = ? AND day = ?', [$t['id'], $day])) && $fin['state'] === 'finished';
+      if ($t['status'] !== 'open' && !$mine) throw new ApiError('This task is closed.');
       $note = txt($in['note'] ?? '', 4000, true, 'The update');
       $state = in_array($in['state'] ?? '', ['progress', 'stuck', 'finished'], true) ? $in['state'] : 'progress';
+      // written offline and sent later: it counts for the day it was written (up to 2 days back)
+      $uday = $day;
+      if (is_string($in['day'] ?? null) && preg_match('/^\d{4}-\d{2}-\d{2}$/', $in['day']) && $in['day'] < $day && $in['day'] >= date('Y-m-d', strtotime($day . ' -2 days'))) $uday = $in['day'];
       if ($state === 'finished' && $t['needs_photo']) {
-        $n = one('SELECT COUNT(*) AS n FROM photos p JOIN updates u ON u.id = p.update_id WHERE u.task_id = ? AND u.day = ?', [$t['id'], $day]);
+        $n = one('SELECT COUNT(*) AS n FROM photos p JOIN updates u ON u.id = p.update_id WHERE u.task_id = ? AND u.day = ?', [$t['id'], $uday]);
         if (!(int)$n['n']) throw new ApiError('A photo is needed to finish this task. Add a photo, then tap Finished.');
       }
       q('INSERT INTO updates (task_id, user_id, day, note, state, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)
-         ON DUPLICATE KEY UPDATE note = VALUES(note), state = VALUES(state), updated_at = VALUES(updated_at)',
-        [$t['id'], $me['id'], $day, $note, $state, now(), now()]);
+         ON DUPLICATE KEY UPDATE user_id = VALUES(user_id), note = VALUES(note), state = VALUES(state), updated_at = VALUES(updated_at)',
+        [$t['id'], $me['id'], $uday, $note, $state, now(), now()]);
       if ($t['repeat_kind'] === 'once') {
         if ($state === 'finished') q("UPDATE tasks SET status = 'done', done_at = ?, updated_at = ? WHERE id = ?", [now(), now(), $t['id']]);
         elseif ($t['status'] === 'done') q("UPDATE tasks SET status = 'open', done_at = NULL, updated_at = ? WHERE id = ?", [now(), $t['id']]);
       }
-      $u = one('SELECT * FROM updates WHERE task_id = ? AND day = ?', [$t['id'], $day]);
+      $u = one('SELECT * FROM updates WHERE task_id = ? AND day = ?', [$t['id'], $uday]);
       return ['update' => update_out($u, photos_of([(int)$u['id']]))];
     }
     case 'photo.add':
@@ -267,25 +282,28 @@ function handle(string $a, array $in): array {
       foreach (array_values($steps) as $i => $st) {
         $stepRef = txt($st['stepRef'] ?? '', 80);
         $title = txt($st['title'] ?? '', 300);
+        $details = txt($st['details'] ?? '', 4000);
         if ($stepRef === '' || $title === '') continue;
         $keep[$stepRef] = true;
         if (isset($byStep[$stepRef])) {
           $t = $byStep[$stepRef];
-          if ($t['title'] !== $title || (int)$t['seq'] !== $i || (int)$t['assignee_id'] !== $who || ($t['project'] ?? '') !== $name || (int)$t['needs_photo'] !== $photo) {
-            q('UPDATE tasks SET title = ?, seq = ?, assignee_id = ?, project = ?, needs_photo = ?, updated_at = ? WHERE id = ?', [$title, $i, $who, $name ?: null, $photo, now(), $t['id']]);
+          if ($t['title'] !== $title || ($t['details'] ?? '') !== $details || (int)$t['seq'] !== $i || (int)$t['assignee_id'] !== $who || ($t['project'] ?? '') !== $name || (int)$t['needs_photo'] !== $photo) {
+            q('UPDATE tasks SET title = ?, details = ?, seq = ?, assignee_id = ?, project = ?, needs_photo = ?, updated_at = ? WHERE id = ?', [$title, $details, $i, $who, $name ?: null, $photo, now(), $t['id']]);
           }
           continue;
         }
-        // finished by the person already (the manager's step will tick itself): do not make it again
-        if (one("SELECT id FROM tasks WHERE step_ref = ? AND status = 'done' AND updated_at >= ?", [$stepRef, date('Y-m-d H:i:s', time() - 30 * 86400)])) continue;
+        // just finished by the person (the manager's step will tick itself in a moment): do not make it again.
+        // Finished longer ago and the step is open again (un-ticked by the manager): it is made again below.
+        if (one("SELECT id FROM tasks WHERE step_ref = ? AND status = 'done' AND done_at >= ?", [$stepRef, date('Y-m-d H:i:s', time() - 10 * 60)])) continue;
         // a single step given earlier: it becomes part of the project hand-over
         $single = one("SELECT id FROM tasks WHERE step_ref = ? AND status = 'open' AND seq IS NULL", [$stepRef]);
-        if ($single) { q('UPDATE tasks SET seq = ?, assignee_id = ?, title = ?, project = ?, project_ref = ?, repeat_kind = ?, needs_photo = ?, updated_at = ? WHERE id = ?', [$i, $who, $title, $name ?: null, $ref, 'once', $photo, now(), $single['id']]); continue; }
+        if ($single) { q('UPDATE tasks SET seq = ?, assignee_id = ?, title = ?, details = ?, project = ?, project_ref = ?, repeat_kind = ?, needs_photo = ?, updated_at = ? WHERE id = ?', [$i, $who, $title, $details, $name ?: null, $ref, 'once', $photo, now(), $single['id']]); continue; }
         q("INSERT INTO tasks (title, details, assignee_id, created_by, repeat_kind, skip_sunday, weekday, due_date, start_date, project, project_ref, step_ref, status, seq, needs_photo, created_at, updated_at)
            VALUES (?, ?, ?, ?, 'once', 1, NULL, NULL, ?, ?, ?, ?, 'open', ?, ?, ?, ?)",
-          [$title, txt($st['details'] ?? '', 4000), $who, $me['id'], $day, $name ?: null, $ref, $stepRef, $i, $photo, now(), now()]);
+          [$title, $details, $who, $me['id'], $day, $name ?: null, $ref, $stepRef, $i, $photo, now(), now()]);
       }
-      foreach ($open as $t) if (!isset($keep[$t['step_ref']])) q("UPDATE tasks SET status = 'done', done_at = ?, updated_at = ? WHERE id = ?", [now(), now(), $t['id']]);
+      // 'cancelled', not 'done': only the person's own Finished means done (so an un-ticked step goes back to them, and is never ticked by itself)
+      foreach ($open as $t) if (!isset($keep[$t['step_ref']])) q("UPDATE tasks SET status = 'cancelled', done_at = ?, updated_at = ? WHERE id = ?", [now(), now(), $t['id']]);
       audit($me['id'], 'project_given', "$name → #$who");
       return ['tasks' => tasks_out(all(TASK_SELECT . " WHERE t.project_ref = ? AND t.seq IS NOT NULL AND t.status = 'open' ORDER BY t.seq", [$ref]), $day)];
     }
@@ -441,7 +459,8 @@ function handle(string $a, array $in): array {
 /** A photo for today's update: made smaller (max 1600 px), turned the right way up, saved as JPEG. */
 function add_photo(array $me, int $updateId): int {
   $u = one('SELECT * FROM updates WHERE id = ?', [$updateId]);
-  if (!$u || (int)$u['user_id'] !== $me['id'] || $u['day'] !== today()) throw new ApiError('Send the update first, then add the photo.', 403);
+  // today's update, or one written offline in the last 2 days and sent now
+  if (!$u || (int)$u['user_id'] !== $me['id'] || $u['day'] > today() || $u['day'] < date('Y-m-d', strtotime(today() . ' -2 days'))) throw new ApiError('Send the update first, then add the photo.', 403);
   if ((int)one('SELECT COUNT(*) AS n FROM photos WHERE update_id = ?', [$updateId])['n'] >= MAX_PHOTOS) throw new ApiError('Up to ' . MAX_PHOTOS . ' photos per update.');
   $f = $_FILES['file'] ?? null;
   if (!$f || $f['error'] !== UPLOAD_ERR_OK || !is_uploaded_file($f['tmp_name'])) throw new ApiError('The photo did not arrive. Try again.');

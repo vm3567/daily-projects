@@ -34,7 +34,10 @@ function dp_put_blob(string $bytes): string {
   if (strlen($bytes) > DP_MAX_BLOB) throw new ApiError('That file is too big.');
   $sha = sha1($bytes);
   $path = dp_blob_path($sha);
-  if (is_file($path) || is_file($path . '.gz')) return $sha;
+  if (is_file($path) || is_file($path . '.gz')) {
+    try { dp_get_blob($sha); return $sha; } // already kept and whole
+    catch (ApiError $e) { @unlink($path); @unlink($path . '.gz'); } // damaged: write it again
+  }
   if (!is_dir(dirname($path))) mkdir(dirname($path), 0750, true);
   $gz = gzencode($bytes, 6);
   [$file, $data] = strlen($gz) < strlen($bytes) * 0.9 ? [$path . '.gz', $gz] : [$path, $bytes];
@@ -47,9 +50,11 @@ function dp_blob_exists(string $sha): bool { $p = dp_blob_path($sha); return is_
 
 function dp_get_blob(string $sha): string {
   $p = dp_blob_path($sha);
-  if (is_file($p . '.gz')) return (string)gzdecode((string)file_get_contents($p . '.gz'));
-  if (is_file($p)) return (string)file_get_contents($p);
-  throw new ApiError('File not found.', 404);
+  if (is_file($p . '.gz')) $b = @gzdecode((string)file_get_contents($p . '.gz'));
+  elseif (is_file($p)) $b = file_get_contents($p);
+  else throw new ApiError('File not found.', 404);
+  if ($b === false || sha1($b) !== $sha) throw new ApiError('Stored file is damaged.', 500); // never hand out a broken file as empty
+  return $b;
 }
 
 function dp_tree_files(string $treeId): array {

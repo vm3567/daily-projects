@@ -51,3 +51,13 @@ test('Siri: a project it cannot find goes to the Inbox and says which', () => {
   assert.equal(v.text, 'Book hotel for Mumbai expo project');
   assert.equal(say('  '), null);
 });
+
+test('Siri: day words inside the sentence stay in the step', () => {
+  let v = say("Check tomorrow's firing plan for Kiln trial");
+  assert.equal(v.text, "Check tomorrow's firing plan");
+  assert.equal(v.date, null);
+  v = say('Send the Friday report for Kiln trial');
+  assert.equal(v.text, 'Send the Friday report');
+  assert.equal(v.date, null);
+  assert.equal(say('Call Ravi for Kiln trial Monday').date, '2026-10-19'); // a bare day is still a day
+});

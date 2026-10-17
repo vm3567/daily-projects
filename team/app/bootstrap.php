@@ -186,9 +186,10 @@ function migrate(PDO $pdo): void {
   ];
   $pdo->exec($steps[0]);
   $done = (int)($pdo->query("SELECT v FROM settings WHERE k = 'schema'")->fetchColumn() ?: 0);
-  for ($i = max($done, 1); $i < count($steps); $i++) $pdo->exec($steps[$i]);
-  if ($done < count($steps)) {
-    $st = $pdo->prepare("INSERT INTO settings (k, v) VALUES ('schema', ?) ON DUPLICATE KEY UPDATE v = VALUES(v)");
-    $st->execute([(string)count($steps)]);
+  $st = $pdo->prepare("INSERT INTO settings (k, v) VALUES ('schema', ?) ON DUPLICATE KEY UPDATE v = VALUES(v)");
+  for ($i = max($done, 1); $i < count($steps); $i++) {
+    try { $pdo->exec($steps[$i]); }
+    catch (PDOException $e) { if (!in_array((int)($e->errorInfo[1] ?? 0), [1050, 1060, 1061], true)) throw $e; } // table / column / index already there
+    $st->execute([(string)($i + 1)]); // saved after each step, so a failed step never runs the ones before it again
   }
 }

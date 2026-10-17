@@ -16,7 +16,7 @@ import { MockRepo } from './mockrepo.js';
 import { device } from './device.js';
 import { DATA_OWNER, DATA_REPO, DATA_BRANCH, MOVED_TO, REFRESH_MS, AI_DAILY_LIMIT, BRIEF_CLAIM_MINUTES, WAIT_RED_DAYS, NO_WORK_NOTE_DAYS } from './config.js';
 import { dotColour, isSnoozed, restUntil, awakeProjects, activeProjects, nextStep, todayIndia, isSundayIndia, colourCounts, isOverdue, indiaDate, waitingDays, daysWithoutWork, dayScore, greenStreak, addDays, monthOf, fmtMinutes } from './rules.js';
-import { newId, clone, opMonth, groupHasTimer, cleanLink } from './ops.js';
+import { newId, clone, opMonth, groupHasTimer, cleanLink, carriedOps } from './ops.js';
 import * as ai from './ai.js';
 import { parseVoice } from './voice.js';
 
@@ -1540,6 +1540,8 @@ function renderSettings() {
 async function signOutServer() {
   const waiting = store.pending.length;
   if (waiting && !confirm(`${waiting} change(s) are not saved yet and will be lost. Sign out anyway?`)) return;
+  clearTimeout(store.saveTimer);
+  store.forgetPending(); // before clearing storage below; also stops the leave-page check from sending them
   try { await fetch('../api/?a=logout', { method: 'POST', headers: { Authorization: 'Bearer ' + serverToken() } }); } catch { /* signed out anyway */ }
   try { localStorage.removeItem(SERVER_TOKEN_KEY); localStorage.removeItem('dp.pending'); localStorage.removeItem('dp.snapshot'); } catch { /* blocked */ }
   location.href = '../';
@@ -1609,9 +1611,15 @@ function takeOpsFromHash() {
   let mine = [];
   try { mine = JSON.parse(localStorage.getItem('dp.pending') || '[]'); } catch { mine = []; }
   const have = new Set(mine.map((o) => o.id));
-  const add = ops.filter((o) => o && typeof o === 'object' && typeof o.id === 'string' && typeof o.type === 'string' && !have.has(o.id));
+  // a link can come from anyone: only harmless kinds of change, and only after a yes
+  const { ok, files } = carriedOps(ops);
+  const add = ok.filter((o) => !have.has(o.id));
+  const filesMsg = files ? ` ${files} photo(s)/file(s) could not come along: please add them again.` : '';
+  if (!add.length) { if (files) setTimeout(() => toast(filesMsg.trim(), 8000), 1500); return; }
+  const kinds = [...new Set(add.map((o) => o.type))].join(', ');
+  if (!confirm(`Add ${add.length} change(s) carried from the old address (kinds: ${kinds})?\n\nSay No if you did not just come from the old address.`)) return;
   try { localStorage.setItem('dp.pending', JSON.stringify([...mine, ...add])); } catch { return; }
-  if (add.length) setTimeout(() => toast(`${add.length} change(s) from the old address added ✓`, 5000), 1500);
+  setTimeout(() => toast(`${add.length} change(s) from the old address added ✓${filesMsg}`, files ? 8000 : 5000), 1500);
 }
 
 // ---------------------------------------------------------------- render
@@ -2345,7 +2353,7 @@ function sendNow() {
 // ---------------------------------------------------------------- team (worktask.in only)
 
 /** Team tasks given from a step, by step id, so each step can show the person's latest update. */
-const team = { byStep: new Map(), fillBy: '18:00', late: false, at: 0, alerts: { stuck: 0, unread: 0, suggestions: 0 } };
+const team = { byStep: new Map(), fillBy: '18:00', late: false, at: 0, gen: 0, syncErr: {}, alerts: { stuck: 0, unread: 0, suggestions: 0 } };
 const TICKED_KEY = 'dp.teamTicked'; // team tasks already ticked on this device (so an un-tick by hand stays)
 
 /** 👥 in the top bar, with a red number when the team needs you (stuck, new messages, suggestions). */
@@ -2381,6 +2389,7 @@ const SYNC_KEY = 'dp.teamSync'; // last steps sent per given project, so unchang
 async function giveProject(p, person, needsPhoto = !!ui.givePhoto) {
   try {
     await teamApi('project.sync', { projectRef: p.id, project: p.name, assigneeId: person ? person.id : 0, steps: person ? projectSteps(p) : [], needsPhoto });
+    team.gen++; // a list fetched before this change is old now: it must not move the project back
     store.dispatch('setProjectTeam', { projectId: p.id, userId: person ? person.id : null, name: person ? person.name : '', needsPhoto });
     ui.giveOpen = null;
     ui.givePhoto = false;
@@ -2398,14 +2407,14 @@ function rememberSync(id, sig) {
 }
 
 /** Given projects: new, changed, ticked or deleted steps reach the person's list. */
-async function syncGivenProjects() {
+async function syncGivenProjects(gen = team.gen) {
   if (!store || !store.view) return;
   let m = {};
   try { m = JSON.parse(localStorage.getItem(SYNC_KEY) || '{}'); } catch { m = {}; }
   for (const p of store.view.data.projects) {
     if (!p.team) continue;
     // moved on Work Task (↔ Move to…): follow the new person instead of moving the steps back
-    const onTeam = [...team.byStep.values()].filter((t) => t.projectRef === p.id && t.seq !== null && t.status === 'open');
+    const onTeam = gen === team.gen ? [...team.byStep.values()].filter((t) => t.projectRef === p.id && t.seq !== null && t.status === 'open') : [];
     const moved = onTeam.length && onTeam.every((t) => t.assignee.id === onTeam[0].assignee.id) && onTeam[0].assignee.id !== p.team.userId ? onTeam[0].assignee : null;
     if (moved) store.dispatch('setProjectTeam', { projectId: p.id, userId: moved.id, name: moved.name, needsPhoto: !!p.team.needsPhoto });
     const sig = JSON.stringify([p.team.userId, p.name, p.state === 'active' ? projectSteps(p) : [], !!p.team.needsPhoto]);
@@ -2413,6 +2422,22 @@ async function syncGivenProjects() {
     try {
       await teamApi('project.sync', { projectRef: p.id, project: p.name, assigneeId: p.state === 'active' ? p.team.userId : 0, steps: p.state === 'active' ? projectSteps(p) : [], needsPhoto: !!p.team.needsPhoto });
       rememberSync(p.id, sig);
+      delete team.syncErr[p.id];
+    } catch (e) {
+      // try again next time; say it once, so new steps do not quietly reach nobody
+      if (e.message !== 'No connection' && team.syncErr[p.id] !== e.message) {
+        team.syncErr[p.id] = e.message;
+        toast(`Could not send ${p.name} to ${p.team.name}: ${e.message} Use Change person.`, 8000);
+      }
+    }
+  }
+  // a given project that was deleted: take its steps back from the person
+  const ids = new Set(store.view.data.projects.map((p) => p.id));
+  for (const ref of Object.keys(m)) {
+    if (ids.has(ref)) continue;
+    try {
+      await teamApi('project.sync', { projectRef: ref, project: '', assigneeId: 0, steps: [] });
+      rememberSync(ref, null);
     } catch { /* try again next time */ }
   }
 }
@@ -2432,7 +2457,7 @@ function tickFinishedTeamTasks(tasks) {
     const words = (t.today || t.last) ? (t.today || t.last).note : '';
     actMany(p.id, [
       ['tickStep', { projectId: p.id, stepId: step.id }],
-      ...(words ? [['addWorkNote', { projectId: p.id, noteId: newId(), stepId: step.id, text: `👥 ${t.assignee.name} finished “${step.text}”: ${words}` }]] : []),
+      ...(words ? [['addWorkNote', { projectId: p.id, noteId: 'tn' + t.id, stepId: step.id, text: `👥 ${t.assignee.name} finished “${step.text}”: ${words}` }]] : []),
     ], `✓ ${t.assignee.name} finished: ${step.text}`);
   }
   try { localStorage.setItem(TICKED_KEY, JSON.stringify([...seen].slice(-500))); } catch { /* full */ }
@@ -2441,17 +2466,18 @@ function tickFinishedTeamTasks(tasks) {
 async function loadTeam(force = false) {
   if (!onServer || (!force && Date.now() - team.at < 60000)) return;
   team.at = Date.now();
+  const gen = team.gen; // changed by giveProject while this list is on its way: the list is old
   try {
     const res = await fetch('../api/?a=tasks.linked', { method: 'POST', cache: 'no-store', headers: { Authorization: 'Bearer ' + serverToken(), 'Content-Type': 'application/json' }, body: '{}' });
     const out = await res.json();
-    if (!out.ok) return;
+    if (!out.ok || gen !== team.gen) return;
     team.byStep = new Map(out.tasks.map((t) => [t.stepRef, t]));
     team.fillBy = out.fillBy;
     team.late = out.late;
     if (out.alerts) team.alerts = out.alerts;
     if (out.summary) team.summary = out.summary;
     tickFinishedTeamTasks(out.tasks);
-    await syncGivenProjects();
+    await syncGivenProjects(gen);
     render();
   } catch { /* no connection: try again next time */ }
 }
@@ -2467,9 +2493,9 @@ async function doRefresh(force) {
 let started = false;
 
 function start() {
+  if (!isMock && !onServer && MOVED_TO) { showMoved(); return; } // first: it passes #say= / #add= on to the new address
   takeClipFromHash();
   takeVoiceFromHash();
-  if (!isMock && !onServer && MOVED_TO) { showMoved(); return; }
   if (onServer) takeOpsFromHash(); // before the store starts: it reads the waiting changes once
   if (onServer && !serverToken()) { toSignIn(); return; }
   const key = device.githubKey();

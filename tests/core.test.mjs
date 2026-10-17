@@ -611,3 +611,23 @@ test('a whole project can be given to a team member and taken back', () => {
   assert.equal(s.data.projects[0].team, undefined);
   assert.equal(applyOp(s, op('setProjectTeam', { projectId: 'p1', userId: 'x', name: 'Bad' }, '2026-10-18')), false);
 });
+
+test('unknown or broken changes are skipped, never stop the app', async () => {
+  const state = { data: emptyData(), history: {} };
+  for (const type of ['__proto__', 'valueOf', 'constructor', 'toString', 'nothing']) assert.equal(applyOp(state, { type, args: {} }), false);
+  assert.equal(applyOp(state, null), false);
+  const { carriedOps } = await import('../docs/ops.js');
+  const at = '2026-10-17T05:00:00.000Z';
+  const r = carriedOps([
+    { id: 'a', type: 'addStep', at, args: { projectId: 'p', stepId: 's', text: 'x' } },
+    { id: 'b', type: 'deleteProject', at, args: { projectId: 'p' } },
+    { id: 'c', type: 'setAiKey', at, args: { provider: 'claude', key: 'k' } },
+    { id: 'd', type: 'setProjectTeam', at, args: { projectId: 'p', userId: 9 } },
+    { id: 'e', type: 'addFile', at, args: { projectId: 'p', sha: 'abc' } },
+    { id: 'f', type: '__proto__', at, args: {} },
+    { id: 'g', type: 'addStep', args: {} },
+  ]);
+  assert.deepEqual(r.ok.map((o) => o.id), ['a']);
+  assert.equal(r.files, 1);
+  assert.equal(carriedOps('nope').ok.length, 0);
+});
