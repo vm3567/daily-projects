@@ -15,7 +15,7 @@ import { ServerRepo, SERVER_TOKEN_KEY } from './serverrepo.js';
 import { MockRepo } from './mockrepo.js';
 import { device } from './device.js';
 import { DATA_OWNER, DATA_REPO, DATA_BRANCH, MOVED_TO, REFRESH_MS, AI_DAILY_LIMIT, BRIEF_CLAIM_MINUTES, WAIT_RED_DAYS, NO_WORK_NOTE_DAYS } from './config.js';
-import { dotColour, isSnoozed, restUntil, awakeProjects, activeProjects, nextStep, todayIndia, isSundayIndia, colourCounts, isOverdue, indiaDate, waitingDays, daysWithoutWork, dayScore, greenStreak, addDays, monthOf, fmtMinutes } from './rules.js';
+import { dotColour, greenByTeamOnly, isSnoozed, restUntil, awakeProjects, activeProjects, nextStep, todayIndia, isSundayIndia, colourCounts, isOverdue, indiaDate, waitingDays, daysWithoutWork, dayScore, greenStreak, addDays, monthOf, fmtMinutes } from './rules.js';
 import { newId, clone, opMonth, groupHasTimer, cleanLink, carriedOps } from './ops.js';
 import * as ai from './ai.js';
 import { parseVoice } from './voice.js';
@@ -161,7 +161,6 @@ const ctx = {
   neighbourPerson: (step) => neighbourPerson(step),
   aiBreakdown: (p, goal) => runAi(p, 'breakdown', goal),
   hasAiKey: () => !!(store && aiReady().key),
-  toggleOk: (p) => toggleOk(p),
   startTimer: (p) => startTimer(p),
   stopTimer: () => stopTimer(),
   clockText: (iso) => clockText(iso),
@@ -172,6 +171,7 @@ const ctx = {
   teamTask: (stepId) => team.byStep.get(stepId) || null,
   teamPeople: () => teamPeople(),
   teamDaily: (p) => teamDaily(p),
+  teamPhoto: (id) => teamPhoto(id),
   moreDaily: (p) => { const e = daily.get(p.id); teamDaily(p, (e ? e.days : 30) + 30); },
   teamBusy: (id) => team.busy.has(id),
   giveProject: (p, person) => giveProject(p, person),
@@ -354,7 +354,13 @@ async function draftFollowUp(p, step) {
 /** 📋 Everything done today, grouped by project, ready to send. */
 function todaySummaryText() {
   const dateText = new Intl.DateTimeFormat('en-IN', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata' }).format(new Date());
-  return summaryText(store.view.data, store.view.history, todayIndia(), dateText);
+  const base = summaryText(store.view.data, store.view.history, todayIndia(), dateText);
+  // the team's updates today (worktask.in), under their projects
+  const today = todayIndia();
+  const teamToday = [...team.byStep.values()].filter((t) => t.today && t.today.day === today);
+  if (!teamToday.length) return base;
+  const names = new Map(store.view.data.projects.map((p) => [p.id, p.name]));
+  return `${base}\n\nTeam updates:\n${teamToday.map((t) => `- ${t.assignee.name} — ${names.get(t.projectRef) || t.project || ''}: ${t.title}: ${t.today.note}${t.today.state === 'stuck' ? ' (stuck)' : t.today.state === 'finished' ? ' (finished)' : ''}`).join('\n')}`;
 }
 
 function openSummary() {
@@ -505,16 +511,6 @@ function markShownOpened() {
   if (!ui.selected || (ui.view === 'people' && !ui.search)) return;
   const detail = document.getElementById('detail');
   if (detail && detail.offsetParent !== null) { markOpened(ui.selected); }
-}
-
-/** "OK for today" (or undo it). */
-function toggleOk(p) {
-  const today = todayIndia();
-  if (p.okDate === today) {
-    store.dispatch('undoOkForToday', { projectId: p.id });
-    return;
-  }
-  act('okForToday', { projectId: p.id }, `✓ ${p.name}: OK for today`);
 }
 
 function select(id) {
@@ -690,6 +686,7 @@ function projectRow(p, today) {
         : h('span', { class: 'quick-tick-space', 'aria-hidden': 'true' }),
     h('button', { class: 'prow-btn', onClick: () => select(p.id) },
       h('span', { class: `dot ${colour}`, 'aria-label': colour }),
+      colour === 'green' && greenByTeamOnly(p, today) ? h('span', { class: 'team-green', title: 'Green today because the team sent an update' }, '👥') : null,
       h('span', { class: 'prow-text' },
         h('span', { class: 'prow-name' }, p.name,
           p.state !== 'active' ? h('span', { class: 'tag' }, p.state) : null,
@@ -705,13 +702,13 @@ function projectRow(p, today) {
     ui.quickAdd === p.id ? quickAddForm(p) : null);
 }
 
-/** One-tap action on a row that is not green yet: "Chased" for a waiting step, else "✓ OK". */
+/** One-tap action on a row that is not green yet: "Chased" for a waiting step (a real update). */
 function rowAction(p, ns, colour) {
   if (p.state !== 'active' || colour === 'green' || colour === 'grey') return null; // grey = snoozed
   if (ns && ns.waiting) {
     return h('button', { class: 'row-act chase', title: `Followed up${ns.waitingOn ? ' with ' + ns.waitingOn : ''} today`, onClick: () => chase(p, ns) }, 'Chased');
   }
-  return h('button', { class: 'row-act', title: 'OK for today (nothing more today)', onClick: () => toggleOk(p) }, '✓ OK');
+  return null;
 }
 
 function chase(p, step) {
@@ -762,7 +759,7 @@ function quickAddForm(p) {
   h('button', { class: 'btn primary small', type: 'submit' }, 'Add'));
 }
 
-/** "No real work for 6 days" — so nothing hides behind "OK for today". */
+/** "No real work for 6 days": no update, tick, follow-up or time for that long. */
 function noWorkTag(p, today) {
   if (p.state !== 'active') return null;
   const d = daysWithoutWork(p, today);
@@ -1132,7 +1129,6 @@ function rowMenu() {
     p.state === 'active' ? item('+', 'Add a step', () => { select(p.id); focusKey('add-step-' + p.id); }) : null,
     p.state === 'active' ? item('📝', 'Write an update', () => { select(p.id); focusKey('wn-' + p.id); }) : null,
     due && due.waiting ? item('📞', `Chased${due.waitingOn ? ' ' + due.waitingOn : ''}`, () => chase(p, due)) : null,
-    p.state === 'active' ? item('👍', p.okDate === today ? 'Undo OK for today' : 'OK for today', () => toggleOk(p)) : null,
     p.state === 'active' ? (p.snoozedUntil && p.snoozedUntil > today
       ? item('⏰', 'Wake up now', () => act('wake', { projectId: p.id }, `Back on Today: ${p.name}`))
       : item('💤', 'Snooze…', () => { select(p.id); ui.snoozeOpen = p.id; focusKey('snooze-' + p.id); })) : null,
@@ -1261,6 +1257,18 @@ function progressLine(today) {
     bar);
 }
 
+/** After the updates are due (18:00 by default): which projects still have nothing today. Tap a name to open it. */
+function eveningCheck(today) {
+  const nowHm = new Date().toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' });
+  if (nowHm < (team.fillBy || '18:00')) return null;
+  const left = awakeProjects(store.view.data, today).filter((p) => dotColour(p, today) !== 'green');
+  if (!left.length) return null;
+  return h('div', { class: 'evening-check', key: 'evening' },
+    `🕕 Nothing today on ${left.length} project${left.length > 1 ? 's' : ''}: `,
+    left.slice(0, 8).map((p, i) => [i ? ', ' : '', h('button', { class: 'link', type: 'button', key: 'ev-' + p.id, onClick: () => select(p.id) }, p.name)]),
+    left.length > 8 ? ` and ${left.length - 8} more` : '');
+}
+
 /** Today: one line about the team — sent / due, stuck, new messages, who has not filled. Opens Team today. */
 function teamLine() {
   if (!onServer || !team.summary) return null;
@@ -1356,6 +1364,7 @@ function renderListColumn() {
     ui.view === 'today' && !ui.search ? celebration() : null,
     ui.view === 'today' && !ui.search ? progressLine(today) : null,
     ui.view === 'today' && !ui.search ? teamLine() : null,
+    ui.view === 'today' && !ui.search ? eveningCheck(today) : null,
     ui.view === 'today' && !ui.search ? followUpRow() : null,
     ui.view === 'today' && !ui.search ? inboxReminder() : null,
     ui.view === 'today' && !ui.search ? renderBrief() : null,
@@ -1902,8 +1911,6 @@ function roundAct(kind) {
     ui.round.mode = kind;
     render();
     focusKey('round-input');
-  } else if (kind === 'ok') {
-    if (act('okForToday', { projectId: p.id }, `✓ ${p.name}: OK for today`)) roundNext();
   } else if (kind === 'chase') {
     if (ns && ns.waiting && act('chased', { projectId: p.id, stepId: ns.id }, `Chased${ns.waitingOn ? ' ' + ns.waitingOn : ''} (${p.name})`)) roundNext();
   } else if (kind === 'skip') {
@@ -1999,7 +2006,6 @@ function renderRound() {
               ], `Photo added to ${p.name}`);
             },
           })),
-        btn('ok', '✓ OK for today', 'o', 'ok-btn'),
         btn('skip', 'Skip →', 'n'))));
 }
 
@@ -2205,7 +2211,6 @@ const KEYS = [
   ['⌫', 'Back to where you came from'],
   ['Ctrl K', 'Jump to any project, person or page'],
   ['x', 'Tick the next step of the open project'],
-  ['o', 'OK for today (or undo)'],
   ['g', 'Start the daily round (then x s w o c n)'],
   ['s', 'Type a new step'],
   ['w', 'Type in "What did you do today?"'],
@@ -2341,11 +2346,7 @@ function onKey(e) {
     if (ui.navStack && ui.navStack.length) goBack(); else handled = false;
   } else if (k === 'ArrowDown' || k === 'j') moveSelection(1);
   else if (k === 'ArrowUp' || k === 'k') moveSelection(-1);
-  else if (ui.view === 'people' && 'xswoi'.includes(k)) handled = false; // project keys do nothing on People
-  else if (k === 'o') {
-    if (p && p.state === 'active') toggleOk(p);
-    else toast('Pick an active project first (↓ ↑).');
-  }
+  else if (ui.view === 'people' && 'xswi'.includes(k)) handled = false; // project keys do nothing on People
   else if (k === 'x') {
     const ns = p && p.state === 'active' && nextStep(p, todayIndia(), { dueOnly: true });
     if (ns) {
@@ -2418,6 +2419,33 @@ function teamApi(a, body = {}) {
 /** One project.sync at a time, also across tabs: two at once would put every step on the person's list twice. */
 function withSyncLock(fn) {
   return navigator.locks && navigator.locks.request ? navigator.locks.request('dp.teamSync', fn) : fn();
+}
+
+/** A team member's photo for the diary (needs the sign-in, so it is fetched, then shown). null while loading. */
+const teamPhotos = new Map(); // photo id -> object URL, or 'loading'
+function teamPhoto(id) {
+  const v = teamPhotos.get(id);
+  if (v && v !== 'loading') return v;
+  if (!v) {
+    teamPhotos.set(id, 'loading');
+    fetch('../api/?a=photo&id=' + id, { headers: { Authorization: 'Bearer ' + serverToken() } })
+      .then((r) => (r.ok ? r.blob() : Promise.reject(new Error('photo'))))
+      .then((b) => { teamPhotos.set(id, URL.createObjectURL(b)); render(); })
+      .catch(() => teamPhotos.delete(id));
+  }
+  return null;
+}
+
+/** The team sent an update on a project today: it counts as work (green, shown with 👥). Once a day per project. */
+function markTeamWork(tasks) {
+  if (!store || !store.view || !store.canEdit()) return;
+  const today = todayIndia();
+  const projects = store.view.data.projects;
+  for (const t of tasks) {
+    if (!t.today || t.today.day !== today) continue;
+    const p = projects.find((x) => x.id === t.projectRef) || projects.find((x) => x.steps.some((st) => st.id === t.stepRef));
+    if (p && p.state === 'active' && p.teamWorkDate !== today) store.dispatch('teamWorked', { projectId: p.id, day: today });
+  }
 }
 
 /** 📅 Daily updates per project: loaded when the project is opened, again after a minute (or on ↻). */
@@ -2595,6 +2623,7 @@ async function loadTeamOnce() {
     if (out.alerts) team.alerts = out.alerts;
     if (out.summary) team.summary = out.summary;
     tickFinishedTeamTasks(out.tasks);
+    markTeamWork(out.tasks);
     await syncGivenProjects(gen);
     render();
   } catch { /* no connection: try again next time */ }

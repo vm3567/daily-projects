@@ -23,29 +23,34 @@ test('India date is used, not UTC', () => {
   assert.equal(daysBetween('2026-10-01', '2026-10-03'), 2);
 });
 
-test('daily dots: red each new day, yellow when opened, green after a change or OK', async () => {
-  const { daysWithoutWork } = await import('../docs/rules.js');
+test('daily dots: red each new day, yellow when opened, green only after a real update', async () => {
+  const { daysWithoutWork, greenByTeamOnly } = await import('../docs/rules.js');
   const s = withProject('2026-10-01');
   const p = s.data.projects[0];
-  assert.equal(dotColour(p, '2026-10-01'), 'green'); // created + steps added today
+  assert.notEqual(dotColour(p, '2026-10-01'), 'green', 'creating a project and adding steps is not an update');
   assert.equal(dotColour(p, '2026-10-02'), 'red', 'resets at midnight');
   applyOp(s, op('markOpened', { projectId: 'p1' }, '2026-10-02'));
   assert.equal(dotColour(p, '2026-10-02'), 'yellow', 'opened');
   assert.equal(applyOp(s, op('markOpened', { projectId: 'p1' }, '2026-10-02', '11:00:00')), false, 'once a day');
+  applyOp(s, op('setProjectField', { projectId: 'p1', field: 'priority', value: 'high' }, '2026-10-02'));
+  applyOp(s, op('addStep', { projectId: 'p1', stepId: 's9', text: 'More' }, '2026-10-02'));
+  assert.equal(dotColour(p, '2026-10-02'), 'yellow', 'edits are not an update');
   applyOp(s, op('addWorkNote', { projectId: 'p1', noteId: 'n1', text: 'Called Ravi' }, '2026-10-02'));
-  assert.equal(dotColour(p, '2026-10-02'), 'green', 'a change');
-  assert.equal(dotColour(p, '2026-10-03'), 'red');
-  applyOp(s, op('okForToday', { projectId: 'p1' }, '2026-10-03'));
-  assert.equal(dotColour(p, '2026-10-03'), 'green', 'OK for today');
-  assert.ok(s.history['2026-10'].some((e) => e.kind === 'reviewed'));
-  applyOp(s, op('undoOkForToday', { projectId: 'p1' }, '2026-10-03', '11:00:00'));
-  assert.equal(dotColour(p, '2026-10-03'), 'yellow', 'undo OK goes back to opened');
-  // OK does not count as real work
-  applyOp(s, op('okForToday', { projectId: 'p1' }, '2026-10-06'));
-  assert.equal(daysWithoutWork(p, '2026-10-06'), 4);
-  // a passed target date no longer forces red (it shows as "Overdue" instead)
-  applyOp(s, op('setProjectField', { projectId: 'p1', field: 'deadline', value: '2026-10-05' }, '2026-10-07'));
-  assert.equal(dotColour(p, '2026-10-07'), 'green');
+  assert.equal(dotColour(p, '2026-10-02'), 'green', 'a written update');
+  applyOp(s, op('deleteWorkNote', { projectId: 'p1', noteId: 'n1' }, '2026-10-02', '12:00:00'));
+  assert.equal(dotColour(p, '2026-10-02'), 'yellow', 'deleting the only update takes the green away');
+  applyOp(s, op('tickStep', { projectId: 'p1', stepId: 's1' }, '2026-10-03'));
+  assert.equal(dotColour(p, '2026-10-03'), 'green', 'a ticked step');
+  applyOp(s, op('addTime', { projectId: 'p1', minutes: 30 }, '2026-10-04'));
+  assert.equal(dotColour(p, '2026-10-04'), 'green', 'time worked today');
+  applyOp(s, op('okForToday', { projectId: 'p1' }, '2026-10-05')); // old changes from before still replay…
+  assert.notEqual(dotColour(p, '2026-10-05'), 'green', '…but "OK for today" no longer makes it green');
+  assert.ok(applyOp(s, op('teamWorked', { projectId: 'p1', day: '2026-10-06' }, '2026-10-06')));
+  assert.equal(dotColour(p, '2026-10-06'), 'green', 'the team sent an update');
+  assert.ok(greenByTeamOnly(p, '2026-10-06'), 'shown with 👥');
+  assert.equal(applyOp(s, op('teamWorked', { projectId: 'p1', day: '2026-10-06' }, '2026-10-06', '12:00:00')), false, 'once a day');
+  assert.equal(applyOp(s, op('teamWorked', { projectId: 'p1', day: '2026-10-09' }, '2026-10-06')), false, 'never a future day');
+  assert.equal(daysWithoutWork(p, '2026-10-09'), 3);
 });
 
 test('old data without lastActivityDate still works (uses lastTickDate)', () => {
@@ -61,7 +66,7 @@ test('paused is grey; opening a paused project does not mark it', () => {
   assert.equal(dotColour(p, '2026-10-20'), 'grey');
   assert.equal(applyOp(s, op('markOpened', { projectId: 'p1' }, '2026-10-20')), false);
   applyOp(s, op('unpause', { projectId: 'p1' }, '2026-10-20'));
-  assert.equal(dotColour(p, '2026-10-20'), 'green', 'unpausing is a change');
+  assert.notEqual(dotColour(p, '2026-10-20'), 'grey', 'unpaused: back in colour (green only after an update)');
 });
 
 test('replay on fresh data: both devices\' changes survive, deleted items stay deleted', () => {

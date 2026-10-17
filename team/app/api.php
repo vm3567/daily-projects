@@ -385,7 +385,7 @@ function handle(string $a, array $in): array {
       $days = max(7, min(120, (int)($in['days'] ?? 30)));
       $from = date('Y-m-d', strtotime($day . ' -' . ($days - 1) . ' days'));
       $tasks = all(TASK_SELECT . ' WHERE t.project_ref = ? ORDER BY t.id', [$ref]);
-      if (!$tasks) return ['today' => $day, 'from' => $from, 'since' => null, 'tasks' => [], 'updates' => [], 'fillBy' => setting('fill_by', '18:00')];
+      if (!$tasks) return ['today' => $day, 'from' => $from, 'since' => null, 'tasks' => [], 'updates' => [], 'comments' => [], 'fillBy' => setting('fill_by', '18:00')];
       $ids = array_map(fn($t) => (int)$t['id'], $tasks);
       $inq = implode(',', array_fill(0, count($ids), '?'));
       $ups = all("SELECT * FROM updates WHERE task_id IN ($inq) AND day >= ? ORDER BY day DESC, updated_at DESC", [...$ids, $from]);
@@ -396,6 +396,9 @@ function handle(string $a, array $in): array {
         'tasks' => array_map(fn($t) => ['id' => (int)$t['id'], 'title' => $t['title'], 'stepRef' => $t['step_ref'], 'status' => $t['status'],
           'assignee' => $t['assignee_name'], 'startDate' => $t['start_date'], 'doneAt' => $t['done_at'], 'repeat' => $t['repeat_kind'], 'skipSunday' => (bool)$t['skip_sunday']], $tasks),
         'updates' => array_map(fn($u) => ['taskId' => (int)$u['task_id']] + update_out($u, $photos), $ups),
+        // messages between the manager and the person, for the project diary
+        'comments' => array_map(fn($c) => ['taskId' => (int)$c['task_id'], 'by' => $c['name'], 'mine' => (int)$c['user_id'] === $me['id'], 'text' => $c['text'], 'at' => $c['at']],
+          all("SELECT c.*, u.name FROM comments c JOIN users u ON u.id = c.user_id WHERE c.task_id IN ($inq) AND c.at >= ? ORDER BY c.at DESC", [...$ids, $from . ' 00:00:00'])),
       ];
     }
     case 'tasks.linked': { // for Daily Projects: every team task given from a step (open, or closed this week)

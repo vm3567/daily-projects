@@ -285,3 +285,10 @@ On a project: **👥 Give project** → pick the person. They see its open steps
 ### Tests
 `npm test` runs everything (about 130 checks, ~10 seconds): the app's rules, the projects storage, Claude's commands against a pretend server, quick PHP tests (`team/tests/unit.php`) and the full Work Task server — each run starts its own throwaway MySQL and PHP server, runs the setup, and tests sign-in, tasks, messages, photos, moves, giving projects, owner protection, projects storage and the command tool. Needs `php` and `mysqld` (Homebrew); without them the server tests are skipped.
 - **📅 Daily updates on a project:** a project with team work shows one line per day (newest first): what the person sent that day (tap it for messages and photos), your own notes, or **No update** in red. Today shows "No update yet" until the due time. Sundays are skipped when the tasks skip Sunday. "Show older days" goes further back.
+
+### The project page (Oct 2026)
+- **Green only with a real update:** a written update, a ticked task, a follow-up (Chased), time worked, or the team's update (shown with 👥). "OK for today" is gone; edits like renaming or moving steps do not count.
+- **Top:** "3 of 6 tasks done", a bar, and who works on it (You + names).
+- **Tasks:** each shows who does it (**Me** — tap to give it — or the person), its state, the person's last update, and **its days →** (the diary for just that task).
+- **📅 What's happening:** a week strip (green = something happened, red = nothing, grey = Sunday), **one** update box ("About:" a task or the whole project, 📷, Save + done), then one line per day: your updates (✎ ✕), ticks, time, the team's updates with photos, messages — or **Nothing happened**.
+- **Today page:** after 6 PM, "🕕 Nothing today on …" lists projects with no update. The 📋 Summary includes the team's updates.

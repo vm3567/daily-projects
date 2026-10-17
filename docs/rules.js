@@ -49,7 +49,7 @@ export function laterDate(a, b) {
  * Daily dot colour for a project (resets every midnight, India time):
  *   red    = not looked at today
  *   yellow = opened today, nothing done yet
- *   green  = changed something today, or pressed "OK for today"
+ *   green  = a real update today (written update, ticked step, follow-up, time, or the team's update)
  *   grey   = paused or finished
  */
 /** A step set to "remind me" on a later date: hidden until that day. */
@@ -76,17 +76,27 @@ export function isSnoozed(project, today = todayIndia()) {
 
 export function dotColour(project, today = todayIndia()) {
   if (project.state !== 'active' || isSnoozed(project, today)) return 'grey';
-  if (lastWorkDate(project) === today || project.okDate === today) return 'green';
+  if (lastWorkDate(project) === today) return 'green'; // only a real update makes it green (there is no "OK for today")
   if (project.lastOpenedDate === today) return 'yellow';
   return 'red';
 }
 
-/** Last day with a real change (older data only has lastTickDate, so both are read). */
+/**
+ * Last day with a real update: a written update (work note), a ticked step, a follow-up, time logged,
+ * or a team member's update (teamWorkDate). Renaming, moving steps or other edits do not count.
+ */
 export function lastWorkDate(project) {
-  return laterDate(project.lastActivityDate, project.lastTickDate);
+  const note = project.workNotes && project.workNotes.length ? indiaDate(project.workNotes[0].createdAt) : null; // newest first
+  return laterDate(laterDate(project.workDate, project.lastTickDate), laterDate(project.teamWorkDate, note));
 }
 
-/** Days since the last real change ("OK for today" does not count). */
+/** Green today only because the team sent an update (shown with 👥). */
+export function greenByTeamOnly(project, today = todayIndia()) {
+  return project.teamWorkDate === today && laterDate(laterDate(project.workDate, project.lastTickDate),
+    project.workNotes && project.workNotes.length ? indiaDate(project.workNotes[0].createdAt) : null) !== today;
+}
+
+/** Days since the last real update. */
 export function daysWithoutWork(project, today = todayIndia()) {
   const since = lastWorkDate(project) || project.activeSince || (project.createdAt ? indiaDate(project.createdAt) : today);
   return Math.max(0, daysBetween(since, today));
@@ -283,7 +293,7 @@ export function dayScore(data, history, day) {
     if (p.snoozedFrom && p.snoozedUntil && p.snoozedFrom <= day && day < p.snoozedUntil) continue; // snoozed that day: not counted
     if (restingByReminders(p, day)) continue; // every open step was waiting for its "remind me" day
     total++;
-    if (busy.has(p.id) || lastWorkDate(p) === day || p.okDate === day) green++;
+    if (busy.has(p.id) || lastWorkDate(p) === day) green++;
   }
   return { green, total };
 }

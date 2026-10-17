@@ -119,6 +119,10 @@ function stepRow(ctx, p, s, box = null) {
   const tt = ctx.teamTask ? ctx.teamTask(s.id) : null;
   const live = !!tt && tt.status === 'open'; // a finished or cancelled task: the step can be given again
   if (tt && (tt.status === 'open' || s.done)) tags.push(teamChip(tt, ctx.teamInfo())); // an old closed task on an open step: nothing to show
+  if (!live && ctx.onServer && !s.done && p.state === 'active') { // you do it yourself: tap to give it to someone
+    tags.push(h('a', { class: 'tag me', href: '../?team#new=' + encodeURIComponent(JSON.stringify({ title: s.text, project: p.name, projectRef: p.id, stepRef: s.id })), title: 'You do this task. Tap to give it to someone.' }, 'Me'));
+  }
+  if (!s.done) tags.push(h('button', { class: 'link small days-link', type: 'button', title: 'Show only this task in the diary', onClick: () => { ui.diaryTask = { projectId: p.id, stepId: s.id }; ctx.render(); setTimeout(() => { const d = document.querySelector('.diary'); if (d) d.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 30); } }, 'its days →'));
   if (s.repeat && !s.done) tags.push(h('span', { class: 'tag repeat', title: 'Repeats' }, `↻ ${REPEAT_WORD[s.repeat]}`));
   if (stepWaitsForReminder(s, today)) tags.push(h('span', { class: 'tag remind', title: 'Comes back on this day' }, `⏰ ${fmtDay(s.snoozedUntil)}`));
   else if (s.snoozedUntil && s.snoozedUntil > today && !s.done) tags.push(h('span', { class: 'tag' }, `from ${fmtDay(s.snoozedUntil)}`));
@@ -160,6 +164,7 @@ function stepRow(ctx, p, s, box = null) {
         onClick: () => { ui.openStep = open ? null : s.id; ctx.render(); },
       }, open ? '▴' : '⋯')),
     stepNotes(p, s),
+    live && !s.done && (tt.today || tt.last) ? h('div', { class: 'step-last muted small' }, `Last from ${tt.assignee.name} (${fmtDay((tt.today || tt.last).day)}): `, h('span', null, (tt.today || tt.last).note.slice(0, 160))) : null,
     box,
     open ? h('div', { class: 'step-extra' },
       s.done ? null : remindRow(ctx, p, s, today),
@@ -341,16 +346,18 @@ function updateBox(ctx, p) {
   const addPhotos = (files) => addUpdatePhotos(ctx, p, files);
   if (p.state !== 'active') return { stepId: null, box: null };
   const box = h('form', {
-    class: 'update-form' + (due ? ' in-step' : ' loose'), key: 'update-' + p.id,
+    class: 'update-form loose', key: 'update-' + p.id,
     onSubmit: (e) => { e.preventDefault(); save(e.target); },
   },
-  due ? null : h('div', { class: 'update-label' },
-    u.about === 'project' && openSteps.length
-      ? ['📝 About the whole project · ', h('button', { class: 'link small', type: 'button', onClick: () => { u.about = null; ctx.render(); } }, 'back to the next step')]
-      : '📝 Anything done today on this project? (optional)'),
+  openSteps.length ? h('div', { class: 'about-row' }, h('span', { class: 'muted small' }, 'About:'),
+    openSteps.slice(0, 8).map((st) => h('button', {
+      class: 'chip' + (due && due.id === st.id ? ' on' : ''), type: 'button', key: 'ab-' + st.id, title: st.text,
+      onClick: () => { u.about = st.id; ctx.render(); focusUpdate(p); },
+    }, st.text.length > 28 ? st.text.slice(0, 26) + '…' : st.text)),
+    h('button', { class: 'chip' + (due ? '' : ' on'), type: 'button', onClick: () => { u.about = 'project'; ctx.render(); focusUpdate(p); } }, 'Whole project')) : null,
   h('input', {
     name: 'note', key: 'wn-' + p.id, autocomplete: 'off', enterkeyhint: 'done', 'data-mention': '1', value: u.note,
-    placeholder: withKey(due ? 'What did you do on this step today?' : 'What did you do today?', 'W'),
+    placeholder: withKey('What happened today?', 'W'),
     onInput: (e, el) => { u.note = el.value; }, // half-typed text survives switching projects
     onKeydown: (e, el) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); save(el.form, true); } },
     onPaste: (e) => { // a pasted screenshot becomes a photo on this update
@@ -372,7 +379,7 @@ function updateBox(ctx, p) {
         onChange: async (e, el) => { const files = [...el.files]; el.value = ''; addPhotos(files); },
       })),
     h('span', { class: 'muted small' }, HAS_KEYBOARD ? (due ? `Enter = Save · ${MOD}+Enter = Save + done` : 'Enter = Save') : ''),
-    due ? h('button', { class: 'link small push-right', type: 'button', title: 'Write about the project, not one step', onClick: () => { u.about = 'project'; ctx.render(); focusUpdate(p); } }, 'whole project') : null));
+    null));
   return { stepId: due ? due.id : null, box };
 }
 
@@ -596,8 +603,6 @@ function stateButtons(ctx, p) {
   const { store, ui } = ctx;
   if (p.state === 'active') {
     const today = todayIndia();
-    const green = dotColour(p, today) === 'green';
-    const okOnly = p.okDate === today && lastWorkDate(p) !== today;
     const t = store.view.data.timer;
     const running = t && t.projectId === p.id;
     const timed = groupHasTimer(store.view.data.groups.find((g) => g.id === p.groupId));
@@ -605,8 +610,6 @@ function stateButtons(ctx, p) {
       running
         ? h('button', { class: 'btn timer-on', title: 'Stop the timer', onClick: () => ctx.stopTimer() }, `⏸ ${ctx.clockText(t.start)}`)
         : timed ? h('button', { class: 'btn', title: 'Start timing your work on this project', onClick: () => ctx.startTimer(p) }, '▶ Start') : null,
-      !green && !isSnoozed(p, today) ? h('button', { class: 'btn ok-btn', title: 'Looked at it, no more work today (key: o)', onClick: () => ctx.toggleOk(p) }, '✓ OK for today', keyHint('O')) : null,
-      okOnly ? h('button', { class: 'btn small', title: 'Undo OK for today', onClick: () => ctx.toggleOk(p) }, 'Undo OK') : null,
       isSnoozed(p, today) ? null : h('button', {
         class: 'btn' + (ui.snoozeOpen === p.id ? ' on' : ''), title: 'Hide from Today for some days',
         onClick: () => { ui.snoozeOpen = ui.snoozeOpen === p.id ? null : p.id; ctx.render(); setTimeout(() => { const n = document.querySelector(`[data-key="snooze-${p.id}"]`); if (n) { n.focus(); n.select(); } }, 30); },
@@ -779,6 +782,7 @@ export function renderDetail(ctx) {
       h('div', { class: 'state-buttons' }, stateButtons(ctx, p))),
     snoozeBar(ctx, p),
     teamBar(ctx, p),
+    progressLine(ctx, p),
     navBar(ctx, p),
     statusLine(ctx, p),
     metaLine(ctx, p, today),
@@ -792,7 +796,7 @@ export function renderDetail(ctx) {
         h('button', { class: 'btn primary small', onClick: () => ctx.openNextOpen(np.id) },
           h('span', { class: `dot ${dotColour(np, today)}` }), ` Next: ${np.name} →`)) : null,
       h('ul', { class: 'steps sortable-steps', key: 'steps-' + p.id, 'data-project': p.id },
-        openSteps.map((s) => stepRow(ctx, p, s, s.id === upd.stepId ? upd.box : null))),
+        openSteps.map((s) => stepRow(ctx, p, s))),
       openSteps.length || p.state !== 'active' ? null : h('p', { class: 'warn next-first' }, '→ No next step yet. Add it first:'),
       h('form', {
         class: 'row add-step',
@@ -806,14 +810,13 @@ export function renderDetail(ctx) {
         },
       },
       h('input', { name: 'text', placeholder: withKey(openSteps.length ? '+ Add step (type @ for a person)' : `What's next for "${p.name}"?`, 'S'), key: 'add-step-' + p.id, enterkeyhint: 'enter', 'data-mention': '1', autocomplete: 'off' })),
-      upd.stepId ? null : upd.box, // no open step (or "whole project"): the note box comes AFTER "What's next?"
       doneSteps.length ? h('details', { class: 'done-steps', key: 'done-' + p.id, open: ui.showDone ? true : undefined },
         h('summary', { onClick: (e) => { e.preventDefault(); ui.showDone = !ui.showDone; if (ctx.rememberUi) ctx.rememberUi(); ctx.render(); } }, `Done (${doneSteps.length})`),
         ui.showDone ? h('ul', { class: 'steps' }, doneSteps.slice(0, ui.doneLimit || 10).map((s) => stepRow(ctx, p, s))) : null,
         ui.showDone && doneSteps.length > (ui.doneLimit || 10)
           ? h('button', { class: 'link small', onClick: () => { ui.doneLimit = (ui.doneLimit || 10) + 30; ctx.render(); } }, `Show older (${doneSteps.length - (ui.doneLimit || 10)})`) : null) : null),
 
-    dailyLog(ctx, p),
+    projectDiary(ctx, p, upd),
 
     // Calm page: work notes, notes, links, files and history wait under "More" (opened once, it stays open).
     moreFold(ctx, p, [
@@ -827,54 +830,123 @@ export function renderDetail(ctx) {
     ]));
 }
 
+/** "3 of 6 tasks done", a thin bar, and who works on it (You + team members). */
+function progressLine(ctx, p) {
+  if (!p.steps.length) return null;
+  const done = p.steps.filter((x) => x.done).length;
+  const names = new Set();
+  if (ctx.teamTask) for (const st of p.steps) { const t = !st.done && ctx.teamTask(st.id); if (t && t.status === 'open') names.add(t.assignee.name); }
+  const fill = h('div', { class: 'proj-bar-fill', key: 'pbf' });
+  if (fill.style) fill.style.width = `${Math.round((done / p.steps.length) * 100)}%`; // set through the style object (allowed by the page's safety rules)
+  const bar = h('div', { class: 'proj-bar' }, fill);
+  return h('div', { class: 'proj-progress', key: 'pp-' + p.id }, bar,
+    h('span', { class: 'muted small' }, `${done} of ${p.steps.length} tasks done`),
+    names.size ? h('span', { class: 'tag' }, `You + ${[...names].join(', ')}`) : null);
+}
+
+/** One line of the diary: icon, who, what (and extras like the task it is about, photos, ✎ ✕). */
+function diaryLine(icon, who, text, extra = []) {
+  return h('div', { class: 'diary-line' }, h('span', { class: 'diary-icon' }, icon),
+    h('div', { class: 'diary-text' }, who ? h('strong', null, who) : null, who ? ' ' : null, text, ...extra));
+}
+
 /**
- * 📅 Daily updates (worktask.in): one line per day, newest first, from the day the team got work on this project.
- * Under each day: what the person sent (and your own notes). A working day with nothing sent says "No update".
+ * 📅 What's happening — one diary for EVERY project, newest day first: your updates, ticked tasks, time,
+ * the team's updates (with photos) and messages. A working day with nothing in it says "Nothing happened".
+ * The week strip on top: green = something happened, red = nothing, grey = Sunday. One box to write today's update.
  */
-function dailyLog(ctx, p) {
-  if (!ctx.onServer || !ctx.teamDaily) return null;
-  const d = ctx.teamDaily(p);
-  if (!d || !d.data || !d.data.tasks.length) return null;
-  const { today, from, since, tasks, updates, fillBy } = d.data;
-  const byTask = new Map(tasks.map((t) => [t.id, t]));
-  const people = [...new Set(tasks.filter((t) => t.status === 'open').map((t) => t.assignee))];
-  const sundaysOff = tasks.every((t) => t.repeat !== 'daily' || t.skipSunday);
-  const oldest = updates.length ? updates[updates.length - 1].day : since; // an update written offline before the task was given
-  const first = oldest < since ? oldest : since;
-  const start = first > from ? first : from;
+function projectDiary(ctx, p, upd) {
+  const { store, ui } = ctx;
+  const today = todayIndia();
+  const t = ctx.onServer && ctx.teamDaily ? ctx.teamDaily(p) : null;
+  const td = t && t.data ? t.data : null;
+  const fillBy = (td && td.fillBy) || '18:00';
+  const created = p.createdAt ? indiaDate(p.createdAt) : today;
+  const shownDays = ui.diaryDays && ui.diaryDays.projectId === p.id ? ui.diaryDays.n : 14;
+  const filter = ui.diaryTask && ui.diaryTask.projectId === p.id ? ui.diaryTask.stepId : null;
+  const stepText = new Map(p.steps.map((x) => [x.id, x.text]));
+  const taskStep = new Map((td ? td.tasks : []).map((x) => [x.id, x.stepRef]));
+  const iso = (v) => (v.includes('T') ? v : v.replace(' ', 'T') + '+05:30'); // server times are India time
+  const about = (stepId) => (stepId && stepText.has(stepId) ? h('span', { class: 'muted small' }, ` · ${stepText.get(stepId)}`) : null);
+  const entries = [];
+  for (const n of p.workNotes) {
+    const files = (p.files || []).filter((f) => f.noteId === n.id);
+    const team = n.text.startsWith('👥 ');
+    entries.push({
+      day: indiaDate(n.createdAt), at: n.createdAt, work: true, stepId: n.stepId,
+      node: diaryLine(team ? '👥' : '📝', team ? null : 'You', team ? n.text.slice(3) : n.text, [
+        about(n.stepId),
+        ...files.map((f) => h('button', { class: 'link small', type: 'button', key: 'f-' + f.id, onClick: () => openFile(ctx, f) }, ` 📷 ${f.name}`)),
+        team ? null : h('button', { class: 'link small', type: 'button', title: 'Change this update', onClick: () => { const v = prompt('Change your update:', n.text); if (v && v.trim()) store.dispatch('editWorkNote', { projectId: p.id, noteId: n.id, text: v }); } }, ' ✎'),
+        team ? null : h('button', { class: 'link small', type: 'button', title: 'Delete this update', onClick: () => { if (confirm('Delete this update?')) ctx.act('deleteWorkNote', { projectId: p.id, noteId: n.id }, 'Update deleted'); } }, ' ✕'),
+      ]),
+    });
+  }
+  for (const e of Object.values(store.view.history).flat()) {
+    if (e.projectId !== p.id) continue;
+    if (e.kind === 'step_ticked') entries.push({ day: indiaDate(e.at), at: e.at, work: true, stepId: e.stepId, node: diaryLine('✓', 'You', `ticked “${e.detail}”`) });
+    else if (e.kind === 'time_logged' || e.kind === 'time_added') entries.push({ day: indiaDate(e.at), at: e.at, work: true, node: diaryLine('⏱', 'You', `worked ${e.detail}`) });
+  }
+  for (const u of td ? td.updates : []) {
+    const words = { stuck: ' · Stuck', finished: ' · Finished' }[u.state] || '';
+    entries.push({
+      day: u.day, at: iso(u.at), work: true, stepId: taskStep.get(u.taskId),
+      node: diaryLine('👥', u.by, `“${u.note}”${words}`, [
+        about(taskStep.get(u.taskId)),
+        ...(u.photos || []).map((pid) => {
+          const src = ctx.teamPhoto ? ctx.teamPhoto(pid) : null;
+          return src ? h('img', { class: 'diary-photo', src, alt: 'Photo', key: 'tp-' + pid, onClick: () => window.open(src, '_blank', 'noopener') }) : h('span', { class: 'muted small', key: 'tp-' + pid }, ' 📷');
+        }),
+      ]),
+    });
+  }
+  for (const c of td ? td.comments || [] : []) {
+    entries.push({ day: c.at.slice(0, 10), at: iso(c.at), work: false, stepId: taskStep.get(c.taskId), node: diaryLine('💬', c.mine ? 'You' : c.by, `“${c.text}”`, [about(taskStep.get(c.taskId))]) });
+  }
+  const byDay = new Map();
+  for (const e of entries) { if (!byDay.has(e.day)) byDay.set(e.day, []); byDay.get(e.day).push(e); }
+  const workOn = (day) => (byDay.get(day) || []).some((e) => e.work);
+  const weekday = (day) => new Date(day + 'T00:00:00Z').getUTCDay();
+  const nowHm = new Date().toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' });
+  const W = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const WHAT = { ok: 'something happened', miss: 'nothing happened', off: 'Sunday', wait: 'nothing yet today', none: 'before the project started' };
+  const week = [];
+  for (let i = 6; i >= 0; i--) {
+    const day = addDays(today, -i);
+    const state = day < created ? 'none' : workOn(day) ? 'ok' : weekday(day) === 0 ? 'off' : day === today && nowHm < fillBy ? 'wait' : 'miss';
+    week.push(h('span', { class: `wk ${state}`, key: 'wk-' + day, title: `${W[weekday(day)]} ${fmtDay(day)}: ${WHAT[state]}` }, W[weekday(day)][0]));
+  }
+  let start = addDays(today, -(shownDays - 1));
+  if (created > start) start = created;
   const days = [];
   for (let day = today; day >= start; day = addDays(day, -1)) days.push(day);
-  const nowHm = new Date().toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' });
-  const open = (taskId) => { location.href = `../?team#task=${taskId}`; };
-  const stateWord = { stuck: 'Stuck', finished: 'Finished', progress: '' };
-  return section(`📅 Daily updates${people.length ? ` — ${people.join(', ')}` : ''}`,
-    h('ul', { class: 'daily-log', key: 'dl-' + p.id }, days.map((day) => {
-      const ups = updates.filter((u) => u.day === day);
-      const mine = p.workNotes.filter((n) => indiaDate(n.createdAt) === day && !n.text.startsWith('👥 '));
-      const sunday = new Date(day + 'T00:00:00Z').getUTCDay() === 0;
+  return h('section', { class: 'block diary', key: 'diary-' + p.id },
+    h('div', { class: 'diary-head' }, h('h3', null, "📅 What's happening"), h('div', { class: 'week', title: 'Last 7 days' }, week)),
+    upd.box,
+    filter ? h('div', { class: 'diary-filter' }, `Only: ${stepText.get(filter) || 'this task'} `,
+      h('button', { class: 'link small', type: 'button', onClick: () => { ui.diaryTask = null; ctx.render(); } }, '✕ show all')) : null,
+    h('ul', { class: 'diary-days' }, days.map((day) => {
+      const list = (byDay.get(day) || []).filter((e) => !filter || e.stepId === filter).sort((a, b) => (a.at < b.at ? 1 : -1));
       let empty = null;
-      if (!ups.length) {
-        if (sunday && sundaysOff) empty = h('span', { class: 'muted small' }, 'Sunday');
-        else if (day === today && nowHm < fillBy) empty = h('span', { class: 'daily-none wait' }, `No update yet (due by ${fillBy})`);
-        else empty = h('span', { class: 'daily-none' }, 'No update');
+      if (!list.length) {
+        if (weekday(day) === 0) empty = h('span', { class: 'muted small' }, 'Sunday');
+        else if (day === today) empty = h('span', { class: nowHm < fillBy ? 'diary-none wait' : 'diary-none' }, nowHm < fillBy ? 'Nothing yet today' : 'Nothing happened today');
+        else empty = h('span', { class: 'diary-none' }, 'Nothing happened');
       }
-      return h('li', { class: 'daily-day' + (ups.length ? ' has' : ''), key: 'dd-' + day },
-        h('div', { class: 'daily-date' }, day === today ? 'Today' : ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][new Date(day + 'T00:00:00Z').getUTCDay()],
-          h('span', { class: 'muted small' }, ` ${fmtDay(day)}`)),
-        h('div', { class: 'daily-items' },
-          ups.map((u) => {
-            const t = byTask.get(u.taskId);
-            return h('button', { class: 'daily-item', type: 'button', key: 'du-' + u.id, title: 'Open the task, its messages and photos', onClick: () => open(u.taskId) },
-              h('strong', null, `👥 ${u.by}`), t ? h('span', { class: 'muted small' }, ` · ${t.title}`) : null,
-              stateWord[u.state] ? h('span', { class: 'tag' + (u.state === 'stuck' ? ' late' : '') }, stateWord[u.state]) : null,
-              h('span', { class: 'muted small' }, ` · ${fmtTime(u.at.replace(' ', 'T') + '+05:30')}`),
-              h('div', { class: 'daily-note' }, u.note),
-              u.photos && u.photos.length ? h('span', { class: 'muted small' }, `📷 ${u.photos.length} photo${u.photos.length > 1 ? 's' : ''}`) : null);
-          }),
-          empty,
-          mine.map((n) => h('div', { class: 'daily-mine', key: 'dm-' + n.id }, h('strong', null, 'You: '), n.text))));
+      return h('li', { class: 'diary-day', key: 'dd-' + day },
+        h('div', { class: 'diary-date' }, day === today ? 'Today' : W[weekday(day)], h('span', { class: 'muted small' }, ` ${fmtDay(day)}`)),
+        h('div', { class: 'diary-items' }, list.map((e) => e.node), empty));
     })),
-    d.data.from > since ? h('button', { class: 'link small', onClick: () => ctx.moreDaily(p) }, 'Show older days') : null);
+    start > created ? h('button', {
+      class: 'link small', type: 'button',
+      onClick: () => {
+        ui.diaryDays = { projectId: p.id, n: shownDays + 14 };
+        const loaded = new Set(Object.keys(store.view.history));
+        const older = store.availableMonths().find((m) => !loaded.has(m));
+        if (older && addDays(today, -(shownDays + 13)).slice(0, 7) <= older) store.loadMonth(older); // the older days' ticks
+        ctx.render();
+      },
+    }, 'Show older days') : null);
 }
 
 /** "▸ More — 3 work notes · notes · 2 files": the less-used parts of a project, folded. */

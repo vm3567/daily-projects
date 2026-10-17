@@ -148,6 +148,11 @@ function touch(project, op) {
   project.lastActivityDate = laterDate(project.lastActivityDate, indiaDate(op.at));
 }
 
+/** A real update today: makes the dot green (edits like renaming or moving steps do not). */
+function markWork(project, op) {
+  project.workDate = laterDate(project.workDate, indiaDate(op.at));
+}
+
 function recalcLastTick(project) {
   let last = null;
   for (const s of project.steps) if (s.done && s.doneAt) last = laterDate(last, indiaDate(s.doneAt));
@@ -420,6 +425,15 @@ const handlers = {
     else delete p.team;
     touch(p, op);
     addEvent(state, op, p, 'edited', userId ? `Given to ${name}` : `Taken back from ${old.name}`);
+    return true;
+  },
+
+  /** worktask.in: a team member sent an update on this project that day (makes it green, shown with 👥). */
+  teamWorked(state, op, a) {
+    const p = findProject(state.data, a.projectId);
+    const day = cleanDate(a.day);
+    if (!p || !day || day > indiaDate(op.at) || (p.teamWorkDate && p.teamWorkDate >= day)) return false;
+    p.teamWorkDate = day;
     return true;
   },
 
@@ -859,6 +873,7 @@ const handlers = {
     const start = a.day ? new Date(`${day}T12:00:00+05:30`).toISOString() : new Date(Date.parse(op.at) - minutes * 60000).toISOString();
     (p.timeLogs ||= []).push({ id: op.id, start, minutes, manual: true });
     touch(p, op);
+    if (day === indiaDate(op.at)) markWork(p, op); // time added for today is a real update
     addEvent(state, op, p, 'time_added', `${minutes} min`);
     return true;
   },
@@ -931,6 +946,7 @@ function closeTimer(state, op, endIso) {
   if (capped) minutes = TIMER_MAX_MINUTES;
   (p.timeLogs ||= []).push({ id: t.id, start: t.start, minutes, ...(capped ? { capped: true } : {}) });
   touch(p, op);
+  markWork(p, op); // time worked is a real update
   // its own event id: a Pause / Finish in the same change also writes a history line with op.id
   addEvent(state, { ...op, id: op.id + 't' }, p, 'time_logged', `${minutes} min${capped ? ' (cut to 10 h)' : ''}`);
 }

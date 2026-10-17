@@ -141,14 +141,19 @@ test('project page: "Save + done" button, and the next project offer when green'
   assert.ok(!text.includes('This step is done'), 'old tick box gone');
 });
 
-test('project page: the write box sits inside the next step; snoozed project shows when it comes back', () => {
+test('project page: one update box in the diary (about the next task), week strip, days; snoozed project shows when it comes back', () => {
   const s = sampleState();
   const el = renderDetail(fakeCtx(s, { selected: 'p1', update: {} }));
   const find = (node, f) => (f(node) ? node : (node.childNodes || []).map((c) => find(c, f)).find(Boolean));
-  const stepWithBox = find(el, (n) => (n.className || '').includes('has-update'));
-  assert.ok(stepWithBox, 'a step holds the box');
-  assert.ok(find(stepWithBox, (n) => n.value === 'Fire samples'), 'it is the next step');
-  assert.ok(stepWithBox.textContent.includes('Save + done'));
+  const diary = find(el, (n) => (n.className || '').includes('diary'));
+  assert.ok(diary, 'the diary is on the page');
+  const box = find(diary, (n) => (n.className || '').includes('update-form'));
+  assert.ok(box, 'the one update box sits at the top of the diary');
+  assert.ok(box.textContent.includes('About:') && box.textContent.includes('Save + done'));
+  assert.ok(find(box, (n) => (n.className || '').includes('chip on') && n.textContent === 'Fire samples'), 'about the next task');
+  assert.ok(find(diary, (n) => (n.className || '').includes('week')), 'week strip');
+  assert.ok(diary.textContent.includes('Today'), 'days listed');
+  assert.ok(!find(el, (n) => (n.className || '').includes('has-update')), 'no box inside the steps any more');
   applyOps(s, [makeOp('snooze', { projectId: 'p1', days: 4 })]);
   const text = renderDetail(fakeCtx(s, { selected: 'p1', update: {} })).textContent;
   assert.ok(text.includes('Snoozed — comes back to Today'));
