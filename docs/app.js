@@ -1587,7 +1587,9 @@ function showMoved() {
   let waiting = [];
   try { waiting = JSON.parse(localStorage.getItem('dp.pending') || '[]'); } catch { waiting = []; }
   // Siri (#say=) and the Chrome button (#add=) still work with the old address: pass them on.
-  if (!waiting.length) { location.replace(MOVED_TO + location.hash); return; }
+  // A Siri note or Chrome-button page goes on at once; changes still waiting here stay on this device
+  // and are offered (the button below) the next time this old address is opened.
+  if (!waiting.length || /^#(say|add)=/.test(location.hash)) { location.replace(MOVED_TO + location.hash); return; }
   const screen = document.getElementById('keyscreen');
   screen.hidden = false;
   root.hidden = true;
