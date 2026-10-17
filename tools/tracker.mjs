@@ -28,7 +28,7 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const DATA = process.env.DP_DATA_DIR || join(ROOT, 'data'); // DP_DATA_DIR is only for tests
 
 // ---- Work Task server (after the move) ----
-const SERVER = !process.env.DP_DATA_DIR && (!!MOVED_TO || !!process.env.DP_SERVER_LOCAL);
+const SERVER = !process.env.DP_DATA_DIR && (!!MOVED_TO || !!process.env.DP_SERVER_LOCAL || !!process.env.DP_SERVER_CMD);
 const SSH = ['-i', join(process.env.HOME || '', '.ssh', 'hostinger_dp'), '-o', 'IdentitiesOnly=yes', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=20', '-p', '65002', 'u578596396@145.79.25.173'];
 const CLI = 'domains/worktask.in/app/dp-cli.php';
 let server = null; // { head, data, history } from the last export
@@ -37,6 +37,7 @@ function serverRun(args, input) {
   const opts = { encoding: 'utf8', input, stdio: ['pipe', 'pipe', 'pipe'], maxBuffer: 64 * 1024 * 1024 };
   const quoted = args.map((a) => `'${String(a).replace(/'/g, "'\\''")}'`).join(' ');
   try {
+    if (process.env.DP_SERVER_CMD) return execFileSync(process.execPath, [process.env.DP_SERVER_CMD, ...args], opts); // tests: a pretend server
     return process.env.DP_SERVER_LOCAL // testing on this Mac: the local copy of the server
       ? execFileSync('php', [join(ROOT, 'team', 'app', 'dp-cli.php'), ...args], opts)
       : execFileSync('ssh', [...SSH, `php ${CLI} ${quoted}`], opts);
