@@ -2209,7 +2209,6 @@ const KEYS = [
   ['g', 'Start the daily round (then x s w o c n)'],
   ['s', 'Type a new step'],
   ['w', 'Type in "What did you do today?"'],
-  ['i', '✨ AI: suggest the next steps'],
   ['n', 'New project'],
   ['/', 'Search'],
   ['q', 'Quick capture: write an idea or task into the Inbox'],
@@ -2343,10 +2342,6 @@ function onKey(e) {
   } else if (k === 'ArrowDown' || k === 'j') moveSelection(1);
   else if (k === 'ArrowUp' || k === 'k') moveSelection(-1);
   else if (ui.view === 'people' && 'xswoi'.includes(k)) handled = false; // project keys do nothing on People
-  else if (k === 'i') {
-    if (p && p.state === 'active') { ui.mobile = 'detail'; runSuggest(p); }
-    else toast('Pick a project first (↓ ↑).');
-  }
   else if (k === 'o') {
     if (p && p.state === 'active') toggleOk(p);
     else toast('Pick an active project first (↓ ↑).');

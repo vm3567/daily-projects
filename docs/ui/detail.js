@@ -197,60 +197,6 @@ function stepRow(ctx, p, s, box = null) {
       }, '🗑 Delete step')) : null);
 }
 
-/** ✨ AI steps panel: suggested next steps, in order. Untick or remove any, edit the words, then add. */
-function aiPanel(ctx, p) {
-  const { ui, store } = ctx;
-  const ai = ui.ai && ui.ai.projectId === p.id ? ui.ai : null;
-  if (!ai) return null;
-  const close = () => { ui.ai = null; ctx.render(); };
-  const head = h('div', { class: 'ai-head' }, h('strong', null, '✨ AI suggested steps'),
-    h('button', { class: 'icon', 'aria-label': 'Close', onClick: close }, '✕'));
-  let body;
-  if (ai.state === 'nokey') {
-    body = h('div', null,
-      h('p', null, 'Add your Claude or Gemini key in Settings first.'),
-      h('button', { class: 'btn primary small', onClick: () => { ui.ai = null; ctx.goSettings(); } }, 'Open Settings'));
-  } else if (ai.state === 'busy') {
-    body = h('p', { class: 'muted' }, 'Reading the project and thinking…');
-  } else if (ai.state === 'error') {
-    body = h('div', null, h('p', { class: 'error' }, ai.error),
-      h('button', { class: 'btn small', onClick: () => ctx.aiSteps(p) }, '↻ Try again'));
-  } else if (ai.state === 'list') {
-    const count = ai.steps.filter((t, i) => ai.picked[i] && t.trim()).length;
-    body = h('div', null,
-      h('p', { class: 'muted small' }, 'Top = the very next step. Untick or ✕ what you don\'t want, or change the words.'),
-      h('ol', { class: 'ai-list' }, ai.steps.map((text, i) => h('li', { key: 'ai-' + i, class: ai.picked[i] ? '' : 'off' },
-        h('input', {
-          type: 'checkbox', checked: ai.picked[i], 'aria-label': 'Use this step',
-          onChange: (e, el) => { ai.picked[i] = el.checked; ctx.render(); },
-        }),
-        h('input', {
-          class: 'ai-text', value: text, key: 'ai-t-' + i, 'aria-label': `Suggested step ${i + 1}`,
-          onInput: (e, el) => { ai.steps[i] = el.value; },
-        }),
-        i === 0 ? h('span', { class: 'tag next-tag' }, 'Next') : null,
-        h('button', {
-          class: 'icon', title: 'Remove this suggestion', 'aria-label': 'Remove this suggestion',
-          onClick: () => { ai.steps.splice(i, 1); ai.picked.splice(i, 1); if (!ai.steps.length) ui.ai = null; ctx.render(); },
-        }, '✕')))),
-      h('div', { class: 'row' },
-        h('button', {
-          class: 'btn primary', disabled: count ? undefined : true,
-          onClick: () => {
-            const chosen = ai.steps.filter((t, i) => ai.picked[i] && t.trim()).map((t) => t.trim());
-            let added = 0;
-            for (const text of chosen) if (store.dispatch('addStep', { projectId: p.id, stepId: newId(), text })) added++;
-            ui.ai = null;
-            ctx.render();
-            if (added) ctx.toast(`Added ${added} step${added > 1 ? 's' : ''} to ${p.name}`);
-          },
-        }, count ? `Add ${count} step${count > 1 ? 's' : ''}` : 'Pick at least one'),
-        h('button', { class: 'btn', onClick: () => ctx.aiSteps(p) }, '↻ New ideas'),
-        h('span', { class: 'muted small' }, ai.provider === 'gemini' ? 'by Gemini' : 'by Claude')));
-  }
-  return h('div', { class: 'ai-panel', key: 'ai-panel-' + p.id }, head, body);
-}
-
 function linksBlock(ctx, p) {
   const { store, ui } = ctx;
   const items = p.links.map((l) => {
@@ -859,12 +805,7 @@ export function renderDetail(ctx) {
           input.focus();
         },
       },
-      h('input', { name: 'text', placeholder: withKey(openSteps.length ? '+ Add step (type @ for a person)' : `What's next for "${p.name}"?`, 'S'), key: 'add-step-' + p.id, enterkeyhint: 'enter', 'data-mention': '1', autocomplete: 'off' }),
-      h('button', {
-        class: 'btn ai small', type: 'button', title: 'AI reads this project and suggests the next steps (key: i)',
-        onClick: () => { if (ui.ai && ui.ai.projectId === p.id) { ui.ai = null; ctx.render(); } else ctx.aiSteps(p); },
-      }, '✨ AI steps', keyHint('I'))),
-      aiPanel(ctx, p),
+      h('input', { name: 'text', placeholder: withKey(openSteps.length ? '+ Add step (type @ for a person)' : `What's next for "${p.name}"?`, 'S'), key: 'add-step-' + p.id, enterkeyhint: 'enter', 'data-mention': '1', autocomplete: 'off' })),
       upd.stepId ? null : upd.box, // no open step (or "whole project"): the note box comes AFTER "What's next?"
       doneSteps.length ? h('details', { class: 'done-steps', key: 'done-' + p.id, open: ui.showDone ? true : undefined },
         h('summary', { onClick: (e) => { e.preventDefault(); ui.showDone = !ui.showDone; if (ctx.rememberUi) ctx.rememberUi(); ctx.render(); } }, `Done (${doneSteps.length})`),
