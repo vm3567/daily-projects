@@ -8,7 +8,7 @@ require $app . '/bootstrap.php';
 
 header('X-Content-Type-Options: nosniff');
 header('Cache-Control: no-store');
-$codeFile = APP_DIR . '/setup-code.txt';
+$codeFile = SETUP_CODE_FILE;
 $done = is_file(CONFIG_FILE);
 $error = '';
 $okMsg = '';
@@ -34,6 +34,8 @@ if (!$done && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
     migrate($pdo);
     $st = $pdo->prepare("INSERT INTO users (username, name, role, pass_hash, must_change, active, created_at) VALUES (?, ?, 'admin', ?, 0, 1, ?)");
     $st->execute([$user, $name, password_hash($pass, PASSWORD_DEFAULT), now()]);
+    // the first manager owns the projects from the start, so no other manager can ever reset or switch them off
+    $pdo->prepare("INSERT INTO settings (k, v) VALUES ('dp_owner', ?) ON DUPLICATE KEY UPDATE v = v")->execute([(string)$pdo->lastInsertId()]);
     $cfg = "<?php\n// Made by setup.php. Keep private: it holds the database password.\nreturn " . var_export(['db_host' => $dbHost, 'db_name' => $dbName, 'db_user' => $dbUser, 'db_pass' => $dbPass], true) . ";\n";
     if (file_put_contents(CONFIG_FILE, $cfg) === false) throw new Exception('Could not save the settings file.');
     @chmod(CONFIG_FILE, 0600);

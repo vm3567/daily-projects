@@ -6,9 +6,12 @@ declare(strict_types=1);
 date_default_timezone_set('Asia/Kolkata');
 
 const APP_DIR = __DIR__;
-define('ROOT_DIR', dirname(__DIR__));
+// Automatic tests (tests/php-server.test.mjs) point everything at a throwaway folder; never set on the live server.
+define('TEST_DIR', (string)(getenv('WT_TEST_DIR') ?: ''));
+define('ROOT_DIR', TEST_DIR ?: dirname(__DIR__));
 define('UPLOAD_DIR', ROOT_DIR . '/uploads');
-const CONFIG_FILE = APP_DIR . '/config.php';
+define('CONFIG_FILE', (TEST_DIR ?: APP_DIR) . '/config.php');
+define('SETUP_CODE_FILE', (TEST_DIR ?: APP_DIR) . '/setup-code.txt');
 
 const MAX_FAILS = 5;            // wrong passwords before a pause
 const LOCK_MINUTES = 15;        // the pause

@@ -281,3 +281,6 @@ On a project: **👥 Give project** → pick the person. They see its open steps
 - **Projects:** works without internet. An orange **📴 Offline** bar says so; your changes wait on the device and are sent by themselves when the internet is back (tap the bar to try at once).
 - **Staff app:** opens with the last saved list. Updates (with photos) and messages sent offline show **⏳ Waiting to send** and go out by themselves when online.
 - The installed app opens on your projects; the 👥 button opens the Team pages (worktask.in/?team).
+
+### Tests
+`npm test` runs everything (about 130 checks, ~10 seconds): the app's rules, the projects storage, Claude's commands against a pretend server, quick PHP tests (`team/tests/unit.php`) and the full Work Task server — each run starts its own throwaway MySQL and PHP server, runs the setup, and tests sign-in, tasks, messages, photos, moves, giving projects, owner protection, projects storage and the command tool. Needs `php` and `mysqld` (Homebrew); without them the server tests are skipped.
