@@ -452,6 +452,18 @@ function snoozeBar(ctx, p) {
   h('button', { class: 'link small', type: 'button', onClick: () => { ui.snoozeOpen = null; ctx.render(); } }, 'Cancel'));
 }
 
+/** "📊 3 of 7 steps done by Valar · now: … · last update 2 days ago" (from the team server). */
+function teamProgressLine(ctx, p) {
+  const g = ctx.teamProgress ? ctx.teamProgress(p.id) : null;
+  if (!g || (!g.open && !g.done && !g.lastUpdate)) return null;
+  const today = todayIndia();
+  const ago = !g.lastUpdate ? 'no update yet' : g.lastUpdate === today ? 'updated today' : `last update ${fmtDay(g.lastUpdate)}`;
+  const total = g.open + g.done;
+  return h('div', { class: 'team-progress' + (g.stuck ? ' stuck' : '') },
+    total ? h('span', { class: 'bar' }, h('span', { style: `width:${Math.round((g.done / total) * 100)}%` })) : null,
+    h('span', null, [total ? `📊 ${g.done} of ${total} steps done by ${p.team.name}` : `📊 ${p.team.name}`, g.current ? `now: ${g.current.title}` : '', ago, g.stuck ? '⚠️ stuck' : ''].filter(Boolean).join(' · ')));
+}
+
 /** worktask.in: "Given to Valar" (with Change / Take back), or the people to choose from after "👥 Give project". */
 function teamBar(ctx, p) {
   const { ui } = ctx;
@@ -464,6 +476,7 @@ function teamBar(ctx, p) {
           ? `They see the ${open} open step${open === 1 ? '' : 's'} in order and send a daily update on the current one. New steps you add go to them too.`
           : 'No steps yet: they see the whole project as one task and send a daily update on it. Steps you add replace it.')),
       p.team.needsPhoto ? h('span', { class: 'tag' }, '📷 photo to finish') : null,
+      teamProgressLine(ctx, p),
       h('button', { class: 'btn small', onClick: () => { ui.giveOpen = p.id; ui.givePhoto = !!p.team.needsPhoto; ctx.render(); } }, 'Change person'),
       h('button', { class: 'btn small', onClick: () => { if (confirm(`Take "${p.name}" back from ${p.team.name}? Their open steps are removed from their list.`)) ctx.takeBackProject(p); } }, 'Take back'));
   }

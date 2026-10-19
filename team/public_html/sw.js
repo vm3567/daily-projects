@@ -1,6 +1,6 @@
 // Work Task app shell: keeps the screens on the phone so the app opens fast and shows something
 // without internet. Data (api/) and the projects app (projects/, it has its own) are never kept here.
-const CACHE = 'worktask-v4';
+const CACHE = 'worktask-v5';
 const SHELL = ['./', 'index.html', 'app.js', 'styles.css', 'projects/styles.css', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png'];
 
 self.addEventListener('install', (e) => {
@@ -34,6 +34,7 @@ self.addEventListener('push', (e) => {
     const app = list.filter((c) => new URL(c.url).pathname === '/');
     app.forEach((c) => c.postMessage({ type: 'push', msg: m }));
     if (app.some((c) => c.visibilityState === 'visible' && c.focused)) return undefined; // they are looking at it: the bar is enough
+    if (self.navigator.setAppBadge && m.kind === 'task') self.navigator.setAppBadge().catch(() => {}); // a dot on the app icon until it is opened
     return self.registration.showNotification(m.title || 'Work Task', {
       body: m.body || '', tag: m.tag || undefined, renotify: !!m.tag, icon: 'icons/icon-192.png', data: { url: m.url || '/' },
     });

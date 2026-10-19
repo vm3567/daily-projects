@@ -11,6 +11,7 @@ if (PHP_SAPI !== 'cli') { http_response_code(404); exit; }
 require __DIR__ . '/bootstrap.php';
 require __DIR__ . '/auth.php';
 require __DIR__ . '/dp.php';
+require __DIR__ . '/api.php';
 
 function out($v): void { echo json_encode($v, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES), "\n"; }
 function fail(string $m, int $code = 1): void { fwrite(STDERR, $m . "\n"); exit($code); }
@@ -35,6 +36,7 @@ try {
       if (!is_array($in)) fail('Bad input.');
       try {
         $r = dp_commit($me, (string)($in['parent'] ?? ''), (array)($in['changes'] ?? []), (string)($in['message'] ?? 'via Claude'));
+        try { server_sync_projects(); } catch (Throwable $e) { /* the team lists catch up on the next save */ }
       } catch (ApiError $e) {
         if ($e->status === 409) fail('Another device saved first.', 3);
         throw $e;

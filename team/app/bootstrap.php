@@ -205,6 +205,10 @@ function migrate(PDO $pdo): void {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
     // v8: a step the person added to a project given to them, until the owner's Daily Projects has put it in the project
     "ALTER TABLE tasks ADD COLUMN from_staff TINYINT(1) NOT NULL DEFAULT 0",
+    // v9: a second alert for Stuck; photos in messages, and editing your own message; a suggestion sent twice is kept once
+    "ALTER TABLE updates ADD COLUMN alert2 TINYINT(1) NOT NULL DEFAULT 0",
+    "ALTER TABLE comments ADD COLUMN photo VARCHAR(120) NULL, ADD COLUMN edited_at DATETIME NULL",
+    "ALTER TABLE tasks ADD COLUMN client_id VARCHAR(60) NULL, ADD UNIQUE KEY task_once (created_by, client_id)",
   ];
   $pdo->exec($steps[0]);
   $done = (int)($pdo->query("SELECT v FROM settings WHERE k = 'schema'")->fetchColumn() ?: 0);

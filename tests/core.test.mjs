@@ -53,6 +53,22 @@ test('daily dots: red each new day, yellow when opened, green only after a real 
   assert.equal(daysWithoutWork(p, '2026-10-09'), 3);
 });
 
+test('team work on an earlier day (page closed that day) counts for that day box, and raises its score', async () => {
+  const { dayScore } = await import('../docs/rules.js');
+  const s = fresh();
+  applyOp(s, op('createProject', { projectId: 'p1', name: 'Kiln', groupId: 'g2' }, '2026-10-01'));
+  applyOp(s, op('recordScores', { scores: { '2026-10-03': { green: 0, total: 1 } } }, '2026-10-06'));
+  assert.ok(applyOp(s, op('teamWorked', { projectId: 'p1', day: '2026-10-05' }, '2026-10-06')));
+  assert.ok(applyOp(s, op('teamWorked', { projectId: 'p1', day: '2026-10-03' }, '2026-10-06')), 'an older day is still added');
+  const p = s.data.projects[0];
+  assert.deepEqual([p.teamDays, p.teamWorkDate], [['2026-10-03', '2026-10-05'], '2026-10-05'], 'the newest work day stays the newest');
+  assert.deepEqual(dayScore(s.data, {}, '2026-10-03'), { green: 1, total: 1 });
+  applyOp(s, op('recordScores', { scores: { '2026-10-03': { green: 1, total: 1 } } }, '2026-10-06'));
+  assert.equal(s.data.dayScores['2026-10-03'].green, 0, 'a saved score is kept…');
+  applyOp(s, op('recordScores', { scores: { '2026-10-03': { green: 1, total: 1 } }, raise: true }, '2026-10-06'));
+  assert.equal(s.data.dayScores['2026-10-03'].green, 1, '…unless the team\'s work raises it');
+});
+
 test('old data without lastActivityDate still works (uses lastTickDate)', () => {
   const p = { state: 'active', deadline: null, lastTickDate: '2026-10-05', activeSince: '2026-10-01' };
   assert.equal(dotColour(p, '2026-10-05'), 'green');

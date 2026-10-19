@@ -145,7 +145,9 @@ function dp_handle(string $a, array $in, array $me): ?array {
       return ['sha' => dp_put_blob($bytes)];
     }
     case 'dp.commit':
-      return dp_commit($me, (string)($in['parent'] ?? ''), (array)($in['changes'] ?? []), (string)($in['message'] ?? ''));
+      $r = dp_commit($me, (string)($in['parent'] ?? ''), (array)($in['changes'] ?? []), (string)($in['message'] ?? ''));
+      $GLOBALS['sync_projects'] = true; // after the answer: given projects follow what was saved
+      return $r;
     case 'dp.versions': { // for "go back to an earlier day": newest first, by following each version to the one before
       $rows = [];
       $id = dp_head($me['id']);

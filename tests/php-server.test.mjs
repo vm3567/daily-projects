@@ -344,3 +344,77 @@ test('server: command tool (dp-cli) for /today, /add and /restore', { skip }, ()
   assert.equal(cli(['cat', ex.head, 'data.json']), ex.files['data.json'], 'an older version reads back exactly');
   assert.equal(JSON.parse(cli(['before', '2000-01-01'])), null, 'nothing that old');
 });
+
+test('server: given projects follow the saved projects by themselves; messages, search, report', { skip }, async () => {
+  const save = async (projects) => {
+    const head = (await call('dp.head', {}, tok.boss)).head;
+    const r = await call('dp.commit', { parent: head, changes: [{ path: 'data.json', content: JSON.stringify({ projects }) }], message: 'test' }, tok.boss);
+    assert.ok(r.ok, r.error);
+  };
+  const mine = async (ref) => { const m = await call('my.today', {}, tok.suresh); return [...m.tasks, ...m.other].filter((t) => t.projectRef === ref && t.status === 'open'); };
+  const tomorrow = istDay(-1);
+  const proj = (steps, extra = {}) => ({ id: 'ps1', name: 'Saggar trial', state: 'active', team: { userId: id.suresh, name: 'Suresh' }, steps, ...extra });
+  // saved on another device (no project.sync from the app): the list follows at once
+  await save([proj([{ id: 'a1', text: 'Mix body', done: false, dueDate: '2026-11-02' }, { id: 'a2', text: 'Press', done: false, snoozedUntil: tomorrow }])]);
+  let m = await mine('ps1');
+  assert.deepEqual(m.map((t) => [t.title, t.dueDate]), [['Mix body', '2026-11-02']], 'open steps arrive (with their date); a snoozed one waits');
+  await save([proj([{ id: 'a1', text: 'Mix body', done: true }, { id: 'a2', text: 'Press', done: false }])]);
+  assert.deepEqual((await mine('ps1')).map((t) => t.title), ['Press'], 'ticked = closed, back from snooze = on the list');
+  await save([proj([{ id: 'a2', text: 'Press', done: false }], { state: 'paused' })]);
+  assert.deepEqual(await mine('ps1'), [], 'paused: off the list');
+  await save([proj([{ id: 'a2', text: 'Press', done: false }])]);
+  assert.deepEqual((await mine('ps1')).map((t) => t.title), ['Press'], 'started again: back');
+  await save([]);
+  assert.deepEqual(await mine('ps1'), [], 'deleted: off the list');
+
+  // future start, overview, project page for the manager
+  const fut = (await call('task.save', { assigneeId: id.suresh, title: 'Next week job', repeat: 'once', startDate: istDay(-7) }, tok.boss)).task;
+  assert.equal(fut.startDate, istDay(-7));
+  m = await call('my.today', {}, tok.suresh);
+  assert.ok(!m.tasks.some((t) => t.id === fut.id) && m.other.some((t) => t.id === fut.id), 'not due before its start day: in Coming next');
+  await call('project.sync', { projectRef: 'po', project: 'Overview P', assigneeId: id.suresh, steps: [{ stepRef: 'o1', title: 'One' }, { stepRef: 'o2', title: 'Two' }] }, tok.boss);
+  const ov = (await call('projects.overview', {}, tok.boss)).projects.find((p) => p.ref === 'po');
+  assert.ok(ov && ov.open === 2 && ov.current.title === 'One' && ov.people[0] === 'Suresh');
+  assert.equal((await call('projects.overview', {}, tok.suresh)).s, 403);
+  assert.equal((await call('project.team', { projectRef: 'po' }, tok.boss)).tasks.length, 2);
+
+  // messages: photo, edit, delete (own only)
+  const fd = new FormData(); fd.append('taskId', String(ov.current.id)); fd.append('text', 'See crack'); fd.append('file', new Blob([png], { type: 'image/png' }), 'p.png');
+  const ph = await call('comment.photo', fd, tok.suresh, true);
+  assert.ok(ph.ok, ph.error);
+  const c = ph.comments.find((x) => x.photo);
+  assert.equal((await fetch(`${B}comment.photo&id=${c.id}`, { headers: { Authorization: 'Bearer ' + tok.boss } })).headers.get('content-type'), 'image/jpeg');
+  assert.equal((await fetch(`${B}comment.photo&id=${c.id}`, { headers: { Authorization: 'Bearer ' + tok.anita } })).status, 404, 'others cannot see it');
+  assert.equal((await call('comment.edit', { id: c.id, text: 'x' }, tok.boss)).s, 403, 'only your own message');
+  assert.equal((await call('comment.edit', { id: c.id, text: 'See the crack here' }, tok.suresh)).comments.find((x) => x.id === c.id).text, 'See the crack here');
+  assert.ok(!(await call('comment.delete', { id: c.id }, tok.suresh)).comments.some((x) => x.id === c.id));
+
+  // search: staff only find their own
+  await call('comment.add', { taskId: ov.current.id, text: 'zirconium shortage' }, tok.boss);
+  assert.ok((await call('search', { q: 'zirconium' }, tok.suresh)).results.some((r) => r.kind === 'message'));
+  assert.deepEqual((await call('search', { q: 'zirconium' }, tok.anita)).results, [], 'not someone else\'s task');
+
+  // a suggestion sent twice from the outbox is kept once
+  const s1 = await call('suggest', { title: 'Twice', clientId: 'sg123456-aa' }, tok.suresh);
+  const s2 = await call('suggest', { title: 'Twice', clientId: 'sg123456-aa' }, tok.suresh);
+  assert.equal(s1.task.id, s2.task.id);
+
+  // weekly report
+  const rep = await call('report.week', {}, tok.boss);
+  const su = rep.people.find((p) => p.name === 'Suresh');
+  assert.ok(rep.days.length === 7 && su && su.updates > 0 && su.workDays >= 1);
+
+  // still stuck after a day, nobody answered: one more alert; and the evening summary
+  const st = (await call('task.save', { assigneeId: id.suresh, title: 'Stuck one', repeat: 'once' }, tok.boss)).task;
+  const u = (await call('update.save', { taskId: st.id, note: 'No clay', state: 'stuck' }, tok.suresh)).update;
+  sql(`UPDATE wt.updates SET updated_at = NOW() - INTERVAL 25 HOUR WHERE id = ${u.id}; UPDATE wt.settings SET v = '0' WHERE k = 'jobs_at'; INSERT INTO wt.settings (k, v) VALUES ('fill_by', '00:00') ON DUPLICATE KEY UPDATE v = '00:00'; DELETE FROM wt.settings WHERE k = 'sum_day';`);
+  const before = readFileSync(join(dir, 'push.log'), 'utf8').length;
+  await call('me', {}, tok.anita); // any request: the server's own work runs after it
+  const sent = readFileSync(join(dir, 'push.log'), 'utf8').slice(before);
+  assert.match(sent, /still stuck/, 'second alert');
+  assert.match(sent, /📊 Today: \d+ of \d+ updates in/, 'evening summary');
+  await call('me', {}, tok.anita);
+  assert.equal(readFileSync(join(dir, 'push.log'), 'utf8').slice(before), sent, 'each only once');
+  const tt = await call('team.today', {}, tok.boss);
+  assert.ok(tt.people.find((p) => p.name === 'Suresh').lastUpdate, 'last update day per person');
+});

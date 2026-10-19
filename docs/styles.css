@@ -919,3 +919,8 @@ a.tag.me:hover { color: var(--brand); border-color: var(--brand); }
 @media (max-width: 600px) { .diary-day { grid-template-columns: 1fr; gap: 4px; } }
 .row-menu-item.danger { color: var(--red); }
 .row-menu-note { padding: 6px 10px 2px; border-top: 1px solid var(--line); margin-top: 4px; }
+/* given project: how far the team is */
+.team-progress { flex-basis: 100%; display: flex; align-items: center; gap: 10px; font-size: 13.5px; color: var(--muted); margin-top: 2px; }
+.team-progress.stuck { color: var(--red); }
+.team-progress .bar { flex: 0 0 90px; height: 7px; border-radius: 99px; background: #e5e7eb; overflow: hidden; }
+.team-progress .bar span { display: block; height: 100%; background: var(--green); }

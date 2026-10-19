@@ -169,6 +169,7 @@ const ctx = {
   chase: (p, s) => chase(p, s),
   onServer,
   teamTask: (stepId) => team.byStep.get(stepId) || null,
+  teamProgress: (projectId) => teamProgress(projectId),
   teamPeople: () => teamPeople(),
   teamDaily: (p) => teamDaily(p),
   teamPhoto: (id) => teamPhoto(id),
@@ -2537,7 +2538,15 @@ function teamPhoto(id) {
 }
 
 /** The team sent an update on a project today: it counts as work (green, shown with 👥). Once a day per project. */
-function markTeamWork(tasks) {
+/** A given project on the team: steps done / open, the step they are on, their last update. */
+function teamProgress(projectId) {
+  const list = [...team.byStep.values()].filter((t) => t.projectRef === projectId && t.seq !== null && t.seq !== undefined && !String(t.stepRef).endsWith(':whole'));
+  const open = list.filter((t) => t.status === 'open'), done = list.filter((t) => t.status === 'done');
+  const days = [...team.byStep.values()].filter((t) => t.projectRef === projectId).map((t) => (t.today || t.last || {}).day).filter(Boolean).sort();
+  return { open: open.length, done: done.length, current: open.find((t) => !t.queued) || null, lastUpdate: days[days.length - 1] || null, stuck: open.some((t) => t.stuck) };
+}
+
+function markTeamWork(tasks, teamDays) {
   if (!store || !store.view || !store.canEdit()) return;
   const today = todayIndia();
   const projects = store.view.data.projects;
@@ -2547,6 +2556,20 @@ function markTeamWork(tasks) {
     if (!u || !u.day || u.day > today) continue;
     const p = projects.find((x) => x.id === t.projectRef) || projects.find((x) => x.steps.some((st) => st.id === t.stepRef));
     if (p && p.state === 'active' && (!p.teamWorkDate || p.teamWorkDate < u.day)) store.dispatch('teamWorked', { projectId: p.id, day: u.day });
+  }
+  // every day the team worked on a project (also days this page was not open): those day boxes count it too
+  const past = new Set();
+  for (const [ref, days] of Object.entries(teamDays || {})) {
+    for (const day of days) {
+      const p = store.view.data.projects.find((x) => x.id === ref);
+      if (!p || day > today || (p.teamDays || []).includes(day)) continue;
+      if (store.dispatch('teamWorked', { projectId: p.id, day }) && day < today) past.add(day);
+    }
+  }
+  if (past.size) { // days already scored without this work: score them again (a score only goes up)
+    const scores = {};
+    for (const d of past) { const sc = dayScore(store.view.data, store.view.history, d); if (sc.total) scores[d] = sc; }
+    if (Object.keys(scores).length) store.dispatch('recordScores', { scores, raise: true });
   }
 }
 
@@ -2581,7 +2604,7 @@ function teamPeople() {
  *  (snoozed, or the next copy of a repeating step) is sent on the day it comes back, not before. */
 const projectSteps = (p) => {
   const today = todayIndia();
-  const open = p.steps.filter((x) => !x.done && !(x.snoozedUntil && x.snoozedUntil > today)).map((x) => ({ stepRef: x.id, title: x.text, details: x.note || '' }));
+  const open = p.steps.filter((x) => !x.done && !(x.snoozedUntil && x.snoozedUntil > today)).map((x) => ({ stepRef: x.id, title: x.text, details: x.note || '', dueDate: x.dueDate || null }));
   if (open.length || p.steps.some((x) => !x.done)) return open; // (only snoozed steps left: nothing to do today)
   // no steps at all: the person still gets the project, as one task with its name, until steps are added
   return [{ stepRef: wholeRef(p.id), title: p.name, details: p.status || '' }];
@@ -2769,7 +2792,7 @@ async function loadTeamOnce() {
     if (out.summary) team.summary = out.summary;
     adoptStaffSteps(out.tasks);
     tickFinishedTeamTasks(out.tasks);
-    markTeamWork(out.tasks);
+    markTeamWork(out.tasks, out.teamDays);
     // only from data checked against the server a moment ago (a phone that was asleep could otherwise undo the PC's changes)
     if (Date.now() - dataFreshAt < 90000) {
       await syncGivenProjects(gen);

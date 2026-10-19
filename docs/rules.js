@@ -293,7 +293,7 @@ export function dayScore(data, history, day) {
     if (p.snoozedFrom && p.snoozedUntil && p.snoozedFrom <= day && day < p.snoozedUntil) continue; // snoozed that day: not counted
     if (restingByReminders(p, day)) continue; // every open step was waiting for its "remind me" day
     total++;
-    if (busy.has(p.id) || lastWorkDate(p) === day) green++;
+    if (busy.has(p.id) || lastWorkDate(p) === day || (p.teamDays || []).includes(day)) green++;
   }
   return { green, total };
 }

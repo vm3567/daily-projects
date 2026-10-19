@@ -4,6 +4,7 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/push.php';
+require_once __DIR__ . '/jobs.php';
 
 const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
@@ -118,7 +119,7 @@ function tasks_out(array $tasks, string $day): array {
     'status' => $t['status'], 'createdAt' => $t['created_at'], 'doneAt' => $t['done_at'],
     'dueToday' => $t['status'] === 'open' && due_on($t, $day) && !$queued($t),
     'today' => update_out($todays[$t['id']] ?? null, $photos), 'last' => update_out($lasts[$t['id']] ?? null, $photos),
-    'createdBy' => (int)$t['created_by'], 'fromStaff' => (bool)($t['from_staff'] ?? 0), 'needsPhoto' => (bool)($t['needs_photo'] ?? 0), 'files' => $files[$t['id']] ?? [],
+    'createdBy' => (int)$t['created_by'], 'createdByName' => user_name((int)$t['created_by']), 'fromStaff' => (bool)($t['from_staff'] ?? 0), 'needsPhoto' => (bool)($t['needs_photo'] ?? 0), 'files' => $files[$t['id']] ?? [],
     'messages' => $count[$t['id']] ?? 0, 'unread' => $unread[$t['id']] ?? 0, 'lastMessage' => $lastMsg[$t['id']] ?? null,
     // stuck: the newest update says "Stuck" (and the manager has not answered since)
     'stuck' => (function () use ($t, $todays, $lasts, $answered) {
@@ -143,7 +144,8 @@ function mark_read(array $taskIds, int $userId): void {
 
 function comments_of(int $taskId): array {
   $meId = (int)($GLOBALS['me']['id'] ?? 0);
-  return array_map(fn($c) => ['id' => (int)$c['id'], 'by' => $c['name'], 'byId' => (int)$c['user_id'], 'text' => $c['text'], 'at' => $c['at'], 'mine' => (int)$c['user_id'] === $meId],
+  return array_map(fn($c) => ['id' => (int)$c['id'], 'by' => $c['name'], 'byId' => (int)$c['user_id'], 'text' => $c['text'], 'at' => $c['at'], 'mine' => (int)$c['user_id'] === $meId,
+    'photo' => !empty($c['photo']), 'editedAt' => $c['edited_at'] ?? null],
     all('SELECT c.*, u.name FROM comments c JOIN users u ON u.id = c.user_id WHERE c.task_id = ? ORDER BY c.id', [$taskId]));
 }
 
@@ -321,12 +323,69 @@ function handle(string $a, array $in): array {
       $tasks = all(TASK_SELECT . " WHERE t.project_ref = ? AND t.seq IS NOT NULL AND t.assignee_id = ? AND (t.status = 'open' OR t.status = 'done') ORDER BY t.status = 'open', t.done_at, t.seq, t.id", [$ref, $me['id']]);
       return ['today' => $day, 'tasks' => tasks_out($tasks, $day)];
     }
+    case 'comment.photo': { // a photo in the messages (with an optional line of text)
+      $t = own_task($me, (int)($_POST['taskId'] ?? 0));
+      $cid = client_id($_POST['clientId'] ?? null);
+      if ($cid && ($dup = one('SELECT id FROM comments WHERE user_id = ? AND client_id = ?', [$me['id'], $cid]))) return ['comments' => comments_of((int)$t['id'])];
+      $f = $_FILES['file'] ?? null;
+      if (!$f || $f['error'] !== UPLOAD_ERR_OK || !is_uploaded_file($f['tmp_name'])) throw new ApiError('The photo did not arrive. Try again.');
+      if ($f['size'] > MAX_UPLOAD_BYTES) throw new ApiError('That photo is too big.');
+      $mime = (new finfo(FILEINFO_MIME_TYPE))->file($f['tmp_name']);
+      if (!in_array($mime, ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif'], true)) throw new ApiError('Only photos can be added.');
+      $jpeg = shrink_photo($f['tmp_name'], $mime);
+      $dir = 'msg/' . date('Y-m');
+      if (!is_dir(UPLOAD_DIR . "/$dir")) mkdir(UPLOAD_DIR . "/$dir", 0750, true);
+      $file = "$dir/" . bin2hex(random_bytes(12)) . '.jpg';
+      file_put_contents(UPLOAD_DIR . "/$file", $jpeg);
+      $text = txt($_POST['text'] ?? '', 2000);
+      q('INSERT INTO comments (task_id, user_id, text, at, client_id, photo) VALUES (?, ?, ?, ?, ?, ?)', [$t['id'], $me['id'], $text, now(), $cid, $file]);
+      mark_read([(int)$t['id']], $me['id']);
+      notify($me['role'] === 'admin' ? [(int)$t['assignee_id']] : admin_ids(), 'msg', "📷 {$me['name']} · {$t['title']}", $text !== '' ? $text : 'Sent a photo', '/#open=' . $t['id'], 'm' . $t['id']);
+      return ['comments' => comments_of((int)$t['id'])];
+    }
+    case 'comment.edit':
+    case 'comment.delete': { // only your own message
+      $c = one('SELECT * FROM comments WHERE id = ?', [(int)($in['id'] ?? 0)]);
+      if (!$c || (int)$c['user_id'] !== $me['id']) throw new ApiError('You can change only your own messages.', 403);
+      own_task($me, (int)$c['task_id']);
+      if ($a === 'comment.delete') {
+        q('DELETE FROM comments WHERE id = ?', [$c['id']]);
+        if ($c['photo']) @unlink(UPLOAD_DIR . '/' . $c['photo']);
+      } else {
+        $text = txt($in['text'] ?? '', 2000, !$c['photo'], 'The message');
+        q('UPDATE comments SET text = ?, edited_at = ? WHERE id = ?', [$text, now(), $c['id']]);
+      }
+      return ['comments' => comments_of((int)$c['task_id'])];
+    }
+    case 'search': { // tasks, messages and updates with these words (staff: only their own tasks)
+      $words = txt($in['q'] ?? '', 100);
+      if (mb_strlen($words) < 2) return ['results' => []];
+      $like = '%' . str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], $words) . '%';
+      $mine = $me['role'] === 'admin' ? '' : ' AND t.assignee_id = ' . (int)$me['id'];
+      $out = [];
+      foreach (all("SELECT t.id, t.title, t.status, t.project, t.updated_at AS at, u.name FROM tasks t JOIN users u ON u.id = t.assignee_id
+          WHERE (t.title LIKE ? OR t.details LIKE ? OR t.project LIKE ?) AND t.status <> 'suggested'$mine ORDER BY t.status = 'open' DESC, t.updated_at DESC LIMIT 30", [$like, $like, $like]) as $r) {
+        $out[] = ['taskId' => (int)$r['id'], 'title' => $r['title'], 'who' => $r['name'], 'kind' => 'task', 'text' => trim(($r['project'] ?? '') . ' · ' . $r['status'], ' ·'), 'at' => $r['at']];
+      }
+      foreach (all("SELECT c.task_id, c.text, c.at, t.title, u.name FROM comments c JOIN tasks t ON t.id = c.task_id JOIN users u ON u.id = c.user_id
+          WHERE c.text LIKE ?$mine ORDER BY c.at DESC LIMIT 30", [$like]) as $r) {
+        $out[] = ['taskId' => (int)$r['task_id'], 'title' => $r['title'], 'who' => $r['name'], 'kind' => 'message', 'text' => $r['text'], 'at' => $r['at']];
+      }
+      foreach (all("SELECT p.task_id, p.note, p.updated_at AS at, t.title, u.name FROM updates p JOIN tasks t ON t.id = p.task_id JOIN users u ON u.id = p.user_id
+          WHERE p.note LIKE ?$mine ORDER BY p.day DESC LIMIT 30", [$like]) as $r) {
+        $out[] = ['taskId' => (int)$r['task_id'], 'title' => $r['title'], 'who' => $r['name'], 'kind' => 'update', 'text' => $r['note'], 'at' => $r['at']];
+      }
+      usort($out, fn($x, $y) => strcmp($y['at'], $x['at']));
+      return ['results' => array_slice($out, 0, 60)];
+    }
     case 'suggest': { // staff: "I think this should be done" — it waits for the manager's yes
       $title = txt($in['title'] ?? '', 300, true, 'The task');
       $kind = in_array($in['repeat'] ?? '', ['daily', 'weekly', 'once'], true) ? $in['repeat'] : 'once';
-      q("INSERT INTO tasks (title, details, assignee_id, created_by, repeat_kind, skip_sunday, weekday, due_date, start_date, status, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, 1, NULL, ?, ?, 'suggested', ?, ?)",
-        [$title, txt($in['details'] ?? '', 4000), $me['id'], $me['id'], $kind, $kind === 'once' ? date_or_null($in['dueDate'] ?? null) : null, $day, now(), now()]);
+      $cid = client_id($in['clientId'] ?? null);
+      if ($cid && ($dup = one('SELECT id FROM tasks WHERE created_by = ? AND client_id = ?', [$me['id'], $cid]))) return ['task' => tasks_out([own_task($me, (int)$dup['id'])], $day)[0]]; // sent twice
+      q("INSERT INTO tasks (title, details, assignee_id, created_by, repeat_kind, skip_sunday, weekday, due_date, start_date, status, client_id, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, 1, NULL, ?, ?, 'suggested', ?, ?, ?)",
+        [$title, txt($in['details'] ?? '', 4000), $me['id'], $me['id'], $kind, $kind === 'once' ? date_or_null($in['dueDate'] ?? null) : null, $day, $cid, now(), now()]);
       $id = (int)db()->lastInsertId();
       audit($me['id'], 'task_suggested', "#$id $title");
       notify(admin_ids(), 'msg', "💡 {$me['name']} suggests a task", $title, '/#open=' . $id);
@@ -344,7 +403,18 @@ function handle(string $a, array $in): array {
       $fillBy = setting('fill_by', '18:00');
       $att = team_attention();
       unset($att['open']);
-      return ['today' => $day, 'fillBy' => $fillBy, 'late' => date('H:i') >= $fillBy, 'people' => array_map('public_user', $people), 'tasks' => $out] + $att;
+      // each person: the last day they sent an update (for "no update for 3 days")
+      $lastDay = [];
+      foreach (all('SELECT user_id, MAX(day) AS d FROM updates GROUP BY user_id') as $r) $lastDay[(int)$r['user_id']] = $r['d'];
+      // stuck since: the first day of the run of Stuck updates on each stuck task
+      $since = [];
+      foreach ($att['stuck'] as $t) {
+        $first = $t['today'] ?? $t['last'];
+        foreach (all('SELECT day, state FROM updates WHERE task_id = ? ORDER BY day DESC LIMIT 30', [$t['id']]) as $u) { if ($u['state'] !== 'stuck') break; $first = $u['day']; }
+        $since[$t['id']] = is_array($first) ? $first['day'] : $first;
+      }
+      return ['today' => $day, 'fillBy' => $fillBy, 'late' => date('H:i') >= $fillBy, 'people' => array_map(fn($p) => public_user($p) + ['lastUpdate' => $lastDay[(int)$p['id']] ?? null], $people),
+        'tasks' => $out, 'stuckSince' => (object)$since] + $att;
     }
     case 'project.sync': {
       // Daily Projects: "this whole project is given to <person>". steps = the project's open steps, in order.
@@ -352,19 +422,10 @@ function handle(string $a, array $in): array {
       // and closes tasks whose step is gone (ticked or deleted by the manager). assigneeId 0 = take the project back.
       // One at a time per project (two taps, or two devices, would otherwise make every step twice).
       $ref = txt($in['projectRef'] ?? '', 80, true, 'The project');
-      $lk = 'ps:' . md5($ref);
-      if (!(int)(one('SELECT GET_LOCK(?, 10) AS l', [$lk])['l'] ?? 0)) throw new ApiError('Busy, try again in a moment.');
-      try {
-        db()->beginTransaction();
-        $out = project_sync($me, $in, $ref, $day);
-        db()->commit();
-        return $out;
-      } catch (Throwable $e) {
-        if (db()->inTransaction()) db()->rollBack();
-        throw $e;
-      } finally {
-        q('SELECT RELEASE_LOCK(?)', [$lk]);
-      }
+      unset($in['_server']);
+      $out = locked_project_sync($me, $in, $ref, $day);
+      set_setting('psc:' . md5($ref), (string)time()); // the server's own sync leaves this project alone for a few minutes
+      return $out;
     }
     case 'task.move': { // one task — or, for a step of a given project, all its open steps
       $t = own_task($me, (int)($in['id'] ?? 0));
@@ -414,6 +475,63 @@ function handle(string $a, array $in): array {
       notify([(int)$t['assignee_id']], 'msg', '💡 Not now: ' . $t['title'], $why !== '' ? $why : 'Your manager said not now.', '/#open=' . $t['id']);
       return [];
     }
+    case 'projects.overview': { // every given project: who, how far, last update
+      $tasks = tasks_out(all(TASK_SELECT . " WHERE t.seq IS NOT NULL AND t.project_ref IS NOT NULL AND (t.status = 'open' OR (t.status = 'done' AND t.done_at >= ?)) ORDER BY t.seq, t.id",
+        [date('Y-m-d H:i:s', time() - 90 * 86400)]), $day);
+      $by = [];
+      foreach ($tasks as $t) $by[$t['projectRef']][] = $t;
+      $out = [];
+      foreach ($by as $ref => $list) {
+        $open = array_values(array_filter($list, fn($t) => $t['status'] === 'open' && !str_ends_with((string)$t['stepRef'], ':whole')));
+        $openAll = array_values(array_filter($list, fn($t) => $t['status'] === 'open'));
+        $done = array_values(array_filter($list, fn($t) => $t['status'] === 'done' && !str_ends_with((string)$t['stepRef'], ':whole')));
+        if (!$openAll && max(array_map(fn($t) => (string)$t['doneAt'], $done) ?: ['']) < date('Y-m-d H:i:s', time() - 14 * 86400)) continue; // finished long ago
+        $cur = null;
+        foreach ($openAll as $t) if (!$t['queued']) { $cur = $t; break; }
+        $ids = array_map(fn($t) => $t['id'], $list);
+        $last = one('SELECT MAX(day) AS d FROM updates WHERE task_id IN (' . implode(',', array_fill(0, count($ids), '?')) . ')', $ids)['d'] ?? null;
+        $names = array_values(array_unique(array_map(fn($t) => $t['assignee']['name'], $openAll ?: $list)));
+        $out[] = ['ref' => $ref, 'name' => end($list)['project'] ?: 'Project', 'people' => $names, 'open' => count($open), 'done' => count($done),
+          'current' => $cur ? ['id' => $cur['id'], 'title' => $cur['title'], 'sentToday' => (bool)$cur['today']] : null, 'lastUpdate' => $last,
+          'stuck' => (bool)array_filter($openAll, fn($t) => $t['stuck']), 'staffSteps' => count(array_filter($list, fn($t) => $t['createdBy'] === $t['assignee']['id']))];
+      }
+      usort($out, fn($a, $b) => [!$a['open'], $a['name']] <=> [!$b['open'], $b['name']]);
+      return ['today' => $day, 'projects' => $out];
+    }
+    case 'project.team': { // one given project: every step (done ones too), for the manager
+      $ref = txt($in['projectRef'] ?? '', 80, true, 'The project');
+      $tasks = all(TASK_SELECT . " WHERE t.project_ref = ? AND t.seq IS NOT NULL AND (t.status = 'open' OR t.status = 'done') ORDER BY t.status = 'open', t.done_at, t.seq, t.id", [$ref]);
+      return ['today' => $day, 'tasks' => tasks_out($tasks, $day)];
+    }
+    case 'report.week': { // each person, the 7 days up to `end`: days sent, days missed, stuck, finished
+      $end = date_or_null($in['end'] ?? null) ?: $day;
+      if ($end > $day) $end = $day;
+      $from = date('Y-m-d', strtotime("$end -6 days"));
+      $days = [];
+      for ($d = $from; $d <= $end; $d = date('Y-m-d', strtotime("$d +1 day"))) $days[] = $d;
+      $people = all("SELECT * FROM users WHERE active = 1 AND role = 'staff' ORDER BY name");
+      $rows = [];
+      foreach ($people as $p) {
+        $tasks = all('SELECT * FROM tasks WHERE assignee_id = ? AND status <> ? AND start_date <= ? AND (done_at IS NULL OR done_at >= ?)', [$p['id'], 'suggested', $end, $from . ' 00:00:00']);
+        $ups = all('SELECT day, state, task_id FROM updates WHERE user_id = ? AND day BETWEEN ? AND ?', [$p['id'], $from, $end]);
+        $sentDays = array_values(array_unique(array_column($ups, 'day')));
+        $workDays = []; $missed = [];
+        foreach ($days as $d) {
+          $due = false;
+          foreach ($tasks as $t) {
+            if ($t['created_at'] > "$d 23:59:59" || ($t['done_at'] && $t['done_at'] < "$d 00:00:00")) continue;
+            if (due_on($t, $d) && ($t['seq'] === null || !one("SELECT id FROM tasks WHERE project_ref = ? AND assignee_id = ? AND seq IS NOT NULL AND seq < ? AND created_at <= ? AND (done_at IS NULL OR done_at >= ?) LIMIT 1", [$t['project_ref'], $p['id'], $t['seq'], "$d 23:59:59", "$d 00:00:00"]))) { $due = true; break; }
+          }
+          if ($due || in_array($d, $sentDays, true)) $workDays[] = $d;
+          if ($due && !in_array($d, $sentDays, true)) $missed[] = $d;
+        }
+        $rows[] = ['id' => (int)$p['id'], 'name' => $p['name'], 'workDays' => count($workDays), 'sentDays' => count(array_intersect($sentDays, $days)), 'missed' => $missed,
+          'updates' => count($ups), 'stuck' => count(array_filter($ups, fn($u) => $u['state'] === 'stuck')),
+          'finished' => (int)(one("SELECT COUNT(*) AS n FROM tasks WHERE assignee_id = ? AND status = 'done' AND closed_by = ? AND done_at BETWEEN ? AND ?", [$p['id'], $p['id'], "$from 00:00:00", "$end 23:59:59"])['n'] ?? 0),
+          'stepsAdded' => (int)(one('SELECT COUNT(*) AS n FROM tasks WHERE created_by = ? AND seq IS NOT NULL AND created_at BETWEEN ? AND ?', [$p['id'], "$from 00:00:00", "$end 23:59:59"])['n'] ?? 0)];
+      }
+      return ['from' => $from, 'end' => $end, 'today' => $day, 'days' => $days, 'people' => $rows];
+    }
     case 'tasks.list': {
       $closed = ($in['status'] ?? 'open') === 'closed';
       $tasks = all(TASK_SELECT . ($closed ? " WHERE t.status IN ('done', 'cancelled') ORDER BY t.updated_at DESC LIMIT 200" : " WHERE t.status = 'open' ORDER BY u.name, t.id"));
@@ -447,7 +565,10 @@ function handle(string $a, array $in): array {
       $tasks = all(TASK_SELECT . " WHERE t.step_ref IS NOT NULL AND (t.status = 'open' OR t.updated_at >= ? OR (t.status = 'done' AND t.done_at >= ?)) ORDER BY t.id", [$since, $doneSince]);
       $fillBy = setting('fill_by', '18:00');
       $att = team_attention();
-      return ['today' => $day, 'fillBy' => $fillBy, 'late' => date('H:i') >= $fillBy, 'tasks' => tasks_out($tasks, $day),
+      $teamDays = [];
+      foreach (all("SELECT DISTINCT t.project_ref, u.day FROM updates u JOIN tasks t ON t.id = u.task_id WHERE t.project_ref IS NOT NULL AND u.state <> 'stuck' AND u.day >= ? ORDER BY u.day",
+        [date('Y-m-d', strtotime("$day -45 days"))]) as $r) $teamDays[$r['project_ref']][] = $r['day'];
+      return ['today' => $day, 'fillBy' => $fillBy, 'late' => date('H:i') >= $fillBy, 'tasks' => tasks_out($tasks, $day), 'teamDays' => (object)$teamDays,
         'alerts' => ['stuck' => count($att['stuck']), 'unread' => count($att['unread']), 'suggestions' => count($att['suggestions'])],
         'summary' => (function () use ($att) { // one line for the manager's Today page
           $due = array_values(array_filter($att['open'], fn($t) => $t['dueToday']));
@@ -486,6 +607,7 @@ function handle(string $a, array $in): array {
         if ((int)$old['assignee_id'] !== (int)$assignee['id'] && $old['status'] === 'open') move_tasks($me, [$old], (int)$assignee['id']);
         q('UPDATE tasks SET title=?, details=?, assignee_id=?, repeat_kind=?, skip_sunday=?, weekday=?, due_date=?, project=?, project_ref=?, step_ref=?, updated_at=? WHERE id=?', [...$vals, $id]);
         q('UPDATE tasks SET needs_photo = ? WHERE id = ?', [empty($in['needsPhoto']) ? 0 : 1, $id]);
+        if ($start = date_or_null($in['startDate'] ?? null)) q('UPDATE tasks SET start_date = ? WHERE id = ?', [$start, $id]);
         audit($me['id'], 'task_edit', "#$id $title");
       } else {
         q('INSERT INTO tasks (title, details, assignee_id, repeat_kind, skip_sunday, weekday, due_date, project, project_ref, step_ref, updated_at, created_by, start_date, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
@@ -493,7 +615,9 @@ function handle(string $a, array $in): array {
         $id = (int)db()->lastInsertId();
         q('UPDATE tasks SET needs_photo = ? WHERE id = ?', [empty($in['needsPhoto']) ? 0 : 1, $id]);
         audit($me['id'], 'task_new', "#$id $title");
-        notify([(int)$assignee['id']], 'task', '📥 New task for you', $title . ($vals[7] ? ' · ' . $vals[7] : ''), '/#open=' . $id, 't' . $id);
+        $start = date_or_null($in['startDate'] ?? null);
+        if ($start && $start > $day) q('UPDATE tasks SET start_date = ? WHERE id = ?', [$start, $id]); // starts on a later day
+        notify([(int)$assignee['id']], 'task', '📥 New task for you', $title . ($vals[7] ? ' · ' . $vals[7] : '') . ($start && $start > $day ? ' · starts ' . date('D j M', strtotime($start)) : ''), '/#open=' . $id, 't' . $id);
       }
       return ['task' => tasks_out([own_task($me, $id)], $day)[0]];
     }
@@ -600,7 +724,7 @@ function project_sync(array $me, array $in, string $ref, string $day): array {
   if (!$who) {
     // the person's own new steps are cancelled too, but Daily Projects still adds them to the project (so nothing is lost)
     foreach ($open as $t) q("UPDATE tasks SET status = 'cancelled', done_at = ?, updated_at = ? WHERE id = ?", [now(), now(), $t['id']]);
-    audit($me['id'], 'project_taken_back', $name);
+    if (empty($in['_server'])) audit($me['id'], 'project_taken_back', $name);
     $why = ['paused' => 'Your manager paused this project. It comes back to you when it starts again.', 'finished' => 'Your manager finished this project. Thank you!'][$in['reason'] ?? ''] ?? 'Your manager took this project back. Nothing more to do on it.';
     if ($open) notify(array_map(fn($t) => (int)$t['assignee_id'], $open), 'task', '📁 Off your list: ' . ($name ?: ($open[0]['project'] ?? 'a project')), $why, '/', 'p' . md5($ref));
     return ['tasks' => []];
@@ -627,6 +751,7 @@ function project_sync(array $me, array $in, string $ref, string $day): array {
     $stepRef = txt($st['stepRef'] ?? '', 80);
     $title = txt($st['title'] ?? '', 300);
     $details = txt($st['details'] ?? '', 4000);
+    $due = is_string($st['dueDate'] ?? null) && preg_match('/^\d{4}-\d{2}-\d{2}$/', $st['dueDate']) ? $st['dueDate'] : null; // "by" date of the step
     if ($stepRef === '' || $title === '') continue;
     if ($stepRef === "$ref:whole" && $pending) continue; // the person already added steps (not in the project yet): no "whole project" task
     $keep[$stepRef] = true;
@@ -636,8 +761,8 @@ function project_sync(array $me, array $in, string $ref, string $day): array {
       if ((int)$t['assignee_id'] !== $who) { move_tasks($me, [$t], $who, false); $news[] = $title; } // a new person: the move note, and old messages count as read
       // details: only set when the task is made, so what the manager typed in Work Task is never replaced
       $np = $photoFor((int)$t['needs_photo']);
-      if ($t['title'] !== $title || (int)$t['seq'] !== $i || ($t['project'] ?? '') !== $name || (int)$t['needs_photo'] !== $np) {
-        q('UPDATE tasks SET title = ?, seq = ?, project = ?, needs_photo = ?, updated_at = ? WHERE id = ?', [$title, $i, $name ?: null, $np, now(), $t['id']]);
+      if ($t['title'] !== $title || (int)$t['seq'] !== $i || ($t['project'] ?? '') !== $name || (int)$t['needs_photo'] !== $np || $t['due_date'] !== $due) {
+        q('UPDATE tasks SET title = ?, seq = ?, project = ?, needs_photo = ?, due_date = ?, updated_at = ? WHERE id = ?', [$title, $i, $name ?: null, $np, $due, now(), $t['id']]);
       }
       continue;
     }
@@ -657,12 +782,12 @@ function project_sync(array $me, array $in, string $ref, string $day): array {
     if ($single) {
       if ((int)$single['assignee_id'] !== $who || !empty($single['reopened'])) $news[] = $title;
       if ((int)$single['assignee_id'] !== $who) move_tasks($me, [$single], $who, false);
-      q("UPDATE tasks SET seq = ?, title = ?, details = IF(details IS NULL OR details = '', ?, details), project = ?, project_ref = ?, repeat_kind = ?, needs_photo = ?, updated_at = ? WHERE id = ?", [$i, $title, $details, $name ?: null, $ref, 'once', max($photo, (int)$single['needs_photo']), now(), $single['id']]);
+      q("UPDATE tasks SET seq = ?, title = ?, details = IF(details IS NULL OR details = '', ?, details), project = ?, project_ref = ?, repeat_kind = ?, needs_photo = ?, due_date = ?, updated_at = ? WHERE id = ?", [$i, $title, $details, $name ?: null, $ref, 'once', max($photo, (int)$single['needs_photo']), $due, now(), $single['id']]);
       continue;
     }
     q("INSERT INTO tasks (title, details, assignee_id, created_by, repeat_kind, skip_sunday, weekday, due_date, start_date, project, project_ref, step_ref, status, seq, needs_photo, created_at, updated_at)
-       VALUES (?, ?, ?, ?, 'once', 1, NULL, NULL, ?, ?, ?, ?, 'open', ?, ?, ?, ?)",
-      [$title, $details, $who, $me['id'], $day, $name ?: null, $ref, $stepRef, $i, $photo, now(), now()]);
+       VALUES (?, ?, ?, ?, 'once', 1, NULL, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?)",
+      [$title, $details, $who, $me['id'], $due, $day, $name ?: null, $ref, $stepRef, $i, $photo, now(), now()]);
     $news[] = $title;
   }
   // 'cancelled', not 'done': only the person's own Finished means done (so an un-ticked step goes back to them, and is never ticked by itself)
@@ -682,7 +807,7 @@ function project_sync(array $me, array $in, string $ref, string $day): array {
   $after = $hadSome && !$news ? $current() : null;
   // the order changed (not because a step was finished or closed): tell them which step is theirs now
   if ($before && $after && (int)$before['id'] !== (int)$after['id'] && one("SELECT id FROM tasks WHERE id = ? AND status = 'open'", [$before['id']])) notify([$who], 'task', "➡️ Your step now in $name", $after['title'], '/#open=' . $after['id'], 'p' . md5($ref));
-  audit($me['id'], 'project_given', "$name → #$who");
+  if (empty($in['_server']) || $news || $closed) audit($me['id'], 'project_given', "$name → #$who");
   if ($news) {
     $n = count($news);
     notify([$who], 'task', $hadSome ? ($n === 1 ? "➕ New step in $name" : "➕ $n new steps in $name") : "📁 New project for you: $name",
@@ -789,6 +914,19 @@ function send_task_file(int $id): void {
 }
 
 /** Show a photo: only to the manager or the person who took it. */
+function send_comment_photo(int $id): void {
+  $me = current_user();
+  $c = one('SELECT * FROM comments WHERE id = ?', [$id]);
+  if (!$c || !$c['photo']) throw new ApiError('Photo not found.', 404);
+  own_task($me, (int)$c['task_id']); // 404 for anyone else
+  $path = UPLOAD_DIR . '/' . $c['photo'];
+  if (!is_file($path)) throw new ApiError('Photo not found.', 404);
+  header('Content-Type: image/jpeg');
+  header('Cache-Control: private, max-age=86400');
+  header('Content-Length: ' . filesize($path));
+  readfile($path);
+}
+
 function send_photo(int $id): void {
   $me = current_user();
   $p = one('SELECT p.*, u.user_id FROM photos p JOIN updates u ON u.id = p.update_id WHERE p.id = ?', [$id]);

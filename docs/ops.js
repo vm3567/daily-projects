@@ -432,8 +432,12 @@ const handlers = {
   teamWorked(state, op, a) {
     const p = findProject(state.data, a.projectId);
     const day = cleanDate(a.day);
-    if (!p || !day || day > indiaDate(op.at) || (p.teamWorkDate && p.teamWorkDate >= day)) return false;
-    p.teamWorkDate = day;
+    if (!p || !day || day > indiaDate(op.at)) return false;
+    const days = p.teamDays || [];
+    const isNew = !days.includes(day), later = !p.teamWorkDate || p.teamWorkDate < day;
+    if (!isNew && !later) return false;
+    if (isNew) p.teamDays = [...days, day].sort().slice(-60); // the days the team worked on it (for the day boxes)
+    if (later) p.teamWorkDate = day;
     return true;
   },
 
@@ -818,7 +822,8 @@ const handlers = {
     const scores = (state.data.dayScores ||= {});
     let changed = false;
     for (const [day, v] of Object.entries(a.scores || {})) {
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || scores[day]) continue;
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) continue;
+      if (scores[day] && !(a.raise && (Number(v.green) || 0) > scores[day].green)) continue; // kept, unless the team's work raises it
       scores[day] = { green: Number(v.green) || 0, total: Number(v.total) || 0 };
       changed = true;
     }

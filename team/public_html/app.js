@@ -65,7 +65,9 @@ function fmtTime(dt) {
 function daysBetween(a, b) { return Math.round((new Date(b + 'T00:00:00') - new Date(a + 'T00:00:00')) / 86400000); }
 
 function repeatLabel(t, today) {
-  if (t.seq !== null && t.seq !== undefined && t.status === 'open') return t.queued ? 'Coming next' : 'Current step — send an update each day';
+  const by = t.dueDate ? (today && t.status === 'open' && t.dueDate < today ? ` · ⏰ late, was by ${fmtDay(t.dueDate)}` : ` · by ${fmtDay(t.dueDate)}`) : '';
+  if (t.seq !== null && t.seq !== undefined && t.status === 'open') return (t.queued ? 'Coming next' : 'Current step — send an update each day') + by;
+  if (today && t.startDate && t.startDate > today && t.status === 'open') return `Starts ${fmtDay(t.startDate)}`;
   if (t.repeat === 'daily') return t.skipSunday ? 'Every day (Mon–Sat)' : 'Every day';
   if (t.repeat === 'weekly') return `Every ${LONG_DAYS[t.weekday ?? 1]}`;
   if (!t.dueDate) return 'One time';
@@ -85,7 +87,7 @@ const stateTag = (s) => el('span', { class: 'tag ' + (s === 'stuck' ? 'red' : s 
 class OfflineError extends Error {}
 class AuthError extends Error {} // signed out (password reset, sign-in too old)
 class RetryError extends Error {} // the server had a hiccup: try again later
-const READS = new Set(['me', 'my.today', 'team.today', 'tasks.list', 'users.list', 'task.get']);
+const READS = new Set(['me', 'my.today', 'team.today', 'tasks.list', 'users.list', 'task.get', 'projects.overview', 'project.team', 'project.mine', 'report.week']);
 const cacheKey = (a, body) => 'wt.c.' + a + ':' + JSON.stringify(body || {});
 function readCache(a, body) { try { return JSON.parse(localStorage.getItem(cacheKey(a, body)) || 'null'); } catch { return null; } }
 function writeCache(a, body, out) { try { localStorage.setItem(cacheKey(a, body), JSON.stringify(out)); } catch { /* phone storage full: still works online */ } }
@@ -150,6 +152,8 @@ async function sendItem(it, tok) {
   if (it.kind === 'update' && !it.updateId && daysBetween(day, istDay(new Date())) > 2) // the server would save it as today's update
     throw new Error(`This update was written on ${fmtDay(day)}, too long ago to send. Please write it again for today`);
   if (it.kind === 'comment') { await api('comment.add', { taskId: it.taskId, text: it.text, day, clientId: it.clientId }); return; }
+  if (it.kind === 'step') { await api('project.addStep', { projectRef: it.projectRef, title: it.title, clientId: it.clientId }); return; }
+  if (it.kind === 'suggest') { await api('suggest', { title: it.title, details: it.details, repeat: it.repeat, clientId: it.clientId }); return; }
   if (it.kind === 'update' && !it.updateId) {
     const twoSteps = it.state === 'finished' && it.needsPhoto && it.files && it.files.length && !it.hadPhoto;
     const out = await api('update.save', { taskId: it.taskId, note: it.note, state: twoSteps ? 'progress' : it.state, day });
@@ -390,6 +394,9 @@ async function loadList() {
     }
     else if (view === 'tasks') data = await api('tasks.list', { status: state.closed ? 'closed' : 'open' });
     else if (view === 'people') data = await api('users.list');
+    else if (view === 'projects') data = await api('projects.overview');
+    else if (view === 'report') data = await api('report.week', state.reportEnd ? { end: state.reportEnd } : {});
+    else if (view === 'search') data = { search: true }; // the results come as you type
     else data = null;
   } catch (e) { failed = e; }
   if (state.user !== me) { state.busy = false; return; } // signed out meanwhile
@@ -411,7 +418,7 @@ async function loadDetail() {
       detail = await api('task.get', { id: Number(sel.slice(5)) });
       if (me.role === 'admin') people = (await api('users.list')).users.filter((u) => u.active);
     } else if (sel.startsWith('project:')) {
-      detail = await api('project.mine', { projectRef: sel.slice(8) });
+      detail = await api(me.role === 'admin' ? 'project.team' : 'project.mine', { projectRef: sel.slice(8) });
     } else if (sel === 'give' || sel.startsWith('edit:')) {
       people = (await api('users.list')).users.filter((u) => u.active);
       detail = sel.startsWith('edit:') ? await api('task.get', { id: Number(sel.slice(5)) }) : null;
@@ -432,7 +439,7 @@ function loadView() {
   if (state.sel) loadDetail();
 }
 
-const LIST_VIEWS = ['today', 'tasks', 'people', 'settings'];
+const LIST_VIEWS = ['today', 'tasks', 'people', 'settings', 'projects', 'report', 'search'];
 
 /** go('today' | 'tasks' | 'people' | 'settings') changes the list; anything else ('task:5', 'give', 'edit:5', 'suggest', 'password') opens on the right. */
 function go(view) {
@@ -471,7 +478,7 @@ function openDetail(sel) {
   pushBack();
   state.sel = sel; state.detail = null; state.detailFailed = false; state.moving = 0;
   state.mobileDetail = true; state.menuOpen = false;
-  if (state.view === 'people' || state.view === 'settings') { state.view = 'today'; state.data = null; } // these fill the page: show a list again
+  if (state.view === 'people' || state.view === 'settings' || state.view === 'report') { state.view = 'today'; state.data = null; } // these fill the page: show a list again
   render();
   if (!state.data && !state.busy) loadList();
   loadDetail();
@@ -500,7 +507,7 @@ function render() {
   // keep where each column was scrolled (the screen is drawn again after every change)
   const keep = ['list', 'detail'].map((id) => { const n = document.getElementById(id); return n ? n.scrollTop : 0; });
   const sameScreen = lastRender && state.renderKey === `${state.view}|${state.sel}`;
-  const wide = state.view === 'people' || state.view === 'settings';
+  const wide = state.view === 'people' || state.view === 'settings' || state.view === 'report';
   root.replaceChildren(el('div', {
     class: ['layout', wide ? 'wide' : '', state.mobileDetail && !wide ? 'show-detail' : '', state.menuOpen ? 'menu-open' : ''].filter(Boolean).join(' '),
   },
@@ -529,6 +536,9 @@ function menuColumn() {
       item('Team today', state.view === 'today' && !state.personFilter, () => { state.personFilter = 0; go('today'); }, needs || null),
       item('Tasks', state.view === 'tasks' && !state.closed, () => { state.closed = false; go('tasks'); }),
       item('Done / cancelled', state.view === 'tasks' && state.closed, () => { state.closed = true; go('tasks'); }),
+      item('📁 Projects', state.view === 'projects', () => go('projects')),
+      item('📊 Weekly report', state.view === 'report', () => go('report')),
+      item('🔍 Search', state.view === 'search', () => go('search')),
       item('People', state.view === 'people', () => go('people')),
       item('Settings', state.view === 'settings', () => go('settings'))),
       el('button', { class: 'primary menu-cta', onClick: () => openDetail('give') }, '+ Give a task'));
@@ -545,9 +555,10 @@ function menuColumn() {
   } else {
     const due = d ? d.tasks.filter((x) => !x.today).length : 0;
     parts.push(el('ul', { class: 'menu-list' },
-      item('Today', state.section === 'today', () => { state.section = 'today'; go('today'); }, due || null),
+      item('Today', state.view === 'today' && state.section === 'today', () => { state.section = 'today'; go('today'); }, due || null),
       item('Coming next', state.section === 'next', () => { state.section = 'next'; go('today'); }, d && d.other.length ? d.other.length : null),
-      item('My suggestions', state.section === 'sugg', () => { state.section = 'sugg'; go('today'); }, d && (d.suggestions || []).length ? d.suggestions.length : null)),
+      item('My suggestions', state.section === 'sugg', () => { state.section = 'sugg'; go('today'); }, d && (d.suggestions || []).length ? d.suggestions.length : null),
+      item('🔍 Search', state.view === 'search', () => go('search'))),
       el('button', { class: 'menu-cta', onClick: () => openDetail('suggest') }, '💡 Suggest a task'));
     const projs = myProjects();
     if (projs.length) {
@@ -580,7 +591,7 @@ function taskRow(t, sub, dot, warn = false) {
 /** Middle column: the list (or, for People and Settings, the whole page). */
 function listColumn(wide) {
   const me = state.user, admin = me.role === 'admin';
-  const titles = { today: admin ? 'Team today' : { today: 'My tasks today', next: 'Coming next', sugg: 'My suggestions' }[state.section], tasks: state.closed ? 'Done / cancelled' : 'Tasks', people: 'People', settings: 'Settings' };
+  const titles = { today: admin ? 'Team today' : { today: 'My tasks today', next: 'Coming next', sugg: 'My suggestions' }[state.section], tasks: state.closed ? 'Done / cancelled' : 'Tasks', people: 'People', settings: 'Settings', projects: 'Projects', report: 'Weekly report', search: 'Search' };
   let title = titles[state.view];
   if (admin && state.view === 'today' && state.personFilter && state.team) { const p = state.team.people.find((x) => x.id === state.personFilter); if (p) title = p.name; }
   const head = el('div', { class: 'list-head' },
@@ -592,9 +603,11 @@ function listColumn(wide) {
   if (!state.data) {
     return el('div', { class: 'col-inner' }, head, bar, el('p', { class: 'list-note' }, state.loadFailed ? ['No saved copy on this phone yet. ', el('button', { class: 'link', onClick: () => loadView() }, 'Try again')] : 'Loading…'));
   }
-  if (wide) return el('div', { class: 'col-inner' }, head, bar, el('div', { class: 'wide-inner' }, peopleScreen()));
+  if (wide) return el('div', { class: 'col-inner' }, head, bar, el('div', { class: 'wide-inner' }, state.view === 'report' ? reportScreen() : peopleScreen()));
   let body;
-  if (state.view === 'tasks') body = tasksList();
+  if (state.view === 'search') body = searchList();
+  else if (state.view === 'projects') body = projectsList();
+  else if (state.view === 'tasks') body = tasksList();
   else body = admin ? teamList() : myList();
   return el('div', { class: 'col-inner' }, head, bar, body);
 }
@@ -674,8 +687,16 @@ function projectPage(pr, done = []) {
     pr.real.length ? [k ? sec('To do') : null, el('ol', { class: 'list-body steps-list' }, pr.real.map((t, i) => taskRow(t,
       t === pr.current ? `Step ${k + i + 1} · current · ${sent(t)}` : `Step ${k + i + 1} · next${t.fromStaff ? ' · added by you' : ''}`,
       t === pr.current ? (t.today ? 'green' : 'orange') : 'grey')))] : null,
+    waitingSteps(pr.ref),
     addStepForm(pr.ref),
   ];
+}
+
+/** Steps added offline, still on the phone. */
+function waitingSteps(ref) {
+  const w = (state.outbox || []).filter((x) => x.kind === 'step' && x.projectRef === ref);
+  return w.length ? el('ul', { class: 'list-body' }, w.map((x) => el('li', { class: 'prow' }, el('div', { class: 'prow-btn' }, el('span', { class: 'dot grey' }),
+    el('span', { class: 'prow-text' }, el('span', { class: 'prow-name' }, x.title), el('span', { class: 'prow-next' }, '⏳ Waiting to send')))))) : null;
 }
 
 function addStepForm(ref) {
@@ -688,14 +709,149 @@ function addStepForm(ref) {
       const title = inp.value.trim();
       if (!title) { inp.focus(); return; }
       btn.disabled = true;
+      const clientId = newClientId();
       try {
-        await api('project.addStep', { projectRef: ref, title, clientId: newClientId() });
+        await api('project.addStep', { projectRef: ref, title, clientId });
         toast('➕ Step added. Your manager sees it in the project too.');
         inp.value = '';
         await loadList();
-      } catch (ex) { toast(ex.message, 6000); btn.disabled = false; }
+      } catch (ex) {
+        if (ex instanceof OfflineError) {
+          try { await queue({ kind: 'step', projectRef: ref, title, clientId }); inp.value = ''; toast('📴 Saved on this phone — it will be added when you are online', 5000); render(); return; }
+          catch { /* could not keep it */ }
+        }
+        toast(ex.message, 6000); btn.disabled = false;
+      }
     },
   }, el('label', null, 'Add a step', inp), btn);
+}
+
+/** Manager, top of Team today: today in one look — updates in, who has not sent, who is stuck (and for how long). */
+function teamSummary(d) {
+  if (d.stale || !d.tasks.length) return null;
+  const due = d.tasks.filter((t) => t.dueToday || t.today);
+  const sent = due.filter((t) => t.today).length;
+  const missing = [...new Set(due.filter((t) => !t.today && t.dueToday).map((t) => t.assignee.name))];
+  const since = d.stuckSince || {};
+  const stuck = (d.stuck || []).map((t) => { const days = since[t.id] ? daysBetween(since[t.id], d.today) : 0; return `${t.assignee.name}${days ? ` (${days} day${days > 1 ? 's' : ''})` : ''}`; });
+  const quiet = (d.people || []).filter((p) => d.tasks.some((t) => t.assignee.id === p.id) && p.lastUpdate && daysBetween(p.lastUpdate, d.today) >= 2)
+    .map((p) => `${p.name} (${daysBetween(p.lastUpdate, d.today)} days)`);
+  const all = sent === due.length;
+  return el('div', { class: 'summary ' + (all ? 'good' : d.late ? 'bad' : '') },
+    el('strong', null, all ? `✓ All ${due.length} updates in today` : `📊 ${sent} of ${due.length} updates in today`),
+    missing.length && !all ? el('span', null, `${d.late ? '⚠️ ' : ''}Not yet: ${missing.join(', ')}`) : null,
+    stuck.length ? el('span', null, `Stuck: ${stuck.join(', ')}`) : null,
+    quiet.length ? el('span', null, `No update for: ${quiet.join(', ')}`) : null);
+}
+
+/** Manager: every given project — who, how far, the step they are on, the last update. */
+function projectsList() {
+  const list = state.data.projects || [];
+  if (!list.length) return el('p', { class: 'list-note' }, 'No projects given to the team yet. Give one from your projects page (👥 Give project).');
+  const ago = (day) => !day ? 'no update yet' : day === state.data.today ? 'updated today' : `last update ${fmtDay(day)}`;
+  return el('ul', { class: 'list-body' }, list.map((p) => {
+    const total = p.open + p.done;
+    const dot = p.stuck ? 'red' : !p.open ? 'green' : p.current && p.current.sentToday ? 'green' : 'orange';
+    const sub = [p.people.join(', '), total ? `${p.done} of ${total} done` : 'no steps yet', p.current && p.open ? `now: ${p.current.title}` : !p.open ? 'all done ✓' : '', ago(p.lastUpdate),
+      p.staffSteps ? `${p.staffSteps} step${p.staffSteps > 1 ? 's' : ''} added by them` : ''].filter(Boolean).join(' · ');
+    return el('li', { class: 'prow' + (state.sel === 'project:' + p.ref ? ' current' : '') },
+      el('button', { class: 'prow-btn', onClick: () => openDetail('project:' + p.ref) },
+        el('span', { class: 'dot ' + dot }),
+        el('span', { class: 'prow-text' }, el('span', { class: 'prow-name' }, '📁 ' + p.name, p.stuck ? el('span', { class: 'tag red new-tag' }, 'Stuck') : null), el('span', { class: 'prow-next' }, sub))));
+  }));
+}
+
+/** Manager: one given project — progress, the steps in order (done ones ticked), who added each step. */
+function adminProjectPage(all) {
+  if (!state.detail) return el('p', { class: 'muted' }, 'Loading…');
+  const steps = all.filter((t) => !t.stepRef.endsWith(':whole'));
+  const done = steps.filter((t) => t.status === 'done'), open = all.filter((t) => t.status === 'open');
+  const cur = open.find((t) => !t.queued);
+  const people = [...new Set(open.map((t) => t.assignee.name))];
+  const days = all.map((t) => (t.today || t.last || {}).day).filter(Boolean).sort();
+  const last = days[days.length - 1];
+  const who = (t) => t.createdBy === t.assignee.id ? ` · added by ${t.assignee.name}` : '';
+  const total = done.length + open.filter((t) => !t.stepRef.endsWith(':whole')).length;
+  return [
+    el('div', { class: 'card' },
+      el('div', { class: 'row spread' }, el('strong', null, people.length ? `👥 ${people.join(', ')}` : 'Not given now'), el('span', { class: 'tag ' + (open.some((t) => t.stuck) ? 'red' : 'grey') }, open.some((t) => t.stuck) ? 'Stuck' : total ? `${done.length} of ${total} done` : 'No steps yet')),
+      total ? el('div', { class: 'progress' }, el('span', { style: `width:${Math.round((done.length / total) * 100)}%` })) : null,
+      el('p', { class: 'meta' }, last ? (last === state.detail.today ? 'Last update: today' : `Last update: ${fmtDay(last)} (${daysBetween(last, state.detail.today)} days ago)`) : 'No update yet')),
+    done.length ? [sec(`✓ ${done.length} done`), el('ul', { class: 'list-body' }, done.map((t, i) => taskRow(t, `Step ${i + 1} · done ${t.doneAt ? fmtDay(t.doneAt) : ''}${who(t)}`, 'green')))] : null,
+    open.length ? [sec('To do'), el('ol', { class: 'list-body' }, open.map((t, i) => taskRow(t,
+      (t.stepRef.endsWith(':whole') ? 'The whole project (no steps yet)' : `Step ${done.length + i + 1}`) + (t === cur ? ` · current · ${t.today ? '✓ sent today' : 'no update today'}` : ' · next') + who(t)
+        + (t.dueDate ? ` · by ${fmtDay(t.dueDate)}` : ''),
+      t.stuck ? 'red' : t === cur ? (t.today ? 'green' : 'orange') : 'grey', t.stuck)))] : el('p', { class: 'list-note' }, 'Nothing open on this project.'),
+    el('p', { class: 'meta' }, 'Add, tick or change steps on your projects page; the person’s list follows by itself.'),
+  ];
+}
+
+/** Search: tasks, messages and updates (staff: only their own). Results come as you type. */
+let searchTimer = 0, searchSeq = 0;
+function searchList() {
+  const results = el('div', { id: 'search-results' }, searchResults());
+  const inp = el('input', { type: 'search', placeholder: 'Search tasks, messages, updates…', value: state.searchQ || '', 'aria-label': 'Search',
+    onInput: (e) => {
+      state.searchQ = e.target.value;
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(async () => {
+        const q = state.searchQ.trim(), n = ++searchSeq;
+        if (q.length < 2) { state.searchResults = null; results.replaceChildren(searchResults()); return; }
+        try { const out = await api('search', { q }); if (n === searchSeq) { state.searchResults = out.results; results.replaceChildren(searchResults()); } }
+        catch (ex) { if (n === searchSeq) results.replaceChildren(el('p', { class: 'list-note' }, ex.message)); }
+      }, 350);
+    } });
+  setTimeout(() => { if (state.view === 'search' && !state.sel && document.contains(inp) && !('ontouchstart' in window)) inp.focus(); }, 0);
+  return [el('div', { class: 'search-box' }, inp), results];
+}
+function searchResults() {
+  const r = state.searchResults;
+  if (!r) return el('p', { class: 'list-note' }, 'Type 2 or more letters.');
+  if (!r.length) return el('p', { class: 'list-note' }, 'Nothing found.');
+  const icon = { task: '📋', message: '💬', update: '📝' };
+  return el('ul', { class: 'list-body' }, r.map((x) => el('li', { class: 'prow' },
+    el('button', { class: 'prow-btn', onClick: () => openDetail('task:' + x.taskId) },
+      el('span', { class: 'prow-text' }, el('span', { class: 'prow-name' }, `${icon[x.kind] || ''} ${x.title}`),
+        el('span', { class: 'prow-next' }, `${x.who} · ${fmtDay(x.at)} — ${x.text}`))))));
+}
+
+/** Manager: the week for each person — days they sent, days they missed, stuck, finished. */
+function reportScreen() {
+  const d = state.data;
+  if (!d.people) return el('p', { class: 'muted' }, 'Loading…');
+  const move = (n) => { state.reportEnd = addDay(d.end, n * 7); if (state.reportEnd >= d.today) state.reportEnd = ''; state.data = null; render(); loadList(); };
+  return [
+    el('div', { class: 'row spread report-nav' },
+      el('button', { onClick: () => move(-1) }, '‹ Week before'),
+      el('strong', null, `${fmtDay(d.from)} – ${fmtDay(d.end)}`),
+      el('button', { disabled: d.end >= d.today, onClick: () => move(1) }, 'Next week ›')),
+    d.people.length ? el('div', { class: 'table-wrap' }, el('table', { class: 'report' },
+      el('thead', null, el('tr', null, ['Person', 'Days sent', 'Missed', 'Updates', 'Stuck', 'Finished', 'Steps added'].map((h) => el('th', null, h)))),
+      el('tbody', null, d.people.map((p) => el('tr', null,
+        el('td', null, el('strong', null, p.name)),
+        el('td', { class: p.sentDays >= p.workDays ? 'ok' : '' }, p.workDays ? `${p.sentDays} of ${p.workDays}` : '—'),
+        el('td', { class: p.missed.length ? 'err' : '' }, p.missed.length ? p.missed.map((x) => fmtDay(x).slice(0, 6)).join(', ') : '—'),
+        el('td', null, String(p.updates)), el('td', { class: p.stuck ? 'err' : '' }, String(p.stuck)),
+        el('td', null, String(p.finished)), el('td', null, String(p.stepsAdded))))))) : el('p', { class: 'muted' }, 'No team members yet.'),
+    el('p', { class: 'meta' }, 'Days sent: days with at least one update, out of the days they had work. Missed: days with work and no update.'),
+  ];
+}
+const addDay = (day, n) => { const x = new Date(day + 'T00:00:00Z'); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); };
+
+/** Manager on another page: keep the "Needs you" number in the menu fresh. */
+let teamCountBusy = false;
+async function refreshTeamCount() {
+  if (teamCountBusy || !state.user || state.user.role !== 'admin' || state.view === 'today') return;
+  teamCountBusy = true;
+  try {
+    const tt = await api('team.today');
+    if (tt.fromCache || !state.user) return;
+    const n = (x) => x ? (x.stuck || []).length + (x.unread || []).length + (x.suggestions || []).length : -1;
+    const changed = n(tt) !== n(state.team);
+    state.team = tt;
+    const a = document.activeElement;
+    if (changed && !((a && /^(TEXTAREA|INPUT|SELECT)$/.test(a.tagName)) || formHasText())) render();
+  } catch { /* next time */ } finally { teamCountBusy = false; }
 }
 
 /** Manager: what needs you, then each person's tasks today (the menu can show one person only). */
@@ -709,14 +865,16 @@ function teamList() {
   const row = (t) => {
     const u = t.today;
     const sub = u ? `✓ ${fmtTime(u.at)}${u.state === 'stuck' ? ' · stuck' : u.state === 'finished' ? ' · finished' : ''} — ${u.note}` : t.queued ? 'Coming next' : d.late ? 'Not filled today' : 'Not filled yet';
-    const dot = t.stuck ? 'red' : u ? 'green' : d.late ? 'red' : 'orange';
-    return taskRow(t, (filt ? '' : '') + sub, dot, !u && d.late);
+    const lateBy = t.status === 'open' && t.dueDate && t.dueDate < d.today; // past its "by" date
+    const dot = t.stuck || lateBy ? 'red' : u ? 'green' : d.late ? 'red' : 'orange';
+    return taskRow(t, (lateBy ? `⏰ Late (by ${fmtDay(t.dueDate)}) · ` : '') + sub, dot, (!u && d.late) || lateBy);
   };
   const needs = filt ? [] : [...stuck.map((t) => [t, `Stuck — ${(t.today || t.last || {}).note || ''}`, 'red']),
     ...unread.map((t) => [t, `💬 ${t.unread} new — ${t.lastMessage ? t.lastMessage.text : ''}`, 'orange']),
     ...sugg.map((t) => [t, `💡 Suggestion — tap to say yes or no`, 'orange'])];
   return [
     d.stale ? el('div', { class: 'list-banner' }, `📴 Saved copy from ${fmtDay(d.today)} — today's updates are not shown yet.`) : null,
+    filt ? null : teamSummary(d),
     needs.length ? [sec('⚠︎ Needs you', el('span', { class: 'tag amber' }, String(needs.length))),
       el('ul', { class: 'list-body' }, needs.map(([t, sub, dot]) => {
         const r = taskRow(t, `${t.assignee.name}: ${sub}`, dot, dot === 'red');
@@ -767,8 +925,8 @@ function detailColumn() {
   else if (sel === 'notify') { title = '🔔 Notifications'; body = notifyPage(); }
   else if (sel.startsWith('project:')) {
     const pr = myProjects().find((x) => x.ref === sel.slice(8)), all = (state.detail && state.detail.tasks) || [];
-    title = '📁 ' + (pr ? pr.name : (all[0] && all[0].project) || 'Project');
-    body = projectPage(pr, all.filter((t) => t.status === 'done' && !t.stepRef.endsWith(':whole')));
+    title = '📁 ' + (pr ? pr.name : (all[all.length - 1] && all[all.length - 1].project) || 'Project');
+    body = state.user.role === 'admin' ? adminProjectPage(all) : projectPage(pr, all.filter((t) => t.status === 'done' && !t.stepRef.endsWith(':whole')));
   }
   else if (sel.startsWith('task:')) {
     title = state.detail && state.detail.task ? state.detail.task.title : '';
@@ -1077,12 +1235,59 @@ function messagesBlock(taskId, comments) {
   return [
     el('h2', null, '💬 Messages'),
     comments.length ? comments.map((c) => el('div', { class: 'card msg' + (c.mine ? ' mine' : '') },
-      el('div', { class: 'row small' }, el('strong', null, c.mine ? 'You' : c.by), el('span', { class: 'muted' }, `${fmtDay(c.at)} ${fmtTime(c.at)}`)),
-      el('div', { class: 'pre' }, c.text))) : el('p', { class: 'muted small' }, 'No messages yet.'),
+      el('div', { class: 'row small' }, el('strong', null, c.mine ? 'You' : c.by), el('span', { class: 'muted' }, `${fmtDay(c.at)} ${fmtTime(c.at)}${c.editedAt ? ' · edited' : ''}`),
+        c.mine && !c.text.startsWith('↔ Moved') ? el('span', { class: 'msg-acts' },
+          el('button', { class: 'link', title: 'Change', onClick: () => editMessage(taskId, c) }, '✎'),
+          el('button', { class: 'link', title: 'Delete', onClick: () => deleteMessage(taskId, c) }, '🗑')) : null),
+      c.photo ? msgPhoto(c.id) : null,
+      c.text ? el('div', { class: 'pre' }, c.text) : null)) : el('p', { class: 'muted small' }, 'No messages yet.'),
     (state.outbox || []).filter((x) => x.kind === 'comment' && x.taskId === taskId).map((x) => el('div', { class: 'card msg mine' },
       el('div', { class: 'row small' }, el('strong', null, 'You'), el('span', { class: 'tag amber' }, '⏳ Waiting to send')), el('div', { class: 'pre' }, x.text))),
-    el('div', { class: 'card stack' }, box, err, el('div', { class: 'row' }, btn)),
+    el('div', { class: 'card stack' }, box, err, el('div', { class: 'row' }, btn, msgPhotoButton(taskId, box, key))),
   ];
+}
+
+const msgPhotoUrls = new Map();
+function msgPhoto(id) {
+  const img = el('img', { alt: 'Photo', class: 'msg-photo', onClick: () => { if (img.src) { const v = document.getElementById('viewer'); v.replaceChildren(el('img', { src: img.src, alt: '' })); v.hidden = false; v.onclick = () => { v.hidden = true; }; } } });
+  const set = (u) => { img.src = u; };
+  if (msgPhotoUrls.has(id)) set(msgPhotoUrls.get(id));
+  else fetch('api/?a=comment.photo&id=' + id, { headers: { Authorization: 'Bearer ' + state.token } })
+    .then((r) => { if (!r.ok) throw new Error('photo'); return r.blob(); })
+    .then((b) => { const u = URL.createObjectURL(b); msgPhotoUrls.set(id, u); set(u); })
+    .catch(() => { img.alt = 'Photo missing'; });
+  return el('div', { class: 'thumbs' }, img);
+}
+/** 📷 in the messages: the photo goes with what is typed in the box (if anything). Needs the internet. */
+function msgPhotoButton(taskId, box, key) {
+  const input = el('input', { type: 'file', accept: 'image/*', class: 'hidden-file', onChange: async () => {
+    const f = input.files[0];
+    if (!f) return;
+    if (state.offline) { toast('Photos in messages need the internet. Try again when online.', 5000); input.value = ''; return; }
+    state.sending[key] = true;
+    toast('Sending photo…');
+    const fd = new FormData();
+    fd.append('taskId', String(taskId)); fd.append('text', box.value || ''); fd.append('clientId', newClientId()); fd.append('file', f, 'photo.jpg');
+    try {
+      const out = await api('comment.photo', fd, true);
+      delete state.drafts['m' + taskId];
+      toast('Sent ✓');
+      if (state.sel === 'task:' + taskId && state.detail) { state.detail.comments = out.comments; }
+    } catch (ex) { toast(ex instanceof OfflineError ? 'Photos in messages need the internet. Try again when online.' : ex.message, 6000); }
+    finally { delete state.sending[key]; input.value = ''; render(); }
+  } });
+  return el('label', { class: 'btn', title: 'Send a photo' }, '📷 Photo', input);
+}
+async function editMessage(taskId, c) {
+  const text = prompt('Change your message:', c.text);
+  if (text === null || text.trim() === c.text.trim()) return;
+  try { const out = await api('comment.edit', { id: c.id, text }); if (state.detail) state.detail.comments = out.comments; render(); toast('Changed ✓'); }
+  catch (ex) { toast(ex.message, 5000); }
+}
+async function deleteMessage(taskId, c) {
+  if (!confirm('Delete this message?')) return;
+  try { const out = await api('comment.delete', { id: c.id }); if (state.detail) state.detail.comments = out.comments; render(); toast('Deleted'); }
+  catch (ex) { toast(ex.message, 5000); }
 }
 
 function suggestForm() {
@@ -1097,8 +1302,15 @@ function suggestForm() {
     el('form', { class: 'card stack', onSubmit: async (e) => {
       e.preventDefault();
       btn.disabled = true; err.hidden = true;
-      try { await api('suggest', { title: title.value, details: details.value, repeat: how.value }); toast('Sent for a yes ✓'); state.section = 'sugg'; go('today'); }
-      catch (ex) { err.textContent = ex.message; err.hidden = false; btn.disabled = false; }
+      const item = { title: title.value, details: details.value, repeat: how.value, clientId: newClientId() };
+      try { await api('suggest', item); toast('Sent for a yes ✓'); state.section = 'sugg'; go('today'); }
+      catch (ex) {
+        if (ex instanceof OfflineError) { // kept on the phone, sent when online
+          try { await queue({ kind: 'suggest', ...item }); toast('📴 Saved on this phone — it will be sent when you are online', 5000); state.section = 'sugg'; go('today'); return; }
+          catch { /* could not keep it: say so below */ }
+        }
+        err.textContent = ex.message; err.hidden = false; btn.disabled = false;
+      }
     } }, el('label', null, 'Task', title), el('label', null, 'Details', details), el('label', null, 'How often', how), err,
     el('div', { class: 'row' }, btn, el('button', { type: 'button', onClick: () => go('today') }, 'Cancel'))),
   ];
@@ -1287,6 +1499,8 @@ function taskForm() {
   const weekday = el('select', null, LONG_DAYS.map((n, i) => el('option', { value: String(i) }, n)));
   weekday.value = String(t && t.weekday !== null ? t.weekday : 1);
   const due = el('input', { type: 'date', value: t && t.dueDate ? t.dueDate : '' });
+  const todayIs = (state.data && state.data.today) || istDay(new Date());
+  const start = el('input', { type: 'date', min: todayIs, value: t && t.startDate && t.startDate > todayIs ? t.startDate : '' });
   const needsPhoto = el('input', { type: 'checkbox', checked: t ? t.needsPhoto : false });
   const files = el('input', { type: 'file', accept: 'image/*,application/pdf', multiple: true });
   const wLabel = el('label', null, 'On', weekday);
@@ -1303,7 +1517,7 @@ function taskForm() {
         const out = await api('task.save', {
           id: t ? t.id : 0, assigneeId: Number(person.value), title: title.value, details: details.value, project: project.value,
           repeat: how.value === 'daily7' ? 'daily' : how.value, skipSunday: how.value === 'daily', weekday: Number(weekday.value), dueDate: due.value,
-          projectRef: t ? t.projectRef : pre.projectRef, stepRef: t ? t.stepRef : pre.stepRef, needsPhoto: needsPhoto.checked,
+          projectRef: t ? t.projectRef : pre.projectRef, stepRef: t ? t.stepRef : pre.stepRef, needsPhoto: needsPhoto.checked, startDate: start.value,
         });
         if (files.files.length) await uploadTaskFiles(out.task.id, [...files.files].slice(0, 10));
         const fromProjects = !editing && pre.stepRef && state.user.owner;
@@ -1315,6 +1529,7 @@ function taskForm() {
     } },
     el('label', null, 'Who', person), el('label', null, 'Task', title), el('label', null, 'Details', details),
     el('label', null, 'Project', project), el('label', null, 'How often', how), wLabel, dLabel,
+    el('label', null, 'Start on (optional — empty = today)', start),
     el('label', { class: 'check' }, needsPhoto, ' 📷 Photo needed to finish'),
     el('label', null, '📎 Instruction photos / PDF (optional)', files), err,
     el('div', { class: 'row' }, btn, el('button', { type: 'button', onClick: async () => { state.prefill = null; if (!editing && state.fromProjects && state.user.owner && await toProjects()) return; if (editing) openDetail('task:' + t.id); else closeDetail(); } }, 'Cancel'))),
@@ -1460,6 +1675,7 @@ const listOf = (d) => [...((d && d.tasks) || []), ...((d && d.other) || []), ...
 /** Every 20 seconds while the app is open: anything new? New tasks get a "New" mark and a message at the bottom. */
 async function liveCheck(quiet = false) {
   if (liveBusy || !state.user || state.user.mustChange || document.visibilityState !== 'visible' || state.offline || state.busy) return;
+  refreshTeamCount();
   if (state.view !== 'today' && state.view !== 'tasks') return;
   const admin = state.user.role === 'admin';
   const action = state.view === 'today' ? (admin ? 'team.today' : 'my.today') : 'tasks.list';

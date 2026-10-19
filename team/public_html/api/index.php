@@ -28,6 +28,7 @@ function send_dp_blob_safe(string $sha): void { dp_migrate(); dp_send_blob($sha)
 try {
   if ($a === 'photo' && ($_SERVER['REQUEST_METHOD'] ?? '') === 'GET') { send_photo((int)($_GET['id'] ?? 0)); exit; }
   if ($a === 'task.file' && ($_SERVER['REQUEST_METHOD'] ?? '') === 'GET') { send_task_file((int)($_GET['id'] ?? 0)); exit; }
+  if ($a === 'comment.photo' && ($_SERVER['REQUEST_METHOD'] ?? '') === 'GET') { send_comment_photo((int)($_GET['id'] ?? 0)); exit; }
   if ($a === 'dp.blob' && ($_SERVER['REQUEST_METHOD'] ?? '') === 'GET') { send_dp_blob_safe((string)($_GET['sha'] ?? '')); exit; }
   if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST') throw new ApiError('Use POST.', 405);
   if (str_starts_with($_SERVER['CONTENT_TYPE'] ?? '', 'multipart/form-data')) $in = $_POST;
@@ -40,11 +41,11 @@ try {
   $out = handle($a, $in);
   header('Content-Type: application/json; charset=utf-8');
   echo json_encode(['ok' => true] + $out, JSON_UNESCAPED_UNICODE);
-  if (!empty($GLOBALS['push_out'])) { // phone notifications: the answer goes first, then the messages to Google / Apple
-    if (function_exists('litespeed_finish_request')) litespeed_finish_request();
-    elseif (function_exists('fastcgi_finish_request')) fastcgi_finish_request();
-    try { push_flush(); } catch (Throwable $e) { error_log('push: ' . $e->getMessage()); }
-  }
+  // the answer goes first; then the server's own work (given projects, alerts) and the phone notifications
+  if (function_exists('litespeed_finish_request')) litespeed_finish_request();
+  elseif (function_exists('fastcgi_finish_request')) fastcgi_finish_request();
+  if (config()) team_jobs();
+  try { push_flush(); } catch (Throwable $e) { error_log('push: ' . $e->getMessage()); }
 } catch (ApiError $e) {
   http_response_code($e->status);
   header('Content-Type: application/json; charset=utf-8');
