@@ -477,6 +477,7 @@ function openDetail(sel) {
   state.backTo = sel.startsWith('task:') && state.sel && state.sel.startsWith('project:') ? state.sel : null;
   pushBack();
   state.sel = sel; state.detail = null; state.detailFailed = false; state.moving = 0;
+  state.taskMenu = 0; state.diaryDays = 0;
   state.mobileDetail = true; state.menuOpen = false;
   if (state.view === 'people' || state.view === 'settings' || state.view === 'report') { state.view = 'today'; state.data = null; } // these fill the page: show a list again
   render();
@@ -937,7 +938,8 @@ function detailColumn() {
   return el('div', { class: 'detail-inner' },
     el('div', { class: 'detail-top' },
       el('button', { class: 'icon back', 'aria-label': 'Back', onClick: () => closeDetail() }, '←'),
-      el('h2', { class: 'detail-title' }, title)),
+      el('h2', { class: 'detail-title' }, title),
+      sel.startsWith('task:') && state.user.role === 'admin' && state.detail && state.detail.task ? taskActions(state.detail.task) : null),
     body);
 }
 
@@ -946,12 +948,124 @@ function myTaskDetail() {
   const { task: t, updates = [], comments = [] } = state.detail;
   const today = (state.data && state.data.today) || istDay(new Date());
   return [
-    myTask(t, today),
+    taskChips(t, today, false),
+    t.details ? el('div', { class: 'task-details pre' }, t.details) : null,
+    taskFiles(t),
+    todayCard(t, today),
     messagesBlock(t.id, comments),
-    updates.filter((u) => u.day !== today).length ? [el('h2', null, 'Earlier updates'), updates.filter((u) => u.day !== today).map((u) => el('div', { class: 'card' },
-      el('div', { class: 'row small' }, el('strong', null, fmtDay(u.day)), el('span', { class: 'muted' }, fmtTime(u.at)), stateTag(u.state)),
-      el('div', { class: 'pre' }, u.note), thumbs(u.photos)))] : null,
+    taskDiary(t, updates, today, true),
   ];
+}
+
+/** Staff: today's update for this task (write it, or what was sent), or what waits on the phone. */
+function todayCard(t, today) {
+  const waiting = (state.outbox || []).filter((x) => (x.kind === 'update' || x.kind === 'photos') && x.taskId === t.id).pop();
+  const head = (extra) => el('div', { class: 'row spread small' }, el('strong', null, "Today's update"), extra);
+  if (waiting && !state.editing[t.id]) {
+    return el('div', { class: 'card waiting' }, head(el('span', { class: 'tag amber' }, '⏳ Waiting to send')),
+      el('div', { class: 'row small' }, stateTag(waiting.state), (waiting.files || []).length ? el('span', { class: 'muted' }, `📷 ${waiting.files.length}`) : null),
+      el('div', { class: 'pre' }, waiting.note),
+      el('p', { class: 'muted small' }, 'Kept on this phone. It is sent by itself when the internet is back.'));
+  }
+  if (t.status !== 'open' && !t.today) return null;
+  const done = t.today && !state.editing[t.id];
+  return el('div', { class: 'card' + (done ? ' sent' : '') },
+    head(null),
+    done ? sentView(t) : updateForm(t));
+}
+
+const LATE_HM = () => new Date().toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' });
+const weekdayOf = (day) => new Date(day + 'T00:00:00Z').getUTCDay();
+/** Is this task due on that day? (the same rule as the server) */
+function dueOn(t, day) {
+  if (t.startDate && day < t.startDate) return false;
+  const wd = weekdayOf(day);
+  if (t.repeat === 'weekly') return wd === (t.weekday ?? 1);
+  return !(t.skipSunday && wd === 0);
+}
+
+/** One line of small chips about a task: who, project, how often, its date, the photo rule, closed. */
+function taskChips(t, today, admin) {
+  const c = (text, cls = '') => el('span', { class: 'info-chip static' + cls }, text);
+  const late = t.status === 'open' && t.dueDate && t.dueDate < today;
+  const how = t.seq !== null && t.seq !== undefined ? (t.queued ? 'Coming next' : 'Current step')
+    : t.startDate && t.startDate > today ? `Starts ${fmtDay(t.startDate)}`
+      : t.repeat === 'daily' ? (t.skipSunday ? 'Every day (Mon–Sat)' : 'Every day') : t.repeat === 'weekly' ? `Every ${LONG_DAYS[t.weekday ?? 1]}` : 'One time';
+  return el('div', { class: 'info-chips' },
+    admin ? c(`👤 ${t.assignee.name}`, ' team') : null,
+    t.project ? c(`📁 ${t.project}`) : null,
+    c(how),
+    t.dueDate ? c(late ? `⏰ Late — was by ${fmtDay(t.dueDate)}` : `By ${fmtDay(t.dueDate)}`, late ? ' bad' : '') : null,
+    t.needsPhoto ? c('📷 Photo to finish') : null,
+    t.status === 'done' ? c('✓ Done', ' good') : t.status === 'cancelled' ? c('Cancelled', ' bad') : t.status === 'suggested' ? c('💡 Suggestion') : t.today ? c('✓ Sent today', ' good') : null);
+}
+
+/** What's happening on this task, day by day: every update with its time; Sunday = Off; a due day with nothing = No progress. */
+function taskDiary(t, updates, today, staff) {
+  const n = state.diaryDays || 14;
+  const fillBy = (state.data && state.data.fillBy) || '18:00';
+  const start = [t.startDate || '', (t.createdAt || '').slice(0, 10)].sort().pop() || today;
+  const end = t.status !== 'open' && t.doneAt ? t.doneAt.slice(0, 10) : today;
+  const byDay = new Map();
+  for (const u of updates) byDay.set(u.day, [...(byDay.get(u.day) || []), u]);
+  const from = addDay(end, -(n - 1)) > start ? addDay(end, -(n - 1)) : start;
+  const rows = [];
+  for (let day = end; day >= from; day = addDay(day, -1)) {
+    if (staff && day === today) continue; // today's update is in its own box above
+    const ups = byDay.get(day) || [];
+    const wd = weekdayOf(day);
+    let content;
+    if (ups.length) {
+      content = ups.map((u) => el('div', { class: 'diary-entry' },
+        el('div', { class: 'diary-line' }, el('span', { class: 'diary-icon' }, u.state === 'stuck' ? '⚠️' : u.state === 'finished' ? '✅' : '📝'),
+          el('div', { class: 'diary-text' }, el('strong', null, (staff && u.byId === state.user.id ? 'You' : u.by) + ' '),
+            u.state !== 'progress' ? [stateTag(u.state), ' '] : null, el('span', { class: 'pre' }, u.note), thumbs(u.photos))),
+        el('span', { class: 'diary-time' }, fmtTime(u.at))));
+    } else if (!dueOn(t, day)) {
+      if (wd !== 0) continue; // not a day for this task (a weekly task, say)
+      content = el('span', { class: 'day-tag off' }, 'Off');
+    } else if (day === today && LATE_HM() < fillBy) content = el('span', { class: 'day-tag wait' }, 'Waiting for today\'s update');
+    else content = [el('span', { class: 'day-tag miss' }, 'No progress'), el('span', { class: 'muted small' }, ' no update')];
+    rows.push(el('li', { class: 'diary-day' },
+      el('div', { class: 'diary-date' }, el('strong', null, day === today ? 'Today' : LONG_DAYS[wd]), el('span', { class: 'muted small' }, day === today ? fmtDay(day) : fmtDay(day).slice(4))),
+      el('div', { class: 'diary-items' }, content)));
+  }
+  return [
+    el('h2', null, staff ? '📅 Earlier days' : "📅 What's happening"),
+    rows.length ? el('ul', { class: 'diary-days' }, rows) : el('p', { class: 'muted small' }, 'Nothing yet.'),
+    from > start ? el('button', { class: 'link small', onClick: () => { state.diaryDays = n + 14; render(); } }, 'Show older days') : null,
+  ];
+}
+
+/** Manager, next to the task's title: Mark done, and ⋯ for the rest. */
+function taskActions(t) {
+  if (t.status === 'suggested') return null;
+  const setStatus = async (status) => {
+    try { await api('task.status', { id: t.id, status }); toast(status === 'open' ? 'Opened again' : status === 'done' ? 'Marked done ✓' : 'Cancelled'); loadView(); } catch (ex) { toast(ex.message, 5000); }
+  };
+  if (t.status !== 'open') return el('span', { class: 'nav-pn' }, el('button', { class: 'btn', onClick: () => setStatus('open') }, 'Open again'));
+  return el('span', { class: 'nav-pn' },
+    el('button', { class: 'btn', onClick: () => setStatus('done') }, '✓ Mark done'),
+    el('button', { class: 'btn icon-btn' + (state.taskMenu === t.id ? ' on' : ''), 'aria-label': 'More actions', title: 'Edit, move, instructions, cancel', onClick: () => { state.taskMenu = state.taskMenu === t.id ? 0 : t.id; render(); } }, '⋯'));
+}
+
+/** The ⋯ menu of a task (manager). */
+function taskMenu(t) {
+  if (state.taskMenu !== t.id || t.status !== 'open') return null;
+  const close = () => { state.taskMenu = 0; };
+  const input = el('input', { type: 'file', accept: 'image/*,application/pdf', multiple: true, class: 'hidden-file', onChange: async () => {
+    close(); render();
+    await uploadTaskFiles(t.id, [...input.files].slice(0, 10)); toast('Added ✓'); loadView();
+  } });
+  return el('div', { class: 'proj-menu', role: 'menu' },
+    el('button', { class: 'menu-row', onClick: () => { close(); go('edit:' + t.id); } }, '✎ Edit task'),
+    el('button', { class: 'menu-row', onClick: () => { close(); state.moving = t.id; render(); } }, '↔ Move to another person…'),
+    el('label', { class: 'menu-row' }, '📎 Add instruction photo / PDF', input),
+    el('button', { class: 'menu-row danger', onClick: async () => {
+      close();
+      if (!confirm('Cancel this task?')) { render(); return; }
+      try { await api('task.status', { id: t.id, status: 'cancelled' }); toast('Cancelled'); loadView(); } catch (ex) { toast(ex.message, 5000); }
+    } }, '✖ Cancel task'));
 }
 
 async function signOut() {
@@ -1447,36 +1561,20 @@ function allTasks() {
 function taskDetail() {
   const { task: t, updates, comments = [] } = state.detail;
   const admin = state.user.role === 'admin';
-  const setStatus = async (status) => {
-    try { await api('task.status', { id: t.id, status }); toast(status === 'open' ? 'Opened again' : status === 'done' ? 'Marked done ✓' : 'Cancelled'); loadView(); } catch (ex) { toast(ex.message, 5000); }
-  };
+
+  const today = (state.data && state.data.today) || istDay(new Date());
   return [
-    el('p', { class: 'meta' }, [t.assignee.name, t.project, repeatLabel(t), t.status !== 'open' ? (t.status === 'done' ? 'Done' : 'Cancelled') : null].filter(Boolean).join(' · ')),
-    t.details ? el('div', { class: 'card pre' }, t.details) : null,
+    admin ? taskMenu(t) : null,
+    taskChips(t, today, admin),
+    t.details ? el('div', { class: 'task-details pre' }, t.details) : null,
     taskFiles(t, admin),
-    t.needsPhoto ? el('p', { class: 'small warn' }, '📷 Photo needed to finish') : null,
-    admin && t.status === 'open' ? (() => {
-      const input = el('input', { type: 'file', accept: 'image/*,application/pdf', multiple: true, class: 'hidden-file', onChange: async () => {
-        await uploadTaskFiles(t.id, [...input.files].slice(0, 10)); toast('Added ✓'); loadView();
-      } });
-      return el('label', { class: 'btn' }, '📎 Add instruction photo / PDF', input);
-    })() : null,
     admin && t.status === 'suggested' ? el('div', { class: 'row' },
       el('span', { class: 'tag' }, `💡 Suggested by ${t.assignee.name}`),
       el('button', { class: 'primary', onClick: async () => { try { await api('task.approve', { id: t.id }); toast('Added ✓'); loadView(); } catch (ex) { toast(ex.message, 5000); } } }, '✓ Yes, add it'),
       el('button', { onClick: async () => { const why = prompt('Not now — why (optional):', ''); if (why === null) return; try { await api('task.decline', { id: t.id, reason: why }); toast('Answered'); loadView(); } catch (ex) { toast(ex.message, 5000); } } }, 'Not now')) : null,
     admin && t.status === 'open' ? moveBox(t) : null,
-    admin && t.status !== 'suggested' ? el('div', { class: 'row' },
-      el('button', { onClick: () => go('edit:' + t.id) }, '✎ Edit'),
-      t.status === 'open' ? el('button', { onClick: () => { state.moving = state.moving === t.id ? 0 : t.id; render(); } }, '↔ Move to…') : null,
-      t.status === 'open' ? [el('button', { onClick: () => setStatus('done') }, '✓ Mark done'), el('button', { onClick: () => { if (confirm('Cancel this task?')) setStatus('cancelled'); } }, 'Cancel task')]
-        : el('button', { onClick: () => setStatus('open') }, 'Open again')) : null,
     messagesBlock(t.id, comments),
-    el('h2', null, 'Updates'),
-    updates.length ? updates.map((u) => el('div', { class: 'card' },
-      el('div', { class: 'row small' }, el('strong', null, fmtDay(u.day)), el('span', { class: 'muted' }, fmtTime(u.at)), stateTag(u.state),
-        u.byId !== t.assignee.id ? el('span', { class: 'muted' }, `by ${u.by}`) : null),
-      el('div', { class: 'pre' }, u.note), thumbs(u.photos))) : el('p', { class: 'muted' }, 'No updates yet.'),
+    t.status === 'suggested' ? null : taskDiary(t, updates, today, false),
   ];
 }
 
