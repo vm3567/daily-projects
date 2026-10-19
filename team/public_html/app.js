@@ -775,7 +775,7 @@ function adminProjectPage(all) {
   return [
     el('div', { class: 'card' },
       el('div', { class: 'row spread' }, el('strong', null, people.length ? `👥 ${people.join(', ')}` : 'Not given now'), el('span', { class: 'tag ' + (open.some((t) => t.stuck) ? 'red' : 'grey') }, open.some((t) => t.stuck) ? 'Stuck' : total ? `${done.length} of ${total} done` : 'No steps yet')),
-      total ? el('div', { class: 'progress' }, el('span', { style: `width:${Math.round((done.length / total) * 100)}%` })) : null,
+      total ? el('div', { class: 'progress' }, (() => { const b = el('span'); b.style.width = `${Math.round((done.length / total) * 100)}%`; return b; })()) : null,
       el('p', { class: 'meta' }, last ? (last === state.detail.today ? 'Last update: today' : `Last update: ${fmtDay(last)} (${daysBetween(last, state.detail.today)} days ago)`) : 'No update yet')),
     done.length ? [sec(`✓ ${done.length} done`), el('ul', { class: 'list-body' }, done.map((t, i) => taskRow(t, `Step ${i + 1} · done ${t.doneAt ? fmtDay(t.doneAt) : ''}${who(t)}`, 'green')))] : null,
     open.length ? [sec('To do'), el('ol', { class: 'list-body' }, open.map((t, i) => taskRow(t,
@@ -1883,3 +1883,25 @@ document.addEventListener('visibilitychange', () => {
 start();
 // Installable as an app (Android: Chrome menu → Install app); keeps the screens for fast opening.
 if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === '127.0.0.1')) navigator.serviceWorker.register('sw.js').catch(() => {});
+
+// ---------------------------------------------------------------- a new version was uploaded while this page stayed open
+// Offer a reload (a page left open could otherwise run old code for days). Checked every 5 minutes and when coming back.
+let codeStamp = null;
+async function checkNewVersion() {
+  try {
+    const r = await fetch('app.js', { method: 'HEAD', cache: 'no-store' });
+    const stamp = r.ok ? (r.headers.get('etag') || r.headers.get('last-modified')) : null;
+    if (!stamp) return;
+    if (codeStamp === null) { codeStamp = stamp; return; }
+    if (stamp !== codeStamp && !document.getElementById('update-ready')) {
+      const b = document.createElement('button');
+      b.id = 'update-ready'; b.className = 'update-ready'; b.type = 'button';
+      b.textContent = '✨ New version ready — tap to reload';
+      b.addEventListener('click', () => location.reload());
+      document.body.append(b);
+    }
+  } catch { /* offline: next time */ }
+}
+checkNewVersion();
+setInterval(checkNewVersion, 5 * 60 * 1000);
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') checkNewVersion(); });

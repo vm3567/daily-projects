@@ -2921,3 +2921,25 @@ installAutocorrect(device.autocorrect());
 if (isMock) document.title = 'Daily Projects (test mode)';
 else if (onServer && location.hostname !== 'worktask.in' && location.hostname !== 'www.worktask.in') document.title = 'Daily Projects (server test)';
 start();
+
+// ---------------------------------------------------------------- a new version was uploaded while this page stayed open
+// Offer a reload (a page left open could otherwise run old code for days). Checked every 5 minutes and when coming back.
+let codeStamp = null;
+async function checkNewVersion() {
+  try {
+    const r = await fetch('app.js', { method: 'HEAD', cache: 'no-store' });
+    const stamp = r.ok ? (r.headers.get('etag') || r.headers.get('last-modified')) : null;
+    if (!stamp) return;
+    if (codeStamp === null) { codeStamp = stamp; return; }
+    if (stamp !== codeStamp && !document.getElementById('update-ready')) {
+      const b = document.createElement('button');
+      b.id = 'update-ready'; b.className = 'update-ready'; b.type = 'button';
+      b.textContent = '✨ New version ready — tap to reload';
+      b.addEventListener('click', () => location.reload());
+      document.body.append(b);
+    }
+  } catch { /* offline: next time */ }
+}
+checkNewVersion();
+setInterval(checkNewVersion, 5 * 60 * 1000);
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') checkNewVersion(); });

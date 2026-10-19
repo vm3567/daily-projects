@@ -75,7 +75,10 @@ test('project page draws (steps, update box, people, time, links)', () => {
   const s = sampleState();
   const el = renderDetail(fakeCtx(s, { selected: 'p1', openParts: { history: true }, update: {}, showMore: true }));
   const text = el.textContent;
-  for (const bit of ['Kiln', 'Fire samples', 'Save + done', 'Work notes', 'Status', 'Snooze', 'Ravi', 'Today', 'Spec']) assert.ok(text.includes(bit), bit);
+  for (const bit of ['Kiln', 'Fire samples', 'Save + done', 'Work notes', 'Status', 'Finish', 'Ravi', 'Today', 'Spec']) assert.ok(text.includes(bit), bit);
+  assert.ok(!text.includes('Snooze'), 'Snooze waits in the ⋯ menu');
+  const menu = renderDetail(fakeCtx(s, { selected: 'p1', update: {}, projMenu: 'p1' })).textContent;
+  for (const bit of ['Snooze', 'Pause', 'Delete project']) assert.ok(menu.includes(bit), 'menu: ' + bit);
 });
 
 test('empty project page draws', () => {
@@ -137,7 +140,7 @@ test('project page: "Save + done" button, and the next project offer when green'
   ctx.openNextOpen = () => {};
   const text = renderDetail(ctx).textContent;
   assert.ok(text.includes('Save + done'), 'save + done button');
-  assert.ok(text.includes('Next: Glaze trial'), 'next project offered');
+  assert.ok(text.includes('Next project: Glaze trial'), 'next project offered (at the bottom)');
   assert.ok(!text.includes('This step is done'), 'old tick box gone');
 });
 

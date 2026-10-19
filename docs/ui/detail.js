@@ -1,6 +1,6 @@
 // The right column: everything about one project, all editable in place.
 
-import { h, fmtDay, fmtTime, fmtSize, keyHint, withKey, HAS_KEYBOARD } from './dom.js';
+import { h, fmtDay, fmtTime, fmtSize, HAS_KEYBOARD } from './dom.js';
 
 const MOD = /Mac|iPhone|iPad/.test(globalThis.navigator ? navigator.platform || navigator.userAgent || '' : '') ? '⌘' : 'Ctrl';
 import { dotColour, isSnoozed, restUntil, stepWaitsForReminder, daysBetween, addDays, todayIndia, isOverdue, indiaDate, waitingDays, lastWorkDate, nextStep, stepLinkedTo, personStatus, minutesBetween, fmtMinutes, weekStart } from '../rules.js';
@@ -398,7 +398,7 @@ function updateBox(ctx, p) {
     h('button', { class: 'chip' + (due ? '' : ' on'), type: 'button', onClick: () => { u.about = 'project'; ctx.render(); focusUpdate(p); } }, 'Whole project')) : null,
   h('input', {
     name: 'note', key: 'wn-' + p.id, autocomplete: 'off', enterkeyhint: 'done', 'data-mention': '1', value: u.note,
-    placeholder: withKey('What happened today?', 'W'),
+    placeholder: 'What happened today?', title: HAS_KEYBOARD ? 'Key: W' : null,
     onInput: (e, el) => { u.note = el.value; }, // half-typed text survives switching projects
     onKeydown: (e, el) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); save(el.form, true); } },
     onPaste: (e) => { // a pasted screenshot becomes a photo on this update; another file goes to the project's files
@@ -456,7 +456,7 @@ function statusLine(ctx, p) {
     h('span', { class: 'status-label' }, 'Status'),
     autoField('input', {
       class: 'status-input', value: p.status || '', key: 'st-in-' + p.id, maxlength: 200, 'aria-label': 'Status: one line on where this project stands',
-      placeholder: 'One line on where it stands (e.g. Waiting for mould, test next week)',
+      placeholder: 'add one line on where it stands…',
     }, (v) => store.dispatch('setProjectField', { projectId: p.id, field: 'status', value: v })),
     p.status ? h('span', { class: 'muted small status-age' }, age === 0 ? 'updated today' : old ? `${age} days old — update status?` : `${age} day${age === 1 ? '' : 's'} ago`) : null);
 }
@@ -493,44 +493,23 @@ function snoozeBar(ctx, p) {
   h('button', { class: 'link small', type: 'button', onClick: () => { ui.snoozeOpen = null; ctx.render(); } }, 'Cancel'));
 }
 
-/** "📊 3 of 7 steps done by Valar · now: … · last update 2 days ago" (from the team server). */
-function teamProgressLine(ctx, p) {
-  const g = ctx.teamProgress ? ctx.teamProgress(p.id) : null;
-  if (!g || (!g.open && !g.done && !g.lastUpdate)) return null;
-  const today = todayIndia();
-  const ago = !g.lastUpdate ? 'no update yet' : g.lastUpdate === today ? 'updated today' : `last update ${fmtDay(g.lastUpdate)}`;
-  const total = g.open + g.done;
-  return h('div', { class: 'team-progress' + (g.stuck ? ' stuck' : '') },
-    total ? h('span', { class: 'bar' }, h('span', { style: `width:${Math.round((g.done / total) * 100)}%` })) : null,
-    h('span', null, [total ? `📊 ${g.done} of ${total} steps done by ${p.team.name}` : `📊 ${p.team.name}`, g.current ? `now: ${g.current.title}` : '', ago, g.stuck ? '⚠️ stuck' : ''].filter(Boolean).join(' · ')));
-}
 
 /** worktask.in: "Given to Valar" (with Change / Take back), or the people to choose from after "👥 Give project". */
 function teamBar(ctx, p) {
   const { ui } = ctx;
   if (!ctx.onServer || p.state !== 'active') return null;
-  if (p.team && ui.giveOpen !== p.id) {
-    const open = p.steps.filter((x) => !x.done).length;
-    return h('div', { class: 'banner team-banner', key: 'tm-' + p.id },
-      h('span', null, `👥 Given to ${p.team.name} since ${fmtDay(p.team.since)}. `,
-        h('span', { class: 'muted small' }, open
-          ? `They see the ${open} open step${open === 1 ? '' : 's'} in order and send a daily update on the current one. New steps you add go to them too.`
-          : 'No steps yet: they see the whole project as one task and send a daily update on it. Steps you add replace it.')),
-      p.team.needsPhoto ? h('span', { class: 'tag' }, '📷 photo to finish') : null,
-      teamProgressLine(ctx, p),
-      h('button', { class: 'btn small', onClick: () => { ui.giveOpen = p.id; ui.givePhoto = !!p.team.needsPhoto; ctx.render(); } }, 'Change person'),
-      h('button', { class: 'btn small', onClick: () => { if (confirm(`Take "${p.name}" back from ${p.team.name}? Their open steps are removed from their list.`)) ctx.takeBackProject(p); } }, 'Take back'));
-  }
+  if (p.team && ui.giveOpen !== p.id) return null; // shown as the 👥 chip now
   if (ui.giveOpen !== p.id) return null;
   const people = ctx.teamPeople();
   const busy = ctx.teamBusy && ctx.teamBusy(p.id); // sending: a second tap must not give it twice
   return h('div', { class: 'banner team-banner', key: 'tg-' + p.id },
-    h('span', null, `👥 Give "${p.name}" to:`),
+    h('span', null, p.team ? `👥 Change person (now ${p.team.name}):` : `👥 Give "${p.name}" to:`),
     h('label', { class: 'check small', title: 'They must add a photo before tapping Finished on each step' },
       h('input', { type: 'checkbox', checked: !!ui.givePhoto, onChange: (e, el) => ctx.setGivePhoto(el.checked) }), ' 📷 Photo needed to finish'),
     people === null ? h('span', { class: 'muted small' }, 'Loading…')
       : people.length ? people.map((u) => h('button', { class: 'chip', key: 'tp-' + u.id, disabled: busy ? true : undefined, onClick: () => ctx.giveProject(p, u) }, u.name))
         : h('a', { class: 'small', href: '../?team' }, 'Add a person first (Team → People)'),
+    p.team ? h('button', { class: 'btn small', onClick: () => { if (confirm(`Take "${p.name}" back from ${p.team.name}? Their open steps are removed from their list.`)) { ui.giveOpen = null; ctx.takeBackProject(p); } } }, 'Take back') : null,
     h('button', { class: 'link small', onClick: () => { ui.giveOpen = null; ui.givePhoto = false; ctx.render(); } }, 'Cancel'));
 }
 
@@ -613,17 +592,6 @@ function addTimePrompt(ctx, p) {
   ctx.act('addTime', { projectId: p.id, minutes }, `⏱ Added ${fmtMinutes(minutes)} to ${p.name}`);
 }
 
-/** ← Back · ‹ previous · next › (in the list you are in). Keys: ⌫, ← → ; phone: swipe. */
-function navBar(ctx, p) {
-  const prev = ctx.neighbourProject(-1);
-  const next = ctx.neighbourProject(1);
-  if (!prev && !next && !ctx.canGoBack()) return null;
-  return h('div', { class: 'nav-bar', key: 'nav-' + p.id },
-    ctx.canGoBack() ? h('button', { class: 'btn small', title: 'Back to where you came from (Backspace)', onClick: () => ctx.goBack() }, '← Back') : h('span'),
-    h('div', { class: 'nav-pn' },
-      h('button', { class: 'btn small', disabled: prev ? undefined : true, title: prev ? `Previous: ${prev.name} (←)` : 'First in this list', onClick: () => prev && ctx.openInList(prev.id) }, '‹ Prev'),
-      h('button', { class: 'btn small', disabled: next ? undefined : true, title: next ? `Next: ${next.name} (→)` : 'Last in this list', onClick: () => next && ctx.openInList(next.id) }, 'Next ›')));
-}
 
 /** Everyone linked to this project's open steps; tap a name to see all their pending work. */
 function peopleChips(ctx, p) {
@@ -651,14 +619,13 @@ function section(title, ...children) {
 
 /** "Steps  ·  X ticks the next one" — the key shown where it is used (computer only). */
 function stepsTitle() {
-  return HAS_KEYBOARD ? h('span', null, 'Steps', h('span', { class: 'h3-hint' }, ' · press ', h('kbd', { class: 'hint' }, 'X'), ' to tick the next one')) : 'Steps';
+  return HAS_KEYBOARD ? h('span', { title: 'Press X to tick the next one' }, 'Steps') : 'Steps';
 }
 
 /** Pause / Finish (or Unpause / Reopen / Delete) — always visible at the top. */
 function stateButtons(ctx, p) {
   const { store, ui } = ctx;
   if (p.state === 'active') {
-    const today = todayIndia();
     const t = store.view.data.timer;
     const running = t && t.projectId === p.id;
     const timed = groupHasTimer(store.view.data.groups.find((g) => g.id === p.groupId));
@@ -666,20 +633,9 @@ function stateButtons(ctx, p) {
       running
         ? h('button', { class: 'btn timer-on', title: 'Stop the timer', onClick: () => ctx.stopTimer() }, `⏸ ${ctx.clockText(t.start)}`)
         : timed ? h('button', { class: 'btn', title: 'Start timing your work on this project', onClick: () => ctx.startTimer(p) }, '▶ Start') : null,
-      isSnoozed(p, today) ? null : h('button', {
-        class: 'btn' + (ui.snoozeOpen === p.id ? ' on' : ''), title: 'Hide from Today for some days',
-        onClick: () => { ui.snoozeOpen = ui.snoozeOpen === p.id ? null : p.id; ctx.render(); setTimeout(() => { const n = document.querySelector(`[data-key="snooze-${p.id}"]`); if (n) { n.focus(); n.select(); } }, 30); },
-      }, '💤 Snooze'),
-      ctx.onServer && !p.team ? h('button', {
-        class: 'btn' + (ui.giveOpen === p.id ? ' on' : ''), title: 'Give the whole project to a team member: they see its open steps in order',
-        onClick: () => { ui.giveOpen = ui.giveOpen === p.id ? null : p.id; ui.givePhoto = false; ctx.render(); },
-      }, '👥 Give project') : null,
-      h('button', { class: 'btn', onClick: () => ctx.act('pause', { projectId: p.id }, `Paused: ${p.name}`) }, 'Pause'),
-      h('button', {
-        class: 'btn',
-        onClick: () => ctx.act('finish', { projectId: p.id }, `Finished: ${p.name} (moved to Finished)`),
-      }, 'Finish'),
-      deleteButton(ctx, p),
+      h('button', { class: 'btn', onClick: () => ctx.act('finish', { projectId: p.id }, `Finished: ${p.name} (moved to Finished)`) }, 'Finish'),
+      menuButton(ctx, p),
+      navButtons(ctx),
     ];
   }
   if (p.state === 'paused') {
@@ -687,9 +643,11 @@ function stateButtons(ctx, p) {
       h('button', { class: 'btn primary', onClick: () => store.dispatch('unpause', { projectId: p.id }) }, 'Unpause'),
       h('button', { class: 'btn', onClick: () => ctx.act('finish', { projectId: p.id }, `Finished: ${p.name} (moved to Finished)`) }, 'Finish'),
       deleteButton(ctx, p),
+      navButtons(ctx),
     ];
   }
   return [
+    navButtons(ctx),
     h('button', { class: 'btn primary', onClick: () => store.dispatch('reopen', { projectId: p.id }) }, 'Reopen'),
     h('button', {
       class: 'btn danger',
@@ -700,6 +658,77 @@ function stateButtons(ctx, p) {
       },
     }, 'Delete'),
   ];
+}
+
+/** ‹ › (and ↩ back to where you came from): the neighbours in the list you are in. Keys: ← → and Backspace. */
+function navButtons(ctx) {
+  const prev = ctx.neighbourProject(-1), next = ctx.neighbourProject(1);
+  return h('span', { class: 'nav-pn' },
+    ctx.canGoBack() ? h('button', { class: 'btn icon-btn', title: 'Back to where you came from (Backspace)', 'aria-label': 'Back', onClick: () => ctx.goBack() }, '↩') : null,
+    h('button', { class: 'btn icon-btn', disabled: prev ? undefined : true, 'aria-label': 'Previous project', title: prev ? `Previous: ${prev.name} (←)` : 'First in this list', onClick: () => prev && ctx.openInList(prev.id) }, '‹'),
+    h('button', { class: 'btn icon-btn', disabled: next ? undefined : true, 'aria-label': 'Next project', title: next ? `Next: ${next.name} (→)` : 'Last in this list', onClick: () => next && ctx.openInList(next.id) }, '›'));
+}
+
+function menuButton(ctx, p) {
+  const { ui } = ctx;
+  return h('button', { class: 'btn icon-btn' + (ui.projMenu === p.id ? ' on' : ''), title: 'More: snooze, pause, team, time, delete', 'aria-label': 'More actions', 'aria-expanded': String(ui.projMenu === p.id),
+    onClick: () => { ui.projMenu = ui.projMenu === p.id ? null : p.id; ctx.render(); } }, '⋯');
+}
+
+/** The ⋯ menu: everything that is not needed every day. */
+function projectMenu(ctx, p) {
+  const { store, ui } = ctx;
+  if (ui.projMenu !== p.id) return null;
+  const today = todayIndia();
+  const go = (fn) => () => { ui.projMenu = null; fn(); ctx.render(); };
+  const timed = groupHasTimer(store.view.data.groups.find((g) => g.id === p.groupId)) || (p.timeLogs || []).length;
+  const item = (label, fn, cls = '') => h('button', { class: 'menu-row' + cls, onClick: go(fn) }, label);
+  return h('div', { class: 'proj-menu', key: 'pm-' + p.id, role: 'menu' },
+    p.state === 'active' && !isSnoozed(p, today) ? item('💤 Snooze…', () => { ui.snoozeOpen = p.id; setTimeout(() => { const n = document.querySelector(`[data-key="snooze-${p.id}"]`); if (n) { n.focus(); n.select(); } }, 30); }) : null,
+    p.state === 'active' && ctx.onServer ? item(p.team ? `👥 Change person (now ${p.team.name})` : '👥 Give project to…', () => { ui.giveOpen = p.id; ui.givePhoto = p.team ? !!p.team.needsPhoto : false; }) : null,
+    p.state === 'active' && ctx.onServer && p.team ? item('↩ Take back from ' + p.team.name, () => { if (confirm(`Take "${p.name}" back from ${p.team.name}? Their open steps are removed from their list.`)) ctx.takeBackProject(p); }) : null,
+    p.state === 'active' ? item('⏸ Pause', () => ctx.act('pause', { projectId: p.id }, `Paused: ${p.name}`)) : null,
+    timed ? item('⏱ Add time', () => addTimePrompt(ctx, p)) : null,
+    item('✎ Group, priority, target date', () => { ui.editMeta = true; }),
+    item('🗑 Delete project', () => {
+      if (!confirm(`Delete "${p.name}"?\n\nYou can press Undo for a few seconds after.`)) return;
+      ctx.act('deleteProject', { projectId: p.id }, `Deleted: ${p.name}`, 10000);
+      ui.selected = null; ui.mobile = 'list';
+    }, ' danger'));
+}
+
+/** One line of small chips: who has it, group, priority, target, steps done, time, people. Tap one to change it. */
+function infoChips(ctx, p, today) {
+  const { store, ui } = ctx;
+  const g = store.view.data.groups.find((x) => x.id === p.groupId);
+  const overdue = isOverdue(p, today);
+  const editMeta = () => { ui.editMeta = !ui.editMeta; ctx.render(); };
+  const chip = (text, title, onClick, cls = '') => onClick
+    ? h('button', { class: 'info-chip' + cls, title, onClick }, text)
+    : h('span', { class: 'info-chip static' + cls, title }, text);
+  const out = [];
+  if (p.team) {
+    out.push(chip(`👥 ${p.team.name}`, 'Given to the team — tap to change person or take back', () => { ui.giveOpen = ui.giveOpen === p.id ? null : p.id; ui.givePhoto = !!p.team.needsPhoto; ctx.render(); }, ' team'));
+    const tp = ctx.teamProgress ? ctx.teamProgress(p.id) : null;
+    if (tp && (tp.lastUpdate || tp.stuck)) {
+      const when = !tp.lastUpdate ? 'no update yet' : tp.lastUpdate === today ? 'updated today' : `last update ${fmtDay(tp.lastUpdate)}`;
+      out.push(chip(tp.stuck ? `⚠️ stuck · ${when}` : when, 'Their last daily update', null, tp.stuck ? ' bad' : tp.lastUpdate === today ? ' good' : ''));
+    }
+  }
+  out.push(chip(g ? g.name : 'No group', 'Group — tap to change', editMeta));
+  if (tagName(g, p)) out.push(chip(`🏷 ${tagName(g, p)}`, 'Tag — tap to change', editMeta));
+  out.push(chip(p.priority[0].toUpperCase() + p.priority.slice(1), 'Priority — tap to change', editMeta, p.priority === 'high' ? ' bad' : ''));
+  out.push(chip(p.deadline ? `${overdue ? 'Overdue' : 'Target'} ${fmtDay(p.deadline)}` : '+ Target date', 'Target date — tap to change', editMeta, overdue ? ' bad' : ''));
+  if (p.steps.length) out.push(chip(`✓ ${p.steps.filter((x) => x.done).length} of ${p.steps.length} steps done`, 'Steps done', null));
+  const timer = store.view.data.timer;
+  const logs = p.timeLogs || [];
+  const timed = groupHasTimer(g);
+  if (timed || logs.length) {
+    const total = minutesBetween(p, '0000-01-01', today, timer);
+    out.push(total ? chip(`⏱ ${fmtMinutes(total)}`, 'Time on this project — tap for details', () => { ui.showTime = ui.showTime === p.id ? null : p.id; ctx.render(); })
+      : chip('⏱ Add time', 'Add time worked (not timed)', () => addTimePrompt(ctx, p)));
+  }
+  return h('div', { class: 'info-chips', key: 'ic-' + p.id }, out, peopleChips(ctx, p));
 }
 
 /** 🗑 Delete for any project: one question, then an Undo button for a few seconds. */
@@ -836,25 +865,19 @@ export function renderDetail(ctx) {
         onClick: () => { const n = document.querySelector(`[data-key="name-${p.id}"]`); if (n) { n.focus(); n.select(); } },
       }, '✎'),
       h('div', { class: 'state-buttons' }, stateButtons(ctx, p))),
+    projectMenu(ctx, p),
     snoozeBar(ctx, p),
     teamBar(ctx, p),
+    infoChips(ctx, p, today),
+    ui.editMeta ? metaLine(ctx, p, today) : null,
+    ui.showTime === p.id ? timeLine(ctx, p, today) : null,
     teamMessages(ctx, p),
-    progressLine(ctx, p),
-    navBar(ctx, p),
     statusLine(ctx, p),
-    metaLine(ctx, p, today),
-    timeLine(ctx, p, today),
-    peopleChips(ctx, p),
     p.state !== 'active' ? h('p', { class: 'banner' }, p.state === 'paused' ? 'This project is paused. It is hidden from Today.' : 'This project is finished.') : null,
 
     section(stepsTitle(),
-      np ? h('div', { class: 'next-project', key: 'np-' + p.id },
-        h('span', null, '✓ Green for today.'),
-        h('button', { class: 'btn primary small', onClick: () => ctx.openNextOpen(np.id) },
-          h('span', { class: `dot ${dotColour(np, today)}` }), ` Next: ${np.name} →`)) : null,
       h('ul', { class: 'steps sortable-steps', key: 'steps-' + p.id, 'data-project': p.id },
         openSteps.map((s) => stepRow(ctx, p, s))),
-      openSteps.length || p.state !== 'active' ? null : h('p', { class: 'warn next-first' }, '→ No next step yet. Add it first:'),
       h('form', {
         class: 'row add-step',
         onSubmit: (e) => {
@@ -866,7 +889,7 @@ export function renderDetail(ctx) {
           input.focus();
         },
       },
-      h('input', { name: 'text', placeholder: withKey(openSteps.length ? '+ Add step (type @ for a person)' : `What's next for "${p.name}"?`, 'S'), key: 'add-step-' + p.id, enterkeyhint: 'enter', 'data-mention': '1', autocomplete: 'off' })),
+      h('input', { name: 'text', placeholder: openSteps.length ? '+ Add a step (type @ for a person)' : '+ Add the next step…', title: HAS_KEYBOARD ? 'Key: S' : null, key: 'add-step-' + p.id, enterkeyhint: 'enter', 'data-mention': '1', autocomplete: 'off' })),
       doneSteps.length ? h('details', { class: 'done-steps', key: 'done-' + p.id, open: ui.showDone ? true : undefined },
         h('summary', { onClick: (e) => { e.preventDefault(); ui.showDone = !ui.showDone; if (ctx.rememberUi) ctx.rememberUi(); ctx.render(); } }, `Done (${doneSteps.length})`),
         ui.showDone ? h('ul', { class: 'steps' }, doneSteps.slice(0, ui.doneLimit || 10).map((s) => stepRow(ctx, p, s))) : null,
@@ -884,22 +907,13 @@ export function renderDetail(ctx) {
       show.history ? section('History', historyBlock(ctx, p)) : null,
       show.notes && show.links && show.files && show.history ? null : h('div', { class: 'chips', key: 'chips-' + p.id },
         chip('notes', '+ Notes'), chip('links', '+ Link'), chip('files', '+ File'), chip('history', 'History')),
-    ]));
+    ]),
+    np ? h('div', { class: 'next-project bottom', key: 'np-' + p.id },
+      h('span', null, '✓ Green for today'),
+      h('button', { class: 'btn primary small', onClick: () => ctx.openNextOpen(np.id) },
+        h('span', { class: `dot ${dotColour(np, today)}` }), ` Next project: ${np.name} →`)) : null);
 }
 
-/** "3 of 6 tasks done", a thin bar, and who works on it (You + team members). */
-function progressLine(ctx, p) {
-  if (!p.steps.length) return null;
-  const done = p.steps.filter((x) => x.done).length;
-  const names = new Set();
-  if (ctx.teamTask) for (const st of p.steps) { const t = !st.done && ctx.teamTask(st.id); if (t && t.status === 'open') names.add(t.assignee.name); }
-  const fill = h('div', { class: 'proj-bar-fill', key: 'pbf' });
-  if (fill.style) fill.style.width = `${Math.round((done / p.steps.length) * 100)}%`; // set through the style object (allowed by the page's safety rules)
-  const bar = h('div', { class: 'proj-bar' }, fill);
-  return h('div', { class: 'proj-progress', key: 'pp-' + p.id }, bar,
-    h('span', { class: 'muted small' }, `${done} of ${p.steps.length} tasks done`),
-    names.size ? h('span', { class: 'tag' }, `You + ${[...names].join(', ')}`) : null);
-}
 
 /** One line of the diary: icon, who, what (and extras like the task it is about, photos, ✎ ✕). */
 function diaryLine(icon, who, text, extra = []) {
@@ -958,6 +972,7 @@ function projectDiary(ctx, p, upd) {
     });
   }
   for (const c of td ? td.comments || [] : []) {
+    if (c.unread && p.team) continue; // new ones are in the message box at the top (not twice)
     entries.push({ day: c.at.slice(0, 10), at: iso(c.at), work: false, stepId: taskStep.get(c.taskId), node: diaryLine('💬', c.mine ? 'You' : c.by, `“${c.text}”`, [about(taskStep.get(c.taskId))]) });
   }
   const byDay = new Map();
@@ -966,7 +981,8 @@ function projectDiary(ctx, p, upd) {
   const weekday = (day) => new Date(day + 'T00:00:00Z').getUTCDay();
   const nowHm = new Date().toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' });
   const W = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-  const WHAT = { ok: 'something happened', miss: 'nothing happened', off: 'Sunday', wait: 'nothing yet today', none: 'before the project started' };
+  const WHAT = { ok: 'work done', miss: 'no progress', off: 'Sunday — off', wait: 'waiting for today\'s update', none: 'before the project started' };
+  const LONG = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
   const week = [];
   for (let i = 6; i >= 0; i--) {
     const day = addDays(today, -i);
@@ -986,13 +1002,15 @@ function projectDiary(ctx, p, upd) {
       const list = (byDay.get(day) || []).filter((e) => !filter || e.stepId === filter).sort((a, b) => (a.at < b.at ? 1 : -1));
       let empty = null;
       if (!list.length) {
-        if (weekday(day) === 0) empty = h('span', { class: 'muted small' }, 'Sunday');
-        else if (day === today) empty = h('span', { class: nowHm < fillBy ? 'diary-none wait' : 'diary-none' }, nowHm < fillBy ? 'Nothing yet today' : 'Nothing happened today');
-        else empty = h('span', { class: 'diary-none' }, 'Nothing happened');
+        if (weekday(day) === 0) empty = h('span', { class: 'day-tag off' }, 'Off');
+        else if (day === today && nowHm < fillBy) empty = h('span', { class: 'day-tag wait' }, 'Waiting for today\'s update');
+        else empty = [h('span', { class: 'day-tag miss' }, 'No progress'), h('span', { class: 'muted small' }, ' no update from anyone')];
       }
       return h('li', { class: 'diary-day', key: 'dd-' + day },
-        h('div', { class: 'diary-date' }, day === today ? 'Today' : W[weekday(day)], h('span', { class: 'muted small' }, ` ${fmtDay(day)}`)),
-        h('div', { class: 'diary-items' }, list.map((e) => e.node), empty));
+        h('div', { class: 'diary-date' }, h('strong', null, day === today ? 'Today' : LONG[weekday(day)]),
+          h('span', { class: 'muted small' }, day === today ? `${W[weekday(day)]} ${fmtDay(day)}` : fmtDay(day))),
+        h('div', { class: 'diary-items' }, list.map((e) => h('div', { class: 'diary-entry', key: 'de-' + e.at + (e.kind || '') }, e.node,
+          e.at ? h('span', { class: 'diary-time' }, fmtTime(e.at)) : null)), empty));
     })),
     start > created ? h('button', {
       class: 'link small', type: 'button',
