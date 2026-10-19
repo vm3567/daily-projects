@@ -49,7 +49,7 @@ export function renderPeopleList(ctx) {
     h('button', { class: 'btn primary small', type: 'submit' }, 'Add')),
     people.length ? null : h('p', { class: 'empty-list' }, 'No people yet. Add a name above, or type @ and a name in any step.'),
     h('ul', { class: 'plist people-list', key: 'people-list' }, peopleByFollowUp(data).map(({ person, st }) => (
-      h('li', { key: 'pp-' + person.id, 'data-id': person.id, class: 'prow' + (ui.person === person.id ? ' current' : '') },
+      h('li', { key: 'pp-' + person.id, 'data-id': person.id, class: 'prow' + (ui.person === person.id ? ' current' : ''), onContextmenu: (e) => ctx.openPersonMenu(person.id, e) },
         h('button', { class: 'prow-btn', onClick: () => ctx.selectPerson(person.id) },
           h('span', { class: `dot ${st.colour}`, 'aria-label': st.colour }),
           h('span', { class: 'avatar' }, initials(person.name)),

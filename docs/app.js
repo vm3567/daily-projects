@@ -179,6 +179,7 @@ const ctx = {
   setGivePhoto: (on) => { ui.givePhoto = on; render(); },
   teamInfo: () => team,
   afterTick: (id, where, undo) => afterTick(id, where, undo),
+  openPersonMenu: (id, e) => openPersonMenu(id, e),
   selectPerson: (id) => { ui.person = id; ui.mobile = 'detail'; render(); const d = document.getElementById('detail'); if (d) d.scrollTop = 0; },
   openProject: (id) => {
     const p = store.view.data.projects.find((x) => x.id === id);
@@ -783,6 +784,7 @@ function followUpRow() {
       class: 'person-chip', key: 'fu-' + person.id,
       title: st.colour === 'red' ? 'Time to contact' : 'Something open',
       onClick: () => { ui.round = null; ui.view = 'people'; ui.search = ''; rememberUi(); ctx.selectPerson(person.id); },
+      onContextmenu: (e) => openPersonMenu(person.id, e),
     }, h('span', { class: `dot ${st.colour}` }), `${person.name} (${st.open})`))));
 }
 
@@ -1113,6 +1115,7 @@ function inboxReminder() {
 /** The small menu that opens when you right-click a project in the list. */
 function rowMenu() {
   const m = ui.rowMenu;
+  if (m && m.kind === 'person') return personMenu(m);
   const p = m && store.view.data.projects.find((x) => x.id === m.id);
   if (!p) return null;
   const today = todayIndia();
@@ -1152,6 +1155,103 @@ function rowMenu() {
 
 function canDrag() {
   return !ui.search && ui.sort === 'mine';
+}
+
+/** Right-click on a person (People list or the side menu): the things you can do with them. */
+function openPersonMenu(personId, e) {
+  e.preventDefault();
+  ui.rowMenu = { kind: 'person', id: personId, x: e.clientX, y: e.clientY };
+  if (onServer) teamAccounts(); // to know if they can sign in to Work Task
+  render();
+}
+
+/** Every Work Task account (to match a person by name). null while loading. */
+function teamAccounts(force = false) {
+  if (team.accounts && !force) return team.accounts;
+  if (!team.accountsLoading) {
+    team.accountsLoading = true;
+    teamApi('users.list').then((out) => { team.accounts = out.users; team.accountsLoading = false; render(); })
+      .catch(() => { team.accountsLoading = false; });
+  }
+  return team.accounts || null;
+}
+
+/** A first password that is easy to read out: kiln-clay-427. */
+function firstPassword() {
+  const words = ['kiln', 'glaze', 'clay', 'tile', 'mould', 'fire', 'slip', 'basin', 'press', 'dryer'];
+  const a = crypto.getRandomValues(new Uint32Array(3));
+  return `${words[a[0] % words.length]}-${words[a[1] % words.length]}-${100 + (a[2] % 900)}`;
+}
+
+/** The sign-in details, ready to send (WhatsApp / Outlook straight to the person when their number / email is saved). */
+function sendSignIn(person, username, password, isNew) {
+  const link = location.origin + '/';
+  openSheet({
+    title: isNew ? `Sign-in for ${person.name}` : `New password for ${person.name}`,
+    text: `Work Task (daily updates)\nLink: ${link}\nUsername: ${username}\nPassword: ${password}\nAfter signing in, choose your own password.`,
+    subject: 'Your Work Task sign-in', to: person,
+  });
+}
+
+/** Give a person a Work Task sign-in (username from their first name; a number is added if it is taken). */
+async function giveSignIn(person) {
+  const base = (person.name.trim().split(/\s+/)[0] || 'user').toLowerCase().replace(/[^a-z0-9._-]/g, '') || 'user';
+  const password = firstPassword();
+  for (const extra of ['', '1', '2', '3', String(Date.now() % 1000)]) {
+    let name = (base + extra).slice(0, 40);
+    if (name.length < 3) name = (name + 'user').slice(0, 40);
+    try {
+      const out = await teamApi('user.save', { name: person.name, username: name, password, role: 'staff' });
+      teamAccounts(true);
+      sendSignIn(person, out.user.username, password, true);
+      return;
+    } catch (e) {
+      if (!/taken/i.test(e.message)) { toast(e.message, 6000); return; }
+    }
+  }
+  toast('Could not find a free username. Add them in Team → People.', 6000);
+}
+
+async function newPasswordFor(person, account) {
+  if (!confirm(`Give ${person.name} a new first password?\nThey are signed out and choose their own again.`)) return;
+  const password = firstPassword();
+  try { await teamApi('user.reset', { id: account.id, password }); sendSignIn(person, account.username, password, false); }
+  catch (e) { toast(e.message, 6000); }
+}
+
+function personMenu(m) {
+  const person = (store.view.data.people || []).find((x) => x.id === m.id);
+  if (!person) return null;
+  const item = (icon, label, fn, cls = '') => h('button', {
+    class: 'row-menu-item' + cls, role: 'menuitem',
+    onClick: () => { ui.rowMenu = null; fn(); render(); },
+  }, h('span', { class: 'rm-icon', 'aria-hidden': 'true' }, icon), label);
+  const open = () => { ui.view = 'people'; ui.search = ''; rememberUi(); ctx.selectPerson(person.id); };
+  const accounts = onServer ? teamAccounts() : null;
+  const account = accounts && accounts.find((u) => u.name.trim().toLowerCase() === person.name.trim().toLowerCase());
+  const el = h('div', { class: 'row-menu', role: 'menu', key: 'person-menu', 'aria-label': `Actions for ${person.name}` },
+    h('div', { class: 'row-menu-title' }, person.name),
+    item('↗', 'Open', open),
+    item('+', `Add a task with ${person.name}`, () => { open(); focusKey('person-task-input'); }),
+    item('📋', 'Send pending list…', () => ctx.openPersonMessage(person)),
+    person.phone ? item('💬', `WhatsApp ${person.name}`, () => window.open(`https://wa.me/${person.phone}`, '_blank', 'noopener')) : null,
+    item('📞', person.phone || person.email ? 'Change number / email' : 'Add WhatsApp number / email', open),
+    onServer ? (accounts === null ? h('div', { class: 'row-menu-note muted small' }, 'Checking Work Task sign-in…')
+      : account ? [
+        h('div', { class: 'row-menu-note muted small' }, `Work Task: @${account.username}${account.active ? '' : ' (switched off)'}`),
+        item('🔑', 'New password…', () => newPasswordFor(person, account)),
+        item('👥', 'Their tasks (Team)', () => { location.href = '../?team'; }),
+      ] : item('🔑', 'Give a Work Task sign-in', () => giveSignIn(person))) : null,
+    item('✎', 'Rename…', () => {
+      const n = prompt('Name:', person.name);
+      if (n && n.trim() && n.trim() !== person.name) store.dispatch('renamePerson', { personId: person.id, name: n.trim() });
+    }),
+    item('🗑', 'Remove from People…', () => {
+      if (confirm(`Remove ${person.name} from People?\n\nTheir name stays in your steps and notes; it is just no longer linked.${account ? '\nTheir Work Task sign-in is not changed.' : ''}`)) { if (store.dispatch('deletePerson', { personId: person.id })) toast(`Removed: ${person.name}`); }
+    }, ' danger'));
+  el.style.left = Math.max(8, Math.min(m.x, window.innerWidth - 270)) + 'px';
+  el.style.top = Math.max(8, Math.min(m.y, window.innerHeight - 420)) + 'px';
+  return el;
 }
 
 /** Tick a project's next step straight from the list. */
@@ -1350,7 +1450,7 @@ function renderListColumn() {
   if (ui.view === 'settings' && !ui.search) return h('div', { class: 'col-inner' }, head, timerStrip(), renderSettings());
   if (ui.view === 'dashboard' && !ui.search) return h('div', { class: 'col-inner' }, head, timerStrip(), renderDashboard(ctx));
   if (ui.view === 'time' && !ui.search) return h('div', { class: 'col-inner' }, head, timerStrip(), renderTimeReport(ctx));
-  if (ui.view === 'people' && !ui.search) return h('div', { class: 'col-inner' }, head, timerStrip(), renderPeopleList(ctx));
+  if (ui.view === 'people' && !ui.search) return h('div', { class: 'col-inner' }, head, timerStrip(), renderPeopleList(ctx), rowMenu());
 
   const list = sortForView(visibleProjects(), today);
   const showSort = !ui.search && ui.view !== 'paused' && ui.view !== 'finished' && list.length > 1;

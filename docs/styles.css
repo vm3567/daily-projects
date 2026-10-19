@@ -916,3 +916,5 @@ a.tag.me:hover { color: var(--brand); border-color: var(--brand); }
 @media (prefers-color-scheme: dark) { .evening-check { background: #2b2311; color: #e3b341; } }
 .team-green { font-size: 11px; margin-left: -2px; }
 @media (max-width: 600px) { .diary-day { grid-template-columns: 1fr; gap: 4px; } }
+.row-menu-item.danger { color: var(--red); }
+.row-menu-note { padding: 6px 10px 2px; border-top: 1px solid var(--line); margin-top: 4px; }
