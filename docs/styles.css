@@ -769,7 +769,8 @@ kbd.hint {
 .row-act { min-height: 28px; border-radius: 8px; }
 .icon { min-width: 32px; min-height: 32px; display: inline-flex; align-items: center; justify-content: center; }
 .icon.back, .icon.menu-btn { display: none; } /* phone-only buttons stay hidden on the desktop */
-@media (max-width: 760px) { .icon.back, .icon.menu-btn { display: inline-flex; } }
+@media (max-width: 760px) { .icon.back { display: inline-flex; } }
+@media (max-width: 1100px) { .icon.menu-btn { display: inline-flex; } }
 .icon.tiny { min-width: 0; min-height: 0; }
 input:not([type=checkbox]):not([type=radio]):not([type=range]), select, textarea { border-radius: 9px; }
 .btn:focus-visible, .chip:focus-visible, .icon:focus-visible, .seg:focus-visible { outline: 2px solid #93b4fb; outline-offset: 1px; }

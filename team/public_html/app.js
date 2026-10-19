@@ -4,6 +4,7 @@
 const TOKEN_KEY = 'wt.token';
 const state = {
   token: load(TOKEN_KEY), user: null, view: 'today', data: null, people: [], closed: false,
+  sel: null, detail: null, mobileDetail: false, menuOpen: false, section: 'today', personFilter: 0, newIds: new Set(),
   drafts: {}, editing: {}, files: {}, sending: {}, busy: false, prefill: null, newPerson: null,
 };
 const photoUrls = new Map();
@@ -213,7 +214,7 @@ async function doFlush() {
     await loadOutbox();
     if (sent) toast(`✓ ${sent} waiting item${sent > 1 ? 's' : ''} sent`);
     // reload only screens that show the sent items: a reload would wipe a form being typed
-    const v = state.view, a = document.activeElement;
+    const v = state.sel || state.view, a = document.activeElement;
     const typing = a && /^(TEXTAREA|INPUT|SELECT)$/.test(a.tagName) && document.getElementById('app').contains(a);
     if (sent && typing) state.reloadLater = true; // reload once they stop typing (next screen, or back to the app)
     if (sent && !typing && state.user && !state.user.mustChange && (v === 'today' || v === 'tasks' || v.startsWith('task:'))) loadView(); else refreshBar();
@@ -270,6 +271,7 @@ function signedOut() {
   // nothing typed or picked carries over to the next person on this phone
   state.drafts = {}; state.files = {}; state.editing = {}; state.sending = {}; state.newPerson = null;
   state.back = ''; state.moving = 0; state.view = 'today'; state.closed = false;
+  state.sel = null; state.detail = null; state.mobileDetail = false; state.menuOpen = false; state.section = 'today'; state.personFilter = 0; state.team = null;
   save(TOKEN_KEY, '');
   clearCache();
   render();
@@ -352,84 +354,318 @@ async function shrink(file) {
 // ---------------------------------------------------------------- loading
 
 let loadSeq = 0;
-async function loadView() {
+/** The middle column: Today (team or mine), Tasks, People. */
+async function loadList() {
   const me = state.user, view = state.view, n = ++loadSeq;
   if (!me) return;
   state.busy = true; state.reloadLater = false;
-  let data = state.data, people = state.people, failed = null;
+  let data = state.data, failed = null;
   try {
     if (view === 'today') {
       data = await api(me.role === 'admin' ? 'team.today' : 'my.today');
       // offline next morning: yesterday's copy must not show yesterday's updates as sent today
       if (data && data.fromCache && data.today !== istDay(new Date())) data = { ...data, stale: true, late: false, tasks: data.tasks.map((t) => ({ ...t, last: t.today || t.last, today: null })) };
+      if (me.role === 'admin' && data && data.people) state.team = data; // the people in the menu
     }
     else if (view === 'tasks') data = await api('tasks.list', { status: state.closed ? 'closed' : 'open' });
     else if (view === 'people') data = await api('users.list');
-    else if (view.startsWith('task:')) {
-      data = await api('task.get', { id: Number(view.slice(5)) });
-      if (me.role === 'admin') people = (await api('users.list')).users.filter((u) => u.active);
-    }
-    else if (view === 'give' || view.startsWith('edit:')) {
-      people = (await api('users.list')).users.filter((u) => u.active);
-      data = view.startsWith('edit:') ? await api('task.get', { id: Number(view.slice(5)) }) : null;
-    } else data = null;
+    else data = null;
   } catch (e) { failed = e; }
   if (state.user !== me) { state.busy = false; return; } // signed out meanwhile
-  if (n !== loadSeq) return; // a newer load started (another screen, or Open / Done on the same one): this answer is old
-  // Give a task is already on screen: redraw only if the people changed (a redraw wipes what is typed)
-  const same = view === 'give' && state.view === 'give' && state.people.length && JSON.stringify(people) === JSON.stringify(state.people);
-  state.data = data; state.people = people; state.busy = false;
+  if (n !== loadSeq) return; // a newer load started: this answer is old
+  state.data = data; state.busy = false;
   state.loadFailed = !!failed && !data;
+  if (failed) toast(failed.message, 5000);
+  render();
+}
+
+let detailSeq = 0;
+/** The right column: one task (with its messages and updates), or Give / Edit a task. */
+async function loadDetail() {
+  const me = state.user, sel = state.sel, n = ++detailSeq;
+  if (!me || !sel) return;
+  let detail = state.detail, people = state.people, failed = null;
+  try {
+    if (sel.startsWith('task:')) {
+      detail = await api('task.get', { id: Number(sel.slice(5)) });
+      if (me.role === 'admin') people = (await api('users.list')).users.filter((u) => u.active);
+    } else if (sel === 'give' || sel.startsWith('edit:')) {
+      people = (await api('users.list')).users.filter((u) => u.active);
+      detail = sel.startsWith('edit:') ? await api('task.get', { id: Number(sel.slice(5)) }) : null;
+    } else detail = null;
+  } catch (e) { failed = e; }
+  if (state.user !== me || n !== detailSeq || state.sel !== sel) return; // signed out, or another task opened meanwhile
+  // Give a task is already on screen: redraw only if the people changed (a redraw wipes what is typed)
+  const same = sel === 'give' && state.people.length && JSON.stringify(people) === JSON.stringify(state.people);
+  state.detail = detail; state.people = people;
+  state.detailFailed = !!failed && !detail;
   if (failed) toast(failed.message, 5000);
   if (!same) render();
 }
 
+/** Reload what is on screen (the list, and the open task). */
+function loadView() {
+  loadList();
+  if (state.sel) loadDetail();
+}
+
+const LIST_VIEWS = ['today', 'tasks', 'people', 'settings'];
+
+/** go('today' | 'tasks' | 'people' | 'settings') changes the list; anything else ('task:5', 'give', 'edit:5', 'suggest', 'password') opens on the right. */
 function go(view) {
-  if (view.startsWith('task:') && !state.view.startsWith('task:') && !state.view.startsWith('edit:')) state.back = state.view;
+  if (!LIST_VIEWS.includes(view)) { openDetail(view); return; }
   state.view = view;
   state.data = null; state.loadFailed = false;
-  window.scrollTo(0, 0);
+  state.sel = null; state.detail = null; state.mobileDetail = false; state.menuOpen = false; state.moving = 0;
   render();
-  loadView();
+  loadList();
+}
+
+function openDetail(sel) {
+  if (sel.startsWith('task:')) state.newIds.delete(Number(sel.slice(5)));
+  state.sel = sel; state.detail = null; state.detailFailed = false; state.moving = 0;
+  state.mobileDetail = true; state.menuOpen = false;
+  if (state.view === 'people' || state.view === 'settings') { state.view = 'today'; state.data = null; } // these fill the page: show a list again
+  render();
+  if (!state.data && !state.busy) loadList();
+  loadDetail();
+}
+
+/** Back (phone) / close: the list again. */
+async function closeDetail() {
+  if (state.fromProjects && state.user.owner && (await toProjects())) return;
+  state.sel = null; state.detail = null; state.mobileDetail = false; state.moving = 0;
+  render();
 }
 
 // ---------------------------------------------------------------- screens
 
+let lastRender = 0;
 function render() {
   const root = document.getElementById('app');
   if (state.token && !state.user && state.retryMe) { // offline (or the server is down) on opening: try again by itself
-    root.replaceChildren(el('main', { class: 'narrow' }, el('h1', null, 'Work Task'), el('p', { class: 'muted' }, '📴 Could not reach Work Task. Trying again…')));
+    root.replaceChildren(el('main', { class: 'narrow' }, brandBig(), el('p', { class: 'muted' }, '📴 Could not reach Work Task. Trying again…')));
     return;
   }
   if (!state.token || !state.user) { root.replaceChildren(loginScreen()); return; }
-  if (state.user.mustChange || state.view === 'password') { root.replaceChildren(header(), passwordScreen()); return; }
-  const bar = offlineBar();
-  let body;
-  // Give a task waits for the people list (a form drawn without it is redrawn, wiping what was typed)
-  if ((!state.data && state.view !== 'settings' && state.view !== 'give' && state.view !== 'suggest') || (state.view === 'give' && !state.people.length)) {
-    body = state.loadFailed ? el('p', { class: 'muted' }, 'No saved copy on this phone yet. ', el('button', { class: 'link', onClick: () => loadView() }, 'Try again'))
-      : el('p', { class: 'muted' }, 'Loading…');
-  }
-  else if (state.view === 'today') body = state.user.role === 'admin' ? teamToday() : myToday();
-  else if (state.view === 'tasks') body = allTasks();
-  else if (state.view === 'people') body = peopleScreen();
-  else if (state.view === 'settings') body = settingsScreen();
-  else if (state.view === 'give' || state.view.startsWith('edit:')) body = taskForm();
-  else if (state.view === 'suggest') body = suggestForm();
-  else if (state.view.startsWith('task:')) body = taskDetail();
-  root.replaceChildren(header(), el('main', { class: 'narrow' }, el('div', { id: 'bar' }, bar), body));
+  if (state.user.mustChange) { root.replaceChildren(passwordScreen()); return; }
+  // keep where each column was scrolled (the screen is drawn again after every change)
+  const keep = ['list', 'detail'].map((id) => { const n = document.getElementById(id); return n ? n.scrollTop : 0; });
+  const sameScreen = lastRender && state.renderKey === `${state.view}|${state.sel}`;
+  const wide = state.view === 'people' || state.view === 'settings';
+  root.replaceChildren(el('div', {
+    class: ['layout', wide ? 'wide' : '', state.mobileDetail && !wide ? 'show-detail' : '', state.menuOpen ? 'menu-open' : ''].filter(Boolean).join(' '),
+  },
+  el('aside', { id: 'menu' }, menuColumn()),
+  el('div', { class: 'scrim', onClick: () => { state.menuOpen = false; render(); } }),
+  el('main', { id: 'list' }, listColumn(wide)),
+  wide ? null : el('section', { id: 'detail' }, detailColumn())));
+  if (sameScreen) ['list', 'detail'].forEach((id, i) => { const n = document.getElementById(id); if (n) n.scrollTop = keep[i]; });
+  state.renderKey = `${state.view}|${state.sel}`; lastRender = Date.now();
+  setBadge();
 }
 
-function header() {
-  const me = state.user;
-  // a tab means they now work in the Team pages: Back / Cancel stay here, not the projects
-  const tab = (v, label) => el('button', { class: state.view === v ? 'on' : '', onClick: () => { state.fromProjects = false; go(v); } }, label);
-  return el('header', { class: 'top' }, el('div', { class: 'bar' },
-    el('span', { class: 'brand' }, 'Work Task'),
-    me.role === 'admin' && !me.mustChange ? el('nav', null, me.owner ? el('a', { class: 'btn', href: 'projects/' }, '📋 My projects') : null,
-      tab('today', 'Team today'), tab('tasks', 'Tasks'), tab('people', 'People'), tab('settings', 'Settings')) : null,
-    el('button', { class: 'link', onClick: () => go('password') }, me.name),
-    el('button', { class: 'link', onClick: signOut }, 'Sign out')));
+const brandBig = () => el('div', { class: 'brand-big' }, el('img', { src: 'icons/icon-192.png', alt: '', width: 40, height: 40 }), el('h1', null, 'Work Task'));
+
+/** Left column, like the projects menu: the lists, the team (with today's dots), your name. */
+function menuColumn() {
+  const me = state.user, admin = me.role === 'admin';
+  const item = (label, on, onClick, count, extra) => el('li', null, el('button', { class: 'menu-item' + (on ? ' current' : '') + (extra || ''), onClick }, label, count ? el('span', { class: 'count' }, String(count)) : null));
+  const d = state.view === 'today' ? state.data : null;
+  const parts = [];
+  if (admin) {
+    const t = state.team;
+    const needs = t ? (t.stuck || []).length + (t.unread || []).length + (t.suggestions || []).length : 0;
+    parts.push(el('ul', { class: 'menu-list' },
+      me.owner ? item('📋 My projects', false, () => toProjects()) : null,
+      item('Team today', state.view === 'today' && !state.personFilter, () => { state.personFilter = 0; go('today'); }, needs || null),
+      item('Tasks', state.view === 'tasks' && !state.closed, () => { state.closed = false; go('tasks'); }),
+      item('Done / cancelled', state.view === 'tasks' && state.closed, () => { state.closed = true; go('tasks'); }),
+      item('People', state.view === 'people', () => go('people')),
+      item('Settings', state.view === 'settings', () => go('settings'))),
+      el('button', { class: 'primary menu-cta', onClick: () => openDetail('give') }, '+ Give a task'));
+    if (t && t.people && t.people.length) {
+      parts.push(el('div', { class: 'menu-head' }, 'Team'), el('ul', { class: 'menu-list' }, t.people.map((p) => {
+        const tasks = t.tasks.filter((x) => x.assignee.id === p.id);
+        const sent = tasks.filter((x) => x.today).length;
+        const dot = !tasks.length ? 'grey' : sent === tasks.length ? 'green' : t.late ? 'red' : 'orange';
+        return el('li', null, el('button', { class: 'menu-item person' + (state.view === 'today' && state.personFilter === p.id ? ' current' : ''), title: tasks.length ? `${sent} of ${tasks.length} sent today` : 'No tasks today',
+          onClick: () => { state.personFilter = state.personFilter === p.id ? 0 : p.id; if (state.view !== 'today') go('today'); else { state.menuOpen = false; render(); } } },
+        el('span', { class: 'dot ' + dot }), p.name, el('span', { class: 'count' }, tasks.length ? `${sent}/${tasks.length}` : '')));
+      })));
+    }
+  } else {
+    const due = d ? d.tasks.filter((x) => !x.today).length : 0;
+    parts.push(el('ul', { class: 'menu-list' },
+      item('Today', state.section === 'today', () => { state.section = 'today'; go('today'); }, due || null),
+      item('Coming next', state.section === 'next', () => { state.section = 'next'; go('today'); }, d && d.other.length ? d.other.length : null),
+      item('My suggestions', state.section === 'sugg', () => { state.section = 'sugg'; go('today'); }, d && (d.suggestions || []).length ? d.suggestions.length : null)),
+      el('button', { class: 'menu-cta', onClick: () => openDetail('suggest') }, '💡 Suggest a task'));
+  }
+  return el('div', { class: 'menu-inner' },
+    el('div', { class: 'brand' }, el('img', { src: 'icons/icon-192.png', alt: '', width: 26, height: 26 }), 'Work Task'),
+    parts,
+    el('div', { class: 'menu-sep' }),
+    el('ul', { class: 'menu-list menu-bottom' },
+      item(`👤 ${me.name}`, state.sel === 'password', () => openDetail('password')),
+      item('Sign out', false, signOut)));
+}
+
+/** One task as a row in the list (dot · title · what is happening), like a project row. */
+function taskRow(t, sub, dot, warn = false) {
+  const on = state.sel === 'task:' + t.id;
+  return el('li', { class: 'prow' + (on ? ' current' : '') },
+    el('button', { class: 'prow-btn', onClick: () => openDetail('task:' + t.id) },
+      el('span', { class: 'dot ' + dot }),
+      el('span', { class: 'prow-text' },
+        el('span', { class: 'prow-name' }, t.title, state.newIds.has(t.id) ? el('span', { class: 'tag amber new-tag' }, 'New') : null,
+          t.unread ? el('span', { class: 'unread-dot', title: `${t.unread} new message(s)` }) : null),
+        el('span', { class: 'prow-next' + (warn ? ' warn' : '') }, sub))));
+}
+
+/** Middle column: the list (or, for People and Settings, the whole page). */
+function listColumn(wide) {
+  const me = state.user, admin = me.role === 'admin';
+  const titles = { today: admin ? 'Team today' : { today: 'My tasks today', next: 'Coming next', sugg: 'My suggestions' }[state.section], tasks: state.closed ? 'Done / cancelled' : 'Tasks', people: 'People', settings: 'Settings' };
+  let title = titles[state.view];
+  if (admin && state.view === 'today' && state.personFilter && state.team) { const p = state.team.people.find((x) => x.id === state.personFilter); if (p) title = p.name; }
+  const head = el('div', { class: 'list-head' },
+    el('button', { class: 'icon menu-btn', 'aria-label': 'Menu', onClick: () => { state.menuOpen = true; render(); } }, '☰'),
+    el('h2', null, title),
+    state.view === 'settings' ? null : el('button', { class: 'icon', title: 'Get latest', 'aria-label': 'Refresh', onClick: () => loadView() }, '↻'));
+  const bar = el('div', { id: 'bar' }, offlineBar());
+  if (state.view === 'settings') return el('div', { class: 'col-inner' }, head, bar, el('div', { class: 'wide-inner' }, settingsScreen()));
+  if (!state.data) {
+    return el('div', { class: 'col-inner' }, head, bar, el('p', { class: 'list-note' }, state.loadFailed ? ['No saved copy on this phone yet. ', el('button', { class: 'link', onClick: () => loadView() }, 'Try again')] : 'Loading…'));
+  }
+  if (wide) return el('div', { class: 'col-inner' }, head, bar, el('div', { class: 'wide-inner' }, peopleScreen()));
+  let body;
+  if (state.view === 'tasks') body = tasksList();
+  else body = admin ? teamList() : myList();
+  return el('div', { class: 'col-inner' }, head, bar, body);
+}
+
+const sec = (label, extra) => el('div', { class: 'list-sec' }, el('span', null, label), extra || null);
+
+/** Staff: today's tasks, coming next, or suggestions (the menu picks which). */
+function myList() {
+  const d = state.data;
+  const sent = d.tasks.filter((t) => t.today).length;
+  const outboxFor = (t) => (state.outbox || []).some((x) => (x.kind === 'update' || x.kind === 'photos') && x.taskId === t.id);
+  if (state.section === 'next') {
+    return [sec(`${d.other.length} coming next`), el('ul', { class: 'list-body' }, d.other.map((t) => taskRow(t, [t.project, repeatLabel(t, d.today)].filter(Boolean).join(' · '), 'grey'))),
+      d.other.length ? null : el('p', { class: 'list-note' }, 'Nothing coming next.')];
+  }
+  if (state.section === 'sugg') {
+    const list = d.suggestions || [];
+    return [sec(`${list.length} suggestion${list.length === 1 ? '' : 's'}`),
+      el('ul', { class: 'list-body' }, list.map((t) => taskRow(t, t.status === 'suggested' ? 'Waiting for a yes' : 'Not now' + (t.lastMessage ? ` — ${t.lastMessage.text}` : ''), t.status === 'suggested' ? 'orange' : 'grey'))),
+      list.length ? null : el('p', { class: 'list-note' }, 'No suggestions yet. Tap 💡 Suggest a task in the menu.')];
+  }
+  return [
+    d.stale ? el('div', { class: 'list-banner' }, `📴 Saved copy from ${fmtDay(d.today)} — today's updates are not shown yet.`) : null,
+    sec(`${fmtDay(d.today)} · ${sent} of ${d.tasks.length} sent`, el('span', { class: 'tag' }, `by ${d.fillBy}`)),
+    el('ul', { class: 'list-body' }, d.tasks.map((t) => {
+      const waiting = outboxFor(t);
+      const late = t.repeat === 'once' && t.dueDate && t.dueDate < d.today;
+      const sub = waiting ? '⏳ Waiting to send' : t.today ? `✓ Sent ${fmtTime(t.today.at)}${t.today.state === 'stuck' ? ' · stuck' : t.today.state === 'finished' ? ' · finished' : ''}`
+        : [t.project, repeatLabel(t, d.today)].filter(Boolean).join(' · ') || 'Send today\'s update';
+      return taskRow(t, sub, t.today ? 'green' : waiting ? 'orange' : late ? 'red' : 'orange', late && !t.today);
+    })),
+    d.tasks.length ? null : el('p', { class: 'list-note' }, 'No tasks for today. 🎉'),
+  ];
+}
+
+/** Manager: what needs you, then each person's tasks today (the menu can show one person only). */
+function teamList() {
+  const d = state.data;
+  const stuck = d.stuck || [], unread = d.unread || [], sugg = d.suggestions || [];
+  const filt = state.personFilter;
+  const people = [...d.people];
+  for (const t of d.tasks) if (!people.some((p) => p.id === t.assignee.id)) people.push({ id: t.assignee.id, name: t.assignee.name });
+  const shown = people.filter((p) => !filt || p.id === filt);
+  const row = (t) => {
+    const u = t.today;
+    const sub = u ? `✓ ${fmtTime(u.at)}${u.state === 'stuck' ? ' · stuck' : u.state === 'finished' ? ' · finished' : ''} — ${u.note}` : t.queued ? 'Coming next' : d.late ? 'Not filled today' : 'Not filled yet';
+    const dot = t.stuck ? 'red' : u ? 'green' : d.late ? 'red' : 'orange';
+    return taskRow(t, (filt ? '' : '') + sub, dot, !u && d.late);
+  };
+  const needs = filt ? [] : [...stuck.map((t) => [t, `Stuck — ${(t.today || t.last || {}).note || ''}`, 'red']),
+    ...unread.map((t) => [t, `💬 ${t.unread} new — ${t.lastMessage ? t.lastMessage.text : ''}`, 'orange']),
+    ...sugg.map((t) => [t, `💡 Suggestion — tap to say yes or no`, 'orange'])];
+  return [
+    d.stale ? el('div', { class: 'list-banner' }, `📴 Saved copy from ${fmtDay(d.today)} — today's updates are not shown yet.`) : null,
+    needs.length ? [sec('⚠︎ Needs you', el('span', { class: 'tag amber' }, String(needs.length))),
+      el('ul', { class: 'list-body' }, needs.map(([t, sub, dot]) => {
+        const r = taskRow(t, `${t.assignee.name}: ${sub}`, dot, dot === 'red');
+        return r;
+      }))] : null,
+    people.length ? null : el('p', { class: 'list-note' }, 'No team members yet. ', el('button', { class: 'link', onClick: () => go('people') }, 'Add a person')),
+    shown.map((p) => {
+      const tasks = d.tasks.filter((t) => t.assignee.id === p.id);
+      const sent = tasks.filter((t) => t.today).length;
+      const tag = !tasks.length ? el('span', { class: 'tag grey' }, 'No tasks today')
+        : el('span', { class: 'tag ' + (sent === tasks.length ? 'green' : d.late ? 'red' : 'amber') }, `${sent} of ${tasks.length} sent`);
+      return [sec(p.name, tag), el('ul', { class: 'list-body' }, tasks.map(row))];
+    }),
+    filt ? el('p', { class: 'list-note' }, el('button', { class: 'link', onClick: () => { state.personFilter = 0; render(); } }, '← Show everyone')) : null,
+  ];
+}
+
+/** Manager: all open (or closed) tasks, by person. */
+function tasksList() {
+  const d = state.data;
+  const groups = new Map();
+  for (const t of d.tasks) { if (!groups.has(t.assignee.name)) groups.set(t.assignee.name, []); groups.get(t.assignee.name).push(t); }
+  return [
+    el('div', { class: 'list-tools' },
+      el('div', { class: 'segmented' },
+        el('button', { class: 'seg' + (!state.closed ? ' on' : ''), onClick: () => { state.closed = false; go('tasks'); } }, 'Open'),
+        el('button', { class: 'seg' + (state.closed ? ' on' : ''), onClick: () => { state.closed = true; go('tasks'); } }, 'Done / cancelled'))),
+    d.tasks.length ? null : el('p', { class: 'list-note' }, state.closed ? 'Nothing closed yet.' : 'No open tasks. Give one with “+ Give a task”.'),
+    [...groups].map(([name, tasks]) => [sec(name, el('span', { class: 'tag grey' }, String(tasks.length))),
+      el('ul', { class: 'list-body' }, tasks.map((t) => taskRow(t,
+        [t.status !== 'open' ? (t.status === 'done' ? 'Done' : 'Cancelled') : null, t.project, repeatLabel(t), t.today ? 'sent today' : t.last ? `last ${fmtDay(t.last.day)}` : 'no update yet'].filter(Boolean).join(' · '),
+        t.status !== 'open' ? 'grey' : t.stuck ? 'red' : t.today ? 'green' : 'orange')))]),
+  ];
+}
+
+/** Right column: the open task (or a form); empty when nothing is picked. */
+function detailColumn() {
+  const sel = state.sel;
+  if (!sel) {
+    return el('div', { class: 'empty' }, el('p', null, 'Pick a task on the left.'),
+      state.user.role === 'admin' ? el('p', null, el('button', { class: 'link', onClick: () => openDetail('give') }, '+ Give a task')) : null);
+  }
+  let title = '', body;
+  if (sel === 'give') { title = 'Give a task'; body = state.people.length ? taskForm() : el('p', { class: 'muted' }, 'Loading…'); }
+  else if (sel.startsWith('edit:')) { title = 'Edit task'; body = state.detail && state.people.length ? taskForm() : el('p', { class: 'muted' }, 'Loading…'); }
+  else if (sel === 'suggest') { title = '💡 Suggest a task'; body = suggestForm(); }
+  else if (sel === 'password') { title = 'Change password'; body = passwordScreen(); }
+  else if (sel.startsWith('task:')) {
+    title = state.detail && state.detail.task ? state.detail.task.title : '';
+    body = state.detail ? (state.user.role === 'admin' ? taskDetail() : myTaskDetail())
+      : state.detailFailed ? el('p', { class: 'muted' }, 'Could not open this task. ', el('button', { class: 'link', onClick: () => loadDetail() }, 'Try again'))
+        : el('p', { class: 'muted' }, 'Loading…');
+  }
+  return el('div', { class: 'detail-inner' },
+    el('div', { class: 'detail-top' },
+      el('button', { class: 'icon back', 'aria-label': 'Back', onClick: () => closeDetail() }, '←'),
+      el('h2', { class: 'detail-title' }, title)),
+    body);
+}
+
+/** Staff: one task — what to send today (or what was sent), messages, and earlier updates. */
+function myTaskDetail() {
+  const { task: t, updates = [], comments = [] } = state.detail;
+  const today = (state.data && state.data.today) || istDay(new Date());
+  return [
+    myTask(t, today),
+    messagesBlock(t.id, comments),
+    updates.filter((u) => u.day !== today).length ? [el('h2', null, 'Earlier updates'), updates.filter((u) => u.day !== today).map((u) => el('div', { class: 'card' },
+      el('div', { class: 'row small' }, el('strong', null, fmtDay(u.day)), el('span', { class: 'muted' }, fmtTime(u.at)), stateTag(u.state)),
+      el('div', { class: 'pre' }, u.note), thumbs(u.photos)))] : null,
+  ];
 }
 
 async function signOut() {
@@ -453,7 +689,7 @@ function loginScreen() {
   const pass = el('input', { name: 'password', type: 'password', autocomplete: 'current-password', required: true });
   const btn = el('button', { class: 'primary', type: 'submit' }, 'Sign in');
   return el('main', { class: 'narrow' },
-    el('h1', null, 'Work Task'),
+    brandBig(),
     el('p', { class: 'muted' }, 'Sign in with the username and password from your manager.'),
     el('form', { class: 'card stack', onSubmit: async (e) => {
       e.preventDefault();
@@ -484,8 +720,9 @@ function passwordScreen() {
   const old = el('input', { type: 'password', autocomplete: 'current-password', required: true });
   const n1 = el('input', { type: 'password', autocomplete: 'new-password', required: true, minlength: 8 });
   const n2 = el('input', { type: 'password', autocomplete: 'new-password', required: true, minlength: 8 });
-  return el('main', { class: 'narrow' },
-    el('h1', null, first ? 'Choose your own password' : 'Change password'),
+  return el(first ? 'main' : 'div', { class: first ? 'narrow' : '' },
+    first ? brandBig() : null,
+    first ? el('h1', null, 'Choose your own password') : null,
     el('p', { class: 'muted' }, first ? 'Welcome! First choose a password only you know. 8 or more characters.' : '8 or more characters.'),
     el('form', { class: 'card stack', onSubmit: async (e) => {
       e.preventDefault();
@@ -507,7 +744,7 @@ function passwordScreen() {
     el('label', null, first ? 'Password from your manager' : 'Current password', old),
     el('label', null, 'New password', n1), el('label', null, 'New password again', n2), err,
     el('div', { class: 'row' }, el('button', { class: 'primary', type: 'submit' }, 'Save password'),
-      first ? null : el('button', { type: 'button', onClick: () => go('today') }, 'Cancel'))));
+      first ? null : el('button', { type: 'button', onClick: () => closeDetail() }, 'Cancel'))));
 }
 
 // ---------- staff: my tasks today
@@ -685,7 +922,7 @@ function messagesBlock(taskId, comments) {
       delete state.drafts['m' + taskId]; delete state.sending[key]; // before the redraw, so the new button is not greyed out
       toast('Sent ✓');
       // only if this task is still open on screen (the user may have gone to another one)
-      if (state.view === 'task:' + taskId && state.data && state.data.task && state.data.task.id === taskId) { state.data.comments = out.comments; render(); }
+      if (state.sel === 'task:' + taskId && state.detail && state.detail.task && state.detail.task.id === taskId) { state.detail.comments = out.comments; render(); }
     } catch (ex) {
       if (ex instanceof OfflineError) {
         try { await queue({ kind: 'comment', taskId, text, clientId: cid }); }
@@ -700,7 +937,7 @@ function messagesBlock(taskId, comments) {
       delete state.sending[key];
       if (!document.contains(btn)) { // redrawn while sending: the new button was drawn greyed out
         if (!err.hidden) toast(err.textContent, 6000);
-        if (state.view === 'task:' + taskId) render();
+        if (state.sel === 'task:' + taskId) render();
       }
     }
   } }, 'Send message');
@@ -727,7 +964,7 @@ function suggestForm() {
     el('form', { class: 'card stack', onSubmit: async (e) => {
       e.preventDefault();
       btn.disabled = true; err.hidden = true;
-      try { await api('suggest', { title: title.value, details: details.value, repeat: how.value }); toast('Sent for a yes ✓'); go('today'); }
+      try { await api('suggest', { title: title.value, details: details.value, repeat: how.value }); toast('Sent for a yes ✓'); state.section = 'sugg'; go('today'); }
       catch (ex) { err.textContent = ex.message; err.hidden = false; btn.disabled = false; }
     } }, el('label', null, 'Task', title), el('label', null, 'Details', details), el('label', null, 'How often', how), err,
     el('div', { class: 'row' }, btn, el('button', { type: 'button', onClick: () => go('today') }, 'Cancel'))),
@@ -840,14 +1077,12 @@ function allTasks() {
 }
 
 function taskDetail() {
-  const { task: t, updates, comments = [] } = state.data;
+  const { task: t, updates, comments = [] } = state.detail;
   const admin = state.user.role === 'admin';
   const setStatus = async (status) => {
     try { await api('task.status', { id: t.id, status }); toast(status === 'open' ? 'Opened again' : status === 'done' ? 'Marked done ✓' : 'Cancelled'); loadView(); } catch (ex) { toast(ex.message, 5000); }
   };
   return [
-    el('button', { class: 'link', onClick: async () => { if (state.fromProjects && state.user.owner && await toProjects()) return; go(state.back || 'today'); } }, '← Back'),
-    el('h1', null, t.title),
     el('p', { class: 'meta' }, [t.assignee.name, t.project, repeatLabel(t), t.status !== 'open' ? (t.status === 'done' ? 'Done' : 'Cancelled') : null].filter(Boolean).join(' · ')),
     t.details ? el('div', { class: 'card pre' }, t.details) : null,
     taskFiles(t, admin),
@@ -897,9 +1132,9 @@ function moveBox(t) {
 }
 
 function taskForm() {
-  const editing = state.view.startsWith('edit:');
-  if (editing && !state.data) return el('p', { class: 'muted' }, 'Loading…');
-  const t = editing ? state.data.task : null;
+  const editing = (state.sel || '').startsWith('edit:');
+  if (editing && !state.detail) return el('p', { class: 'muted' }, 'Loading…');
+  const t = editing ? state.detail.task : null;
   const pre = !editing ? (state.prefill || {}) : {};
   const err = el('p', { class: 'err', hidden: true });
   const person = el('select', { required: true }, el('option', { value: '' }, 'Choose a person…'),
@@ -928,7 +1163,6 @@ function taskForm() {
   sync();
   const btn = el('button', { class: 'primary', type: 'submit' }, editing ? 'Save' : 'Give task');
   return [
-    el('h1', null, editing ? 'Edit task' : 'Give a task'),
     el('form', { class: 'card stack', onSubmit: async (e) => {
       e.preventDefault();
       err.hidden = true; btn.disabled = true;
@@ -943,14 +1177,14 @@ function taskForm() {
         state.prefill = null;
         toast(editing ? 'Saved ✓' : `Given to ${out.task.assignee.name} ✓`);
         if (fromProjects) { setTimeout(async () => { if (!(await toProjects())) go('today'); }, 900); return; }
-        go(editing ? 'task:' + out.task.id : 'today');
+        openDetail('task:' + out.task.id); loadList();
       } catch (ex) { err.textContent = ex.message; err.hidden = false; btn.disabled = false; }
     } },
     el('label', null, 'Who', person), el('label', null, 'Task', title), el('label', null, 'Details', details),
     el('label', null, 'Project', project), el('label', null, 'How often', how), wLabel, dLabel,
     el('label', { class: 'check' }, needsPhoto, ' 📷 Photo needed to finish'),
     el('label', null, '📎 Instruction photos / PDF (optional)', files), err,
-    el('div', { class: 'row' }, btn, el('button', { type: 'button', onClick: async () => { state.prefill = null; if (!editing && state.fromProjects && state.user.owner && await toProjects()) return; go(editing ? 'task:' + t.id : 'today'); } }, 'Cancel'))),
+    el('div', { class: 'row' }, btn, el('button', { type: 'button', onClick: async () => { state.prefill = null; if (!editing && state.fromProjects && state.user.owner && await toProjects()) return; if (editing) openDetail('task:' + t.id); else closeDetail(); } }, 'Cancel'))),
   ];
 }
 
@@ -1083,6 +1317,46 @@ async function start() {
   if (!state.user.mustChange) loadView();
 }
 
+// ---------------------------------------------------------------- new tasks arrive by themselves (like new mail)
+
+let liveBusy = false;
+const listOf = (d) => [...((d && d.tasks) || []), ...((d && d.other) || []), ...((d && d.suggestions) || [])];
+/** Every 20 seconds while the app is open: anything new? New tasks get a "New" mark and a message at the bottom. */
+async function liveCheck() {
+  if (liveBusy || !state.user || state.user.mustChange || document.visibilityState !== 'visible' || state.offline || state.busy) return;
+  if (state.view !== 'today' && state.view !== 'tasks') return;
+  const admin = state.user.role === 'admin';
+  const action = state.view === 'today' ? (admin ? 'team.today' : 'my.today') : 'tasks.list';
+  const body = state.view === 'tasks' ? { status: state.closed ? 'closed' : 'open' } : {};
+  const view = state.view, me = state.user;
+  liveBusy = true;
+  try {
+    const out = await api(action, body);
+    if (out.fromCache || state.user !== me || state.view !== view) return;
+    const same = (a, b) => JSON.stringify(a, (k, v) => (k === 'time' ? undefined : v)) === JSON.stringify(b, (k, v) => (k === 'time' ? undefined : v));
+    if (state.data && same(out, state.data)) return;
+    const had = new Set(listOf(state.data).map((t) => t.id));
+    const fresh = state.data ? listOf(out).filter((t) => !had.has(t.id)) : [];
+    for (const t of fresh) state.newIds.add(t.id);
+    if (fresh.length) toast(fresh.length === 1 ? `📥 New task: ${fresh[0].title}` : `📥 ${fresh.length} new tasks`, 7000);
+    const a = document.activeElement;
+    if (a && /^(TEXTAREA|INPUT|SELECT)$/.test(a.tagName) && document.getElementById('app').contains(a)) { state.reloadLater = true; return; } // typing: show it after
+    state.data = out;
+    if (admin && out.people) state.team = out;
+    render();
+    if (state.sel && state.sel.startsWith('task:')) loadDetail(); // new messages on the open task too
+  } catch { /* try again next time */ } finally { liveBusy = false; }
+}
+setInterval(liveCheck, 20000);
+window.addEventListener('focus', () => liveCheck());
+
+/** The number on the app icon (Android, installed app): tasks still to send today. */
+function setBadge() {
+  if (!state.user || state.user.role === 'admin' || state.view !== 'today' || !state.data || !navigator.setAppBadge) return;
+  const n = (state.data.tasks || []).filter((t) => !t.today).length;
+  (n ? navigator.setAppBadge(n) : navigator.clearAppBadge()).catch(() => {});
+}
+
 function retryStart() { if (state.token && !state.user && state.retryMe) { state.retryMe = false; start(); } }
 window.addEventListener('online', () => { setOffline(false); flushOutbox(); retryStart(); });
 setInterval(retryStart, 15000);
@@ -1097,7 +1371,7 @@ window.addEventListener('hashchange', () => {
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState !== 'visible' || !state.user || state.user.mustChange) return;
   const v = state.view;
-  if (state.reloadLater && (v === 'today' || v === 'tasks' || v.startsWith('task:'))) { loadView(); return; } // items were sent while they typed
+  if (state.reloadLater && (v === 'today' || v === 'tasks')) { loadView(); return; } // items were sent while they typed
   if (v === 'today' && !Object.keys(state.drafts).some((k) => state.drafts[k].note)) loadView();
 });
 start();
