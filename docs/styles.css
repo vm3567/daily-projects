@@ -924,3 +924,9 @@ a.tag.me:hover { color: var(--brand); border-color: var(--brand); }
 .team-progress.stuck { color: var(--red); }
 .team-progress .bar { flex: 0 0 90px; height: 7px; border-radius: 99px; background: #e5e7eb; overflow: hidden; }
 .team-progress .bar span { display: block; height: 100%; background: var(--green); }
+/* new messages from the team, on the project and on Today */
+.team-msgs { display: flex; flex-direction: column; gap: 8px; background: #eef4ff; border-color: #c7d7fb; }
+.team-msg { padding: 6px 10px; border-radius: 8px; background: #fff; border: 1px solid var(--line); }
+.team-msgs form { display: flex; gap: 8px; align-items: center; }
+.team-msgs form input { flex: 1; min-width: 0; }
+a.team-line.msg { background: #eef4ff; border-color: #93b4f8; color: #1e40af; font-weight: 600; }

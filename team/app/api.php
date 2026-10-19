@@ -357,6 +357,12 @@ function handle(string $a, array $in): array {
       }
       return ['comments' => comments_of((int)$c['task_id'])];
     }
+    case 'tasks.read': { // "seen": these tasks' messages count as read for me
+      $ids = array_slice(array_map('intval', (array)($in['ids'] ?? [])), 0, 100);
+      foreach ($ids as $id) own_task($me, $id);
+      mark_read($ids, $me['id']);
+      return [];
+    }
     case 'search': { // tasks, messages and updates with these words (staff: only their own tasks)
       $words = txt($in['q'] ?? '', 100);
       if (mb_strlen($words) < 2) return ['results' => []];
@@ -554,8 +560,10 @@ function handle(string $a, array $in): array {
           'assignee' => $t['assignee_name'], 'startDate' => $t['start_date'], 'doneAt' => $t['done_at'], 'repeat' => $t['repeat_kind'], 'skipSunday' => (bool)$t['skip_sunday']], $tasks),
         'updates' => array_map(fn($u) => ['taskId' => (int)$u['task_id']] + update_out($u, $photos), $ups),
         // messages between the manager and the person, for the project diary
-        'comments' => array_map(fn($c) => ['taskId' => (int)$c['task_id'], 'by' => $c['name'], 'mine' => (int)$c['user_id'] === $me['id'], 'text' => $c['text'], 'at' => $c['at']],
-          all("SELECT c.*, u.name FROM comments c JOIN users u ON u.id = c.user_id WHERE c.task_id IN ($inq) AND c.at >= ? ORDER BY c.at DESC", [...$ids, $from . ' 00:00:00'])),
+        'comments' => array_map(fn($c) => ['id' => (int)$c['id'], 'taskId' => (int)$c['task_id'], 'by' => $c['name'], 'mine' => (int)$c['user_id'] === $me['id'], 'text' => $c['text'], 'at' => $c['at'],
+            'photo' => !empty($c['photo']), 'unread' => (int)$c['user_id'] !== $me['id'] && (int)$c['id'] > (int)($c['last_id'] ?? 0)], // not seen by me yet
+          all("SELECT c.*, u.name, r.last_id FROM comments c JOIN users u ON u.id = c.user_id LEFT JOIN task_reads r ON r.task_id = c.task_id AND r.user_id = ?
+               WHERE c.task_id IN ($inq) AND c.at >= ? ORDER BY c.at DESC", [$me['id'], ...$ids, $from . ' 00:00:00'])),
       ];
     }
     case 'tasks.linked': { // for Daily Projects: every team task given from a step (open, or closed this week)
@@ -568,7 +576,11 @@ function handle(string $a, array $in): array {
       $teamDays = [];
       foreach (all("SELECT DISTINCT t.project_ref, u.day FROM updates u JOIN tasks t ON t.id = u.task_id WHERE t.project_ref IS NOT NULL AND u.state <> 'stuck' AND u.day >= ? ORDER BY u.day",
         [date('Y-m-d', strtotime("$day -45 days"))]) as $r) $teamDays[$r['project_ref']][] = $r['day'];
-      return ['today' => $day, 'fillBy' => $fillBy, 'late' => date('H:i') >= $fillBy, 'tasks' => tasks_out($tasks, $day), 'teamDays' => (object)$teamDays,
+      // the newest messages from the team that I have not seen (for the Today page)
+      $msgs = array_map(fn($c) => ['id' => (int)$c['id'], 'taskId' => (int)$c['task_id'], 'projectRef' => $c['project_ref'], 'title' => $c['title'], 'by' => $c['name'], 'text' => $c['text'] !== '' ? $c['text'] : '📷 Photo', 'at' => $c['at']],
+        all("SELECT c.*, u.name, t.project_ref, t.title FROM comments c JOIN tasks t ON t.id = c.task_id JOIN users u ON u.id = c.user_id
+             LEFT JOIN task_reads r ON r.task_id = c.task_id AND r.user_id = ? WHERE c.user_id <> ? AND c.id > COALESCE(r.last_id, 0) AND c.text NOT LIKE '↔ Moved%' ORDER BY c.id DESC LIMIT 10", [$me['id'], $me['id']]));
+      return ['today' => $day, 'fillBy' => $fillBy, 'late' => date('H:i') >= $fillBy, 'tasks' => tasks_out($tasks, $day), 'teamDays' => (object)$teamDays, 'messages' => $msgs,
         'alerts' => ['stuck' => count($att['stuck']), 'unread' => count($att['unread']), 'suggestions' => count($att['suggestions'])],
         'summary' => (function () use ($att) { // one line for the manager's Today page
           $due = array_values(array_filter($att['open'], fn($t) => $t['dueToday']));

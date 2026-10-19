@@ -1094,8 +1094,12 @@ function sentView(t) {
 }
 
 function photoPicker(t, direct) {
-  const input = el('input', { type: 'file', accept: 'image/*', class: 'hidden-file', multiple: true, onChange: async () => {
-    const files = [...input.files].slice(0, 5);
+  const input = el('input', { type: 'file', accept: 'image/*', class: 'hidden-file', multiple: true, onChange: () => { const files = [...input.files].slice(0, 5); input.value = ''; addTaskPhotos(t, files, direct); } });
+  return el('label', { class: 'btn' }, '📷 Add photo', input);
+}
+
+/** Photos for my update: straight onto today's sent update (direct), or kept for the next Send. Also used by Ctrl+V. */
+async function addTaskPhotos(t, files, direct) {
     if (direct) {
       const cid = newClientId(); // the same id online and in the outbox: a photo whose reply was lost is not kept twice
       const left = await uploadPhotos(t.today.id, files, cid);
@@ -1114,8 +1118,6 @@ function photoPicker(t, direct) {
     }
     state.files[t.id] = [...(state.files[t.id] || []), ...files].slice(0, 5);
     render();
-  } });
-  return el('label', { class: 'btn' }, '📷 Add photo', input);
 }
 
 function updateForm(t) {
@@ -1260,24 +1262,45 @@ function msgPhoto(id) {
 }
 /** 📷 in the messages: the photo goes with what is typed in the box (if anything). Needs the internet. */
 function msgPhotoButton(taskId, box, key) {
-  const input = el('input', { type: 'file', accept: 'image/*', class: 'hidden-file', onChange: async () => {
-    const f = input.files[0];
-    if (!f) return;
-    if (state.offline) { toast('Photos in messages need the internet. Try again when online.', 5000); input.value = ''; return; }
-    state.sending[key] = true;
-    toast('Sending photo…');
-    const fd = new FormData();
-    fd.append('taskId', String(taskId)); fd.append('text', box.value || ''); fd.append('clientId', newClientId()); fd.append('file', f, 'photo.jpg');
-    try {
-      const out = await api('comment.photo', fd, true);
-      delete state.drafts['m' + taskId];
-      toast('Sent ✓');
-      if (state.sel === 'task:' + taskId && state.detail) { state.detail.comments = out.comments; }
-    } catch (ex) { toast(ex instanceof OfflineError ? 'Photos in messages need the internet. Try again when online.' : ex.message, 6000); }
-    finally { delete state.sending[key]; input.value = ''; render(); }
-  } });
+  const input = el('input', { type: 'file', accept: 'image/*', class: 'hidden-file', onChange: () => { const f = input.files[0]; input.value = ''; if (f) sendMsgPhoto(taskId, f, box.value || ''); } });
   return el('label', { class: 'btn', title: 'Send a photo' }, '📷 Photo', input);
 }
+async function sendMsgPhoto(taskId, f, text) {
+  const key = 'm' + taskId;
+  if (state.offline) { toast('Photos in messages need the internet. Try again when online.', 5000); return; }
+  state.sending[key] = true;
+  toast('Sending photo…');
+  const fd = new FormData();
+  fd.append('taskId', String(taskId)); fd.append('text', text); fd.append('clientId', newClientId()); fd.append('file', f, 'photo.jpg');
+  try {
+    const out = await api('comment.photo', fd, true);
+    delete state.drafts[key];
+    toast('Sent ✓');
+    if (state.sel === 'task:' + taskId && state.detail) state.detail.comments = out.comments;
+  } catch (ex) { toast(ex instanceof OfflineError ? 'Photos in messages need the internet. Try again when online.' : ex.message, 6000); }
+  finally { delete state.sending[key]; render(); }
+}
+
+// Ctrl+V on an open task: in the message box = a photo message; otherwise staff add it to today's update, the manager as an instruction file
+document.addEventListener('paste', (e) => {
+  if (e.defaultPrevented || !state.user || !state.sel || !state.sel.startsWith('task:') || !state.detail || !state.detail.task) return;
+  const files = [...((e.clipboardData && e.clipboardData.files) || [])];
+  if (!files.length) return; // plain text: pasted as usual
+  e.preventDefault();
+  const t = state.detail.task;
+  const images = files.filter((f) => f.type.startsWith('image/'));
+  const inMessages = e.target && e.target.tagName === 'TEXTAREA' && /^(Reply|Ask)/.test(e.target.placeholder || ''); // the message box
+  if (inMessages) {
+    if (!images.length) { toast('Only photos can go in a message. Ask your manager to add other files to the task.', 5000); return; }
+    sendMsgPhoto(t.id, images[0], e.target.value || '');
+    return;
+  }
+  if (state.user.role === 'admin') { toast('📎 Adding to the task…'); uploadTaskFiles(t.id, files.slice(0, 10)).then(() => { toast('📎 Added ✓'); loadDetail(); }).catch((ex) => toast(ex.message, 6000)); return; }
+  if (!images.length) { toast('Only photos can be added to an update.', 5000); return; }
+  if (t.status !== 'open' && !t.today) { toast('This task is closed.', 4000); return; }
+  addTaskPhotos(t, images.slice(0, 5), !!(t.today && !state.editing[t.id]));
+  toast('📷 Pasted into your update');
+});
 async function editMessage(taskId, c) {
   const text = prompt('Change your message:', c.text);
   if (text === null || text.trim() === c.text.trim()) return;

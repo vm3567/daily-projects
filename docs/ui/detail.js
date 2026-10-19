@@ -55,6 +55,47 @@ async function addUpdatePhotos(ctx, p, files) {
   }
 }
 
+/** Ctrl+V on a project: screenshots become photos on today's update (write a line and Save); other files go to its files. */
+export function pasteIntoProject(ctx, p, files) {
+  const images = files.filter((f) => f.type.startsWith('image/'));
+  const others = files.filter((f) => !f.type.startsWith('image/'));
+  if (images.length && p.state === 'active') {
+    addUpdatePhotos(ctx, p, images.map((f, i) => (f.name && f.name !== 'image.png' ? f : new File([f], `pasted-${new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 16).replace(/[:T]/g, '-')}${i ? '-' + i : ''}.png`, { type: f.type }))));
+    ctx.toast('📷 Pasted — write a line in "What happened today?" and Save', 4000);
+    focusUpdate(p);
+  } else if (images.length) others.push(...images);
+  if (others.length) uploadFiles(ctx, p.id, others);
+}
+
+/** New messages from the team on this project: read them and answer here (or mark them seen). */
+function teamMessages(ctx, p) {
+  const t = ctx.onServer && p.team && ctx.teamDaily ? ctx.teamDaily(p) : null;
+  const list = t && t.data ? (t.data.comments || []).filter((c) => c.unread).slice().reverse() : [];
+  if (!list.length) return null;
+  const ui = ctx.ui;
+  const taskIds = [...new Set(list.map((c) => c.taskId))];
+  const send = async (form) => {
+    const text = form.elements.reply.value.trim();
+    if (!text) return;
+    form.elements.reply.disabled = true;
+    try { await ctx.teamReply(p, list[list.length - 1].taskId, text); ui.teamReply = ''; }
+    catch (e) { ctx.toast(e.message, 5000); form.elements.reply.disabled = false; }
+  };
+  return h('div', { class: 'banner team-msgs', key: 'tmsg-' + p.id },
+    h('strong', null, `💬 New message${list.length > 1 ? 's' : ''} from the team`),
+    list.map((c) => {
+      const src = c.photo && ctx.teamMsgPhoto ? ctx.teamMsgPhoto(c.id) : null;
+      return h('div', { class: 'team-msg', key: 'tm-' + c.id },
+        h('span', { class: 'muted small' }, `${c.by} · ${fmtDay(c.at.slice(0, 10))} ${fmtTime(c.at.replace(' ', 'T') + '+05:30')}`),
+        c.text ? h('div', null, `“${c.text}”`) : null,
+        c.photo ? (src ? h('img', { class: 'diary-photo', src, alt: 'Photo', onClick: () => window.open(src, '_blank', 'noopener') }) : h('span', { class: 'muted small' }, '📷 photo')) : null);
+    }),
+    h('form', { class: 'row', onSubmit: (e) => { e.preventDefault(); send(e.target); } },
+      h('input', { name: 'reply', key: 'reply-' + p.id, placeholder: 'Answer…', autocomplete: 'off', value: ui.teamReply || '', onInput: (e, el) => { ui.teamReply = el.value; } }),
+      h('button', { class: 'btn primary small', type: 'submit' }, 'Send'),
+      h('button', { class: 'btn small', type: 'button', title: 'Mark as read without answering', onClick: () => ctx.teamSeen(p, taskIds).catch((e) => ctx.toast(e.message, 5000)) }, '✓ Seen')));
+}
+
 /** Put the cursor in Today's update ("What did you do on this step?"). */
 function focusUpdate(p) {
   setTimeout(() => {
@@ -360,11 +401,11 @@ function updateBox(ctx, p) {
     placeholder: withKey('What happened today?', 'W'),
     onInput: (e, el) => { u.note = el.value; }, // half-typed text survives switching projects
     onKeydown: (e, el) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); save(el.form, true); } },
-    onPaste: (e) => { // a pasted screenshot becomes a photo on this update
-      const files = [...((e.clipboardData && e.clipboardData.files) || [])].filter((f) => f.type.startsWith('image/'));
+    onPaste: (e) => { // a pasted screenshot becomes a photo on this update; another file goes to the project's files
+      const files = [...((e.clipboardData && e.clipboardData.files) || [])];
       if (!files.length) return;
       e.preventDefault();
-      addPhotos(files);
+      pasteIntoProject(ctx, p, files);
     },
   }),
   u.uploading ? h('div', { class: 'muted small' }, `📷 Uploading ${u.uploading} photo${u.uploading > 1 ? 's' : ''}…`) : null,
@@ -797,6 +838,7 @@ export function renderDetail(ctx) {
       h('div', { class: 'state-buttons' }, stateButtons(ctx, p))),
     snoozeBar(ctx, p),
     teamBar(ctx, p),
+    teamMessages(ctx, p),
     progressLine(ctx, p),
     navBar(ctx, p),
     statusLine(ctx, p),

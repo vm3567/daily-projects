@@ -1,7 +1,7 @@
 // Daily Projects — main app: start-up, menu, project list, Today box, Diary, Settings, key screen.
 
 import { h, morph, installEvents, fmtDay, fmtLongDay, fmtTime, keyHint, withKey } from './ui/dom.js';
-import { renderDetail, linkChip, isMailLink } from './ui/detail.js';
+import { renderDetail, linkChip, isMailLink, pasteIntoProject } from './ui/detail.js';
 import { renderPeopleList, renderPerson, peopleByFollowUp } from './ui/people.js';
 import { installMentions } from './ui/mention.js';
 import { installAutocorrect, setAutocorrect, autocorrectOn } from './ui/autocorrect.js';
@@ -173,6 +173,9 @@ const ctx = {
   teamPeople: () => teamPeople(),
   teamDaily: (p) => teamDaily(p),
   teamPhoto: (id) => teamPhoto(id),
+  teamReply: (p, taskId, text) => teamApi('comment.add', { taskId, text }).then(() => { refreshDaily(p.id); loadTeam(true); toast('Sent ✓'); }),
+  teamSeen: (p, taskIds) => teamApi('tasks.read', { ids: taskIds }).then(() => { refreshDaily(p.id); loadTeam(true); }),
+  teamMsgPhoto: (id) => teamMsgPhoto(id),
   moreDaily: (p) => { const e = daily.get(p.id); teamDaily(p, (e ? e.days : 30) + 30); },
   teamBusy: (id) => team.busy.has(id),
   giveProject: (p, person) => giveProject(p, person),
@@ -1382,8 +1385,17 @@ function teamLine() {
   if (a.suggestions) bits.push(`${a.suggestions} suggestion${a.suggestions > 1 ? 's' : ''}`);
   const missing = s.notFilled.length ? ` · ${team.late ? 'not filled' : 'waiting'}: ${s.notFilled.join(', ')}` : '';
   const bad = a.stuck || (team.late && s.notFilled.length);
-  return h('a', { class: 'team-line' + (bad ? ' late' : s.due && s.sent === s.due ? ' ok' : ''), href: '../?team', key: 'team-line', title: 'Open Team today' },
-    `👥 Team: ${bits.join(' · ')}${missing}`);
+  const m = team.messages[0];
+  const ofProject = m && m.projectRef && store.view.data.projects.some((p) => p.id === m.projectRef);
+  return [
+    h('a', { class: 'team-line' + (bad ? ' late' : s.due && s.sent === s.due ? ' ok' : ''), href: '../?team', key: 'team-line', title: 'Open Team today' },
+      `👥 Team: ${bits.join(' · ')}${missing}`),
+    // the newest message from the team, right here: tap = open the project (or the task in the team app) to read and answer
+    m ? h('a', {
+      class: 'team-line msg', key: 'team-msg', href: ofProject ? '#' : `../?team#open=${m.taskId}`, title: 'Read and answer',
+      onClick: (e) => { if (!ofProject) return; e.preventDefault(); select(m.projectRef); },
+    }, `💬 ${m.by}: “${m.text.length > 70 ? m.text.slice(0, 68) + '…' : m.text}”${team.messages.length > 1 ? ` (+${team.messages.length - 1} more)` : ''} — answer →`) : null,
+  ];
 }
 
 function newProjectForm() {
@@ -2498,7 +2510,7 @@ function sendNow() {
 // ---------------------------------------------------------------- team (worktask.in only)
 
 /** Team tasks given from a step, by step id, so each step can show the person's latest update. */
-const team = { byStep: new Map(), fillBy: '18:00', late: false, at: 0, gen: 0, syncErr: {}, busy: new Set(), loading: false, again: false, alerts: { stuck: 0, unread: 0, suggestions: 0 } };
+const team = { byStep: new Map(), fillBy: '18:00', late: false, at: 0, gen: 0, syncErr: {}, busy: new Set(), loading: false, again: false, alerts: { stuck: 0, unread: 0, suggestions: 0 }, messages: [] };
 const TICKED_KEY = 'dp.teamTicked'; // team tasks already ticked on this device (so an un-tick by hand stays)
 
 /** 👥 in the top bar, with a red number when the team needs you (stuck, new messages, suggestions). */
@@ -2573,13 +2585,26 @@ function markTeamWork(tasks, teamDays) {
   }
 }
 
-/** 📅 Daily updates per project: loaded when the project is opened, again after a minute (or on ↻). */
+/** The diary of this project is fetched again with the next redraw (after a reply, or a new message). */
+function refreshDaily(projectId) { const e = daily.get(projectId); if (e) e.at = 0; render(); }
+
+/** A photo in a team message (fetched with the sign-in, shown from memory). */
+const msgPhotos = new Map();
+function teamMsgPhoto(id) {
+  if (msgPhotos.has(id)) return msgPhotos.get(id);
+  msgPhotos.set(id, null);
+  fetch('../api/?a=comment.photo&id=' + id, { headers: { Authorization: 'Bearer ' + serverToken() } })
+    .then((r) => (r.ok ? r.blob() : null)).then((b) => { if (b) { msgPhotos.set(id, URL.createObjectURL(b)); render(); } }).catch(() => {});
+  return null;
+}
+
+/** 📅 Daily updates per project: loaded when the project is opened, again after 20 seconds (or on ↻). */
 const daily = new Map(); // projectId -> { at, days, data, loading }
 function teamDaily(p, days) {
   if (!onServer) return null;
   let e = daily.get(p.id);
   const want = days || (e ? e.days : 30);
-  if (!e || (!e.loading && (Date.now() - e.at > 60000 || want !== e.days))) {
+  if (!e || (!e.loading && (Date.now() - e.at > 20000 || want !== e.days))) {
     e = { ...(e || {}), days: want, loading: true, at: Date.now() };
     daily.set(p.id, e);
     teamApi('project.updates', { projectRef: p.id, days: want })
@@ -2788,6 +2813,10 @@ async function loadTeamOnce() {
     team.byStep = new Map(out.tasks.map((t) => [t.stepRef, t]));
     team.fillBy = out.fillBy;
     team.late = out.late;
+    // a new message from the team: the project diaries fetch again at once (not after their usual minute)
+    const newMsg = (out.messages || []).some((m) => !team.messages.some((x) => x.id === m.id));
+    team.messages = out.messages || [];
+    if (newMsg) for (const e of daily.values()) e.at = 0;
     if (out.alerts) team.alerts = out.alerts;
     if (out.summary) team.summary = out.summary;
     adoptStaffSteps(out.tasks);
@@ -2868,6 +2897,16 @@ function start() {
   });
   window.addEventListener('offline', () => store.setStatus('offline', 'No connection'));
   document.addEventListener('keydown', onKey);
+  // Ctrl+V anywhere on an open project: a screenshot or a copied file is added to it (the update box handles its own paste)
+  document.addEventListener('paste', (e) => {
+    if (e.defaultPrevented || !store || !store.view || !ui.selected) return;
+    const files = [...((e.clipboardData && e.clipboardData.files) || [])];
+    if (!files.length) return; // plain text: pasted as usual
+    const p = store.view.data.projects.find((x) => x.id === ui.selected);
+    if (!p) return;
+    e.preventDefault();
+    pasteIntoProject(ctx, p, files);
+  });
   // a click anywhere else closes the right-click menu
   document.addEventListener('click', (e) => { if (ui.rowMenu && !e.target.closest('.row-menu')) { ui.rowMenu = null; render(); } });
   window.addEventListener('scroll', () => { if (ui.rowMenu) { ui.rowMenu = null; render(); } }, true);
