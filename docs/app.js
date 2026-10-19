@@ -2542,9 +2542,11 @@ function markTeamWork(tasks) {
   const today = todayIndia();
   const projects = store.view.data.projects;
   for (const t of tasks) {
-    if (!t.today || t.today.day !== today) continue;
+    // the newest real work (today's, or the one before if today's says Stuck or there is none yet): a Stuck day is not work
+    const u = [t.today, t.last].find((x) => x && x.state !== 'stuck');
+    if (!u || !u.day || u.day > today) continue;
     const p = projects.find((x) => x.id === t.projectRef) || projects.find((x) => x.steps.some((st) => st.id === t.stepRef));
-    if (p && p.state === 'active' && p.teamWorkDate !== today) store.dispatch('teamWorked', { projectId: p.id, day: today });
+    if (p && p.state === 'active' && (!p.teamWorkDate || p.teamWorkDate < u.day)) store.dispatch('teamWorked', { projectId: p.id, day: u.day });
   }
 }
 
@@ -2585,6 +2587,7 @@ const projectSteps = (p) => {
   return [{ stepRef: wholeRef(p.id), title: p.name, details: p.status || '' }];
 };
 const wholeRef = (projectId) => projectId + ':whole';
+let dataFreshAt = 0; // when the projects were last checked against the server (0 = not yet)
 const SYNC_KEY = 'dp.teamSync'; // last steps sent per given project, so unchanged projects are not sent again
 const SYNC_RETRY = 'retry'; // never matches: sent again next time, but a deleted project is still taken back
 
@@ -2596,7 +2599,7 @@ async function giveProject(p, person, needsPhoto = !!ui.givePhoto) {
   try {
     await withSyncLock(async () => {
       const steps = person ? projectSteps(p) : [];
-      const out = await teamApi('project.sync', { projectRef: p.id, project: p.name, assigneeId: person ? person.id : 0, steps, needsPhoto });
+      const out = await teamApi('project.sync', { projectRef: p.id, project: p.name, assigneeId: person ? person.id : 0, steps, needsPhoto, reason: person ? '' : 'taken' });
       team.gen++; // a list fetched before this change is old now: it must not move the project back
       store.dispatch('setProjectTeam', { projectId: p.id, userId: person ? person.id : null, name: person ? person.name : '', needsPhoto });
       ui.giveOpen = null;
@@ -2650,7 +2653,7 @@ async function syncGivenNow(gen) {
     if (m[p.id] === sig) continue;
     const name = p.name, who = p.team.name;
     try {
-      const out = await teamApi('project.sync', { projectRef: p.id, project: name, assigneeId: p.state === 'active' ? p.team.userId : 0, steps, needsPhoto: !!p.team.needsPhoto });
+      const out = await teamApi('project.sync', { projectRef: p.id, project: name, assigneeId: p.state === 'active' ? p.team.userId : 0, steps, needsPhoto: !!p.team.needsPhoto, reason: p.state });
       // a re-opened step that was just finished is not made yet: sent again next time
       rememberSync(id, notSent(out, steps).length ? SYNC_RETRY : sig);
       delete team.syncErr[id];
@@ -2667,23 +2670,39 @@ async function syncGivenNow(gen) {
   for (const ref of Object.keys(m)) {
     if (ids.has(ref)) continue;
     try {
-      await teamApi('project.sync', { projectRef: ref, project: '', assigneeId: 0, steps: [] });
+      await teamApi('project.sync', { projectRef: ref, project: '', assigneeId: 0, steps: [], reason: 'deleted' });
       rememberSync(ref, null);
     } catch { /* try again next time */ }
   }
 }
 
 /** A team task given from a step was finished: tick the step (once), with the person's last words as a work note. */
+/** A step given on its own (not a whole project): when you tick or delete the step, the person's task closes too. */
+async function syncSingleSteps(tasks) {
+  if (!store || !store.view || !store.canEdit()) return;
+  const projects = store.view.data.projects;
+  for (const t of tasks) {
+    if (t.status !== 'open' || (t.seq !== null && t.seq !== undefined) || !t.stepRef) continue;
+    const p = projects.find((x) => x.steps.some((st) => st.id === t.stepRef));
+    if (p && p.team) continue; // part of a given project now: that path keeps it
+    const step = p && p.steps.find((st) => st.id === t.stepRef);
+    if (step && !step.done) continue;
+    if (!step && !projects.some((x) => x.id === t.projectRef)) continue; // its project is not on this device: leave it
+    try { await teamApi('task.status', { id: t.id, status: step ? 'done' : 'cancelled' }); } catch { /* next time */ }
+  }
+}
+
 /** Steps the person added on Work Task: put into the project (same id), so from now on they are the project's own steps. */
 function adoptStaffSteps(tasks) {
   if (!store || !store.view || !store.canEdit()) return;
   const adopted = [];
   for (const t of tasks) {
-    if (!t.fromStaff || t.status === 'cancelled') continue;
+    if (!t.fromStaff) continue; // (a step added just before the project was taken back counts too: it is not lost)
     const p = store.view.data.projects.find((x) => x.id === t.projectRef);
     if (!p) continue; // not here yet (data still loading): next time
-    if (!p.steps.some((st) => st.id === t.stepRef)) actMany(p.id, [['addStep', { projectId: p.id, stepId: t.stepRef, text: t.title }]], `👥 ${t.assignee.name} added a step: ${t.title}`);
-    adopted.push(t.id);
+    // already in the project (added on an earlier look and kept on this device): now the server may forget it was waiting
+    if (p.steps.some((st) => st.id === t.stepRef)) { adopted.push(t.id); continue; }
+    actMany(p.id, [['addStep', { projectId: p.id, stepId: t.stepRef, text: t.title }]], `👥 ${t.assignee.name} added a step: ${t.title}`);
   }
   if (adopted.length) teamApi('tasks.adopted', { ids: adopted }).catch(() => { /* asked again next time; adding twice is ignored */ });
 }
@@ -2751,15 +2770,20 @@ async function loadTeamOnce() {
     adoptStaffSteps(out.tasks);
     tickFinishedTeamTasks(out.tasks);
     markTeamWork(out.tasks);
-    await syncGivenProjects(gen);
+    // only from data checked against the server a moment ago (a phone that was asleep could otherwise undo the PC's changes)
+    if (Date.now() - dataFreshAt < 90000) {
+      await syncGivenProjects(gen);
+      await syncSingleSteps(out.tasks);
+    }
     render();
   } catch { /* no connection: try again next time */ }
 }
 
 async function doRefresh(force) {
-  loadTeam(force);
-  if (!store || store.status === 'auth') return;
+  if (!store || store.status === 'auth') { loadTeam(force); return; }
   await store.refresh(force);
+  if (store.status === 'saved') dataFreshAt = Date.now();
+  loadTeam(force); // after the newest data is in: given projects are sent from it, never from an old copy
   if (force && store.status === 'saved') toast('Up to date ✓');
   makeBrief();
 }
@@ -2791,7 +2815,7 @@ function start() {
     render(); // put ticked boxes and menus back to the real data
   });
   render();
-  store.init().then(() => { render(); if (ui.capture) focusKey('capture-input'); voiceReady = true; runVoice(); loadTeam(true); shareLocalKeys(); markShownOpened(); makeBrief(); recordPastScores(); });
+  store.init().then(() => { if (store.status === 'saved') dataFreshAt = Date.now(); render(); if (ui.capture) focusKey('capture-input'); voiceReady = true; runVoice(); loadTeam(true); shareLocalKeys(); markShownOpened(); makeBrief(); recordPastScores(); });
   if (started) return;
   started = true;
   // redraw now and then: the running timer, and the "not sent yet" bar appearing after a minute

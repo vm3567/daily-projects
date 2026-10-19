@@ -264,6 +264,55 @@ test('server: the person adds steps to a project given to them', { skip }, async
   assert.deepEqual((await open()).map((t) => t.title), ['Fit it'], 'once in the project, deleting it there removes it');
 });
 
+test('server: team logic fixes (whole project, take-back, telling people)', { skip }, async () => {
+  const log = join(dir, 'push.log');
+  const keys = { p256dh: Buffer.concat([Buffer.from([4]), randomBytes(64)]).toString('base64url'), auth: randomBytes(16).toString('base64url') };
+  await call('push.subscribe', { endpoint: 'https://fcm.googleapis.com/fcm/send/suresh-2', keys }, tok.suresh);
+  await call('push.subscribe', { endpoint: 'https://fcm.googleapis.com/fcm/send/anita-2', keys }, tok.anita);
+  let seen = readFileSync(log, 'utf8').length;
+  const fresh = () => { const all = readFileSync(log, 'utf8'); const out = all.slice(seen).trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)); seen = all.length; return out; };
+  const mine = async (ref) => { const m = await call('my.today', {}, tok.suresh); return [...m.tasks, ...m.other].filter((t) => t.projectRef === ref && t.status === 'open'); };
+
+  // a project with no steps, finished as one task, is never made again
+  const whole = [{ stepRef: 'pz:whole', title: 'Clean kiln' }];
+  await call('project.sync', { projectRef: 'pz', project: 'Clean kiln', assigneeId: id.suresh, steps: whole }, tok.boss);
+  const w = (await mine('pz'))[0];
+  await call('update.save', { taskId: w.id, note: 'All clean', state: 'finished' }, tok.suresh);
+  await sql("UPDATE wt.tasks SET done_at = NOW() - INTERVAL 1 HOUR WHERE id = " + w.id);
+  await call('project.sync', { projectRef: 'pz', project: 'Clean kiln', assigneeId: id.suresh, steps: whole }, tok.boss);
+  assert.deepEqual(await mine('pz'), [], 'finished whole-project task does not come back');
+  const done = await call('project.mine', { projectRef: 'pz' }, tok.suresh);
+  assert.deepEqual(done.tasks.map((t) => t.status), ['done'], 'the person still sees what they finished');
+  assert.ok((await call('update.save', { taskId: w.id, note: 'Oops, not yet', state: 'progress' }, tok.suresh)).ok, 'Finished can be undone within 12 hours (not only until midnight)');
+
+  // a step the person added just before the project is taken back is not lost
+  await call('project.sync', { projectRef: 'pt', project: 'Glaze line', assigneeId: id.suresh, steps: [{ stepRef: 'pt1', title: 'Sieve' }] }, tok.boss);
+  fresh();
+  const add = await call('project.addStep', { projectRef: 'pt', title: 'Check sieve mesh', clientId: 'c7654321-bb' }, tok.suresh);
+  await call('project.sync', { projectRef: 'pt', project: 'Glaze line', assigneeId: 0, steps: [], reason: 'paused' }, tok.boss);
+  const after = fresh().filter((x) => x.user === id.suresh);
+  assert.ok(after.some((x) => x.msg.title === '📁 Off your list: Glaze line' && /paused/.test(x.msg.body)), 'the person is told why');
+  const linked = (await call('tasks.linked', {}, tok.boss)).tasks.find((t) => t.id === add.task.id);
+  assert.ok(linked && linked.fromStaff && linked.status === 'cancelled', 'still offered to Daily Projects to add');
+  await call('project.sync', { projectRef: 'pt', project: 'Glaze line', assigneeId: id.suresh, steps: [{ stepRef: 'pt1', title: 'Sieve' }, { stepRef: add.task.stepRef, title: 'Check sieve mesh' }] }, tok.boss);
+  assert.deepEqual((await mine('pt')).map((t) => [t.title, t.fromStaff]), [['Sieve', false], ['Check sieve mesh', false]], 'given again: back with its history');
+
+  // closing a step, a moved task, files, cancelled tasks: the person hears
+  fresh();
+  await call('project.sync', { projectRef: 'pt', project: 'Glaze line', assigneeId: id.suresh, steps: [{ stepRef: add.task.stepRef, title: 'Check sieve mesh' }] }, tok.boss);
+  assert.deepEqual(fresh().map((x) => [x.user, x.msg.title]), [[id.suresh, '✓ Step closed in Glaze line']]);
+  const t = (await call('task.save', { assigneeId: id.suresh, title: 'Count saggars', repeat: 'once' }, tok.boss)).task;
+  fresh();
+  await call('task.save', { id: t.id, assigneeId: id.anita, title: 'Count saggars', repeat: 'once' }, tok.boss);
+  assert.deepEqual(fresh().map((x) => [x.user, x.msg.title]).sort(), [[id.anita, '↔ A task was moved to you'], [id.suresh, '↔ A task was moved to Anita']].sort());
+  const fd = new FormData(); fd.append('taskId', String(t.id)); fd.append('file', new Blob([Buffer.from('%PDF-1.4\n%%EOF\n')], { type: 'application/pdf' }), 'how.pdf');
+  await call('task.file.add', fd, tok.boss, true);
+  await call('task.status', { id: t.id, status: 'cancelled' }, tok.boss);
+  assert.deepEqual(fresh().map((x) => [x.user, x.msg.title]), [[id.anita, '📎 New instruction file'], [id.anita, '✖️ A task was cancelled']], 'the person doing it hears');
+  const sg = (await call('suggest', { title: 'New shelf' }, tok.suresh)).task;
+  assert.equal((await call('task.status', { id: sg.id, status: 'open' }, tok.boss)).s, 400, 'a suggestion is answered with Yes / Not now');
+});
+
 test('server: Daily Projects storage (import, owner-only, versions, clashes)', { skip }, async () => {
   const src = join(dir, 'import'); mkdirSync(join(src, 'history'), { recursive: true });
   writeFileSync(join(src, 'data.json'), JSON.stringify({ projects: [{ id: 'x1', name: 'Kiln' }] }));

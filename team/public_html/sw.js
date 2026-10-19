@@ -1,6 +1,6 @@
 // Work Task app shell: keeps the screens on the phone so the app opens fast and shows something
 // without internet. Data (api/) and the projects app (projects/, it has its own) are never kept here.
-const CACHE = 'worktask-v3';
+const CACHE = 'worktask-v4';
 const SHELL = ['./', 'index.html', 'app.js', 'styles.css', 'projects/styles.css', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png'];
 
 self.addEventListener('install', (e) => {
@@ -47,6 +47,9 @@ self.addEventListener('notificationclick', (e) => {
   e.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
     const c = list.find((x) => new URL(x.url).pathname === '/');
     if (c) { c.postMessage({ type: 'open', hash: url.hash }); return c.focus(); }
+    // another page of this site is open (the owner's projects): use that window, or a new one if it cannot be moved
+    const other = list.find((x) => new URL(x.url).origin === self.location.origin && 'navigate' in x);
+    if (other) return other.navigate(url.href).then((w) => (w || other).focus()).catch(() => self.clients.openWindow(url.href));
     return self.clients.openWindow(url.href);
   }));
 });

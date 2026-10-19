@@ -114,6 +114,7 @@ function change_password(array $me, string $old, string $new): void {
   if ($old === $new) throw new ApiError('Choose a new password, not the same one.');
   q('UPDATE users SET pass_hash = ?, must_change = 0 WHERE id = ?', [password_hash($new, PASSWORD_DEFAULT), $me['id']]);
   q('DELETE FROM tokens WHERE user_id = ? AND id <> ?', [$me['id'], $GLOBALS['token_id']]); // sign out other phones
+  q('DELETE FROM push_subs WHERE user_id = ?', [$me['id']]); // and their notifications (this phone links itself again right away)
   audit($me['id'], 'password_changed');
 }
 

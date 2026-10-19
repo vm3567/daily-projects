@@ -232,7 +232,7 @@ async function doFlush() {
     if (sent) toast(`✓ ${sent} waiting item${sent > 1 ? 's' : ''} sent`);
     // reload only screens that show the sent items: a reload would wipe a form being typed
     const v = state.sel || state.view, a = document.activeElement;
-    const typing = a && /^(TEXTAREA|INPUT|SELECT)$/.test(a.tagName) && document.getElementById('app').contains(a);
+    const typing = (a && /^(TEXTAREA|INPUT|SELECT)$/.test(a.tagName) && document.getElementById('app').contains(a)) || formHasText();
     if (sent && typing) state.reloadLater = true; // reload once they stop typing (next screen, or back to the app)
     if (sent && !typing && state.user && !state.user.mustChange && (v === 'today' || v === 'tasks' || v.startsWith('task:'))) loadView(); else refreshBar();
   }
@@ -290,6 +290,9 @@ function signedOut() {
   state.back = ''; state.moving = 0; state.view = 'today'; state.closed = false;
   state.sel = null; state.detail = null; state.mobileDetail = false; state.menuOpen = false; state.section = 'today'; state.personFilter = 0; state.team = null;
   state.pushOn = false; hideNotice();
+  // signed out (also by a password reset): this phone stops getting their notifications, and the icon number goes
+  if ('serviceWorker' in navigator && 'PushManager' in window) navigator.serviceWorker.getRegistration().then((r) => r && r.pushManager.getSubscription()).then((sub) => sub && sub.unsubscribe()).catch(() => {});
+  if (navigator.clearAppBadge) navigator.clearAppBadge().catch(() => {});
   save(TOKEN_KEY, '');
   clearCache();
   render();
@@ -407,6 +410,8 @@ async function loadDetail() {
     if (sel.startsWith('task:')) {
       detail = await api('task.get', { id: Number(sel.slice(5)) });
       if (me.role === 'admin') people = (await api('users.list')).users.filter((u) => u.active);
+    } else if (sel.startsWith('project:')) {
+      detail = await api('project.mine', { projectRef: sel.slice(8) });
     } else if (sel === 'give' || sel.startsWith('edit:')) {
       people = (await api('users.list')).users.filter((u) => u.active);
       detail = sel.startsWith('edit:') ? await api('task.get', { id: Number(sel.slice(5)) }) : null;
@@ -439,8 +444,31 @@ function go(view) {
   loadList();
 }
 
+/** Something is typed (or a file picked) in a form on screen: a redraw now would wipe it. */
+function formHasText() {
+  const app = document.getElementById('app');
+  if (!app) return false;
+  return [...app.querySelectorAll('textarea, input')].some((i) => {
+    if (i.disabled || i.readOnly) return false;
+    if (i.type === 'file') return !!(i.files && i.files.length);
+    if (['checkbox', 'radio', 'hidden', 'submit', 'button', 'password'].includes(i.type)) return false;
+    return i.value.trim() !== '';
+  });
+}
+
+// the phone's Back button closes the open task (or the menu) instead of leaving the app
+function pushBack() { if (!history.state || !history.state.wt) history.pushState({ wt: 1 }, ''); }
+window.addEventListener('popstate', () => {
+  if (!state.user) return;
+  if (state.menuOpen) { state.menuOpen = false; render(); if (state.sel) pushBack(); return; }
+  if (state.sel) closeDetail(true);
+});
+
 function openDetail(sel) {
   if (sel.startsWith('task:')) state.newIds.delete(Number(sel.slice(5)));
+  // a step opened from its project: Back goes to the project again
+  state.backTo = sel.startsWith('task:') && state.sel && state.sel.startsWith('project:') ? state.sel : null;
+  pushBack();
   state.sel = sel; state.detail = null; state.detailFailed = false; state.moving = 0;
   state.mobileDetail = true; state.menuOpen = false;
   if (state.view === 'people' || state.view === 'settings') { state.view = 'today'; state.data = null; } // these fill the page: show a list again
@@ -450,8 +478,10 @@ function openDetail(sel) {
 }
 
 /** Back (phone) / close: the list again. */
-async function closeDetail() {
+async function closeDetail(fromBackButton = false) {
+  if (!fromBackButton && history.state && history.state.wt) { history.back(); return; } // the same as the phone's Back (it comes back here)
   if (state.fromProjects && state.user.owner && (await toProjects())) return;
+  if (state.backTo) { const b = state.backTo; state.backTo = null; openDetail(b); return; }
   state.sel = null; state.detail = null; state.mobileDetail = false; state.moving = 0;
   render();
 }
@@ -554,7 +584,7 @@ function listColumn(wide) {
   let title = titles[state.view];
   if (admin && state.view === 'today' && state.personFilter && state.team) { const p = state.team.people.find((x) => x.id === state.personFilter); if (p) title = p.name; }
   const head = el('div', { class: 'list-head' },
-    el('button', { class: 'icon menu-btn', 'aria-label': 'Menu', onClick: () => { state.menuOpen = true; render(); } }, '☰'),
+    el('button', { class: 'icon menu-btn', 'aria-label': 'Menu', onClick: () => { state.menuOpen = true; pushBack(); render(); } }, '☰'),
     el('h2', null, title),
     state.view === 'settings' ? null : el('button', { class: 'icon', title: 'Get latest', 'aria-label': 'Refresh', onClick: () => loadView() }, '↻'));
   const bar = el('div', { id: 'bar' }, offlineBar(), pushBanner());
@@ -622,7 +652,7 @@ function myProjects() {
 
 function projectRow(pr) {
   const c = pr.current, n = pr.real.length;
-  const sub = !n ? 'No steps yet — add your steps' : `Step ${pr.real.indexOf(c) + 1} of ${n}: ${c.title}${c.today ? ' · ✓ sent today' : ''}`;
+  const sub = !n ? 'No steps yet — add your steps' : `${n} step${n > 1 ? 's' : ''} to do · now: ${c.title}${c.today ? ' · ✓ sent today' : ''}`;
   return el('li', { class: 'prow' + (state.sel === 'project:' + pr.ref ? ' current' : '') },
     el('button', { class: 'prow-btn', onClick: () => openDetail('project:' + pr.ref) },
       el('span', { class: 'dot ' + (c && c.today ? 'green' : 'orange') }),
@@ -630,17 +660,20 @@ function projectRow(pr) {
 }
 
 /** Staff: one project — its steps in order, today's update on the current one, and adding a step. */
-function projectPage(pr) {
-  if (!pr) return el('p', { class: 'muted' }, state.data ? 'This project is not on your list any more.' : 'Loading…');
+function projectPage(pr, done = []) {
+  const doneList = done.length ? [sec(`✓ ${done.length} done`), el('ul', { class: 'list-body' }, done.map((t, i) => taskRow(t, `Step ${i + 1} · done ${t.doneAt ? fmtDay(t.doneAt) : ''}`, 'green')))] : null;
+  if (!pr) return [el('p', { class: 'muted' }, !state.data ? 'Loading…' : done.length ? 'All your steps are done ✓. Your manager decides what comes next.' : 'This project is not on your list any more.'), doneList];
   const sent = (t) => t.today ? `✓ Sent ${fmtTime(t.today.at)}` : 'Send today\'s update';
+  const k = done.length; // the steps already done count in the numbers
   return [
+    doneList,
     el('p', { class: 'muted' }, pr.real.length
       ? 'Do the steps in order. Every day, open the current step and send what you did. Found more work? Add a step below.'
       : 'No steps yet. Add the steps you will do, in order. Until then, send your daily update on the whole project.'),
     !pr.real.length ? el('ul', { class: 'list-body' }, pr.steps.map((t) => taskRow(t, sent(t), t.today ? 'green' : 'orange'))) : null,
-    pr.real.length ? el('ol', { class: 'list-body steps-list' }, pr.real.map((t, i) => taskRow(t,
-      t === pr.current ? `Step ${i + 1} · current · ${sent(t)}` : `Step ${i + 1} · next${t.fromStaff ? ' · added by you' : ''}`,
-      t === pr.current ? (t.today ? 'green' : 'orange') : 'grey'))) : null,
+    pr.real.length ? [k ? sec('To do') : null, el('ol', { class: 'list-body steps-list' }, pr.real.map((t, i) => taskRow(t,
+      t === pr.current ? `Step ${k + i + 1} · current · ${sent(t)}` : `Step ${k + i + 1} · next${t.fromStaff ? ' · added by you' : ''}`,
+      t === pr.current ? (t.today ? 'green' : 'orange') : 'grey')))] : null,
     addStepForm(pr.ref),
   ];
 }
@@ -658,6 +691,7 @@ function addStepForm(ref) {
       try {
         await api('project.addStep', { projectRef: ref, title, clientId: newClientId() });
         toast('➕ Step added. Your manager sees it in the project too.');
+        inp.value = '';
         await loadList();
       } catch (ex) { toast(ex.message, 6000); btn.disabled = false; }
     },
@@ -731,7 +765,11 @@ function detailColumn() {
   else if (sel === 'suggest') { title = '💡 Suggest a task'; body = suggestForm(); }
   else if (sel === 'password') { title = 'Change password'; body = passwordScreen(); }
   else if (sel === 'notify') { title = '🔔 Notifications'; body = notifyPage(); }
-  else if (sel.startsWith('project:')) { const pr = myProjects().find((x) => x.ref === sel.slice(8)); title = pr ? '📁 ' + pr.name : 'Project'; body = projectPage(pr); }
+  else if (sel.startsWith('project:')) {
+    const pr = myProjects().find((x) => x.ref === sel.slice(8)), all = (state.detail && state.detail.tasks) || [];
+    title = '📁 ' + (pr ? pr.name : (all[0] && all[0].project) || 'Project');
+    body = projectPage(pr, all.filter((t) => t.status === 'done' && !t.stepRef.endsWith(':whole')));
+  }
   else if (sel.startsWith('task:')) {
     title = state.detail && state.detail.task ? state.detail.task.title : '';
     body = state.detail ? (state.user.role === 'admin' ? taskDetail() : myTaskDetail())
@@ -759,6 +797,8 @@ function myTaskDetail() {
 }
 
 async function signOut() {
+  const n = (state.outbox || []).length;
+  if (n && !confirm(`${n} item${n > 1 ? 's are' : ' is'} not sent yet. They go out when you sign in again on this phone. Sign out anyway?`)) return;
   await pushOff().catch(() => {}); // the next person on this phone must not get their messages
   try { await api('logout'); } catch { /* signed out anyway */ }
   state.prefill = null; state.openTask = 0;
@@ -825,6 +865,7 @@ function passwordScreen() {
         state.user = out.user;
         toast('Password changed ✓');
         flushOutbox(); // work that waited for the new password goes out now
+        syncPush(); // other phones were signed out (and their notifications stopped): this one links itself again
         if (out.user.owner && wantsProjects && await toProjects()) return;
         // a Give to team / task link that waited for the new password
         if (state.prefill && out.user.role === 'admin') { go('give'); return; }
@@ -1435,11 +1476,11 @@ async function liveCheck(quiet = false) {
     for (const t of fresh) state.newIds.add(t.id);
     if (!quiet && Date.now() - (state.pushAt || 0) > 30000) tellNews(fresh, out, state.data); // a notification just said it: not twice
     const a = document.activeElement;
-    if (a && /^(TEXTAREA|INPUT|SELECT)$/.test(a.tagName) && document.getElementById('app').contains(a)) { state.reloadLater = true; return; } // typing: show it after
-    state.data = out;
+    state.data = out; // kept now (shown with the next redraw), so the same news is never told twice
     if (admin && out.people) state.team = out;
+    if ((a && /^(TEXTAREA|INPUT|SELECT)$/.test(a.tagName) && document.getElementById('app').contains(a)) || formHasText()) { state.reloadLater = true; return; } // typing: show it after
     render();
-    if (state.sel && state.sel.startsWith('task:')) loadDetail(); // new messages on the open task too
+    if (state.sel && (state.sel.startsWith('task:') || state.sel.startsWith('project:'))) loadDetail(); // new messages / steps on the open page too
   } catch { /* try again next time */ } finally { liveBusy = false; }
 }
 setInterval(() => liveCheck(), 20000);
@@ -1454,7 +1495,8 @@ function tellNews(fresh, out, before) {
     if (one) {
       const p = steps[0].project || 'a project';
       const had = listOf(before).some((t) => t.projectRef === steps[0].projectRef);
-      notice('task', had ? (steps.length === 1 ? `➕ New step in ${p}` : `➕ ${steps.length} new steps in ${p}`) : `📁 New project for you: ${p}`, names, () => openDetail('task:' + steps[0].id));
+      notice('task', had ? (steps.length === 1 ? `➕ New step in ${p}` : `➕ ${steps.length} new steps in ${p}`) : `📁 New project for you: ${p}`, names,
+        () => openDetail(state.user.role === 'admin' ? 'task:' + steps[0].id : 'project:' + steps[0].projectRef));
     } else notice('task', fresh.length === 1 ? '📥 New task for you' : `📥 ${fresh.length} new tasks`, names, () => openDetail('task:' + fresh[0].id));
     return;
   }
@@ -1556,7 +1598,11 @@ function notifyPage() {
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.addEventListener('message', (e) => {
     const d = e.data || {};
-    if (!state.user || state.user.mustChange) return;
+    if (!state.user || state.user.mustChange) {
+      const id = d.type === 'open' && /^#open=(\d+)$/.exec(d.hash || '');
+      if (id) state.openTask = Number(id[1]); // opened after sign-in / the new password
+      return;
+    }
     if (d.type === 'push') {
       const m = d.msg || {}, id = /#open=(\d+)/.exec(m.url || '');
       state.pushAt = Date.now();
@@ -1591,6 +1637,7 @@ window.addEventListener('hashchange', () => {
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState !== 'visible' || !state.user || state.user.mustChange) return;
   const v = state.view;
+  if (formHasText()) { state.reloadLater = true; return; } // back from the camera or another app: keep what was typed or picked
   if (state.reloadLater && (v === 'today' || v === 'tasks')) { loadView(); return; } // items were sent while they typed
   if (v === 'today' && !Object.keys(state.drafts).some((k) => state.drafts[k].note)) loadView();
 });
