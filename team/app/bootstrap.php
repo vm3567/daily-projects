@@ -191,6 +191,18 @@ function migrate(PDO $pdo): void {
     "ALTER TABLE photos ADD COLUMN client_id VARCHAR(40) NULL, ADD UNIQUE KEY photo_once (update_id, client_id)",
     // v6: who closed a task by their own Finished (empty when the manager closed it), so only they can undo it
     "ALTER TABLE tasks ADD COLUMN closed_by INT NULL",
+    // v7: phone notifications: each phone's push address (and its keys to lock the message) for one person
+    "CREATE TABLE IF NOT EXISTS push_subs (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      user_id INT NOT NULL,
+      endpoint TEXT NOT NULL,
+      ep_hash CHAR(64) NOT NULL UNIQUE,
+      p256dh VARCHAR(120) NOT NULL,
+      auth VARCHAR(40) NOT NULL,
+      created_at DATETIME NOT NULL,
+      last_ok DATETIME NULL,
+      INDEX (user_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
   ];
   $pdo->exec($steps[0]);
   $done = (int)($pdo->query("SELECT v FROM settings WHERE k = 'schema'")->fetchColumn() ?: 0);

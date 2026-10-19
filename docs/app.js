@@ -2579,8 +2579,12 @@ function teamPeople() {
  *  (snoozed, or the next copy of a repeating step) is sent on the day it comes back, not before. */
 const projectSteps = (p) => {
   const today = todayIndia();
-  return p.steps.filter((x) => !x.done && !(x.snoozedUntil && x.snoozedUntil > today)).map((x) => ({ stepRef: x.id, title: x.text, details: x.note || '' }));
+  const open = p.steps.filter((x) => !x.done && !(x.snoozedUntil && x.snoozedUntil > today)).map((x) => ({ stepRef: x.id, title: x.text, details: x.note || '' }));
+  if (open.length || p.steps.some((x) => !x.done)) return open; // (only snoozed steps left: nothing to do today)
+  // no steps at all: the person still gets the project, as one task with its name, until steps are added
+  return [{ stepRef: wholeRef(p.id), title: p.name, details: p.status || '' }];
 };
+const wholeRef = (projectId) => projectId + ':whole';
 const SYNC_KEY = 'dp.teamSync'; // last steps sent per given project, so unchanged projects are not sent again
 const SYNC_RETRY = 'retry'; // never matches: sent again next time, but a deleted project is still taken back
 
@@ -2681,6 +2685,14 @@ function tickFinishedTeamTasks(tasks) {
     const latest = team.byStep.get(t.stepRef); // the step was given again after this (re-opened): the old task must not tick it
     if (latest && latest.id !== t.id) { seen.add(t.id); continue; }
     const p = store.view.data.projects.find((x) => x.id === t.projectRef) || store.view.data.projects.find((x) => x.steps.some((st) => st.id === t.stepRef));
+    if (p && t.stepRef === wholeRef(p.id)) { // the project with no steps, finished as one task: a note, you decide on Finish
+      seen.add(t.id);
+      if (!(p.workNotes || []).some((n) => n.id === 'tn' + t.id)) {
+        const words = (t.today || t.last) ? (t.today || t.last).note : '';
+        actMany(p.id, [['addWorkNote', { projectId: p.id, noteId: 'tn' + t.id, text: `👥 ${t.assignee.name} finished the project${words ? ': ' + words : '.'}` }]], `✓ ${t.assignee.name} finished: ${p.name}`);
+      }
+      continue;
+    }
     const step = p && p.steps.find((st) => st.id === t.stepRef);
     if (!step) continue; // not here yet (data still loading): tried again next time
     seen.add(t.id);

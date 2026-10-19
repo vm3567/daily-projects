@@ -460,7 +460,9 @@ function teamBar(ctx, p) {
     const open = p.steps.filter((x) => !x.done).length;
     return h('div', { class: 'banner team-banner', key: 'tm-' + p.id },
       h('span', null, `👥 Given to ${p.team.name} since ${fmtDay(p.team.since)}. `,
-        h('span', { class: 'muted small' }, `They see the ${open} open step${open === 1 ? '' : 's'} in order and send a daily update on the current one. New steps you add go to them too.`)),
+        h('span', { class: 'muted small' }, open
+          ? `They see the ${open} open step${open === 1 ? '' : 's'} in order and send a daily update on the current one. New steps you add go to them too.`
+          : 'No steps yet: they see the whole project as one task and send a daily update on it. Steps you add replace it.')),
       p.team.needsPhoto ? h('span', { class: 'tag' }, '📷 photo to finish') : null,
       h('button', { class: 'btn small', onClick: () => { ui.giveOpen = p.id; ui.givePhoto = !!p.team.needsPhoto; ctx.render(); } }, 'Change person'),
       h('button', { class: 'btn small', onClick: () => { if (confirm(`Take "${p.name}" back from ${p.team.name}? Their open steps are removed from their list.`)) ctx.takeBackProject(p); } }, 'Take back'));

@@ -4,7 +4,8 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, execFileSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, mkdirSync, rmSync, existsSync, readFileSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -28,7 +29,7 @@ async function until(fn, what, ms = 30000) {
   throw new Error(`timed out waiting for ${what}`);
 }
 const sql = (q) => execFileSync('mysql', ['-u', 'root', `--socket=${SOCK}`, '-e', q], { stdio: 'pipe' });
-const env = () => ({ ...process.env, WT_TEST_DIR: dir, WT_DB_HOST: `127.0.0.1;port=${DB_PORT}` });
+const env = () => ({ ...process.env, WT_TEST_DIR: dir, WT_DB_HOST: `127.0.0.1;port=${DB_PORT}`, WT_PUSH_LOG: join(dir, 'push.log') });
 
 async function call(a, body = {}, t, form) {
   const h = {};
@@ -201,6 +202,44 @@ test('server: owner protection and instruction files', { skip }, async () => {
   assert.equal((await fetch(`${B}task.file&id=${f.fileId}`, { headers: { Authorization: 'Bearer ' + tok.suresh } })).status, 404);
   assert.equal((await fetch(`${B}task.file&id=${f.fileId}`, { headers: { Authorization: 'Bearer ' + tok.anita } })).headers.get('content-type'), 'application/pdf');
   assert.ok((await call('logout', {}, m)).ok && (await call('me', {}, m)).s === 401, 'sign out ends the session');
+});
+
+test('server: phone notifications go to the right person, once', { skip }, async () => {
+  const log = join(dir, 'push.log');
+  const sent = () => { try { return readFileSync(log, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)); } catch { return []; } };
+  let seen = 0;
+  const fresh = () => { const all = sent(); const out = all.slice(seen); seen = all.length; return out; };
+  const keys = { p256dh: Buffer.concat([Buffer.from([4]), randomBytes(64)]).toString('base64url'), auth: randomBytes(16).toString('base64url') };
+  assert.ok(!(await call('push.subscribe', { endpoint: 'https://evil.example/x', keys }, tok.suresh)).ok, 'only real push services');
+  assert.ok((await call('push.subscribe', { endpoint: 'https://fcm.googleapis.com/fcm/send/suresh-phone', keys }, tok.suresh)).ok);
+  assert.ok((await call('push.subscribe', { endpoint: 'https://fcm.googleapis.com/fcm/send/boss-phone', keys }, tok.boss)).ok);
+  assert.match((await call('push.key', {}, tok.suresh)).key, /^[A-Za-z0-9_-]{87}$/, 'the public key only (65 bytes)');
+  const t = (await call('task.save', { assigneeId: id.suresh, title: 'Check moulds', repeat: 'once' }, tok.boss)).task;
+  let m = fresh();
+  assert.deepEqual(m.map((x) => [x.user, x.msg.title, x.msg.body, x.msg.kind]), [[id.suresh, '📥 New task for you', 'Check moulds', 'task']]);
+  assert.equal(m[0].msg.url, '/#open=' + t.id);
+  const steps = [{ stepRef: 'n1', title: 'Weigh clay' }, { stepRef: 'n2', title: 'Mix slip' }];
+  await call('project.sync', { projectRef: 'pn', project: 'New body', assigneeId: id.suresh, steps }, tok.boss);
+  assert.deepEqual(fresh().map((x) => [x.user, x.msg.title, x.msg.body]), [[id.suresh, '📁 New project for you: New body', '2 steps. First: Weigh clay']]);
+  await call('project.sync', { projectRef: 'pn', project: 'New body', assigneeId: id.suresh, steps }, tok.boss);
+  assert.deepEqual(fresh(), [], 'nothing new = no notification (Daily Projects sends this often)');
+  await call('project.sync', { projectRef: 'pn', project: 'New body', assigneeId: id.suresh, steps: [...steps, { stepRef: 'n3', title: 'Cast trial' }] }, tok.boss);
+  assert.deepEqual(fresh().map((x) => [x.user, x.msg.title, x.msg.body]), [[id.suresh, '➕ New step in New body', 'Cast trial']]);
+  await call('update.save', { taskId: t.id, note: 'Half done', state: 'progress' }, tok.suresh);
+  m = fresh();
+  assert.deepEqual(m.map((x) => [x.user, x.msg.title, x.msg.kind]), [[id.boss, '✓ Suresh sent an update', 'update']], 'the manager hears (on the phone that is on), not Suresh');
+  await call('update.save', { taskId: t.id, note: 'Half done, fixed a word', state: 'progress' }, tok.suresh);
+  assert.deepEqual(fresh(), [], 'a small fix of the same update is not news');
+  await call('update.save', { taskId: t.id, note: 'Mould cracked', state: 'stuck' }, tok.suresh);
+  assert.deepEqual(fresh().map((x) => [x.user, x.msg.title, x.msg.kind]), [[id.boss, '⚠️ Suresh is stuck', 'stuck']]);
+  await call('comment.add', { taskId: t.id, text: 'Use mould 4' }, tok.boss);
+  assert.deepEqual(fresh().map((x) => [x.user, x.msg.title, x.msg.body]), [[id.suresh, '💬 Boss · Check moulds', 'Use mould 4']]);
+  assert.ok((await call('push.test', {}, tok.suresh)).ok);
+  assert.deepEqual(fresh().map((x) => [x.user, x.msg.tag]), [[id.suresh, 'test']]);
+  await call('push.unsubscribe', { endpoint: 'https://fcm.googleapis.com/fcm/send/suresh-phone' }, tok.suresh);
+  await call('task.save', { assigneeId: id.suresh, title: 'After sign out', repeat: 'once' }, tok.boss);
+  assert.deepEqual(fresh(), [], 'a phone that signed out gets nothing');
+  assert.equal((await call('push.test', {}, tok.suresh)).s, 400);
 });
 
 test('server: Daily Projects storage (import, owner-only, versions, clashes)', { skip }, async () => {

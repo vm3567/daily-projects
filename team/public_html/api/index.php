@@ -40,6 +40,11 @@ try {
   $out = handle($a, $in);
   header('Content-Type: application/json; charset=utf-8');
   echo json_encode(['ok' => true] + $out, JSON_UNESCAPED_UNICODE);
+  if (!empty($GLOBALS['push_out'])) { // phone notifications: the answer goes first, then the messages to Google / Apple
+    if (function_exists('litespeed_finish_request')) litespeed_finish_request();
+    elseif (function_exists('fastcgi_finish_request')) fastcgi_finish_request();
+    try { push_flush(); } catch (Throwable $e) { error_log('push: ' . $e->getMessage()); }
+  }
 } catch (ApiError $e) {
   http_response_code($e->status);
   header('Content-Type: application/json; charset=utf-8');

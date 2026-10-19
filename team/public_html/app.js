@@ -37,6 +37,23 @@ function toast(text, ms = 3000) {
   toastTimer = setTimeout(() => { t.hidden = true; }, ms);
 }
 
+/** The coloured bar at the top, like a new-mail alert: blue = new task / project / message, green = an update. */
+let noticeTimer = 0;
+function notice(kind, title, body, onOpen) {
+  let n = document.getElementById('notice');
+  if (!n) { n = el('div', { id: 'notice', role: 'status' }); document.body.append(n); }
+  n.className = 'notice ' + (kind === 'update' ? 'green' : kind === 'stuck' ? 'amber' : 'blue');
+  n.replaceChildren(
+    el('button', { class: 'notice-main', onClick: () => { hideNotice(); if (onOpen) onOpen(); } },
+      el('strong', null, title), body ? el('span', null, body) : null),
+    el('button', { class: 'notice-x', 'aria-label': 'Close', onClick: hideNotice }, '✕'));
+  n.hidden = false;
+  n.classList.remove('in'); void n.offsetWidth; n.classList.add('in'); // slide in again for each new one
+  clearTimeout(noticeTimer);
+  noticeTimer = setTimeout(hideNotice, 12000);
+}
+function hideNotice() { const n = document.getElementById('notice'); if (n) n.hidden = true; }
+
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const LONG_DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -272,6 +289,7 @@ function signedOut() {
   state.drafts = {}; state.files = {}; state.editing = {}; state.sending = {}; state.newPerson = null;
   state.back = ''; state.moving = 0; state.view = 'today'; state.closed = false;
   state.sel = null; state.detail = null; state.mobileDetail = false; state.menuOpen = false; state.section = 'today'; state.personFilter = 0; state.team = null;
+  state.pushOn = false; hideNotice();
   save(TOKEN_KEY, '');
   clearCache();
   render();
@@ -507,6 +525,7 @@ function menuColumn() {
     parts,
     el('div', { class: 'menu-sep' }),
     el('ul', { class: 'menu-list menu-bottom' },
+      pushState() === 'no' ? null : item('🔔 Notifications', state.sel === 'notify', () => openDetail('notify'), pushState() === 'on' ? 'On' : 'Off'),
       item(`👤 ${me.name}`, state.sel === 'password', () => openDetail('password')),
       item('Sign out', false, signOut)));
 }
@@ -533,7 +552,7 @@ function listColumn(wide) {
     el('button', { class: 'icon menu-btn', 'aria-label': 'Menu', onClick: () => { state.menuOpen = true; render(); } }, '☰'),
     el('h2', null, title),
     state.view === 'settings' ? null : el('button', { class: 'icon', title: 'Get latest', 'aria-label': 'Refresh', onClick: () => loadView() }, '↻'));
-  const bar = el('div', { id: 'bar' }, offlineBar());
+  const bar = el('div', { id: 'bar' }, offlineBar(), pushBanner());
   if (state.view === 'settings') return el('div', { class: 'col-inner' }, head, bar, el('div', { class: 'wide-inner' }, settingsScreen()));
   if (!state.data) {
     return el('div', { class: 'col-inner' }, head, bar, el('p', { class: 'list-note' }, state.loadFailed ? ['No saved copy on this phone yet. ', el('button', { class: 'link', onClick: () => loadView() }, 'Try again')] : 'Loading…'));
@@ -642,6 +661,7 @@ function detailColumn() {
   else if (sel.startsWith('edit:')) { title = 'Edit task'; body = state.detail && state.people.length ? taskForm() : el('p', { class: 'muted' }, 'Loading…'); }
   else if (sel === 'suggest') { title = '💡 Suggest a task'; body = suggestForm(); }
   else if (sel === 'password') { title = 'Change password'; body = passwordScreen(); }
+  else if (sel === 'notify') { title = '🔔 Notifications'; body = notifyPage(); }
   else if (sel.startsWith('task:')) {
     title = state.detail && state.detail.task ? state.detail.task.title : '';
     body = state.detail ? (state.user.role === 'admin' ? taskDetail() : myTaskDetail())
@@ -669,6 +689,7 @@ function myTaskDetail() {
 }
 
 async function signOut() {
+  await pushOff().catch(() => {}); // the next person on this phone must not get their messages
   try { await api('logout'); } catch { /* signed out anyway */ }
   state.prefill = null; state.openTask = 0;
   try { localStorage.removeItem('dp.snapshot'); } catch { /* blocked */ } // the owner's projects copy (changes not sent yet are kept)
@@ -704,6 +725,7 @@ function loginScreen() {
         // straight to your projects, unless a Give to team / task link is waiting
         if (out.user.owner && ready && !teamWanted && !state.prefill && !state.openTask && await toProjects()) return;
         flushOutbox();
+        if (ready) syncPush();
         if (ready && state.prefill && out.user.role === 'admin') { go('give'); return; }
         if (ready && state.openTask) { const id = state.openTask; state.openTask = 0; go('task:' + id); return; }
         render();
@@ -1286,6 +1308,8 @@ function settingsScreen() {
 
 /** From Daily Projects: worktask.in/#new={"title":…,"project":…,"projectRef":…,"stepRef":…} opens "Give a task" filled in. */
 function takePrefill() {
+  const o = /^#open=(\d+)$/.exec(location.hash); // from a phone notification: open this task here
+  if (o) { state.openTask = Number(o[1]); state.fromProjects = false; history.replaceState(null, '', location.pathname + location.search); return; }
   const m = /^#task=(\d+)$/.exec(location.hash); // from Daily Projects: open this team task
   state.fromProjects = !!m || location.hash.startsWith('#new='); // Back / Cancel return to the projects
   if (m) { state.openTask = Number(m[1]); history.replaceState(null, '', location.pathname + location.search); return; }
@@ -1308,6 +1332,7 @@ async function start() {
     return;
   }
   await loadOutbox();
+  if (!state.user.mustChange) syncPush();
   // the owner opens the app on their projects; worktask.in/?team shows the Team pages
   const teamWanted = new URLSearchParams(location.search).has('team');
   if (state.user.owner && !state.user.mustChange && !teamWanted && !state.prefill && !state.openTask && await toProjects()) return;
@@ -1322,7 +1347,7 @@ async function start() {
 let liveBusy = false;
 const listOf = (d) => [...((d && d.tasks) || []), ...((d && d.other) || []), ...((d && d.suggestions) || [])];
 /** Every 20 seconds while the app is open: anything new? New tasks get a "New" mark and a message at the bottom. */
-async function liveCheck() {
+async function liveCheck(quiet = false) {
   if (liveBusy || !state.user || state.user.mustChange || document.visibilityState !== 'visible' || state.offline || state.busy) return;
   if (state.view !== 'today' && state.view !== 'tasks') return;
   const admin = state.user.role === 'admin';
@@ -1338,7 +1363,7 @@ async function liveCheck() {
     const had = new Set(listOf(state.data).map((t) => t.id));
     const fresh = state.data ? listOf(out).filter((t) => !had.has(t.id)) : [];
     for (const t of fresh) state.newIds.add(t.id);
-    if (fresh.length) toast(fresh.length === 1 ? `📥 New task: ${fresh[0].title}` : `📥 ${fresh.length} new tasks`, 7000);
+    if (!quiet && Date.now() - (state.pushAt || 0) > 30000) tellNews(fresh, out, state.data); // a notification just said it: not twice
     const a = document.activeElement;
     if (a && /^(TEXTAREA|INPUT|SELECT)$/.test(a.tagName) && document.getElementById('app').contains(a)) { state.reloadLater = true; return; } // typing: show it after
     state.data = out;
@@ -1347,8 +1372,133 @@ async function liveCheck() {
     if (state.sel && state.sel.startsWith('task:')) loadDetail(); // new messages on the open task too
   } catch { /* try again next time */ } finally { liveBusy = false; }
 }
-setInterval(liveCheck, 20000);
+setInterval(() => liveCheck(), 20000);
 window.addEventListener('focus', () => liveCheck());
+
+/** What is new since the last look, as the coloured bar: new tasks / a project / new steps (blue), or the team's updates (green). */
+function tellNews(fresh, out, before) {
+  if (fresh.length) {
+    const steps = fresh.filter((t) => t.projectRef && t.seq !== null && t.seq !== undefined);
+    const one = steps.length === fresh.length && new Set(steps.map((t) => t.projectRef)).size === 1;
+    const names = fresh.map((t) => t.title).slice(0, 3).join(' · ');
+    if (one) {
+      const p = steps[0].project || 'a project';
+      const had = listOf(before).some((t) => t.projectRef === steps[0].projectRef);
+      notice('task', had ? (steps.length === 1 ? `➕ New step in ${p}` : `➕ ${steps.length} new steps in ${p}`) : `📁 New project for you: ${p}`, names, () => openDetail('task:' + steps[0].id));
+    } else notice('task', fresh.length === 1 ? '📥 New task for you' : `📥 ${fresh.length} new tasks`, names, () => openDetail('task:' + fresh[0].id));
+    return;
+  }
+  if (state.user.role !== 'admin' || !before) return;
+  const was = new Map(listOf(before).map((t) => [t.id, t.today ? t.today.at : null]));
+  const sent = listOf(out).filter((t) => t.today && was.has(t.id) && was.get(t.id) !== t.today.at && t.today.byId !== state.user.id);
+  if (!sent.length) return;
+  const t = sent[0], u = t.today;
+  const head = sent.length > 1 ? `✓ ${sent.length} new updates` : u.state === 'stuck' ? `⚠️ ${u.by} is stuck` : u.state === 'finished' ? `✅ ${u.by} finished a task` : `✓ ${u.by} sent an update`;
+  notice(u.state === 'stuck' && sent.length === 1 ? 'stuck' : 'update', head, `${t.title}: ${u.note}`, () => openDetail('task:' + t.id));
+}
+
+// ---------------------------------------------------------------- phone notifications (Web Push)
+
+const pushOk = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+const isIOS = () => /iPhone|iPad|iPod/.test(navigator.userAgent);
+/** 'on' | 'default' (not asked yet) | 'denied' (blocked) | 'granted' (allowed, not linked yet) | 'ios' (add to Home Screen first) | 'no' */
+function pushState() {
+  if (!pushOk()) return isIOS() ? 'ios' : 'no';
+  if (Notification.permission === 'granted') return state.pushOn ? 'on' : 'granted';
+  return Notification.permission;
+}
+const fromB64u = (s) => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((s.length + 3) % 4)), (c) => c.charCodeAt(0));
+const toB64u = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+
+/** Link this phone to the signed-in person on the server (asks nothing: permission was given before). */
+async function subscribePush() {
+  const reg = await Promise.race([navigator.serviceWorker.ready, new Promise((_, no) => setTimeout(() => no(new Error('The app is still loading. Try again in a moment.')), 8000))]);
+  const { key } = await api('push.key');
+  let sub = await reg.pushManager.getSubscription();
+  if (sub && sub.options && sub.options.applicationServerKey && toB64u(sub.options.applicationServerKey) !== key) { await sub.unsubscribe(); sub = null; }
+  if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: fromB64u(key) });
+  await api('push.subscribe', sub.toJSON());
+  state.pushOn = true;
+}
+async function syncPush() {
+  if (!pushOk() || Notification.permission !== 'granted' || !state.user) return;
+  try { await subscribePush(); render(); } catch { /* offline: next time */ }
+}
+async function turnOnPush() {
+  if (!pushOk()) return;
+  const p = await Notification.requestPermission();
+  if (p !== 'granted') { render(); if (p === 'denied') openDetail('notify'); return; }
+  try {
+    await subscribePush();
+    notice('task', '🔔 Notifications are on', 'New tasks, new project steps and messages will come to this phone, like email.');
+  } catch (e) { toast('Could not turn on notifications: ' + e.message, 6000); }
+  render();
+}
+async function pushOff() {
+  if (!pushOk()) return;
+  const reg = await navigator.serviceWorker.getRegistration();
+  const sub = reg && await reg.pushManager.getSubscription();
+  if (sub) { await api('push.unsubscribe', { endpoint: sub.endpoint }).catch(() => {}); await sub.unsubscribe().catch(() => {}); }
+  state.pushOn = false;
+}
+
+/** At the top of the list, once: "turn on notifications". */
+function pushBanner() {
+  const s = pushState();
+  if (s !== 'default' && s !== 'granted') return null;
+  try { if (Number(localStorage.getItem('wt.pushLater') || 0) > Date.now()) return null; } catch { /* blocked */ }
+  return el('div', { class: 'push-banner' },
+    el('span', null, '🔔 Get a message on this phone when a new task or update comes — like email.'),
+    el('span', { class: 'row' },
+      el('button', { class: 'primary', onClick: () => turnOnPush() }, 'Turn on'),
+      el('button', { class: 'link', onClick: () => { try { localStorage.setItem('wt.pushLater', String(Date.now() + 3 * 86400000)); } catch { /* blocked */ } render(); } }, 'Later')));
+}
+
+function notifyPage() {
+  const s = pushState(), admin = state.user.role === 'admin';
+  const what = admin
+    ? ['An update from your team (and when someone is Stuck or Finished)', 'A message or a suggestion from your team']
+    : ['A new task, or a whole project given to you', 'A new step added to your project', 'A message from your manager'];
+  const parts = [el('p', null, 'You get a message on this phone, like new email, for:'), el('ul', null, what.map((w) => el('li', null, w)))];
+  if (s === 'on') {
+    parts.push(el('p', { class: 'ok' }, '✓ On for this phone.'), el('div', { class: 'row' },
+      el('button', { onClick: async () => { try { await api('push.test'); toast('🔔 Test sent. It comes in a few seconds.'); } catch (e) { toast(e.message, 5000); } } }, 'Send me a test'),
+      el('button', { onClick: async () => { await pushOff(); render(); toast('Notifications are off for this phone.'); } }, 'Turn off')));
+  } else if (s === 'default' || s === 'granted') {
+    parts.push(el('button', { class: 'primary', onClick: () => turnOnPush() }, '🔔 Turn on notifications'));
+  } else if (s === 'denied') {
+    parts.push(el('p', { class: 'warn' }, 'Notifications are blocked for Work Task on this phone. To allow them:'),
+      el('ol', null,
+        el('li', null, 'Installed app: press and hold the Work Task icon → App info → Notifications → turn on.'),
+        el('li', null, 'In Chrome: tap ⋮ → Settings → Site settings → Notifications → worktask.in → Allow.'),
+        el('li', null, 'Come back here and open this page again.')));
+  } else if (s === 'ios') {
+    parts.push(el('p', { class: 'warn' }, 'On iPhone, notifications work only from the Home Screen app:'),
+      el('ol', null,
+        el('li', null, 'Open worktask.in in Safari.'),
+        el('li', null, 'Tap Share → Add to Home Screen.'),
+        el('li', null, 'Open Work Task from the Home Screen and turn notifications on here.')));
+  }
+  return el('div', { class: 'card stack' }, parts);
+}
+
+// a notification arrived while the app is open, or one was tapped
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.addEventListener('message', (e) => {
+    const d = e.data || {};
+    if (!state.user || state.user.mustChange) return;
+    if (d.type === 'push') {
+      const m = d.msg || {}, id = /#open=(\d+)/.exec(m.url || '');
+      state.pushAt = Date.now();
+      if (document.visibilityState === 'visible') notice(m.kind, m.title || 'Work Task', m.body || '', id ? () => openDetail('task:' + id[1]) : () => go('today'));
+      liveCheck(true);
+      if (state.sel && state.sel.startsWith('task:')) loadDetail();
+    } else if (d.type === 'open') {
+      const id = /^#open=(\d+)$/.exec(d.hash || '');
+      if (id) openDetail('task:' + id[1]); else go('today');
+    }
+  });
+}
 
 /** The number on the app icon (Android, installed app): tasks still to send today. */
 function setBadge() {
@@ -1376,4 +1526,4 @@ document.addEventListener('visibilitychange', () => {
 });
 start();
 // Installable as an app (Android: Chrome menu → Install app); keeps the screens for fast opening.
-if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
+if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === '127.0.0.1')) navigator.serviceWorker.register('sw.js').catch(() => {});

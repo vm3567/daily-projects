@@ -3,6 +3,8 @@
 // every manager-only action checks require_admin() first.
 declare(strict_types=1);
 
+require_once __DIR__ . '/push.php';
+
 const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
 function txt($v, int $max, bool $required = false, string $what = 'This'): string {
@@ -49,10 +51,11 @@ function update_out(?array $u, array $photos = []): ?array {
 }
 
 /** Hand open tasks to another person: history stays, and both see a note on the task. Returns how many moved. */
-function move_tasks(array $me, array $tasks, int $toId): int {
+function move_tasks(array $me, array $tasks, int $toId, bool $tell = true): int {
   $to = one("SELECT id, name, active FROM users WHERE id = ?", [$toId]);
   if (!$to || !$to['active']) throw new ApiError('Choose who takes it over.');
   $n = 0;
+  $titles = [];
   foreach ($tasks as $t) {
     if ((int)$t['assignee_id'] === $toId || $t['status'] !== 'open') continue;
     q('UPDATE tasks SET assignee_id = ?, updated_at = ? WHERE id = ?', [$toId, now(), $t['id']]);
@@ -62,7 +65,9 @@ function move_tasks(array $me, array $tasks, int $toId): int {
     q('INSERT INTO comments (task_id, user_id, text, at) VALUES (?, ?, ?, ?)', [$t['id'], $me['id'], '↔ Moved from ' . user_name((int)$t['assignee_id']) . ' to ' . $to['name'] . '.', now()]);
     audit($me['id'], 'task_moved', "#{$t['id']} → {$to['name']}");
     $n++;
+    $titles[] = $t['title'];
   }
+  if ($n && $tell) notify([$toId], 'task', $n === 1 ? '↔ A task was moved to you' : "↔ $n tasks were moved to you", implode(' · ', array_slice($titles, 0, 3)), '/');
   return $n;
 }
 
@@ -174,6 +179,8 @@ function handle(string $a, array $in): array {
   $day = today();
   $dp = dp_handle($a, $in, $me);
   if ($dp !== null) return $dp;
+  $push = push_handle($a, $in, $me);
+  if ($push !== null) return $push;
   switch ($a) {
     case 'me':
       return ['user' => public_user($me), 'today' => $day];
@@ -236,7 +243,13 @@ function handle(string $a, array $in): array {
         $n = one('SELECT COUNT(*) AS n FROM photos p JOIN updates u ON u.id = p.update_id WHERE u.task_id = ? AND u.day = ? AND u.user_id = ? AND p.created_at >= u.created_at', [$t['id'], $uday, $me['id']]);
         if (!(int)$n['n']) throw new ApiError('A photo is needed to finish this task. Add a photo, then tap Finished.');
       }
-      $old = one('SELECT user_id, note FROM updates WHERE task_id = ? AND day = ?', [$t['id'], $uday]);
+      $old = one('SELECT user_id, note, state FROM updates WHERE task_id = ? AND day = ?', [$t['id'], $uday]);
+      // the manager hears of the first update of the day, and of Stuck / Finished (not of every small fix)
+      if (!$old || ($state !== $old['state'] && $state !== 'progress')) {
+        notify(admin_ids(), $state === 'stuck' ? 'stuck' : 'update',
+          $state === 'stuck' ? "⚠️ {$me['name']} is stuck" : ($state === 'finished' ? "✅ {$me['name']} finished a task" : "✓ {$me['name']} sent an update"),
+          $t['title'] . ': ' . $note, '/#open=' . $t['id'], 'u' . $t['id']);
+      }
       if ($old && (int)$old['user_id'] !== $me['id']) {
         // the task was moved: the person before already wrote for this day. Keep their words above;
         // their photos stay on the row but are marked as older than this take-over (created_at)
@@ -284,6 +297,8 @@ function handle(string $a, array $in): array {
       $cid = client_id($in['clientId'] ?? null);
       if (!$cid || !one('SELECT id FROM comments WHERE user_id = ? AND client_id = ?', [$me['id'], $cid])) {
         q('INSERT INTO comments (task_id, user_id, text, at, client_id) VALUES (?, ?, ?, ?, ?)', [$t['id'], $me['id'], $text, now(), $cid]);
+        // the manager writes: the person doing it hears; the person writes: the managers hear
+        notify($me['role'] === 'admin' ? [(int)$t['assignee_id']] : admin_ids(), 'msg', "💬 {$me['name']} · {$t['title']}", $text, '/#open=' . $t['id'], 'm' . $t['id']);
       }
       mark_read([(int)$t['id']], $me['id']);
       return ['comments' => comments_of((int)$t['id'])];
@@ -296,6 +311,7 @@ function handle(string $a, array $in): array {
         [$title, txt($in['details'] ?? '', 4000), $me['id'], $me['id'], $kind, $kind === 'once' ? date_or_null($in['dueDate'] ?? null) : null, $day, now(), now()]);
       $id = (int)db()->lastInsertId();
       audit($me['id'], 'task_suggested', "#$id $title");
+      notify(admin_ids(), 'msg', "💡 {$me['name']} suggests a task", $title, '/#open=' . $id);
       return ['task' => tasks_out([own_task($me, $id)], $day)[0]];
     }
   }
@@ -364,6 +380,7 @@ function handle(string $a, array $in): array {
         $kind === 'once' ? (array_key_exists('dueDate', $in) ? date_or_null($in['dueDate']) : $t['due_date']) : null, $day, now(), $t['id']]);
       if (trim((string)($in['note'] ?? '')) !== '') q('INSERT INTO comments (task_id, user_id, text, at) VALUES (?, ?, ?, ?)', [$t['id'], $me['id'], txt($in['note'], 2000), now()]);
       audit($me['id'], 'task_approved', "#{$t['id']} {$t['title']}");
+      notify([(int)$t['assignee_id']], 'task', '✅ Your suggestion is now a task', $t['title'], '/#open=' . $t['id'], 't' . $t['id']);
       return ['task' => tasks_out([own_task($me, (int)$t['id'])], $day)[0]];
     }
     case 'task.decline': {
@@ -442,12 +459,14 @@ function handle(string $a, array $in): array {
         q('UPDATE tasks SET title=?, details=?, assignee_id=?, repeat_kind=?, skip_sunday=?, weekday=?, due_date=?, project=?, project_ref=?, step_ref=?, updated_at=? WHERE id=?', [...$vals, $id]);
         q('UPDATE tasks SET needs_photo = ? WHERE id = ?', [empty($in['needsPhoto']) ? 0 : 1, $id]);
         audit($me['id'], 'task_edit', "#$id $title");
+        if ((int)$old['assignee_id'] !== (int)$assignee['id'] && $old['status'] === 'open') notify([(int)$assignee['id']], 'task', '📥 New task for you', $title, '/#open=' . $id, 't' . $id);
       } else {
         q('INSERT INTO tasks (title, details, assignee_id, repeat_kind, skip_sunday, weekday, due_date, project, project_ref, step_ref, updated_at, created_by, start_date, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
           [...$vals, $me['id'], $day, now()]);
         $id = (int)db()->lastInsertId();
         q('UPDATE tasks SET needs_photo = ? WHERE id = ?', [empty($in['needsPhoto']) ? 0 : 1, $id]);
         audit($me['id'], 'task_new', "#$id $title");
+        notify([(int)$assignee['id']], 'task', '📥 New task for you', $title . ($vals[7] ? ' · ' . $vals[7] : ''), '/#open=' . $id, 't' . $id);
       }
       return ['task' => tasks_out([own_task($me, $id)], $day)[0]];
     }
@@ -506,6 +525,7 @@ function handle(string $a, array $in): array {
       q('UPDATE users SET active = ? WHERE id = ?', [$on ? 1 : 0, $id]);
       if (!$on) {
         q('DELETE FROM tokens WHERE user_id = ?', [$id]);
+        q('DELETE FROM push_subs WHERE user_id = ?', [$id]); // no more notifications on their phones
         // their suggestions still waiting for a yes: nobody would do them now
         q("UPDATE tasks SET status = 'cancelled', done_at = ?, updated_at = ? WHERE assignee_id = ? AND status = 'suggested'", [now(), now(), $id]);
       }
@@ -543,6 +563,8 @@ function project_sync(array $me, array $in, string $ref, string $day): array {
   $photoFor = fn(int $cur): int => $prev === '' ? max($photo, $cur) : ((int)$prev !== $photo ? $photo : $cur);
   $byStep = [];
   foreach ($open as $t) $byStep[$t['step_ref']] = $t;
+  $hadSome = (bool)array_filter($open, fn($t) => (int)$t['assignee_id'] === $who); // the project was theirs already: only new steps are news
+  $news = []; // steps that are new for this person (made, opened again, or moved to them)
   $steps = array_slice((array)($in['steps'] ?? []), 0, 300);
   $keep = [];
   $skipped = []; // steps finished minutes ago: not made again now (the Daily Projects app tries again later)
@@ -554,7 +576,7 @@ function project_sync(array $me, array $in, string $ref, string $day): array {
     $keep[$stepRef] = true;
     if (isset($byStep[$stepRef])) {
       $t = $byStep[$stepRef];
-      if ((int)$t['assignee_id'] !== $who) move_tasks($me, [$t], $who); // a new person: the move note, and old messages count as read
+      if ((int)$t['assignee_id'] !== $who) { move_tasks($me, [$t], $who, false); $news[] = $title; } // a new person: the move note, and old messages count as read
       // details: only set when the task is made, so what the manager typed in Work Task is never replaced
       $np = $photoFor((int)$t['needs_photo']);
       if ($t['title'] !== $title || (int)$t['seq'] !== $i || ($t['project'] ?? '') !== $name || (int)$t['needs_photo'] !== $np) {
@@ -571,19 +593,27 @@ function project_sync(array $me, array $in, string $ref, string $day): array {
     if (!$single && ($single = one("SELECT * FROM tasks WHERE project_ref = ? AND step_ref = ? AND seq IS NOT NULL AND status = 'cancelled' ORDER BY id DESC LIMIT 1", [$ref, $stepRef]))) {
       q("UPDATE tasks SET status = 'open', done_at = NULL, closed_by = NULL, updated_at = ? WHERE id = ?", [now(), $single['id']]);
       $single['status'] = 'open';
+      $single['reopened'] = true;
     }
     if ($single) {
-      if ((int)$single['assignee_id'] !== $who) move_tasks($me, [$single], $who);
+      if ((int)$single['assignee_id'] !== $who || !empty($single['reopened'])) $news[] = $title;
+      if ((int)$single['assignee_id'] !== $who) move_tasks($me, [$single], $who, false);
       q("UPDATE tasks SET seq = ?, title = ?, details = IF(details IS NULL OR details = '', ?, details), project = ?, project_ref = ?, repeat_kind = ?, needs_photo = ?, updated_at = ? WHERE id = ?", [$i, $title, $details, $name ?: null, $ref, 'once', max($photo, (int)$single['needs_photo']), now(), $single['id']]);
       continue;
     }
     q("INSERT INTO tasks (title, details, assignee_id, created_by, repeat_kind, skip_sunday, weekday, due_date, start_date, project, project_ref, step_ref, status, seq, needs_photo, created_at, updated_at)
        VALUES (?, ?, ?, ?, 'once', 1, NULL, NULL, ?, ?, ?, ?, 'open', ?, ?, ?, ?)",
       [$title, $details, $who, $me['id'], $day, $name ?: null, $ref, $stepRef, $i, $photo, now(), now()]);
+    $news[] = $title;
   }
   // 'cancelled', not 'done': only the person's own Finished means done (so an un-ticked step goes back to them, and is never ticked by itself)
   foreach ($open as $t) if (!isset($keep[$t['step_ref']])) q("UPDATE tasks SET status = 'cancelled', done_at = ?, updated_at = ? WHERE id = ?", [now(), now(), $t['id']]);
   audit($me['id'], 'project_given', "$name → #$who");
+  if ($news) {
+    $n = count($news);
+    notify([$who], 'task', $hadSome ? ($n === 1 ? "➕ New step in $name" : "➕ $n new steps in $name") : "📁 New project for you: $name",
+      $hadSome ? implode(' · ', array_slice($news, 0, 3)) : "$n step" . ($n > 1 ? 's' : '') . '. First: ' . $news[0], '/', 'p' . md5($ref));
+  }
   return ['tasks' => tasks_out(all(TASK_SELECT . " WHERE t.project_ref = ? AND t.seq IS NOT NULL AND t.status = 'open' ORDER BY t.seq", [$ref]), $day), 'skipped' => $skipped];
 }
 
