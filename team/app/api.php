@@ -115,7 +115,7 @@ function tasks_out(array $tasks, string $day): array {
     'status' => $t['status'], 'createdAt' => $t['created_at'], 'doneAt' => $t['done_at'],
     'dueToday' => $t['status'] === 'open' && due_on($t, $day) && !$queued($t),
     'today' => update_out($todays[$t['id']] ?? null, $photos), 'last' => update_out($lasts[$t['id']] ?? null, $photos),
-    'createdBy' => (int)$t['created_by'], 'needsPhoto' => (bool)($t['needs_photo'] ?? 0), 'files' => $files[$t['id']] ?? [],
+    'createdBy' => (int)$t['created_by'], 'fromStaff' => (bool)($t['from_staff'] ?? 0), 'needsPhoto' => (bool)($t['needs_photo'] ?? 0), 'files' => $files[$t['id']] ?? [],
     'messages' => $count[$t['id']] ?? 0, 'unread' => $unread[$t['id']] ?? 0, 'lastMessage' => $lastMsg[$t['id']] ?? null,
     // stuck: the newest update says "Stuck" (and the manager has not answered since)
     'stuck' => (function () use ($t, $todays, $lasts, $answered) {
@@ -303,6 +303,27 @@ function handle(string $a, array $in): array {
       mark_read([(int)$t['id']], $me['id']);
       return ['comments' => comments_of((int)$t['id'])];
     }
+    case 'project.addStep': { // the person adds a step to a project given to them; the owner's Daily Projects then adds it to the project
+      $ref = txt($in['projectRef'] ?? '', 80, true, 'The project');
+      $title = txt($in['title'] ?? '', 300, true, 'The step');
+      $mine = all("SELECT * FROM tasks WHERE project_ref = ? AND seq IS NOT NULL AND status = 'open' AND assignee_id = ? ORDER BY seq", [$ref, $me['id']]);
+      if (!$mine) throw new ApiError('This project is not given to you.', 403);
+      $cid = client_id($in['clientId'] ?? null);
+      $stepRef = 'w' . ($cid ? substr(preg_replace('/[^a-z0-9]/i', '', $cid), 0, 40) : bin2hex(random_bytes(8)));
+      if (!($t = one('SELECT id FROM tasks WHERE step_ref = ? AND created_by = ?', [$stepRef, $me['id']]))) { // sent twice (reply lost): kept once
+        $seq = (int)(one("SELECT MAX(seq) AS m FROM tasks WHERE project_ref = ? AND seq IS NOT NULL AND status = 'open'", [$ref])['m'] ?? 0) + 1;
+        $photo = (int)setting('pp:' . md5($ref), '0');
+        q("INSERT INTO tasks (title, details, assignee_id, created_by, repeat_kind, skip_sunday, weekday, due_date, start_date, project, project_ref, step_ref, status, seq, needs_photo, from_staff, created_at, updated_at)
+           VALUES (?, '', ?, ?, 'once', 1, NULL, NULL, ?, ?, ?, ?, 'open', ?, ?, 1, ?, ?)",
+          [$title, $me['id'], $me['id'], $day, $mine[0]['project'], $ref, $stepRef, $seq, $photo, now(), now()]);
+        $t = ['id' => (int)db()->lastInsertId()];
+        // the project had no steps (it was one task with its name): the steps take its place
+        q("UPDATE tasks SET status = 'cancelled', done_at = ?, updated_at = ? WHERE project_ref = ? AND step_ref = ? AND status = 'open'", [now(), now(), $ref, $ref . ':whole']);
+        audit($me['id'], 'step_added', "{$mine[0]['project']}: $title");
+        notify(admin_ids(), 'update', "➕ {$me['name']} added a step", ($mine[0]['project'] ?: 'Project') . ': ' . $title, '/#open=' . $t['id']);
+      }
+      return ['task' => tasks_out([own_task($me, (int)$t['id'])], $day)[0]];
+    }
     case 'suggest': { // staff: "I think this should be done" — it waits for the manager's yes
       $title = txt($in['title'] ?? '', 300, true, 'The task');
       $kind = in_array($in['repeat'] ?? '', ['daily', 'weekly', 'once'], true) ? $in['repeat'] : 'once';
@@ -432,6 +453,11 @@ function handle(string $a, array $in): array {
           $missing = array_values(array_unique(array_map(fn($t) => $t['assignee']['name'], array_filter($due, fn($t) => !$t['today']))));
           return ['due' => count($due), 'sent' => count(array_filter($due, fn($t) => (bool)$t['today'])), 'notFilled' => $missing];
         })()];
+    }
+    case 'tasks.adopted': { // Daily Projects added these steps (written by the person) to the project: from now on they are normal steps
+      $ids = array_slice(array_map('intval', (array)($in['ids'] ?? [])), 0, 200);
+      if ($ids) q('UPDATE tasks SET from_staff = 0 WHERE id IN (' . implode(',', array_fill(0, count($ids), '?')) . ')', $ids);
+      return [];
     }
     case 'tasks.byRefs': { // for Daily Projects: the team tasks linked to these steps
       $refs = array_slice(array_filter(array_map('strval', (array)($in['stepRefs'] ?? []))), 0, 500);
@@ -567,12 +593,14 @@ function project_sync(array $me, array $in, string $ref, string $day): array {
   $news = []; // steps that are new for this person (made, opened again, or moved to them)
   $steps = array_slice((array)($in['steps'] ?? []), 0, 300);
   $keep = [];
+  $pending = (bool)array_filter($open, fn($t) => (int)($t['from_staff'] ?? 0)); // steps the person added, not yet in the project
   $skipped = []; // steps finished minutes ago: not made again now (the Daily Projects app tries again later)
   foreach (array_values($steps) as $i => $st) {
     $stepRef = txt($st['stepRef'] ?? '', 80);
     $title = txt($st['title'] ?? '', 300);
     $details = txt($st['details'] ?? '', 4000);
     if ($stepRef === '' || $title === '') continue;
+    if ($stepRef === "$ref:whole" && $pending) continue; // the person already added steps (not in the project yet): no "whole project" task
     $keep[$stepRef] = true;
     if (isset($byStep[$stepRef])) {
       $t = $byStep[$stepRef];
@@ -607,7 +635,9 @@ function project_sync(array $me, array $in, string $ref, string $day): array {
     $news[] = $title;
   }
   // 'cancelled', not 'done': only the person's own Finished means done (so an un-ticked step goes back to them, and is never ticked by itself)
-  foreach ($open as $t) if (!isset($keep[$t['step_ref']])) q("UPDATE tasks SET status = 'cancelled', done_at = ?, updated_at = ? WHERE id = ?", [now(), now(), $t['id']]);
+  $n = count($steps); // the person's own new steps stay at the end, after the project's steps
+  foreach ($open as $t) if (!isset($keep[$t['step_ref']]) && (int)($t['from_staff'] ?? 0)) q('UPDATE tasks SET seq = ?, project = ?, assignee_id = ? WHERE id = ?', [$n++, $name ?: null, $who, $t['id']]);
+  foreach ($open as $t) if (!isset($keep[$t['step_ref']]) && !(int)($t['from_staff'] ?? 0)) q("UPDATE tasks SET status = 'cancelled', done_at = ?, updated_at = ? WHERE id = ?", [now(), now(), $t['id']]);
   audit($me['id'], 'project_given', "$name → #$who");
   if ($news) {
     $n = count($news);

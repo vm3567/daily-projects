@@ -203,6 +203,8 @@ function migrate(PDO $pdo): void {
       last_ok DATETIME NULL,
       INDEX (user_id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+    // v8: a step the person added to a project given to them, until the owner's Daily Projects has put it in the project
+    "ALTER TABLE tasks ADD COLUMN from_staff TINYINT(1) NOT NULL DEFAULT 0",
   ];
   $pdo->exec($steps[0]);
   $done = (int)($pdo->query("SELECT v FROM settings WHERE k = 'schema'")->fetchColumn() ?: 0);

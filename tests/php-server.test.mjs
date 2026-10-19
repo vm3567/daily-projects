@@ -242,6 +242,28 @@ test('server: phone notifications go to the right person, once', { skip }, async
   assert.equal((await call('push.test', {}, tok.suresh)).s, 400);
 });
 
+test('server: the person adds steps to a project given to them', { skip }, async () => {
+  const before = readFileSync(join(dir, 'push.log'), 'utf8');
+  await call('project.sync', { projectRef: 'pw', project: 'Servo', assigneeId: id.suresh, steps: [{ stepRef: 'pw:whole', title: 'Servo' }] }, tok.boss);
+  const open = async () => [...(await call('my.today', {}, tok.suresh)).tasks, ...(await call('my.today', {}, tok.suresh)).other].filter((t) => t.projectRef === 'pw' && t.status === 'open');
+  assert.deepEqual((await open()).map((t) => t.title), ['Servo'], 'no steps yet: the whole project as one task');
+  assert.equal((await call('project.addStep', { projectRef: 'pw', title: 'Nope' }, tok.anita)).s, 403, 'only the person it was given to');
+  const a1 = await call('project.addStep', { projectRef: 'pw', title: 'Order spare', clientId: 'c1234567-aa' }, tok.suresh);
+  const a2 = await call('project.addStep', { projectRef: 'pw', title: 'Order spare', clientId: 'c1234567-aa' }, tok.suresh);
+  assert.ok(a1.ok && a1.task.id === a2.task.id && a1.task.fromStaff, 'sent twice = kept once');
+  assert.deepEqual((await open()).map((t) => t.title), ['Order spare'], 'the steps take the place of the whole-project task');
+  assert.match(readFileSync(join(dir, 'push.log'), 'utf8').slice(before.length), /➕ Suresh added a step/);
+  await call('project.sync', { projectRef: 'pw', project: 'Servo', assigneeId: id.suresh, steps: [{ stepRef: 'pw:whole', title: 'Servo' }] }, tok.boss);
+  assert.deepEqual((await open()).map((t) => t.title), ['Order spare'], 'before the owner\'s app has it, a sync keeps it (and no whole task again)');
+  const linked = (await call('tasks.linked', {}, tok.boss)).tasks.find((t) => t.id === a1.task.id);
+  assert.ok(linked && linked.fromStaff, 'Daily Projects sees it as a step to add');
+  assert.ok((await call('tasks.adopted', { ids: [a1.task.id] }, tok.boss)).ok);
+  await call('project.sync', { projectRef: 'pw', project: 'Servo', assigneeId: id.suresh, steps: [{ stepRef: a1.task.stepRef, title: 'Order spare' }, { stepRef: 'pw2', title: 'Fit it' }] }, tok.boss);
+  assert.deepEqual((await open()).map((t) => t.title), ['Order spare', 'Fit it']);
+  await call('project.sync', { projectRef: 'pw', project: 'Servo', assigneeId: id.suresh, steps: [{ stepRef: 'pw2', title: 'Fit it' }] }, tok.boss);
+  assert.deepEqual((await open()).map((t) => t.title), ['Fit it'], 'once in the project, deleting it there removes it');
+});
+
 test('server: Daily Projects storage (import, owner-only, versions, clashes)', { skip }, async () => {
   const src = join(dir, 'import'); mkdirSync(join(src, 'history'), { recursive: true });
   writeFileSync(join(src, 'data.json'), JSON.stringify({ projects: [{ id: 'x1', name: 'Kiln' }] }));

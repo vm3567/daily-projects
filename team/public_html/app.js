@@ -519,6 +519,11 @@ function menuColumn() {
       item('Coming next', state.section === 'next', () => { state.section = 'next'; go('today'); }, d && d.other.length ? d.other.length : null),
       item('My suggestions', state.section === 'sugg', () => { state.section = 'sugg'; go('today'); }, d && (d.suggestions || []).length ? d.suggestions.length : null)),
       el('button', { class: 'menu-cta', onClick: () => openDetail('suggest') }, '💡 Suggest a task'));
+    const projs = myProjects();
+    if (projs.length) {
+      parts.push(el('div', { class: 'menu-head' }, 'My projects'), el('ul', { class: 'menu-list' }, projs.map((pr) =>
+        item(`📁 ${pr.name}`, state.sel === 'project:' + pr.ref, () => openDetail('project:' + pr.ref), pr.real.length || null))));
+    }
   }
   return el('div', { class: 'menu-inner' },
     el('div', { class: 'brand' }, el('img', { src: 'icons/icon-192.png', alt: '', width: 26, height: 26 }), 'Work Task'),
@@ -581,8 +586,10 @@ function myList() {
       el('ul', { class: 'list-body' }, list.map((t) => taskRow(t, t.status === 'suggested' ? 'Waiting for a yes' : 'Not now' + (t.lastMessage ? ` — ${t.lastMessage.text}` : ''), t.status === 'suggested' ? 'orange' : 'grey'))),
       list.length ? null : el('p', { class: 'list-note' }, 'No suggestions yet. Tap 💡 Suggest a task in the menu.')];
   }
+  const projs = myProjects();
   return [
     d.stale ? el('div', { class: 'list-banner' }, `📴 Saved copy from ${fmtDay(d.today)} — today's updates are not shown yet.`) : null,
+    projs.length ? [sec('📁 My projects'), el('ul', { class: 'list-body' }, projs.map(projectRow))] : null,
     sec(`${fmtDay(d.today)} · ${sent} of ${d.tasks.length} sent`, el('span', { class: 'tag' }, `by ${d.fillBy}`)),
     el('ul', { class: 'list-body' }, d.tasks.map((t) => {
       const waiting = outboxFor(t);
@@ -593,6 +600,68 @@ function myList() {
     })),
     d.tasks.length ? null : el('p', { class: 'list-note' }, 'No tasks for today. 🎉'),
   ];
+}
+
+/** Staff: the projects given to me, each with its open steps in order (the current one first). */
+function myProjects() {
+  const d = state.data;
+  if (!d || !state.user || state.user.role === 'admin') return [];
+  const by = new Map();
+  for (const t of [...(d.tasks || []), ...(d.other || [])]) {
+    if (!t.projectRef || t.seq === null || t.seq === undefined || t.status !== 'open') continue;
+    if (!by.has(t.projectRef)) by.set(t.projectRef, { ref: t.projectRef, name: t.project || 'Project', steps: [] });
+    by.get(t.projectRef).steps.push(t);
+  }
+  return [...by.values()].map((pr) => {
+    pr.steps.sort((a, b) => a.seq - b.seq || a.id - b.id);
+    pr.real = pr.steps.filter((t) => !t.stepRef.endsWith(':whole')); // the "whole project" task when there are no steps yet
+    pr.current = pr.steps.find((t) => !t.queued) || pr.steps[0];
+    return pr;
+  }).sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function projectRow(pr) {
+  const c = pr.current, n = pr.real.length;
+  const sub = !n ? 'No steps yet — add your steps' : `Step ${pr.real.indexOf(c) + 1} of ${n}: ${c.title}${c.today ? ' · ✓ sent today' : ''}`;
+  return el('li', { class: 'prow' + (state.sel === 'project:' + pr.ref ? ' current' : '') },
+    el('button', { class: 'prow-btn', onClick: () => openDetail('project:' + pr.ref) },
+      el('span', { class: 'dot ' + (c && c.today ? 'green' : 'orange') }),
+      el('span', { class: 'prow-text' }, el('span', { class: 'prow-name' }, '📁 ' + pr.name), el('span', { class: 'prow-next' }, sub))));
+}
+
+/** Staff: one project — its steps in order, today's update on the current one, and adding a step. */
+function projectPage(pr) {
+  if (!pr) return el('p', { class: 'muted' }, state.data ? 'This project is not on your list any more.' : 'Loading…');
+  const sent = (t) => t.today ? `✓ Sent ${fmtTime(t.today.at)}` : 'Send today\'s update';
+  return [
+    el('p', { class: 'muted' }, pr.real.length
+      ? 'Do the steps in order. Every day, open the current step and send what you did. Found more work? Add a step below.'
+      : 'No steps yet. Add the steps you will do, in order. Until then, send your daily update on the whole project.'),
+    !pr.real.length ? el('ul', { class: 'list-body' }, pr.steps.map((t) => taskRow(t, sent(t), t.today ? 'green' : 'orange'))) : null,
+    pr.real.length ? el('ol', { class: 'list-body steps-list' }, pr.real.map((t, i) => taskRow(t,
+      t === pr.current ? `Step ${i + 1} · current · ${sent(t)}` : `Step ${i + 1} · next${t.fromStaff ? ' · added by you' : ''}`,
+      t === pr.current ? (t.today ? 'green' : 'orange') : 'grey'))) : null,
+    addStepForm(pr.ref),
+  ];
+}
+
+function addStepForm(ref) {
+  const inp = el('input', { placeholder: 'e.g. Order the spare servo motor', maxlength: '300', 'aria-label': 'New step' });
+  const btn = el('button', { class: 'primary', type: 'submit' }, '+ Add step');
+  return el('form', {
+    class: 'card stack',
+    onSubmit: async (e) => {
+      e.preventDefault();
+      const title = inp.value.trim();
+      if (!title) { inp.focus(); return; }
+      btn.disabled = true;
+      try {
+        await api('project.addStep', { projectRef: ref, title, clientId: newClientId() });
+        toast('➕ Step added. Your manager sees it in the project too.');
+        await loadList();
+      } catch (ex) { toast(ex.message, 6000); btn.disabled = false; }
+    },
+  }, el('label', null, 'Add a step', inp), btn);
 }
 
 /** Manager: what needs you, then each person's tasks today (the menu can show one person only). */
@@ -662,6 +731,7 @@ function detailColumn() {
   else if (sel === 'suggest') { title = '💡 Suggest a task'; body = suggestForm(); }
   else if (sel === 'password') { title = 'Change password'; body = passwordScreen(); }
   else if (sel === 'notify') { title = '🔔 Notifications'; body = notifyPage(); }
+  else if (sel.startsWith('project:')) { const pr = myProjects().find((x) => x.ref === sel.slice(8)); title = pr ? '📁 ' + pr.name : 'Project'; body = projectPage(pr); }
   else if (sel.startsWith('task:')) {
     title = state.detail && state.detail.task ? state.detail.task.title : '';
     body = state.detail ? (state.user.role === 'admin' ? taskDetail() : myTaskDetail())

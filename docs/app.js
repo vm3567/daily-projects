@@ -2674,6 +2674,20 @@ async function syncGivenNow(gen) {
 }
 
 /** A team task given from a step was finished: tick the step (once), with the person's last words as a work note. */
+/** Steps the person added on Work Task: put into the project (same id), so from now on they are the project's own steps. */
+function adoptStaffSteps(tasks) {
+  if (!store || !store.view || !store.canEdit()) return;
+  const adopted = [];
+  for (const t of tasks) {
+    if (!t.fromStaff || t.status === 'cancelled') continue;
+    const p = store.view.data.projects.find((x) => x.id === t.projectRef);
+    if (!p) continue; // not here yet (data still loading): next time
+    if (!p.steps.some((st) => st.id === t.stepRef)) actMany(p.id, [['addStep', { projectId: p.id, stepId: t.stepRef, text: t.title }]], `👥 ${t.assignee.name} added a step: ${t.title}`);
+    adopted.push(t.id);
+  }
+  if (adopted.length) teamApi('tasks.adopted', { ids: adopted }).catch(() => { /* asked again next time; adding twice is ignored */ });
+}
+
 function tickFinishedTeamTasks(tasks) {
   if (!store || !store.view || !store.canEdit()) return;
   let done = [];
@@ -2734,6 +2748,7 @@ async function loadTeamOnce() {
     team.late = out.late;
     if (out.alerts) team.alerts = out.alerts;
     if (out.summary) team.summary = out.summary;
+    adoptStaffSteps(out.tasks);
     tickFinishedTeamTasks(out.tasks);
     markTeamWork(out.tasks);
     await syncGivenProjects(gen);
