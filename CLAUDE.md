@@ -11,6 +11,10 @@ The owner asked for this so a later update never breaks what already works.
 - Projects app logic (docs/ops.js, docs/rules.js): `tests/core.test.mjs`. Its screens: `tests/screens.test.mjs`.
 - Team app (team/public_html/app.js) logic: `tests/team-app.test.mjs`.
 - Run `npm test` before every commit. Never commit with a failing check.
+- A commit guard (.git/hooks/pre-commit) refuses a commit that changes app code with no test change,
+  and anything that looks like a key or token. Never bypass it (no `--no-verify`).
+- This applies to every fix from code reviews (including the ultracode review loop) and to every helper agent:
+  tell each helper to add the check with its fix.
 - Never delete or weaken an existing check to make a change pass. If a check's rule really changed
   (the owner asked for different behaviour), update it and say so in the commit message.
 
