@@ -310,6 +310,10 @@ test('day score and streak', async () => {
   applyOp(s, op('addWorkNote', { projectId: 'p1', noteId: 'n', text: 'x' }, '2026-10-02'));
   assert.deepEqual(dayScore(s.data, s.history, '2026-10-02'), { green: 1, total: 2 });
   applyOp(s, op('okForToday', { projectId: 'p2' }, '2026-10-02'));
+  assert.deepEqual(dayScore(s.data, s.history, '2026-10-02'), { green: 1, total: 2 }, '"OK for today" (old changes) is not work, as on the dot');
+  applyOp(s, op('setProjectField', { projectId: 'p2', field: 'priority', value: 'high' }, '2026-10-02'));
+  assert.deepEqual(dayScore(s.data, s.history, '2026-10-02'), { green: 1, total: 2 }, 'an edit is not work either');
+  applyOp(s, op('addWorkNote', { projectId: 'p2', noteId: 'n2', text: 'y' }, '2026-10-02'));
   assert.deepEqual(dayScore(s.data, s.history, '2026-10-02'), { green: 2, total: 2 });
   const scores = { '2026-10-07': { green: 2, total: 2 }, '2026-10-08': { green: 3, total: 3 }, '2026-10-06': { green: 1, total: 3 } };
   assert.equal(greenStreak(scores, { green: 1, total: 3 }, '2026-10-09'), 2);

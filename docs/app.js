@@ -2420,6 +2420,7 @@ function onKey(e) {
     if (!viewer.hidden) { closeSheet(); return; }
     if (ui.showKeys) { ui.showKeys = false; render(); return; }
     if (ui.rowMenu) { ui.rowMenu = null; render(); return; }
+    if (ui.projMenu || ui.giveOpen || ui.snoozeOpen) { ui.projMenu = null; ui.giveOpen = null; ui.snoozeOpen = null; render(); return; }
     if (ui.capture) { ui.capture = false; render(); return; }
     if (isTyping(document.activeElement)) { document.activeElement.blur(); return; }
     if (ui.round) { if (ui.round.mode) { ui.round.mode = null; render(); } else endRound(); return; }
@@ -2513,6 +2514,8 @@ function sendNow() {
 
 /** Team tasks given from a step, by step id, so each step can show the person's latest update. */
 const team = { byStep: new Map(), fillBy: '18:00', late: false, at: 0, gen: 0, syncErr: {}, busy: new Set(), loading: false, again: false, alerts: { stuck: 0, unread: 0, suggestions: 0 }, messages: [] };
+const ADOPTED_KEY = 'dp.teamAdopted'; // staff steps this device put into a project (deleted later = stays deleted)
+const adoptedHere = new Set((() => { try { return JSON.parse(localStorage.getItem('dp.teamAdopted') || '[]'); } catch { return []; } })());
 const TICKED_KEY = 'dp.teamTicked'; // team tasks already ticked on this device (so an un-tick by hand stays)
 
 /** 👥 in the top bar, with a red number when the team needs you (stuck, new messages, suggestions). */
@@ -2612,12 +2615,13 @@ const daily = new Map(); // projectId -> { at, days, data, loading }
 function teamDaily(p, days) {
   if (!onServer) return null;
   let e = daily.get(p.id);
-  const want = days || (e ? e.days : 30);
+  const want = Math.max(days || 0, e ? e.days : 30, (e && e.wantDays) || 0);
+  if (e && e.loading && days) e.wantDays = Math.max(e.wantDays || 0, days); // asked while loading: fetched right after
   if (!e || (!e.loading && (Date.now() - e.at > 20000 || want !== e.days))) {
-    e = { ...(e || {}), days: want, loading: true, at: Date.now() };
+    e = { ...(e || {}), days: want, loading: true, at: Date.now(), wantDays: 0 };
     daily.set(p.id, e);
     teamApi('project.updates', { projectRef: p.id, days: want })
-      .then((out) => { e.data = out; e.loading = false; e.at = Date.now(); render(); })
+      .then((out) => { e.data = out; e.loading = false; e.at = e.wantDays > e.days ? 0 : Date.now(); render(); })
       .catch(() => { e.loading = false; });
   }
   return e;
@@ -2656,7 +2660,8 @@ async function giveProject(p, person, needsPhoto = !!ui.givePhoto) {
   try {
     await withSyncLock(async () => {
       const steps = person ? projectSteps(p) : [];
-      const out = await teamApi('project.sync', { projectRef: p.id, project: p.name, assigneeId: person ? person.id : 0, steps, needsPhoto, reason: person ? '' : 'taken' });
+      // (the change of person is saved right after this: the server must not act on the older saved copy meanwhile)
+      const out = await teamApi('project.sync', { projectRef: p.id, project: p.name, assigneeId: person ? person.id : 0, steps, needsPhoto, reason: person ? '' : 'taken', baseCommit: store.base && store.base.commit, pending: true });
       team.gen++; // a list fetched before this change is old now: it must not move the project back
       store.dispatch('setProjectTeam', { projectId: p.id, userId: person ? person.id : null, name: person ? person.name : '', needsPhoto });
       ui.giveOpen = null;
@@ -2710,7 +2715,8 @@ async function syncGivenNow(gen) {
     if (m[p.id] === sig) continue;
     const name = p.name, who = p.team.name;
     try {
-      const out = await teamApi('project.sync', { projectRef: p.id, project: name, assigneeId: p.state === 'active' ? p.team.userId : 0, steps, needsPhoto: !!p.team.needsPhoto, reason: p.state });
+      const out = await teamApi('project.sync', { projectRef: p.id, project: name, assigneeId: p.state === 'active' ? p.team.userId : 0, steps, needsPhoto: !!p.team.needsPhoto, reason: p.state,
+        baseCommit: store.base && store.base.commit, pending: store.pending.length > 0 });
       // a re-opened step that was just finished is not made yet: sent again next time
       rememberSync(id, notSent(out, steps).length ? SYNC_RETRY : sig);
       delete team.syncErr[id];
@@ -2763,7 +2769,10 @@ function adoptStaffSteps(tasks) {
       if (saved && saved.steps.some((st) => st.id === t.stepRef)) adopted.push(t.id);
       continue;
     }
+    if (adoptedHere.has(t.stepRef)) { adopted.push(t.id); continue; } // added once already and since deleted by you: stays deleted (the server forgets it)
     actMany(p.id, [['addStep', { projectId: p.id, stepId: t.stepRef, text: t.title, byTeam: true }]], `👥 ${t.assignee.name} added a step: ${t.title}`);
+    adoptedHere.add(t.stepRef);
+    try { localStorage.setItem(ADOPTED_KEY, JSON.stringify([...adoptedHere].slice(-300))); } catch { /* full */ }
   }
   if (adopted.length) teamApi('tasks.adopted', { ids: adopted }).catch(() => { /* asked again next time; adding twice is ignored */ });
 }
@@ -2784,8 +2793,8 @@ function tickFinishedTeamTasks(tasks) {
       const latest = team.byStep.get(t.stepRef);
       if (step && step.done && note && (!latest || latest.id === t.id)) {
         actMany(p.id, [['untickStep', { projectId: p.id, stepId: step.id, byTeam: true }], ['deleteWorkNote', { projectId: p.id, noteId: note.id, byTeam: true }]], `↩ ${t.assignee.name} opened “${step.text}” again`);
-        seen.delete(t.id);
       }
+      seen.delete(t.id); // open now: when it is finished again, it is new again (here and on every other device)
       continue;
     }
     if (t.status !== 'done' || seen.has(t.id)) continue;
@@ -2810,7 +2819,8 @@ function tickFinishedTeamTasks(tasks) {
     actMany(p.id, [
       ['tickStep', { projectId: p.id, stepId: step.id, byTeam: true, at: serverTime(t.doneAt) }], // their day, not your work today
       // always a note (same id on every device), so no other device ticks it again
-      ['addWorkNote', { projectId: p.id, noteId: 'tn' + t.id, stepId: step.id, team: true, at: serverTime(t.doneAt), text: `👥 ${t.assignee.name} finished “${step.text}”${words ? ': ' + words : '.'}` }],
+      ['addWorkNote', { projectId: p.id, noteId: 'tn' + t.id, stepId: step.id, team: true, at: serverTime(t.doneAt),
+        text: t.closedByPerson === false ? `👥 Marked done in Work Task: “${step.text}” (${t.assignee.name}'s step)` : `👥 ${t.assignee.name} finished “${step.text}”${words ? ': ' + words : '.'}` }],
     ], `✓ ${t.assignee.name} finished: ${step.text}`);
   }
   // keep every id the server still sends (60 days), so none of them looks new again
@@ -2940,7 +2950,10 @@ function start() {
     pasteIntoProject(ctx, p, files);
   });
   // a click anywhere else closes the right-click menu
-  document.addEventListener('click', (e) => { if (ui.rowMenu && !e.target.closest('.row-menu')) { ui.rowMenu = null; render(); } });
+  document.addEventListener('click', (e) => {
+    if (ui.rowMenu && !e.target.closest('.row-menu')) { ui.rowMenu = null; render(); }
+    if (ui.projMenu && !e.target.closest('.proj-menu') && !e.target.closest('[aria-label="More actions"]')) { ui.projMenu = null; render(); }
+  });
   window.addEventListener('scroll', () => { if (ui.rowMenu) { ui.rowMenu = null; render(); } }, true);
 }
 

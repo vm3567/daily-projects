@@ -209,6 +209,18 @@ function migrate(PDO $pdo): void {
     "ALTER TABLE updates ADD COLUMN alert2 TINYINT(1) NOT NULL DEFAULT 0",
     "ALTER TABLE comments ADD COLUMN photo VARCHAR(120) NULL, ADD COLUMN edited_at DATETIME NULL",
     "ALTER TABLE tasks ADD COLUMN client_id VARCHAR(60) NULL, ADD UNIQUE KEY task_once (created_by, client_id)",
+    // v10: moves are recorded by the server (never read back from message text); when a closed task was opened again
+    "CREATE TABLE IF NOT EXISTS task_moves (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      task_id INT NOT NULL,
+      from_id INT NOT NULL,
+      to_id INT NOT NULL,
+      at DATETIME NOT NULL,
+      INDEX (task_id), INDEX (from_id, at), INDEX (to_id, at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+    "ALTER TABLE comments ADD COLUMN kind VARCHAR(10) NULL",
+    "UPDATE comments c JOIN users u ON u.id = c.user_id SET c.kind = 'move' WHERE u.role = 'admin' AND c.text LIKE '↔ Moved from % to %'",
+    "ALTER TABLE tasks ADD COLUMN reopened_at DATETIME NULL",
   ];
   $pdo->exec($steps[0]);
   $done = (int)($pdo->query("SELECT v FROM settings WHERE k = 'schema'")->fetchColumn() ?: 0);

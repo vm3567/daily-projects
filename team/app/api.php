@@ -64,7 +64,8 @@ function move_tasks(array $me, array $tasks, int $toId, bool $tell = true): int 
     // the old messages count as read for the new person: only the move note shows as new
     $prev = (int)(one('SELECT MAX(id) AS m FROM comments WHERE task_id = ?', [$t['id']])['m'] ?? 0);
     q('INSERT INTO task_reads (task_id, user_id, at, last_id) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE last_id = GREATEST(last_id, VALUES(last_id))', [$t['id'], $toId, now(), $prev]);
-    q('INSERT INTO comments (task_id, user_id, text, at) VALUES (?, ?, ?, ?)', [$t['id'], $me['id'], '↔ Moved from ' . user_name((int)$t['assignee_id']) . ' to ' . $to['name'] . '.', now()]);
+    q("INSERT INTO comments (task_id, user_id, text, at, kind) VALUES (?, ?, ?, ?, 'move')", [$t['id'], $me['id'], '↔ Moved from ' . user_name((int)$t['assignee_id']) . ' to ' . $to['name'] . '.', now()]);
+    q('INSERT INTO task_moves (task_id, from_id, to_id, at) VALUES (?, ?, ?, ?)', [$t['id'], (int)$t['assignee_id'], $toId, now()]);
     audit($me['id'], 'task_moved', "#{$t['id']} → {$to['name']}");
     $n++;
     $titles[] = $t['title'];
@@ -95,7 +96,7 @@ function tasks_out(array $tasks, string $day): array {
   foreach (all("SELECT c.task_id, MAX(c.at) AS at FROM comments c
       JOIN (SELECT task_id, MAX(day) AS d FROM updates WHERE task_id IN ($in) GROUP BY task_id) m ON m.task_id = c.task_id
       JOIN updates u ON u.task_id = m.task_id AND u.day = m.d
-      WHERE c.user_id <> u.user_id AND c.text NOT LIKE '↔ Moved%' GROUP BY c.task_id", $ids) as $r) $answered[$r['task_id']] = $r['at'];
+      WHERE c.user_id <> u.user_id AND c.kind IS NULL GROUP BY c.task_id", $ids) as $r) $answered[$r['task_id']] = $r['at'];
   foreach (all("SELECT c.*, u.name FROM comments c JOIN users u ON u.id = c.user_id JOIN (SELECT task_id, MAX(id) AS mid FROM comments WHERE task_id IN ($in) GROUP BY task_id) m ON m.mid = c.id", $ids) as $c) {
     $lastMsg[$c['task_id']] = ['by' => $c['name'], 'byId' => (int)$c['user_id'], 'text' => $c['text'], 'at' => $c['at'], 'mine' => (int)$c['user_id'] === $meId];
   }
@@ -126,6 +127,7 @@ function tasks_out(array $tasks, string $day): array {
     'dueToday' => $t['status'] === 'open' && due_on($t, $day) && !$queued($t),
     'today' => update_out($todays[$t['id']] ?? null, $photos), 'last' => update_out($lasts[$t['id']] ?? null, $photos),
     'createdBy' => (int)$t['created_by'], 'createdByName' => user_name((int)$t['created_by']), 'declined' => (int)($t['closed_by'] ?? 0) === -2,
+    'closedByPerson' => $t['status'] === 'done' && (int)($t['closed_by'] ?? 0) > 0, // their own Finished (not the manager's Mark done)
     'turnSince' => $turnSince[$t['id']] ?? null, 'fromStaff' => (bool)($t['from_staff'] ?? 0), 'needsPhoto' => (bool)($t['needs_photo'] ?? 0), 'files' => $files[$t['id']] ?? [],
     'messages' => $count[$t['id']] ?? 0, 'unread' => $unread[$t['id']] ?? 0, 'lastMessage' => $lastMsg[$t['id']] ?? null,
     // stuck: the newest update says "Stuck" (and the manager has not answered since)
@@ -210,7 +212,7 @@ function handle(string $a, array $in): array {
       $due = array_values(array_filter($out, fn($t) => $t['dueToday'] || ($t['today'] !== null)));
       $other = array_values(array_filter($out, fn($t) => !$t['dueToday'] && $t['today'] === null && $t['status'] === 'open'));
       // my suggestions: waiting for a yes, or said no this week (with the reason in the messages)
-      $sugg = tasks_out(all(TASK_SELECT . " WHERE t.created_by = ? AND t.assignee_id = ? AND (t.status = 'suggested' OR (t.status = 'cancelled' AND t.updated_at >= ?)) ORDER BY t.id DESC",
+      $sugg = tasks_out(all(TASK_SELECT . " WHERE t.created_by = ? AND t.assignee_id = ? AND (t.status = 'suggested' OR (t.status = 'cancelled' AND t.closed_by = -2 AND t.updated_at >= ?)) ORDER BY t.id DESC",
         [$me['id'], $me['id'], date('Y-m-d H:i:s', time() - 7 * 86400)]), $day);
       return ['today' => $day, 'tasks' => $due, 'other' => $other, 'suggestions' => $sugg, 'fillBy' => setting('fill_by', '18:00')];
     }
@@ -231,15 +233,22 @@ function handle(string $a, array $in): array {
         && $fin['state'] === 'finished' && (int)$fin['user_id'] === $me['id'];
       // written offline before the task was moved to someone else or closed: kept as history for that day, nothing else changes
       // (only someone who still had the task that day: it was moved away from them on or after that day, or closed while theirs)
-      $hadIt = $t && ((int)$t['assignee_id'] === $me['id']
-        || one("SELECT id FROM comments WHERE task_id = ? AND text LIKE ? AND at >= ? LIMIT 1", [$t['id'], '↔ Moved from ' . str_replace(['%', '_'], ['\\%', '\\_'], $me['name']) . ' to %', $uday . ' 00:00:00']));
-      if ($t && $uday < $day && ((int)$t['assignee_id'] !== $me['id'] || ($t['status'] !== 'open' && !$mine)) && $hadIt
-        && (one('SELECT id FROM updates WHERE task_id = ? AND user_id = ? LIMIT 1', [$t['id'], $me['id']]) || one('SELECT task_id FROM task_reads WHERE task_id = ? AND user_id = ?', [$t['id'], $me['id']]))) {
+      // today's update only if it was written (offline) before the move or the close; an earlier day's if moved after that day
+      $wrote = is_string($in['writtenAt'] ?? null) && strtotime($in['writtenAt']) ? date('Y-m-d H:i:s', min(time(), (int)strtotime($in['writtenAt']))) : null;
+      $since = $uday < $day ? $uday . ' 00:00:00' : $wrote;
+      $hadIt = $t && $since !== null && (((int)$t['assignee_id'] === $me['id'] && ($uday < $day || ($t['done_at'] && $t['done_at'] >= $since)))
+        || one('SELECT id FROM task_moves WHERE task_id = ? AND from_id = ? AND at > ? LIMIT 1', [$t['id'], $me['id'], $since])); // moved after it was written
+      // (also today's: written before the move or the close later today)
+      if ($t && ((int)$t['assignee_id'] !== $me['id'] || ($t['status'] !== 'open' && !$mine)) && $hadIt) {
         $note = txt($in['note'] ?? '', 4000, true, 'The update');
         $state = in_array($in['state'] ?? '', ['progress', 'finished'], true) ? $in['state'] : 'progress'; // not "Stuck": the task is not theirs now
         $old = one('SELECT user_id, note FROM updates WHERE task_id = ? AND day = ?', [$t['id'], $uday]);
-        if ($old && (int)$old['user_id'] !== $me['id']) { // someone else already wrote for that day: add these words below theirs
-          q('UPDATE updates SET note = ?, updated_at = ? WHERE task_id = ? AND day = ?', [mb_substr(trim((string)$old['note']) . "\n\n" . $me['name'] . ': ' . $note, 0, 8000), now(), $t['id'], $uday]);
+        if ($old && (int)$old['user_id'] !== $me['id']) { // someone else already wrote for that day: add these words below theirs (once)
+          $line = $me['name'] . ': ' . $note;
+          if (!str_contains((string)$old['note'], $line)) q('UPDATE updates SET note = ?, updated_at = ? WHERE task_id = ? AND day = ?', [mb_substr(trim((string)$old['note']) . "\n\n" . $line, 0, 8000), now(), $t['id'], $uday]);
+          $u = one('SELECT * FROM updates WHERE task_id = ? AND day = ?', [$t['id'], $uday]);
+          $u['note'] = $note; $u['user_id'] = $me['id']; // the answer: only what this person wrote, never the other person's update
+          return ['update' => update_out($u, [])];
         } else {
           q('INSERT INTO updates (task_id, user_id, day, note, state, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)
              ON DUPLICATE KEY UPDATE note = VALUES(note), state = VALUES(state), updated_at = VALUES(updated_at)',
@@ -279,7 +288,7 @@ function handle(string $a, array $in): array {
       $newer = $uday < $day && one('SELECT id FROM updates WHERE task_id = ? AND day > ?', [$t['id'], $uday]);
       if ($t['repeat_kind'] === 'once' && !$newer) {
         if ($state === 'finished') q("UPDATE tasks SET status = 'done', done_at = ?, closed_by = ?, updated_at = ? WHERE id = ?", [now(), $me['id'], now(), $t['id']]);
-        elseif ($t['status'] === 'done') q("UPDATE tasks SET status = 'open', done_at = NULL, closed_by = NULL, updated_at = ? WHERE id = ?", [now(), $t['id']]);
+        elseif ($t['status'] === 'done') q("UPDATE tasks SET status = 'open', done_at = NULL, closed_by = NULL, reopened_at = ?, updated_at = ? WHERE id = ?", [now(), now(), $t['id']]);
       }
       $u = one('SELECT * FROM updates WHERE task_id = ? AND day = ?', [$t['id'], $uday]);
       return ['update' => update_out($u, photos_of([(int)$u['id']]))];
@@ -307,7 +316,8 @@ function handle(string $a, array $in): array {
     }
     case 'comment.add': { // a message on a task: between the manager and the person doing it
       $t = own_task($me, (int)($in['taskId'] ?? 0));
-      $text = txt($in['text'] ?? '', 2000, true, 'The message');
+      $text = (string)preg_replace('/^[↔\s]+/u', '', txt($in['text'] ?? '', 2000, true, 'The message')); // (that sign marks the server's move notes)
+      if ($text === '') throw new ApiError('The message is empty.');
       $cid = client_id($in['clientId'] ?? null);
       if (!$cid || !one('SELECT id FROM comments WHERE user_id = ? AND client_id = ?', [$me['id'], $cid])) {
         q('INSERT INTO comments (task_id, user_id, text, at, client_id) VALUES (?, ?, ?, ?, ?)', [$t['id'], $me['id'], $text, now(), $cid]);
@@ -362,7 +372,8 @@ function handle(string $a, array $in): array {
         q('DELETE FROM comments WHERE id = ?', [$c['id']]);
         if ($c['photo']) @unlink(UPLOAD_DIR . '/' . $c['photo']);
       } else {
-        $text = txt($in['text'] ?? '', 2000, !$c['photo'], 'The message');
+        $text = (string)preg_replace('/^[↔\s]+/u', '', txt($in['text'] ?? '', 2000, !$c['photo'], 'The message'));
+        if ($c['kind'] === 'move') throw new ApiError('This note cannot be changed.');
         q('UPDATE comments SET text = ?, edited_at = ? WHERE id = ?', [$text, now(), $c['id']]);
       }
       return ['comments' => comments_of((int)$c['task_id'])];
@@ -440,6 +451,9 @@ function handle(string $a, array $in): array {
       $ref = txt($in['projectRef'] ?? '', 80, true, 'The project');
       unset($in['_server']);
       set_setting('psc:' . md5($ref), (string)time()); // before the work too: a server sync waiting for the lock sees it
+      // its unsaved changes: the saved projects are older than this for the project until they are saved
+      if (!empty($in['pending'])) set_setting('psp:' . md5($ref), json_encode(['base' => txt($in['baseCommit'] ?? '', 40), 'at' => time()]));
+      else q('DELETE FROM settings WHERE k = ?', ['psp:' . md5($ref)]);
       $out = locked_project_sync($me, $in, $ref, $day);
       set_setting('psc:' . md5($ref), (string)time()); // the server's own sync leaves this project alone for a few minutes
       return $out;
@@ -532,14 +546,13 @@ function handle(string $a, array $in): array {
         $tasks = all('SELECT * FROM tasks WHERE assignee_id = ? AND status <> ? AND (closed_by IS NULL OR closed_by <> -2) AND start_date <= ? AND (done_at IS NULL OR done_at >= ?)', [$p['id'], 'suggested', $end, $from . ' 00:00:00']);
         // tasks moved away from this person: theirs until the move
         $movedAway = [];
-        $esc = str_replace(['%', '_'], ['\\%', '\\_'], $p['name']);
-        foreach (all("SELECT c.task_id, MAX(c.at) AS at FROM comments c JOIN tasks t ON t.id = c.task_id WHERE c.text LIKE ? AND t.assignee_id <> ? AND c.at >= ? GROUP BY c.task_id", ['↔ Moved from ' . $esc . ' to %', $p['id'], $from . ' 00:00:00']) as $r) $movedAway[(int)$r['task_id']] = $r['at'];
+        foreach (all('SELECT m.task_id, MAX(m.at) AS at FROM task_moves m JOIN tasks t ON t.id = m.task_id WHERE m.from_id = ? AND t.assignee_id <> ? AND m.at >= ? GROUP BY m.task_id', [$p['id'], $p['id'], $from . ' 00:00:00']) as $r) $movedAway[(int)$r['task_id']] = $r['at'];
         if ($movedAway) $tasks = [...$tasks, ...all('SELECT * FROM tasks WHERE id IN (' . implode(',', array_keys($movedAway)) . ') AND start_date <= ?', [$end])];
         $ups = all('SELECT day, state, task_id FROM updates WHERE user_id = ? AND day BETWEEN ? AND ?', [$p['id'], $from, $end]);
         $sentDays = array_values(array_unique(array_column($ups, 'day')));
         $movedAt = []; // tasks moved to this person: when (the move note)
         foreach ($tasks as $t) {
-          $m = one("SELECT MAX(at) AS at FROM comments WHERE task_id = ? AND text LIKE ?", [$t['id'], '↔ Moved from % to ' . str_replace(['%', '_'], ['\\%', '\\_'], $p['name']) . '.']);
+          $m = one('SELECT MAX(at) AS at FROM task_moves WHERE task_id = ? AND to_id = ?', [$t['id'], $p['id']]);
           if ($m && $m['at']) $movedAt[$t['id']] = $m['at'];
         }
         $workDays = []; $missed = [];
@@ -602,7 +615,7 @@ function handle(string $a, array $in): array {
       // the newest messages from the team that I have not seen (for the Today page)
       $msgs = array_map(fn($c) => ['id' => (int)$c['id'], 'taskId' => (int)$c['task_id'], 'projectRef' => $c['project_ref'], 'title' => $c['title'], 'by' => $c['name'], 'text' => $c['text'] !== '' ? $c['text'] : '📷 Photo', 'at' => $c['at']],
         all("SELECT c.*, u.name, t.project_ref, t.title FROM comments c JOIN tasks t ON t.id = c.task_id JOIN users u ON u.id = c.user_id
-             LEFT JOIN task_reads r ON r.task_id = c.task_id AND r.user_id = ? WHERE c.user_id <> ? AND c.id > COALESCE(r.last_id, 0) AND c.text NOT LIKE '↔ Moved%' ORDER BY c.id DESC LIMIT 10", [$me['id'], $me['id']]));
+             LEFT JOIN task_reads r ON r.task_id = c.task_id AND r.user_id = ? WHERE c.user_id <> ? AND c.id > COALESCE(r.last_id, 0) AND c.kind IS NULL ORDER BY c.id DESC LIMIT 10", [$me['id'], $me['id']]));
       return ['today' => $day, 'fillBy' => $fillBy, 'late' => date('H:i') >= $fillBy, 'tasks' => tasks_out($tasks, $day), 'teamDays' => (object)$teamDays, 'messages' => $msgs,
         'alerts' => ['stuck' => count($att['stuck']), 'unread' => count($att['unread']), 'suggestions' => count($att['suggestions'])],
         'summary' => (function () use ($att) { // one line for the manager's Today page
@@ -665,6 +678,7 @@ function handle(string $a, array $in): array {
       if ($st !== $t['status']) notify([(int)$t['assignee_id']], 'task',
         ['done' => '✓ Your manager closed a task', 'cancelled' => '✖️ A task was cancelled', 'open' => '↩️ A task is open again'][$st], $t['title'], '/#open=' . $t['id'], 't' . $t['id']);
       q('UPDATE tasks SET status = ?, done_at = ?, closed_by = NULL, updated_at = ? WHERE id = ?', [$st, $st === 'open' ? null : now(), now(), $t['id']]); // closed by the manager, not by the person's Finished
+      if ($st === 'open' && $t['status'] !== 'open') q('UPDATE tasks SET reopened_at = ? WHERE id = ?', [now(), $t['id']]);
       audit($me['id'], 'task_' . $st, "#{$t['id']} {$t['title']}");
       return ['task' => tasks_out([own_task($me, (int)$t['id'])], $day)[0]];
     }
@@ -835,7 +849,7 @@ function project_sync(array $me, array $in, string $ref, string $day): array {
   // the server's own sync: a step opened again after it was ticked (their undo, Open again) waits for the owner's app to untick it
   $tickedAt = (array)($in['doneAt'] ?? []);
   foreach ($open as $t) {
-    if (!empty($in['_server']) && isset($tickedAt[$t['step_ref']]) && strtotime((string)$t['updated_at']) > strtotime((string)$tickedAt[$t['step_ref']])) { $keep[$t['step_ref']] = true; continue; }
+    if (!empty($in['_server']) && isset($tickedAt[$t['step_ref']]) && !empty($t['reopened_at']) && strtotime((string)$t['reopened_at']) > strtotime((string)$tickedAt[$t['step_ref']]) - 120) { $keep[$t['step_ref']] = true; continue; }
     if (isset($keep[$t['step_ref']])) continue;
     if ((int)($t['from_staff'] ?? 0)) {
       if ((int)$t['assignee_id'] !== $who) { $leftBy[] = (int)$t['assignee_id']; move_tasks($me, [$t], $who, false); $news[] = $t['title']; }

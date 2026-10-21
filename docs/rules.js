@@ -272,6 +272,8 @@ export function personStatus(data, person, today = todayIndia()) {
  * How many projects were green on a past day, worked out from the saved dates and the history.
  * Counts projects that existed and were active that day.
  */
+/** Real work in the history, the same as the dot's rule: your notes, ticks and time (the team's counts through teamDays). */
+const WORK = new Set(['note_added', 'step_ticked', 'time_logged', 'time_added']);
 const NOT_WORK = new Set(['created', 'snoozed', 'woke', 'step_remind', 'team_ticked', 'team_note', 'team_step_added', 'team_step_unticked', 'team_note_deleted', 'team_moved']); // (the team's work counts through teamDays)
 
 /** On that day, was every open step of the project waiting for a "remind me" date? */
@@ -283,7 +285,7 @@ function restingByReminders(p, day) {
 export function dayScore(data, history, day) {
   const busy = new Set();
   for (const e of (history[monthOf(day)] || [])) {
-    if (e.projectId && indiaDate(e.at) === day && !NOT_WORK.has(e.kind)) busy.add(e.projectId);
+    if (e.projectId && indiaDate(e.at) === day && WORK.has(e.kind)) busy.add(e.projectId);
   }
   let total = 0;
   let green = 0;

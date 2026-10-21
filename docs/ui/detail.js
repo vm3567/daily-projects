@@ -69,7 +69,7 @@ export function pasteIntoProject(ctx, p, files) {
 
 /** New messages from the team on this project: read them and answer here (or mark them seen). */
 function teamMessages(ctx, p) {
-  const t = ctx.onServer && p.team && ctx.teamDaily ? ctx.teamDaily(p) : null;
+  const t = ctx.onServer && ctx.teamDaily ? ctx.teamDaily(p) : null;
   const list = t && t.data ? (t.data.comments || []).filter((c) => c.unread).slice().reverse() : [];
   if (!list.length) return null;
   const ui = ctx.ui;
@@ -439,7 +439,7 @@ function notesLog(ctx, p, notesShown) {
           (v) => { if (v.trim()) store.dispatch('editWorkNote', { projectId: p.id, noteId: n.id, text: v }); }),
         st ? h('span', { class: 'tag on-step', title: 'This note is about this step' }, `on: ${st.text}`) : null,
         ...p.files.filter((f) => f.noteId === n.id).map((f) => h('button', { class: 'tag photo', key: 'nf-' + f.id, title: 'Open photo', onClick: () => openFile(ctx, f) }, '📷')),
-        h('button', {
+        n.team || String(n.id).startsWith('tn') ? null : h('button', {
           class: 'icon', title: 'Delete note',
           onClick: () => ctx.act('deleteWorkNote', { projectId: p.id, noteId: n.id }, 'Note deleted'),
         }, '🗑'));
@@ -975,7 +975,7 @@ function projectDiary(ctx, p, upd) {
     });
   }
   for (const c of td ? td.comments || [] : []) {
-    if (c.unread && p.team) continue; // new ones are in the message box at the top (not twice)
+    if (c.unread) continue; // new ones are in the message box at the top (not twice)
     entries.push({ day: c.at.slice(0, 10), at: iso(c.at), work: false, stepId: taskStep.get(c.taskId), node: diaryLine('💬', c.mine ? 'You' : c.by, `“${c.text}”`, [about(taskStep.get(c.taskId))]) });
   }
   const byDay = new Map();

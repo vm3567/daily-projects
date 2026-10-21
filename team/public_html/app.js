@@ -156,7 +156,7 @@ async function sendItem(it, tok) {
   if (it.kind === 'suggest') { await api('suggest', { title: it.title, details: it.details, repeat: it.repeat, clientId: it.clientId }); return; }
   if (it.kind === 'update' && !it.updateId) {
     const twoSteps = it.state === 'finished' && it.needsPhoto && it.files && it.files.length && !it.hadPhoto;
-    const out = await api('update.save', { taskId: it.taskId, note: it.note, state: twoSteps ? 'progress' : it.state, day });
+    const out = await api('update.save', { taskId: it.taskId, note: it.note, state: twoSteps ? 'progress' : it.state, day, writtenAt: it.at });
     it.updateId = out.update.id; it.thenFinish = !!twoSteps;
     if (twoSteps) it.note = out.update.note; // keep the earlier person's words (after a move) for the Finished save
     await keep(it);
@@ -202,6 +202,9 @@ function giveBack(it, why) {
   toast(`Could not send "${words.slice(0, 60)}": ${String(why).replace(/\.$/, '')}.${back}`, it.kind === 'suggest' ? 15000 : 10000);
 }
 
+/** What a waiting item belongs to: later items of the same thing wait behind one that keeps failing. */
+const itemKey = (it) => (it.kind === 'step' ? 'p:' + it.projectRef : it.kind === 'suggest' ? 's:' + it.id : 't:' + it.taskId);
+
 async function doFlush() {
   if (!state.user) return;
   let sent = 0;
@@ -211,7 +214,7 @@ async function doFlush() {
     await loadOutbox();
     for (const it of [...state.outbox].sort((x, y) => x.id - y.id)) {
       if (!state.user || state.user.id !== uid || state.token !== tok || it.userId !== uid) break; // signed out, or someone else signed in
-      if (stuck.has(it.taskId)) continue;
+      if (stuck.has(itemKey(it))) continue;
       try {
         await sendItem(it, tok);
         await outbox('readwrite', (s) => s.delete(it.id));
@@ -227,7 +230,7 @@ async function doFlush() {
           }
           await keep(it);
           if (it.tries < 5) break;
-          stuck.add(it.taskId);
+          stuck.add(itemKey(it));
           continue;
         }
         await outbox('readwrite', (s) => s.delete(it.id)); // refused by the server (e.g. task closed): say so, do not retry forever
@@ -407,8 +410,12 @@ async function loadList() {
   if (state.user !== me) { state.busy = false; return; } // signed out meanwhile
   if (n !== loadSeq) return; // a newer load started: this answer is old
   state.data = data; state.busy = false;
+  if (data && data.fillBy) state.fillBy = data.fillBy; // kept for screens whose list has no time (Tasks, Projects, Search)
   state.loadFailed = !!failed && !data;
   if (failed) toast(failed.message, 5000);
+  // T-d: a form being filled in (Give a task) is not wiped: the list is redrawn when they stop
+  const a = document.activeElement;
+  if ((a && /^(TEXTAREA|INPUT|SELECT)$/.test(a.tagName) && document.getElementById('detail') && document.getElementById('detail').contains(a)) || (state.sel && formHasText())) { state.reloadLater = true; return; }
   render();
 }
 
@@ -449,7 +456,8 @@ const LIST_VIEWS = ['today', 'tasks', 'people', 'settings', 'projects', 'report'
 /** go('today' | 'tasks' | 'people' | 'settings') changes the list; anything else ('task:5', 'give', 'edit:5', 'suggest', 'password') opens on the right. */
 function go(view) {
   if (!LIST_VIEWS.includes(view)) { openDetail(view); return; }
-  if (history.state && history.state.wt) history.replaceState(null, ''); // the open task closes: its Back step goes too
+  dropBack(); // the open task closes: its Back step goes too
+  state.fromProjects = false; // (only the task opened from the projects page goes back there)
   state.view = view;
   state.data = null; state.loadFailed = false;
   state.sel = null; state.detail = null; state.mobileDetail = false; state.menuOpen = false; state.moving = 0;
@@ -473,7 +481,11 @@ function formHasText() {
 
 // the phone's Back button closes the open task (or the menu) instead of leaving the app
 function pushBack() { if (!history.state || !history.state.wt) history.pushState({ wt: 1 }, ''); }
+let ignorePop = false;
+/** The open task / menu closed without Back: take its Back step out of the history (the next Back leaves as expected). */
+function dropBack() { if (history.state && history.state.wt) { ignorePop = true; history.back(); } }
 window.addEventListener('popstate', () => {
+  if (ignorePop) { ignorePop = false; if (state.sel || state.menuOpen) pushBack(); return; } // something opened meanwhile: it gets its Back step
   if (!state.user) return;
   if (state.menuOpen) { state.menuOpen = false; render(); if (state.sel) pushBack(); return; }
   if (state.sel) closeDetail(true);
@@ -481,6 +493,7 @@ window.addEventListener('popstate', () => {
 
 function openDetail(sel) {
   if (sel.startsWith('task:')) state.newIds.delete(Number(sel.slice(5)));
+  if (state.sel && state.sel !== sel) state.fromProjects = false;
   // a step opened from its project: Back goes to the project again
   state.backTo = sel.startsWith('task:') && state.sel && state.sel.startsWith('project:') ? state.sel : null;
   pushBack();
@@ -521,7 +534,7 @@ function render() {
     class: ['layout', wide ? 'wide' : '', state.mobileDetail && !wide ? 'show-detail' : '', state.menuOpen ? 'menu-open' : ''].filter(Boolean).join(' '),
   },
   el('aside', { id: 'menu' }, menuColumn()),
-  el('div', { class: 'scrim', onClick: () => { state.menuOpen = false; render(); } }),
+  el('div', { class: 'scrim', onClick: () => { state.menuOpen = false; if (!state.sel) dropBack(); render(); } }),
   el('main', { id: 'list' }, listColumn(wide)),
   wide ? null : el('section', { id: 'detail' }, detailColumn())));
   if (sameScreen) ['list', 'detail'].forEach((id, i) => { const n = document.getElementById(id); if (n) n.scrollTop = keep[i]; });
@@ -719,9 +732,12 @@ function addStepForm(ref) {
       const title = inp.value.trim();
       if (!title) { inp.focus(); return; }
       btn.disabled = true;
-      const clientId = newClientId();
+      const ids = (state.stepCid ||= {});
+      if (!ids[ref] || ids[ref].title !== title) ids[ref] = { id: newClientId(), title }; // a retry of the same step: the same id
+      const clientId = ids[ref].id;
       try {
         await api('project.addStep', { projectRef: ref, title, clientId });
+        delete state.stepCid[ref];
         toast('➕ Step added. Your manager sees it in the project too.');
         inp.value = '';
         await loadList();
@@ -1015,19 +1031,22 @@ function taskChips(t, today, admin) {
 function taskDiary(t, updates, today, staff) {
   const n = state.diaryDays || 14;
   const notYet = t.queued || t.status === 'suggested'; // a step waiting its turn, a suggestion: no day is "missed"
-  const fillBy = (state.data && state.data.fillBy) || '18:00';
+  const fillBy = (state.data && state.data.fillBy) || state.fillBy || '18:00';
   const start = [t.startDate || '', (t.createdAt || '').slice(0, 10), t.turnSince || ''].sort().pop() || today; // (a step: from when its turn came)
   const end = t.status !== 'open' && t.doneAt ? t.doneAt.slice(0, 10) : today;
   const byDay = new Map();
   for (const u of updates) byDay.set(u.day, [...(byDay.get(u.day) || []), u]);
   // the server sends the newest 60 days with an update: never call days older than those "No progress"
   const oldest = updates.length >= 60 ? updates.map((u) => u.day).sort()[0] : '';
-  const lower = oldest > start ? oldest : start;
+  const firstUpdate = updates.map((u) => u.day).sort()[0] || start;
+  const begin = firstUpdate < start ? firstUpdate : start; // an update written before the step's turn still shows
+  const lower = oldest > begin ? oldest : begin;
   const from = addDay(end, -(n - 1)) > lower ? addDay(end, -(n - 1)) : lower;
   const rows = [];
   for (let day = end; day >= from; day = addDay(day, -1)) {
     if (staff && day === today) continue; // today's update is in its own box above
     const ups = byDay.get(day) || [];
+    if (!ups.length && day < start) continue; // before its start: nothing to show
     const wd = weekdayOf(day);
     let content;
     if (ups.length) {
@@ -1337,10 +1356,14 @@ function messagesBlock(taskId, comments) {
     if (state.sending[key]) return; // already going (the screen was redrawn meanwhile)
     if (!box.value.trim()) { err.textContent = 'Write the message first.'; err.hidden = false; return; }
     btn.disabled = true; state.sending[key] = true;
-    const cid = newClientId(); // the same id online and in the outbox: a message whose reply was lost is not kept twice
     const text = box.value;
+    // the same id online, in the outbox, and on a retry of the same words: a message whose reply was lost is not kept twice
+    const ids = (state.msgCid ||= {});
+    if (!ids[key] || ids[key].text !== text) ids[key] = { id: newClientId(), text };
+    const cid = ids[key].id;
     try {
       const out = await api('comment.add', { taskId, text, clientId: cid });
+      delete state.msgCid[key];
       delete state.drafts['m' + taskId]; delete state.sending[key]; // before the redraw, so the new button is not greyed out
       toast('Sent ✓');
       // only if this task is still open on screen (the user may have gone to another one)
@@ -1888,12 +1911,15 @@ async function subscribePush() {
   await api('push.subscribe', sub.toJSON());
   state.pushOn = true;
 }
+const pushOffKey = () => 'wt.pushOff.' + (state.user ? state.user.id : 0);
 async function syncPush() {
   if (!pushOk() || Notification.permission !== 'granted' || !state.user) return;
-  try { await subscribePush(); render(); } catch { /* offline: next time */ }
+  try { if (localStorage.getItem(pushOffKey())) return; } catch { /* blocked */ } // turned off here by this person: stays off
+  try { await subscribePush(); if (!formHasText()) render(); } catch { /* offline: next time */ }
 }
 async function turnOnPush() {
   if (!pushOk()) return;
+  try { localStorage.removeItem(pushOffKey()); } catch { /* blocked */ }
   const p = await Notification.requestPermission();
   if (p !== 'granted') { render(); if (p === 'denied') openDetail('notify'); return; }
   try {
@@ -1931,7 +1957,7 @@ function notifyPage() {
   if (s === 'on') {
     parts.push(el('p', { class: 'ok' }, '✓ On for this phone.'), el('div', { class: 'row' },
       el('button', { onClick: async () => { try { await api('push.test'); toast('🔔 Test sent. It comes in a few seconds.'); } catch (e) { toast(e.message, 5000); } } }, 'Send me a test'),
-      el('button', { onClick: async () => { await pushOff(); render(); toast('Notifications are off for this phone.'); } }, 'Turn off')));
+      el('button', { onClick: async () => { await pushOff(); try { localStorage.setItem(pushOffKey(), '1'); } catch { /* blocked */ } render(); toast('Notifications are off for this phone.'); } }, 'Turn off')));
   } else if (s === 'default' || s === 'granted') {
     parts.push(el('button', { class: 'primary', onClick: () => turnOnPush() }, '🔔 Turn on notifications'));
   } else if (s === 'denied') {
@@ -1964,7 +1990,8 @@ if ('serviceWorker' in navigator) {
       state.pushAt = Date.now();
       if (document.visibilityState === 'visible') notice(m.kind, m.title || 'Work Task', m.body || '', id ? () => openDetail('task:' + id[1]) : () => go('today'));
       liveCheck(true);
-      if (state.sel && state.sel.startsWith('task:')) loadDetail();
+      const a = document.activeElement, typing = (a && /^(TEXTAREA|INPUT|SELECT)$/.test(a.tagName)) || formHasText();
+      if (id && state.sel === 'task:' + id[1] && !typing) loadDetail();
     } else if (d.type === 'new-version') {
       codeStamp = 'old'; checkNewVersion(); // the page runs an old copy: offer the reload
     } else if (d.type === 'open') {

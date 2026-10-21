@@ -80,7 +80,9 @@ function server_sync_projects(): void {
     foreach (array_unique([...array_keys($given), ...$refs]) as $ref) {
       $ref = (string)$ref;
       $psc = (int)setting('psc:' . md5($ref), '0');
-      if ($psc && $psc > $savedAt) continue; // the owner's app changed this project after the last save: the next save brings it
+      // the owner's app had changes not saved yet when it sent this project, and nothing was saved since: the saved copy is older
+      $psp = json_decode(setting('psp:' . md5($ref), ''), true);
+      if (is_array($psp) && ($psp['base'] ?? '') === setting('dp_head', '') && (int)($psp['at'] ?? 0) > time() - 7 * 86400) continue;
       if ($psc > time() - 300) { // the owner's app sent this project minutes ago: it knows best — look again once that is over
         $retry = (int)setting('sync_retry', '0');
         if (!$retry || $retry > $psc + 301) set_setting('sync_retry', (string)($psc + 301));
