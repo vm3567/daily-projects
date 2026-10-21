@@ -115,8 +115,8 @@ function server_sync_projects(): void {
 /** Stuck for a day and nobody answered: the managers hear once more. */
 function stuck_second_alerts(): void {
   $rows = all("SELECT u.id, u.task_id, u.note, t.title, t.assignee_id, us.name FROM updates u
-      JOIN tasks t ON t.id = u.task_id JOIN users us ON us.id = t.assignee_id
-      WHERE u.state = 'stuck' AND u.alert2 = 0 AND t.status = 'open' AND u.updated_at < ? AND u.updated_at > ?
+      JOIN tasks t ON t.id = u.task_id JOIN users us ON us.id = u.user_id -- the person who wrote Stuck
+      WHERE u.state = 'stuck' AND u.alert2 = 0 AND t.status = 'open' AND t.assignee_id = u.user_id AND u.updated_at < ? AND u.updated_at > ?
         AND u.day = (SELECT MAX(day) FROM updates WHERE task_id = u.task_id)
         AND NOT EXISTS (SELECT 1 FROM comments c WHERE c.task_id = u.task_id AND c.kind IS NULL AND c.user_id <> u.user_id AND c.at >= u.updated_at)",
     [date('Y-m-d H:i:s', time() - 86400), date('Y-m-d H:i:s', time() - 7 * 86400)]);

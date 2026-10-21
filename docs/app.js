@@ -164,7 +164,7 @@ const ctx = {
   startTimer: (p) => startTimer(p),
   stopTimer: () => stopTimer(),
   clockText: (iso) => clockText(iso),
-  act: (type, args, message) => act(type, args, message),
+  act: (type, args, message, ms) => act(type, args, message, ms),
   actMany: (projectId, steps, message) => actMany(projectId, steps, message),
   chase: (p, s) => chase(p, s),
   onServer,
@@ -485,13 +485,14 @@ async function recordPastScores() {
   // every missing day since the last saved one (so a week away does not break the streak), up to 120 days back
   const savedDays = Object.keys(saved).sort();
   const firstCreated = store.view.data.projects.map((p) => (p.createdAt ? indiaDate(p.createdAt) : today)).sort()[0] || today;
-  let from = savedDays.length ? addDays(savedDays[savedDays.length - 1], 1) : firstCreated;
+  let from = firstCreated; // every day without a score (a later day scored by the team's work must not hide earlier ones)
   if (from < addDays(today, -120)) from = addDays(today, -120);
+  void savedDays;
   const days = [];
   for (let d = from; d < today; d = addDays(d, 1)) if (!saved[d]) days.push(d);
   if (!days.length || !store.view.data.projects.length) return;
   const months = [...new Set(days.map(monthOf))].filter((m) => !store.view.history[m] && store.availableMonths().includes(m));
-  for (const m of months) await store.loadMonth(m);
+  try { for (const m of months) await store.loadMonth(m); } catch { return; } // offline: next time
   const scores = {};
   for (const d of days) {
     const sc = dayScore(store.view.data, store.view.history, d);
@@ -2799,6 +2800,7 @@ function tickFinishedTeamTasks(tasks) {
       continue;
     }
     if (t.status !== 'done') continue;
+    if (t.closedByPerson === false && (t.seq === null || t.seq === undefined)) continue; // a single step closed by you / the manager: your tick decides
     // (handled = the shared 'tn' note below; this device's list only saves work, a team untick on another device clears the note)
     const latest = team.byStep.get(t.stepRef); // the step was given again after this (re-opened): the old task must not tick it
     if (latest && latest.id !== t.id) { seen.add(t.id); continue; }

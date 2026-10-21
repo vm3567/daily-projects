@@ -479,13 +479,13 @@ function go(view) {
 function formHasText() {
   const app = document.getElementById('app');
   if (!app) return false;
-  if ([...app.querySelectorAll('form select')].some((s) => !s.disabled && s.selectedIndex > 0)) return true;
-  if ([...app.querySelectorAll('form input[type=checkbox]')].some((c) => c.checked !== c.defaultChecked)) return true;
-  return [...app.querySelectorAll('textarea, input')].some((i) => {
+  return [...app.querySelectorAll('textarea, input, select')].some((i) => {
     if (i.disabled || i.readOnly) return false;
     if (i.type === 'file') return !!(i.files && i.files.length);
-    if (['checkbox', 'radio', 'hidden', 'submit', 'button', 'password'].includes(i.type)) return false;
-    return i.value.trim() !== '';
+    if (['radio', 'hidden', 'submit', 'button', 'password'].includes(i.type)) return false;
+    const now = i.type === 'checkbox' ? String(i.checked) : i.value;
+    if (i.dataset.init !== undefined) return now !== i.dataset.init; // changed since the screen was drawn
+    return i.type !== 'checkbox' && i.tagName !== 'SELECT' && now.trim() !== '';
   });
 }
 
@@ -505,7 +505,7 @@ function openDetail(sel) {
   if (sel.startsWith('task:')) state.newIds.delete(Number(sel.slice(5)));
   if (state.sel && state.sel !== sel) state.fromProjects = false;
   // a step opened from its project: Back goes to the project again
-  state.backTo = sel.startsWith('task:') && state.sel && state.sel.startsWith('project:') ? state.sel : null;
+  if (state.sel !== sel) state.backTo = sel.startsWith('task:') && state.sel && state.sel.startsWith('project:') ? state.sel : null;
   pushBack();
   state.sel = sel; state.detail = null; state.detailFailed = false; state.moving = 0;
   state.taskMenu = 0; state.diaryDays = 0;
@@ -549,6 +549,8 @@ function render() {
   wide ? null : el('section', { id: 'detail' }, detailColumn())));
   if (sameScreen) ['list', 'detail'].forEach((id, i) => { const n = document.getElementById(id); if (n) n.scrollTop = keep[i]; });
   state.renderKey = `${state.view}|${state.sel}`; lastRender = Date.now();
+  // how each field looked when drawn (so a preset choice or a restored draft is not "typing")
+  root.querySelectorAll('input, textarea, select').forEach((x) => { x.dataset.init = x.type === 'checkbox' ? String(x.checked) : x.value; });
   setBadge();
 }
 
@@ -983,7 +985,7 @@ function detailColumn() {
 /** Staff: one task — what to send today (or what was sent), messages, and earlier updates. */
 function myTaskDetail() {
   const { task: t, updates = [], comments = [] } = state.detail;
-  const today = (state.data && state.data.today) || istDay(new Date());
+  const today = (state.data && !state.data.stale && state.data.today) || istDay(new Date());
   return [
     taskChips(t, today, false),
     t.details ? el('div', { class: 'task-details pre' }, t.details) : null,
@@ -1057,6 +1059,7 @@ function taskDiary(t, updates, today, staff) {
     if (staff && day === today) continue; // today's update is in its own box above
     const ups = byDay.get(day) || [];
     if (!ups.length && day < start) continue; // before its start: nothing to show
+    if (!ups.length && t.reopenedAt && day < String(t.reopenedAt).slice(0, 10)) continue; // closed (or off the list) then; open again since
     if (!ups.length && t.status !== 'open' && day === end) continue; // the day it was closed
     const wd = weekdayOf(day);
     let content;
@@ -1689,7 +1692,7 @@ function taskForm() {
         const out = await api('task.save', {
           id: t ? t.id : 0, assigneeId: Number(person.value), title: title.value, details: details.value, project: project.value,
           repeat: how.value === 'daily7' ? 'daily' : how.value, skipSunday: how.value === 'daily' || (how.value === 'once' && (!t || t.skipSunday)), weekday: Number(weekday.value), dueDate: due.value,
-          projectRef: t ? t.projectRef : pre.projectRef, stepRef: t ? t.stepRef : pre.stepRef, needsPhoto: needsPhoto.checked, startDate: start.value,
+          projectRef: t ? t.projectRef : pre.projectRef, stepRef: t ? t.stepRef : pre.stepRef, needsPhoto: needsPhoto.checked, startDate: start.value || (t && t.startDate && t.startDate > todayIs ? todayIs : ''),
         });
         if (files.files.length) await uploadTaskFiles(out.task.id, [...files.files].slice(0, 10));
         const fromProjects = !editing && pre.stepRef && state.user.owner;
@@ -2017,6 +2020,7 @@ if ('serviceWorker' in navigator) {
 
 /** The number on the app icon (Android, installed app): tasks still to send today. */
 function setBadge() {
+  if (state.user && state.user.role === 'admin' && navigator.clearAppBadge && document.visibilityState === 'visible') { navigator.clearAppBadge().catch(() => {}); return; }
   if (!state.user || state.user.role === 'admin' || state.view !== 'today' || !state.data || !navigator.setAppBadge) return;
   const n = (state.data.tasks || []).filter((t) => !t.today).length;
   (n ? navigator.setAppBadge(n) : navigator.clearAppBadge()).catch(() => {});

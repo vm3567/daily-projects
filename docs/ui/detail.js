@@ -1015,7 +1015,7 @@ function projectDiary(ctx, p, upd) {
       if (!list.length) {
         if (weekday(day) === 0) empty = h('span', { class: 'day-tag off' }, 'Off');
         else if (day === today && nowHm < fillBy) empty = h('span', { class: 'day-tag wait' }, 'Waiting for today\'s update');
-        else if (p.team && !(td && td.from && day >= td.from)) empty = h('span', { class: 'muted small' }, '…'); // the team's updates for this day are still loading
+        else if (p.team && !(td && td.from && day >= td.from)) empty = h('span', { class: 'muted small' }, t && t.days >= 120 && !t.loading ? '—' : '…'); // still loading (— older than the team history kept)
         else empty = [h('span', { class: 'day-tag miss' }, 'No progress'), h('span', { class: 'muted small' }, ' no update from anyone')];
       }
       return h('li', { class: 'diary-day', key: 'dd-' + day },
