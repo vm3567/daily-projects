@@ -424,3 +424,53 @@ export function pasteGoesToProject(ui, { viewerOpen = false, narrow = false } = 
   if (wideView || (ui.view === 'people' && !ui.search) || ui.round || ui.capture) return false;
   return !(narrow && ui.mobile !== 'detail');
 }
+
+/** A step given on its own (not a whole project): what to do with the person's open task now.
+ *  'done' (you ticked it), 'cancelled' (you deleted the step, or its whole project), or null (leave it / wait).
+ *  `savedIds` = the project ids in the saved data (null = not loaded). */
+export function singleStepClose(t, projects, savedIds, history, now = Date.now()) {
+  if (t.status !== 'open' || (t.seq !== null && t.seq !== undefined) || !t.stepRef) return null;
+  const p = projects.find((x) => x.steps.some((st) => st.id === t.stepRef));
+  if (p && p.team) return null; // part of a given project now: that path keeps it
+  const step = p && p.steps.find((st) => st.id === t.stepRef);
+  if (step && !step.done) return null;
+  if (singleStepCloseWaits(step, t.stepRef, history, now)) return null; // Undo still on screen: next time
+  if (step && t.reopenedAt && step.doneAt && Date.parse(String(t.reopenedAt).replace(' ', 'T') + '+05:30') > Date.parse(step.doneAt)) return null; // opened again there after your tick
+  if (!step && !projects.some((x) => x.id === t.projectRef)) {
+    // its whole project is gone: cancel once that delete is saved and can no longer be undone
+    if (!t.projectRef || takeBackWaits(t.projectRef, savedIds, history, now)) return null;
+  }
+  return step ? 'done' : 'cancelled';
+}
+
+/** The newest team message the owner was shown: 'Seen' / an answer marks as read only up to it (not one that came later). */
+export function seenUpTo(list) {
+  const ids = (list || []).map((c) => Number(c.id)).filter((n) => Number.isFinite(n) && n > 0);
+  return ids.length ? Math.max(...ids) : 0;
+}
+
+/** The version check: the first one past the browser's own store (it may hold an old version.txt), later ones never stored. */
+export function versionRequest(codeStamp, now = Date.now()) {
+  return codeStamp === null ? { url: 'version.txt', init: { cache: 'no-cache' } } : { url: `version.txt?check=${now}`, init: { cache: 'no-store' } };
+}
+
+/** A project's diary is wanted again at once. If a fetch is on its way (it may hold older data), it goes again when that ends. */
+export function askDiaryAgain(e) {
+  if (!e) return;
+  e.at = 0;
+  if (e.loading) e.stale = true;
+}
+
+/** A diary fetch ended: when it counts as fresh from (0 = fetch again at once). */
+export function diaryLoadedAt(e, now = Date.now()) {
+  const again = e.stale || (e.wantDays || 0) > e.days;
+  e.stale = false;
+  return again ? 0 : now;
+}
+
+/** A team photo kept in memory: fetch it (again)? Not while loading or shown; a failed one only after a minute (or ↻). */
+export const PHOTO_RETRY_MS = 60000;
+export function photoNeedsFetch(v, now = Date.now()) {
+  if (v === undefined) return true;
+  return !!v && typeof v === 'object' && now - v.failedAt >= PHOTO_RETRY_MS;
+}

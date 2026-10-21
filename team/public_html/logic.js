@@ -112,3 +112,40 @@ export function redrawHow({ typed = false, listTyped = false, hasDetail = false 
   if (!typed) return 'all';
   return hasDetail && !listTyped ? 'lists' : 'later';
 }
+
+/**
+ * Manager's projects list: the dot and the "now / all done" words for one project.
+ * A project given as one task (no steps yet) comes with open=0 but an open current task: it is live work, not done.
+ */
+export function projectRowState(p) {
+  const live = !!(p.open || p.current);
+  const dot = p.stuck ? 'red' : !live ? 'green' : p.current && p.current.sentToday ? 'green' : 'orange';
+  const now = p.current ? `now: ${p.open ? p.current.title : 'whole project'}` : !p.open ? 'all done ✓' : '';
+  return { dot, now };
+}
+
+/**
+ * A waiting item the server refused: what to show. { sticky: true, title, body } = the notice that stays (words to copy),
+ * or { sticky: false, text, ms } = a short toast. boxThere = the box the words went back to can still be opened.
+ * Updates, messages, steps and suggestions show their whole words in the notice that stays (nothing written is lost).
+ */
+export function giveBackShow(it, why, boxThere) {
+  const reason = String(why).replace(/\.$/, '');
+  const words = it.note || it.text || it.title || '';
+  const full = it.kind === 'suggest' && it.details ? `${words}\n${it.details}` : words;
+  if ((['comment', 'step', 'suggest'].includes(it.kind) || (it.kind === 'update' && !it.updateId)) && full) {
+    const tail = boxThere ? (it.kind === 'step' ? 'It is also back in the Add a step box.' : 'They are also back in the box.') : 'Copy them if you need them.';
+    return { sticky: true, title: `Could not send: ${reason}.`, body: `Your words:\n${full}\n\n${tail}` };
+  }
+  return { sticky: false, text: `Could not send "${words.slice(0, 60)}": ${reason}.`, ms: 10000 };
+}
+
+/** The notice that stays: each refused item is added under the earlier ones (a second one never wipes the first). */
+export const keptNotice = (list) => (list.length === 1 ? { title: list[0].title, body: list[0].body }
+  : { title: `Could not send ${list.length} items.`, body: list.map((x) => `${x.title}\n${x.body}`).join('\n\n———\n\n') });
+
+/** A new notice while the one with words to copy is open: it waits ('hold') until that one is closed. */
+export const noticeHow = ({ copyOpen = false, copy = false }) => (copy ? 'add' : copyOpen ? 'hold' : 'show');
+
+/** Ctrl+V of a photo on a task whose update waits on the phone (and is not being changed): refused, it would go nowhere. */
+export const pasteWaits = (outbox, taskId, editing) => !editing && (outbox || []).some((x) => (x.kind === 'update' || x.kind === 'photos') && x.taskId === taskId);

@@ -99,6 +99,12 @@ function server_sync_projects(): void {
       $p = $given[$ref] ?? null;
       $active = $p && ($p['state'] ?? '') === 'active';
       if (!$active && !one("SELECT id FROM tasks WHERE project_ref = ? AND seq IS NOT NULL AND status = 'open' LIMIT 1", [$ref])) continue; // nothing on anyone's list
+      // deleted in the projects app moments ago: wait for its Undo (15 s, plus the save) — take it back once that is over
+      if (!$p && $savedAt > time() - 20 && !in_array($ref, array_column($data['projects'], 'id'), true)) {
+        $retry = (int)setting('sync_retry', '0');
+        if (!$retry || $retry > $savedAt + 21) set_setting('sync_retry', (string)($savedAt + 21));
+        continue;
+      }
       // moved to someone else in Work Task (Move to…), and the owner's app has not taken that over yet: follow the move
       $who = $active ? (int)$p['team']['userId'] : 0;
       if ($active) {

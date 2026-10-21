@@ -15,7 +15,7 @@ import { ServerRepo, SERVER_TOKEN_KEY } from './serverrepo.js';
 import { MockRepo } from './mockrepo.js';
 import { device } from './device.js';
 import { DATA_OWNER, DATA_REPO, DATA_BRANCH, MOVED_TO, REFRESH_MS, AI_DAILY_LIMIT, BRIEF_CLAIM_MINUTES, WAIT_RED_DAYS, NO_WORK_NOTE_DAYS } from './config.js';
-import { dotColour, greenByTeamOnly, isSnoozed, restUntil, awakeProjects, activeProjects, nextStep, todayIndia, isSundayIndia, colourCounts, isOverdue, indiaDate, waitingDays, daysWithoutWork, dayScore, greenStreak, addDays, monthOf, fmtMinutes, singleStepCloseWaits, takeBackWaits, staffStepAction, pasteGoesToProject } from './rules.js';
+import { dotColour, greenByTeamOnly, isSnoozed, restUntil, awakeProjects, activeProjects, nextStep, todayIndia, isSundayIndia, colourCounts, isOverdue, indiaDate, waitingDays, daysWithoutWork, dayScore, greenStreak, addDays, monthOf, fmtMinutes, takeBackWaits, staffStepAction, pasteGoesToProject, singleStepClose, versionRequest, askDiaryAgain, diaryLoadedAt, photoNeedsFetch } from './rules.js';
 import { newId, clone, opMonth, groupHasTimer, cleanLink, carriedOps } from './ops.js';
 import * as ai from './ai.js';
 import { parseVoice } from './voice.js';
@@ -175,10 +175,11 @@ const ctx = {
   teamPeople: () => teamPeople(),
   teamDaily: (p) => teamDaily(p),
   teamPhoto: (id) => teamPhoto(id),
-  teamReply: (p, taskId, text, allIds = [], clientId = null) => teamApi('comment.add', { taskId, text, ...(clientId ? { clientId } : {}) })
-    .then(() => (allIds.length > 1 ? teamApi('tasks.read', { ids: allIds }) : null)) // answered = every message in the box is read
+  // upTo = the newest message shown in the box: one that came after it stays unread (it is shown next)
+  teamReply: (p, taskId, text, allIds = [], clientId = null, upTo = 0) => teamApi('comment.add', { taskId, text, ...(clientId ? { clientId } : {}), ...(upTo ? { upTo } : {}) })
+    .then(() => (allIds.length > 1 ? teamApi('tasks.read', { ids: allIds, ...(upTo ? { upTo } : {}) }) : null)) // answered = every message in the box is read
     .then(() => { refreshDaily(p.id); loadTeam(true); toast('Sent ✓'); }),
-  teamSeen: (p, taskIds) => teamApi('tasks.read', { ids: taskIds }).then(() => { refreshDaily(p.id); loadTeam(true); }),
+  teamSeen: (p, taskIds, upTo = 0) => teamApi('tasks.read', { ids: taskIds, ...(upTo ? { upTo } : {}) }).then(() => { refreshDaily(p.id); loadTeam(true); }),
   teamMsgPhoto: (id) => teamMsgPhoto(id),
   moreDaily: (p) => { const e = daily.get(p.id); teamDaily(p, (e ? e.days : 30) + 30); },
   teamBusy: (id) => team.busy.has(id),
@@ -2541,16 +2542,16 @@ function withSyncLock(fn) {
 }
 
 /** A team member's photo for the diary (needs the sign-in, so it is fetched, then shown). null while loading. */
-const teamPhotos = new Map(); // photo id -> object URL, or 'loading'
+const teamPhotos = new Map(); // photo id -> object URL, 'loading', or { failedAt } (tried again after a minute, or on ↻)
 function teamPhoto(id) {
   const v = teamPhotos.get(id);
-  if (v && v !== 'loading') return v;
-  if (!v) {
+  if (typeof v === 'string' && v !== 'loading') return v;
+  if (photoNeedsFetch(v)) {
     teamPhotos.set(id, 'loading');
     fetch('../api/?a=photo&id=' + id, { headers: { Authorization: 'Bearer ' + serverToken() } })
       .then((r) => (r.ok ? r.blob() : Promise.reject(new Error('photo'))))
       .then((b) => { teamPhotos.set(id, URL.createObjectURL(b)); render(); })
-      .catch(() => teamPhotos.delete(id));
+      .catch(() => teamPhotos.set(id, { failedAt: Date.now() }));
   }
   return null;
 }
@@ -2598,16 +2599,19 @@ async function rescoreDays(days) {
 }
 
 /** The diary of this project is fetched again with the next redraw (after a reply, or a new message). */
-function refreshDaily(projectId) { const e = daily.get(projectId); if (e) e.at = 0; render(); }
+function refreshDaily(projectId) { askDiaryAgain(daily.get(projectId)); render(); }
 
 /** A photo in a team message (fetched with the sign-in, shown from memory). */
-const msgPhotos = new Map();
+const msgPhotos = new Map(); // id -> object URL, null while loading, or { failedAt }
 function teamMsgPhoto(id) {
-  if (msgPhotos.has(id)) return msgPhotos.get(id);
+  const v = msgPhotos.get(id);
+  if (typeof v === 'string') return v;
+  if (!photoNeedsFetch(v)) return null;
   msgPhotos.set(id, null);
+  const failed = () => msgPhotos.set(id, { failedAt: Date.now() }); // tried again after a minute (or on ↻), not on every draw
   fetch('../api/?a=comment.photo&id=' + id, { headers: { Authorization: 'Bearer ' + serverToken() } })
-    .then((r) => (r.ok ? r.blob() : null)).then((b) => { if (b) { msgPhotos.set(id, URL.createObjectURL(b)); render(); } else msgPhotos.delete(id); })
-    .catch(() => msgPhotos.delete(id)); // failed: tried again on the next draw
+    .then((r) => (r.ok ? r.blob() : null)).then((b) => { if (b) { msgPhotos.set(id, URL.createObjectURL(b)); render(); } else failed(); })
+    .catch(failed);
   return null;
 }
 
@@ -2622,7 +2626,7 @@ function teamDaily(p, days) {
     e = { ...(e || {}), days: want, loading: true, at: Date.now(), wantDays: 0 };
     daily.set(p.id, e);
     teamApi('project.updates', { projectRef: p.id, days: want })
-      .then((out) => { e.data = out; e.loading = false; e.at = e.wantDays > e.days ? 0 : Date.now(); render(); })
+      .then((out) => { e.data = out; e.loading = false; e.at = diaryLoadedAt(e); render(); }) // asked again meanwhile: fetched again at once
       .catch(() => { e.loading = false; });
   }
   return e;
@@ -2747,16 +2751,12 @@ async function syncGivenNow(gen) {
 async function syncSingleSteps(tasks) {
   if (!store || !store.view || !store.canEdit()) return;
   const projects = store.view.data.projects;
+  const savedIds = store.base ? new Set(store.base.data.projects.map((p) => p.id)) : null;
   for (const t of tasks) {
-    if (t.status !== 'open' || (t.seq !== null && t.seq !== undefined) || !t.stepRef) continue;
-    const p = projects.find((x) => x.steps.some((st) => st.id === t.stepRef));
-    if (p && p.team) continue; // part of a given project now: that path keeps it
-    const step = p && p.steps.find((st) => st.id === t.stepRef);
-    if (step && !step.done) continue;
-    if (singleStepCloseWaits(step, t.stepRef, store.view.history)) continue; // Undo still on screen: next time
-    if (step && t.reopenedAt && step.doneAt && Date.parse(String(t.reopenedAt).replace(' ', 'T') + '+05:30') > Date.parse(step.doneAt)) continue; // opened again there after your tick
-    if (!step && !projects.some((x) => x.id === t.projectRef)) continue; // its project is not on this device: leave it
-    try { await teamApi('task.status', { id: t.id, status: step ? 'done' : 'cancelled' }); } catch { /* next time */ }
+    // ticked, or deleted (the step, or its whole project) once Undo is gone (rules.js)
+    const status = singleStepClose(t, projects, savedIds, store.view.history);
+    if (!status) continue;
+    try { await teamApi('task.status', { id: t.id, status }); } catch { /* next time */ }
   }
 }
 
@@ -2834,7 +2834,10 @@ function tickFinishedTeamTasks(tasks) {
 
 /** One load at a time: a forced load asked for while one runs makes that one go round once more. */
 async function loadTeam(force = false) {
-  if (force) for (const e of daily.values()) e.at = 0; // ↻ also brings the newest daily updates
+  if (force) {
+    for (const e of daily.values()) askDiaryAgain(e); // ↻ also brings the newest daily updates
+    for (const m of [teamPhotos, msgPhotos]) for (const [id, v] of m) if (v && typeof v === 'object') m.delete(id); // and tries failed photos again
+  }
   if (!onServer || (!force && Date.now() - team.at < 60000)) return;
   if (team.loading) { if (force) team.again = true; return; }
   team.loading = true;
@@ -2857,7 +2860,7 @@ async function loadTeamOnce() {
     // a new message from the team: the project diaries fetch again at once (not after their usual minute)
     const newMsg = (out.messages || []).some((m) => !team.messages.some((x) => x.id === m.id));
     team.messages = out.messages || [];
-    if (newMsg) for (const e of daily.values()) e.at = 0;
+    if (newMsg) for (const e of daily.values()) askDiaryAgain(e);
     if (out.alerts) team.alerts = out.alerts;
     if (out.summary) team.summary = out.summary;
     adoptStaffSteps(out.tasks);
@@ -2976,7 +2979,8 @@ async function checkNewVersion() {
   try {
     // version.txt is written by every upload (tools/deploy-worktask.sh): a different one = a new version
     // the first one comes the same way as the page's code (offline: the copy kept with it); later ones always from the server
-    const r = await fetch(codeStamp === null ? 'version.txt' : `version.txt?check=${Date.now()}`, codeStamp === null ? {} : { cache: 'no-store' });
+    const { url, init } = versionRequest(codeStamp); // the first one past the browser's store (offline: the copy kept with the page)
+    const r = await fetch(url, init);
     const stamp = r.ok ? (await r.text()).trim() : '';
     if (!stamp) return;
     if (codeStamp === null) { codeStamp = stamp; return; }

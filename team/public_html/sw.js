@@ -1,6 +1,6 @@
 // Work Task app shell: keeps the screens on the phone so the app opens fast and shows something
 // without internet. Data (api/) and the projects app (projects/, it has its own) are never kept here.
-const CACHE = 'worktask-v11';
+const CACHE = 'worktask-v12';
 const SHELL = ['./', 'index.html', 'app.js', 'logic.js', 'styles.css', 'projects/styles.css', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png'];
 
 self.addEventListener('install', (e) => {

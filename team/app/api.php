@@ -145,9 +145,11 @@ function client_id($v): ?string {
   return is_string($v) && preg_match('/^[A-Za-z0-9-]{8,60}$/', $v) ? $v : null;
 }
 
-function mark_read(array $taskIds, int $userId): void {
+/** $upTo: the newest message the person was shown (0 = all) — one that came after it stays unread. */
+function mark_read(array $taskIds, int $userId, int $upTo = 0): void {
   foreach (array_unique($taskIds) as $id) {
     $last = (int)(one('SELECT MAX(id) AS m FROM comments WHERE task_id = ?', [(int)$id])['m'] ?? 0);
+    if ($upTo > 0) $last = min($last, $upTo);
     q('INSERT INTO task_reads (task_id, user_id, at, last_id) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE at = VALUES(at), last_id = GREATEST(last_id, VALUES(last_id))', [(int)$id, $userId, now(), $last]);
   }
 }
@@ -249,7 +251,15 @@ function handle(string $a, array $in): array {
       if ($t && $hadIt && $uday === $day && (int)$t['assignee_id'] !== $me['id']) {
         throw new ApiError('This task was moved to ' . user_name((int)$t['assignee_id']) . ' before your update arrived, so it was not saved. Tell your manager what you did.');
       }
+      // an earlier day: only if it was theirs that day (not given to them or started later)
+      $notYetTheirs = function (array $t) use ($me, $uday): bool {
+        $first = one('SELECT to_id, at FROM task_moves WHERE task_id = ? AND (from_id = ? OR to_id = ?) ORDER BY at, id LIMIT 1', [$t['id'], $me['id'], $me['id']]);
+        $cameLater = $first && (int)$first['to_id'] === $me['id'] && $first['at'] > $uday . ' 23:59:59'; // (moved away and back: they had it from the start)
+        return $cameLater || $t['start_date'] > $uday || substr((string)$t['created_at'], 0, 10) > $uday;
+      };
       if ($t && ((int)$t['assignee_id'] !== $me['id'] || ($t['status'] !== 'open' && !$mine)) && $hadIt) {
+        // (history for an earlier day too: only by who held the task that day)
+        if ($uday < $day && $notYetTheirs($t)) throw new ApiError('That day was before this task was yours, so the update was not saved.');
         $note = txt($in['note'] ?? '', 4000, true, 'The update');
         $state = in_array($in['state'] ?? '', ['progress', 'finished'], true) ? $in['state'] : 'progress'; // not "Stuck": the task is not theirs now
         $old = one('SELECT user_id, note, updated_at, client_id FROM updates WHERE task_id = ? AND day = ?', [$t['id'], $uday]);
@@ -278,11 +288,7 @@ function handle(string $a, array $in): array {
         return ['update' => update_out($u, photos_of([(int)$u['id']])), 'history' => 'own'];
       }
       $t = own_task($me, (int)($in['taskId'] ?? 0));
-      if ($uday < $day) { // an earlier day: only if it was theirs that day (not given to them or started later)
-        $first = one('SELECT to_id, at FROM task_moves WHERE task_id = ? AND (from_id = ? OR to_id = ?) ORDER BY at, id LIMIT 1', [$t['id'], $me['id'], $me['id']]);
-        $cameLater = $first && (int)$first['to_id'] === $me['id'] && $first['at'] > $uday . ' 23:59:59'; // (moved away and back: they had it from the start)
-        if ($cameLater || $t['start_date'] > $uday || substr((string)$t['created_at'], 0, 10) > $uday) throw new ApiError('That day was before this task was yours, so the update was not saved.');
-      }
+      if ($uday < $day && $notYetTheirs($t)) throw new ApiError('That day was before this task was yours, so the update was not saved.');
       $cur = one('SELECT id, user_id, updated_at, client_id FROM updates WHERE task_id = ? AND day = ?', [$t['id'], $uday]);
       if ($cur && $ucid && (int)$cur['user_id'] === $me['id'] && $cur['client_id'] === $ucid) { // sent before, the answer was lost: the same save
         return ['update' => update_out(one('SELECT * FROM updates WHERE id = ?', [$cur['id']]), photos_of([(int)$cur['id']]))];
@@ -357,7 +363,7 @@ function handle(string $a, array $in): array {
         // the manager writes: the person doing it hears; the person writes: the managers hear
         notify($me['role'] === 'admin' ? [(int)$t['assignee_id']] : admin_ids(), 'msg', "💬 {$me['name']} · {$t['title']}", $text, '/#open=' . $t['id'], 'm' . $t['id']);
       }
-      mark_read([(int)$t['id']], $me['id']);
+      mark_read([(int)$t['id']], $me['id'], max(0, (int)($in['upTo'] ?? 0)));
       return ['comments' => comments_of((int)$t['id'])];
     }
     case 'project.addStep': { // the person adds a step to a project given to them; the owner's Daily Projects then adds it to the project
@@ -419,7 +425,7 @@ function handle(string $a, array $in): array {
     case 'tasks.read': { // "seen": these tasks' messages count as read for me
       $ids = array_slice(array_map('intval', (array)($in['ids'] ?? [])), 0, 100);
       foreach ($ids as $id) own_task($me, $id);
-      mark_read($ids, $me['id']);
+      mark_read($ids, $me['id'], max(0, (int)($in['upTo'] ?? 0)));
       return [];
     }
     case 'search': { // tasks, messages and updates with these words (staff: only their own tasks)
@@ -560,13 +566,15 @@ function handle(string $a, array $in): array {
         $open = array_values(array_filter($list, fn($t) => $t['status'] === 'open' && !str_ends_with((string)$t['stepRef'], ':whole')));
         $openAll = array_values(array_filter($list, fn($t) => $t['status'] === 'open'));
         $done = array_values(array_filter($list, fn($t) => $t['status'] === 'done' && !str_ends_with((string)$t['stepRef'], ':whole')));
-        if (!$openAll && max(array_map(fn($t) => (string)$t['doneAt'], $done) ?: ['']) < date('Y-m-d H:i:s', time() - 14 * 86400)) continue; // finished long ago
+        // (a project given as one task counts too: its open task is one open item, its finished one keeps it listed for 14 days)
+        $doneAll = array_filter($list, fn($t) => $t['status'] === 'done');
+        if (!$openAll && max(array_map(fn($t) => (string)$t['doneAt'], $doneAll) ?: ['']) < date('Y-m-d H:i:s', time() - 14 * 86400)) continue; // finished long ago
         $cur = null;
         foreach ($openAll as $t) if (!$t['queued']) { $cur = $t; break; }
         $ids = array_map(fn($t) => $t['id'], $list);
         $last = one('SELECT MAX(day) AS d FROM updates WHERE task_id IN (' . implode(',', array_fill(0, count($ids), '?')) . ')', $ids)['d'] ?? null;
         $names = array_values(array_unique(array_map(fn($t) => $t['assignee']['name'], $openAll ?: $list)));
-        $out[] = ['ref' => $ref, 'name' => end($list)['project'] ?: 'Project', 'people' => $names, 'open' => count($open), 'done' => count($done),
+        $out[] = ['ref' => $ref, 'name' => end($list)['project'] ?: 'Project', 'people' => $names, 'open' => count($open) ?: count($openAll), 'done' => count($done),
           'current' => $cur ? ['id' => $cur['id'], 'title' => $cur['title'], 'sentToday' => (bool)$cur['today']] : null, 'lastUpdate' => $last,
           'stuck' => (bool)array_filter($openAll, fn($t) => $t['stuck']), 'staffSteps' => count(array_filter($list, fn($t) => $t['createdBy'] === $t['assignee']['id']))];
       }

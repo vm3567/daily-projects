@@ -25,7 +25,7 @@ RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
 </FilesMatch>
 
 # The app files change often: always check for a newer copy
-<FilesMatch "\.(html|js|css)$">
+<FilesMatch "\.(html|js|css|txt)$">
   Header set Cache-Control "no-cache"
 </FilesMatch>
 

@@ -368,6 +368,9 @@ test('server: given projects follow the saved projects by themselves; messages, 
   await save([proj([{ id: 'a2', text: 'Press', done: false }])]);
   assert.deepEqual((await mine('ps1')).map((t) => t.title), ['Press'], 'started again: back');
   await save([]);
+  assert.equal((await mine('ps1')).length, 1, 'deleted just now: kept for the Undo wait');
+  sql("USE wt; UPDATE wt.dp_commits SET at = at - INTERVAL 30 SECOND WHERE id = (SELECT v FROM wt.settings WHERE k = 'dp_head'); UPDATE wt.settings SET v = UNIX_TIMESTAMP() - 1 WHERE k = 'sync_retry'");
+  await call('me', {}, tok.anita); // the Undo wait is over: the owed sync runs
   assert.deepEqual(await mine('ps1'), [], 'deleted: off the list');
 
   // future start, overview, project page for the manager
@@ -726,4 +729,64 @@ test('regression: an offline update on the whole-project task, sent after steps 
   assert.ok(r.ok, r.error);
   assert.equal((await call('task.get', { id: s1.id }, tok.suresh)).task.today?.note, 'offline whole words', 'the first step has today\'s update');
   await call('project.sync', { projectRef: 'rg18', project: '', assigneeId: 0, steps: [] }, tok.boss);
+});
+
+test('regression: an earlier day\'s history update only by who held the task that day', { skip }, async () => {
+  const t = (await call('task.save', { assigneeId: id.anita, title: 'Held then', repeat: 'daily', skipSunday: false }, tok.boss)).task;
+  sql(`UPDATE wt.tasks SET created_at = NOW() - INTERVAL 3 DAY, start_date = CURDATE() - INTERVAL 3 DAY WHERE id = ${t.id};
+    INSERT INTO wt.updates (task_id, user_id, day, note, state, created_at, updated_at) VALUES (${t.id}, ${id.anita}, '${istDay(2)}', 'Anita words', 'progress', NOW(), NOW())`);
+  await call('task.move', { id: t.id, toId: id.suresh }, tok.boss);
+  await call('task.move', { id: t.id, toId: id.boss }, tok.boss);
+  const r = await call('update.save', { taskId: t.id, note: 'not mine that day', day: istDay(2) }, tok.suresh);
+  assert.ok(!r.ok, 'Suresh got it today: two days ago was not his');
+  assert.equal(String(sql(`USE wt; SELECT note FROM wt.updates WHERE task_id = ${t.id} AND day = '${istDay(2)}'`)).trim().split('\n').pop(), 'Anita words', 'Anita\'s update is unchanged');
+  // made for him yesterday and closed today: the day before it existed is refused too
+  const c = (await call('task.save', { assigneeId: id.suresh, title: 'Closed later', repeat: 'once' }, tok.boss)).task;
+  sql(`UPDATE wt.tasks SET created_at = NOW() - INTERVAL 1 DAY, start_date = CURDATE() - INTERVAL 1 DAY WHERE id = ${c.id}`);
+  await call('task.status', { id: c.id, status: 'cancelled' }, tok.boss);
+  assert.ok(!(await call('update.save', { taskId: c.id, note: 'before it existed', day: istDay(2) }, tok.suresh)).ok, 'refused');
+  assert.equal(Number(String(sql(`USE wt; SELECT COUNT(*) FROM wt.updates WHERE task_id = ${c.id}`)).trim().split('\n').pop()), 0, 'no row saved');
+});
+
+test('regression: a project given as one task counts as open, and stays listed once finished', { skip }, async () => {
+  await call('project.sync', { projectRef: 'rg19', project: 'One task P', assigneeId: id.suresh, steps: [{ stepRef: 'rg19:whole', title: 'One task P' }] }, tok.boss);
+  let ov = (await call('projects.overview', {}, tok.boss)).projects.find((p) => p.ref === 'rg19');
+  assert.ok(ov && ov.open >= 1, 'not "all done" while its task is open');
+  const w = (await openOf('suresh', 'rg19'))[0];
+  assert.ok((await call('update.save', { taskId: w.id, note: 'done', state: 'finished' }, tok.suresh)).ok);
+  ov = (await call('projects.overview', {}, tok.boss)).projects.find((p) => p.ref === 'rg19');
+  assert.ok(ov, 'still listed after it is finished');
+});
+
+test('regression: a project deleted and put back with Undo is never taken back by the server', { skip }, async () => {
+  const P = { id: 'rg20', name: 'Undo P', state: 'active', team: { userId: id.suresh, name: 'S' }, steps: [{ id: 'u1', text: 'U one', done: false }] };
+  await saveProjects([P]);
+  const before = (await openOf('suresh', 'rg20')).map((t) => t.id);
+  assert.equal(before.length, 1);
+  const n = pushLen();
+  await saveProjects([]); // deleted in the projects app
+  assert.deepEqual((await openOf('suresh', 'rg20')).map((t) => t.id), before, 'kept during the Undo wait');
+  await saveProjects([P]); // Undo
+  assert.deepEqual((await openOf('suresh', 'rg20')).map((t) => t.id), before, 'the same step, never cancelled');
+  assert.ok(!/Off your list: Undo P/.test(pushSince(n)), 'Suresh is not told it went');
+  await saveProjects([]);
+  sql("USE wt; UPDATE wt.dp_commits SET at = at - INTERVAL 30 SECOND WHERE id = (SELECT v FROM wt.settings WHERE k = 'dp_head'); UPDATE wt.settings SET v = UNIX_TIMESTAMP() - 1 WHERE k = 'sync_retry'");
+  await call('me', {}, tok.anita);
+  assert.deepEqual(await openOf('suresh', 'rg20'), [], 'taken back once the wait is over');
+});
+
+test('regression: "Seen" and Send mark messages read only up to the newest one shown', { skip }, async () => {
+  const t = (await call('task.save', { assigneeId: id.suresh, title: 'Seen check', repeat: 'once', project: 'Seen P', projectRef: 'rs10', stepRef: 'rs10s' }, tok.boss)).task;
+  const shown = (await call('comment.add', { taskId: t.id, text: 'first' }, tok.suresh)).comments.at(-1);
+  await call('comment.add', { taskId: t.id, text: 'came later' }, tok.suresh);
+  await call('tasks.read', { ids: [t.id], upTo: shown.id }, tok.boss);
+  let d = await call('project.updates', { projectRef: 'rs10' }, tok.boss);
+  assert.deepEqual(d.comments.filter((c) => c.unread).map((c) => c.text), ['came later'], 'the message that came after the box was drawn stays new');
+  const later = d.comments.find((c) => c.text === 'came later');
+  await call('comment.add', { taskId: t.id, text: 'ok', upTo: shown.id }, tok.boss);
+  d = await call('project.updates', { projectRef: 'rs10' }, tok.boss);
+  assert.ok(d.comments.find((c) => c.id === later.id).unread, 'Send also leaves it new');
+  await call('tasks.read', { ids: [t.id] }, tok.boss);
+  d = await call('project.updates', { projectRef: 'rs10' }, tok.boss);
+  assert.ok(!d.comments.some((c) => c.unread), 'without upTo: all read, as before');
 });

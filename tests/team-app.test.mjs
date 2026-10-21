@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { addDay, weekdayOf, dueOn, itemKey, diaryRows, fieldChanged, lateValue, afterFlush, boxStillThere, updateSaveBody, redrawHow } from '../team/public_html/logic.js';
+import { addDay, weekdayOf, dueOn, itemKey, diaryRows, fieldChanged, lateValue, afterFlush, boxStillThere, updateSaveBody, redrawHow, projectRowState, giveBackShow, keptNotice, noticeHow, pasteWaits } from '../team/public_html/logic.js';
 const APP = readFileSync(new URL('../team/public_html/app.js', import.meta.url), 'utf8');
 
 // Wed 21 Oct 2026 is "today" in these checks; 18 Oct is a Sunday.
@@ -109,7 +109,11 @@ test('team: a refused update says "back in the box" only when the box is still t
   assert.ok(!boxStillThere({ ...t, assignee: { id: 9 } }, 3), 'moved to someone else: no box');
   assert.ok(!boxStillThere({ ...t, status: 'done' }, 3), 'closed: no box');
   assert.ok(!boxStillThere(undefined, 3), 'not on this phone any more');
-  assert.match(APP, /notice\('stuck', `Could not send[^\n]*\$\{words\}[^\n]*stay: true, copy: true/, 'the whole words are shown, and stay until closed');
+  // (the words are now built by giveBackShow in logic.js, checked below; here: it is shown in the notice that stays)
+  assert.match(APP, /notice\('stuck', show\.title, show\.body, null, \{ stay: true, copy: true \}\)/, 'the whole words are shown, and stay until closed');
+  const u = giveBackShow({ kind: 'update', taskId: 4, note: 'All ten pumps checked' }, 'Task moved.', false);
+  assert.ok(u.sticky && u.body.includes('All ten pumps checked') && /Copy them/.test(u.body));
+  assert.match(giveBackShow({ kind: 'comment', text: 'hi' }, 'x', true).body, /also back in the box/);
 });
 
 test('team: every update save carries a clientId (a timed-out online save that is then queued is the same save)', () => {
@@ -137,4 +141,65 @@ test('team: menu and list clicks never redraw over a half-filled Give / Edit for
   assert.ok(!/(^|[^t])render\(\)/m.test(push.replace(/softRender\(\)/g, '')), 'Turn on notifications keeps the form');
   const person = APP.slice(APP.indexOf("class: 'menu-item person'"), APP.indexOf("el('span', { class: 'dot ' + dot })"));
   assert.match(person, /softRender\(\)/); assert.match(person, /!formHasText\(\)\) \{ go\('today'\)/, 'go(today) only when nothing is typed');
+});
+
+test('team: a project given as one task (no steps yet) is live work, not "all done"', () => {
+  const whole = { open: 0, done: 0, stuck: false, current: { title: 'Paint line 2', sentToday: false } };
+  assert.deepEqual(projectRowState(whole), { dot: 'orange', now: 'now: whole project' }, 'no update today: orange, never green "all done"');
+  assert.equal(projectRowState({ ...whole, current: { ...whole.current, sentToday: true } }).dot, 'green');
+  assert.deepEqual(projectRowState({ open: 0, done: 3, current: null }), { dot: 'green', now: 'all done ✓' });
+  assert.deepEqual(projectRowState({ open: 2, done: 1, current: { title: 'Step B', sentToday: false } }), { dot: 'orange', now: 'now: Step B' });
+  assert.equal(projectRowState({ ...whole, stuck: true }).dot, 'red');
+  assert.match(APP, /const \{ dot, now \} = projectRowState\(p\)/, 'the projects list uses the rule');
+});
+
+test('team: a refused step or suggestion shows its whole words to copy; "back in the box" only if the box is there', () => {
+  const long = 'Order the spare servo motor for line 3 '.repeat(5).trim();
+  const gone = giveBackShow({ kind: 'step', projectRef: 'p1', title: long }, 'This project is not given to you.', false);
+  assert.ok(gone.sticky, 'stays until closed');
+  assert.ok(gone.body.includes(long), 'the whole step, not 60 characters');
+  assert.ok(!/Add a step box/.test(gone.body) && /Copy them/.test(gone.body), 'no box: never says it is back in it');
+  assert.match(giveBackShow({ kind: 'step', title: 'x' }, 'y', true).body, /back in the Add a step box/);
+  const sug = giveBackShow({ kind: 'suggest', title: 'Clean filters', details: 'The dryer clogs every week' }, 'No.', false);
+  assert.ok(sug.sticky && sug.body.includes('The dryer clogs every week'), 'a suggestion shows its details too');
+  assert.equal(giveBackShow({ kind: 'photos', note: 'n', updateId: 4 }, 'Closed.', false).sticky, false, 'photos: a toast as before');
+  assert.match(APP, /it\.kind === 'step' \? myProjects\(\)\.some\(\(p\) => p\.ref === it\.projectRef\)/, 'the step box is looked for in my projects');
+});
+
+test('team: two refused items both stay on screen, and other news waits until they are closed', () => {
+  const a = { title: 'Could not send: Task moved.', body: 'Your words:\nfirst' }, b = { title: 'Could not send: Task moved.', body: 'Your words:\nsecond' };
+  assert.deepEqual(keptNotice([a]), a);
+  const two = keptNotice([a, b]);
+  assert.ok(two.body.includes('first') && two.body.includes('second'), 'the second never wipes the first');
+  assert.match(two.title, /2 items/);
+  assert.equal(noticeHow({ copyOpen: true, copy: false }), 'hold', 'news never replaces words still to copy');
+  assert.equal(noticeHow({ copyOpen: true, copy: true }), 'add');
+  assert.equal(noticeHow({ copyOpen: false, copy: false }), 'show');
+  const fn = APP.slice(APP.indexOf('function notice('), APP.indexOf('const DAYS'));
+  assert.match(fn, /if \(how === 'hold'\) \{ held = /); assert.match(fn, /kept\.push\(/); assert.match(fn, /notice\(\.\.\.h\)/, 'held news shown once closed');
+});
+
+test('team: the offline bar redraw keeps the "turn on notifications" banner', () => {
+  const fn = APP.slice(APP.indexOf('function refreshBar()'), APP.indexOf('function idb()'));
+  assert.match(fn, /offlineBar\(\), pushBanner\(\)/);
+});
+
+test('team: a finished send never redraws over a form opened and typed in meanwhile', () => {
+  const photo = APP.slice(APP.indexOf('async function sendMsgPhoto'), APP.indexOf('// Ctrl+V on an open task'));
+  assert.match(photo, /finally \{[^\n]*if \(!formHasText\(\)\) render\(\); else state\.reloadLater = true;/);
+  assert.ok(!/finally \{ delete state\.sending\[key\]; render\(\); \}/.test(photo));
+  const send = APP.slice(APP.indexOf("toast('Sent ✓');\n      if (document.contains(btn)"), APP.indexOf("}, 'Send');"));
+  assert.ok(send.length > 0, 'the update Send checks before redrawing');
+  assert.match(send, /if \(document\.contains\(btn\) \|\| !formHasText\(\)\) render\(\);[^\n]*\n\s*else state\.reloadLater = true;/);
+  assert.match(send, /if \(state\.view === 'today'\) \{ if \(!formHasText\(\)\) render\(\); else state\.reloadLater = true; \}/);
+});
+
+test('team: Ctrl+V of a photo while the update waits on the phone is refused (it would go nowhere)', () => {
+  const box = [{ kind: 'update', taskId: 5 }];
+  assert.ok(pasteWaits(box, 5, false));
+  assert.ok(pasteWaits([{ kind: 'photos', taskId: 5 }], 5, false));
+  assert.ok(!pasteWaits(box, 5, true), 'changing the update: the photo goes with it');
+  assert.ok(!pasteWaits(box, 6, false)); assert.ok(!pasteWaits([{ kind: 'comment', taskId: 5 }], 5, false)); assert.ok(!pasteWaits(undefined, 5, false));
+  const paste = APP.slice(APP.indexOf("document.addEventListener('paste'"), APP.indexOf('async function editMessage'));
+  assert.ok(paste.indexOf('pasteWaits(state.outbox, t.id') > 0 && paste.indexOf('pasteWaits(') < paste.indexOf('addTaskPhotos('), 'checked before the photo is added');
 });

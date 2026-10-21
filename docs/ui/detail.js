@@ -3,7 +3,7 @@
 import { h, fmtDay, fmtTime, fmtSize, HAS_KEYBOARD } from './dom.js';
 
 const MOD = /Mac|iPhone|iPad/.test(globalThis.navigator ? navigator.platform || navigator.userAgent || '' : '') ? '⌘' : 'Ctrl';
-import { dotColour, isSnoozed, restUntil, stepWaitsForReminder, daysBetween, addDays, todayIndia, isOverdue, indiaDate, waitingDays, lastWorkDate, nextStep, stepLinkedTo, personStatus, minutesBetween, fmtMinutes, weekStart } from '../rules.js';
+import { dotColour, isSnoozed, restUntil, stepWaitsForReminder, daysBetween, addDays, todayIndia, isOverdue, indiaDate, waitingDays, lastWorkDate, nextStep, stepLinkedTo, personStatus, minutesBetween, fmtMinutes, weekStart, seenUpTo } from '../rules.js';
 import { WAIT_RED_DAYS } from '../config.js';
 import { newId, PRIORITIES, cleanUrl, groupHasTimer, MAX_SNOOZE_DAYS } from '../ops.js';
 
@@ -76,13 +76,14 @@ function teamMessages(ctx, p) {
   if (!list.length) return null;
   const ui = ctx.ui;
   const taskIds = [...new Set(list.map((c) => c.taskId))];
+  const upTo = seenUpTo(list); // read only up to what is shown here
   const send = async (form) => {
     const text = form.elements.reply.value.trim();
     if (!text) return;
     form.elements.reply.disabled = true;
     const cids = (ui.teamReplyCid = ui.teamReplyCid || {});
     if (!cids[p.id] || cids[p.id].text !== text) cids[p.id] = { id: 'r' + newId() + newId(), text }; // a retry of the same words: the same id (never twice)
-    try { await ctx.teamReply(p, list[list.length - 1].taskId, text, taskIds, cids[p.id].id); delete (ui.teamReply ||= {})[p.id]; delete cids[p.id]; }
+    try { await ctx.teamReply(p, list[list.length - 1].taskId, text, taskIds, cids[p.id].id, upTo); delete (ui.teamReply ||= {})[p.id]; delete cids[p.id]; }
     catch (e) { ctx.toast(e.message, 5000); form.elements.reply.disabled = false; }
   };
   return h('div', { class: 'banner team-msgs', key: 'tmsg-' + p.id },
@@ -97,7 +98,7 @@ function teamMessages(ctx, p) {
     h('form', { class: 'row', onSubmit: (e) => { e.preventDefault(); send(e.target); } },
       h('input', { name: 'reply', key: 'reply-' + p.id, placeholder: 'Answer…', autocomplete: 'off', value: (ui.teamReply || {})[p.id] || '', onInput: (e, el) => { (ui.teamReply = typeof ui.teamReply === 'object' && ui.teamReply ? ui.teamReply : {})[p.id] = el.value; } }),
       h('button', { class: 'btn primary small', type: 'submit' }, 'Send'),
-      h('button', { class: 'btn small', type: 'button', title: 'Mark as read without answering', onClick: () => ctx.teamSeen(p, taskIds).catch((e) => ctx.toast(e.message, 5000)) }, '✓ Seen')));
+      h('button', { class: 'btn small', type: 'button', title: 'Mark as read without answering', onClick: () => ctx.teamSeen(p, taskIds, upTo).catch((e) => ctx.toast(e.message, 5000)) }, '✓ Seen')));
 }
 
 /** Put the cursor in Today's update ("What did you do on this step?"). */

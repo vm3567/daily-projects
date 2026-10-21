@@ -196,3 +196,31 @@ test('worktask.in: a step whose team task was cancelled or finished can be given
   assert.equal(btn.textContent, '👥 Give to team');
   assert.ok(!el.textContent.includes('cancelled'), 'no old cancelled chip on an open step');
 });
+
+test('worktask.in: "Seen" and "Send" mark team messages read only up to the newest one shown', async () => {
+  const s = sampleState();
+  const ctx = fakeCtx(s, { selected: 'p1', update: {} });
+  ctx.onServer = true;
+  ctx.teamInfo = () => ({ byStep: new Map(), fillBy: '18:00' });
+  ctx.teamPeople = () => [];
+  ctx.teamTask = () => null;
+  ctx.teamDaily = () => ({ data: { tasks: [], updates: [], comments: [
+    { id: 41, taskId: 7, by: 'Valar', at: '2026-10-21 10:00:00', text: 'Done the firing', unread: true },
+    { id: 39, taskId: 8, by: 'Valar', at: '2026-10-21 09:00:00', text: 'Started', unread: true },
+    { id: 12, taskId: 7, by: 'Valar', at: '2026-10-20 09:00:00', text: 'old', unread: false },
+  ] } });
+  const calls = [];
+  ctx.teamSeen = (p, ids, upTo) => { calls.push(['seen', ids, upTo]); return Promise.resolve(); };
+  ctx.teamReply = (p, taskId, text, ids, cid, upTo) => { calls.push(['reply', ids, upTo]); return Promise.resolve(); };
+  const el = renderDetail(ctx);
+  const find = (node, f) => (f(node) ? node : (node.childNodes || []).map((c) => find(c, f)).find(Boolean));
+  const seen = find(el, (n) => n.nodeName === 'BUTTON' && n.textContent === '✓ Seen');
+  assert.ok(seen, 'Seen button shown');
+  await seen.__on.click();
+  const form = find(el, (n) => n.nodeName === 'FORM' && find(n, (x) => x.textContent === 'Send'));
+  form.elements = { reply: { value: 'Thanks', disabled: false } };
+  form.__on.submit({ preventDefault() {}, target: form });
+  await new Promise((r) => setTimeout(r, 0));
+  assert.deepEqual(calls[0], ['seen', [8, 7], 41], 'Seen: up to the newest shown (41), not whatever came later');
+  assert.deepEqual(calls[1], ['reply', [8, 7], 41], 'Send: the same');
+});

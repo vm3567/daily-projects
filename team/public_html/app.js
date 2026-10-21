@@ -1,7 +1,7 @@
 // Work Task: the team app. Staff see and fill their own tasks; the manager gives tasks and sees everything.
 // No outside libraries. All text from the server is put on screen as text (never as HTML).
 
-import { addDay, weekdayOf, dueOn, itemKey, diaryRows, fieldChanged, lateValue, afterFlush, boxStillThere, updateSaveBody, redrawHow } from './logic.js'; // the rules (checked in tests/team-app.test.mjs)
+import { addDay, weekdayOf, dueOn, itemKey, diaryRows, fieldChanged, lateValue, afterFlush, boxStillThere, updateSaveBody, redrawHow, projectRowState, giveBackShow, keptNotice, noticeHow, pasteWaits } from './logic.js'; // the rules (checked in tests/team-app.test.mjs)
 
 const TOKEN_KEY = 'wt.token';
 const state = {
@@ -41,9 +41,13 @@ function toast(text, ms = 3000) {
 
 /** The coloured bar at the top, like a new-mail alert: blue = new task / project / message, green = an update. */
 let noticeTimer = 0;
+let kept = [], held = null; // the refused words on show (they add up), and a notice that waits until they are closed
 function notice(kind, title, body, onOpen, opts = {}) {
   let n = document.getElementById('notice');
   if (!n) { n = el('div', { id: 'notice', role: 'status' }); document.body.append(n); }
+  const how = noticeHow({ copyOpen: !n.hidden && kept.length > 0, copy: !!opts.copy }); // (the rule: logic.js)
+  if (how === 'hold') { held = [kind, title, body, onOpen, opts]; return; } // never over words still to copy
+  if (how === 'add') { kept.push({ title, body }); ({ title, body } = keptNotice(kept)); }
   n.className = 'notice ' + (kind === 'update' ? 'green' : kind === 'stuck' ? 'amber' : 'blue');
   n.replaceChildren(
     opts.copy ? el('div', { class: 'notice-main notice-copy' }, el('strong', null, title), body ? el('span', null, body) : null) // (words to copy: not a button)
@@ -55,7 +59,11 @@ function notice(kind, title, body, onOpen, opts = {}) {
   clearTimeout(noticeTimer);
   if (!opts.stay) noticeTimer = setTimeout(hideNotice, 12000); // (words to copy stay until closed)
 }
-function hideNotice() { const n = document.getElementById('notice'); if (n) n.hidden = true; }
+function hideNotice() {
+  const n = document.getElementById('notice'); if (n) n.hidden = true;
+  const wasKept = kept.length > 0; kept = [];
+  if (wasKept && held) { const h = held; held = null; notice(...h); } // the news that waited behind the words to copy
+}
 
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const LONG_DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -109,7 +117,7 @@ function setOffline(on) {
 /** Redraw only the offline bar (a whole redraw would wipe what is being typed). */
 function refreshBar() {
   const h = document.getElementById('bar');
-  if (h) h.replaceChildren(offlineBar() || '');
+  if (h) h.replaceChildren(...[offlineBar(), pushBanner()].filter(Boolean)); // (keep the "turn on notifications" banner)
 }
 
 function idb() {
@@ -209,15 +217,11 @@ function giveBack(it, why) {
     if ((it.files || []).length) state.files[it.taskId] = it.files.slice(0, 5);
   }
   else if (it.kind === 'step') { (state.stepDrafts ||= {})[it.projectRef] = it.title; }
-  const words = it.note || it.text || it.title || '';
-  const reason = String(why).replace(/\.$/, '');
-  if ((it.kind === 'comment' || (it.kind === 'update' && !it.updateId)) && words) {
-    const box = boxStillThere(knownTask(it.taskId), state.user && state.user.id) ? ' They are also back in the box.' : ' Copy them if you need them.';
-    notice('stuck', `Could not send: ${reason}.`, `Your words:\n${words}\n\n${box.trim()}`, null, { stay: true, copy: true });
-    return;
-  }
-  const back = it.kind === 'photos' || it.kind === 'suggest' ? '' : it.kind === 'step' ? ' The step is back in the Add a step box.' : '';
-  toast(`Could not send "${words.slice(0, 60)}": ${reason}.${back}`, it.kind === 'suggest' ? 15000 : 10000);
+  const boxThere = it.kind === 'step' ? myProjects().some((p) => p.ref === it.projectRef) // (taken back or moved: no Add a step box)
+    : it.kind === 'suggest' ? false : boxStillThere(knownTask(it.taskId), state.user && state.user.id);
+  const show = giveBackShow(it, why, boxThere); // (the rule: logic.js)
+  if (show.sticky) notice('stuck', show.title, show.body, null, { stay: true, copy: true });
+  else toast(show.text, show.ms);
 }
 
 /** What a waiting item belongs to: later items of the same thing wait behind one that keeps failing. */
@@ -823,8 +827,8 @@ function projectsList() {
   const ago = (day) => !day ? 'no update yet' : day === state.data.today ? 'updated today' : `last update ${fmtDay(day)}`;
   return el('ul', { class: 'list-body' }, list.map((p) => {
     const total = p.open + p.done;
-    const dot = p.stuck ? 'red' : !p.open ? 'green' : p.current && p.current.sentToday ? 'green' : 'orange';
-    const sub = [p.people.join(', '), total ? `${p.done} of ${total} done` : 'no steps yet', p.current && p.open ? `now: ${p.current.title}` : !p.open ? 'all done ✓' : '', ago(p.lastUpdate),
+    const { dot, now } = projectRowState(p); // (a project given as one task, no steps yet, is live work: the rule is in logic.js)
+    const sub = [p.people.join(', '), total ? `${p.done} of ${total} done` : 'no steps yet', now, ago(p.lastUpdate),
       p.staffSteps ? `${p.staffSteps} step${p.staffSteps > 1 ? 's' : ''} added by them` : ''].filter(Boolean).join(' · ');
     return el('li', { class: 'prow' + (state.sel === 'project:' + p.ref ? ' current' : '') },
       el('button', { class: 'prow-btn', onClick: () => openDetail('project:' + p.ref) },
@@ -1313,7 +1317,8 @@ function updateForm(t) {
       if (twoSteps) await api('update.save', updateSaveBody({ taskId: t.id, note: d.note, clientId: cid, finish: true }));
       delete state.drafts[t.id]; delete state.files[t.id]; delete state.editing[t.id];
       toast('Sent ✓');
-      render(); // the empty box at once (a box still holding the sent words would count as "typing" and hold back the reload)
+      if (document.contains(btn) || !formHasText()) render(); // the empty box at once (a box still holding the sent words would count as "typing" and hold back the reload)
+      else state.reloadLater = true; // another form was opened and typed in meanwhile: never wipe it
       loadView();
     } catch (ex) {
       if (ex instanceof OfflineError) { // keep it on the phone; it goes out when online
@@ -1339,7 +1344,7 @@ function updateForm(t) {
       delete state.sending[t.id];
       if (!document.contains(btn)) { // redrawn while sending: the new Send button was drawn greyed out
         if (!err.hidden) toast(err.textContent, 6000);
-        if (state.view === 'today') render();
+        if (state.view === 'today') { if (!formHasText()) render(); else state.reloadLater = true; } // (never over a form typed in meanwhile)
       }
     }
   } }, 'Send');
@@ -1450,7 +1455,7 @@ async function sendMsgPhoto(taskId, f, text) {
     toast('Sent ✓');
     if (state.sel === 'task:' + taskId && state.detail) state.detail.comments = out.comments;
   } catch (ex) { toast(ex instanceof OfflineError ? 'Photos in messages need the internet. Try again when online.' : ex.message, 6000); }
-  finally { delete state.sending[key]; render(); }
+  finally { delete state.sending[key]; if (!formHasText()) render(); else state.reloadLater = true; } // (a form opened meanwhile is not wiped)
 }
 
 // Ctrl+V on an open task: in the message box = a photo message; otherwise staff add it to today's update, the manager as an instruction file
@@ -1471,6 +1476,7 @@ document.addEventListener('paste', (e) => {
   if (state.user.role === 'admin') { toast('📎 Adding to the task…'); uploadTaskFiles(t.id, files.slice(0, 10)).then(() => { toast('📎 Added ✓'); loadDetail(); }).catch((ex) => toast(ex.message, 6000)); return; }
   if (!images.length) { toast('Only photos can be added to an update.', 5000); return; }
   if (t.status !== 'open' && !t.today) { toast('This task is closed.', 4000); return; }
+  if (pasteWaits(state.outbox, t.id, !!state.editing[t.id])) { toast('Wait until your update is sent, then add the photo.', 5000); return; } // (no box to put it in)
   addTaskPhotos(t, images.slice(0, 5), !!(t.today && !state.editing[t.id]));
   toast('📷 Pasted into your update');
 });

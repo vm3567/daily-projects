@@ -779,3 +779,64 @@ test('Ctrl+V picture goes to the project only when its page is on screen (not un
   assert.equal(pasteGoesToProject({ ...ui, view: 'diary' }), false);
   assert.equal(pasteGoesToProject({ ...ui, mobile: 'list' }, { narrow: true }), false);
 });
+
+test('a single given step whose whole project was deleted: its task is cancelled once the delete is saved and Undo is gone', async () => {
+  const { singleStepClose, UNDO_GRACE_MS } = await import('../docs/rules.js');
+  const now = Date.parse('2026-10-02T10:00:10+05:30');
+  const s = withProject('2026-10-01');
+  const t = { id: 9, status: 'open', seq: null, stepRef: 's1', projectRef: 'p1' };
+  assert.equal(singleStepClose(t, s.data.projects, new Set(['p1']), s.history, now), null, 'step still open: leave it');
+  applyOp(s, makeOp('deleteProject', { projectId: 'p1' }, new Date(now - 4000).toISOString()));
+  const projects = s.data.projects;
+  assert.equal(singleStepClose(t, projects, new Set(['p1']), s.history, now), null, 'delete not saved yet');
+  assert.equal(singleStepClose(t, projects, null, s.history, now), null, 'saved data not loaded');
+  assert.equal(singleStepClose(t, projects, new Set(), s.history, now), null, 'Undo still on screen');
+  assert.equal(singleStepClose(t, projects, new Set(), s.history, now + UNDO_GRACE_MS), 'cancelled', 'later: cancelled (it was left open for good before)');
+  assert.equal(singleStepClose({ ...t, projectRef: null }, projects, new Set(), s.history, now + UNDO_GRACE_MS), null, 'no project known: leave it');
+  assert.equal(singleStepClose({ ...t, seq: 1 }, projects, new Set(), s.history, now + UNDO_GRACE_MS), null, 'part of a whole project: not this path');
+  assert.equal(singleStepClose({ ...t, status: 'done' }, projects, new Set(), s.history, now + UNDO_GRACE_MS), null, 'already closed');
+  // the old paths still work: ticked step = done, deleted step = cancelled
+  const s2 = withProject('2026-10-01');
+  applyOp(s2, makeOp('tickStep', { projectId: 'p1', stepId: 's1' }, new Date(now - 60000).toISOString()));
+  assert.equal(singleStepClose(t, s2.data.projects, new Set(['p1']), s2.history, now), 'done');
+  applyOp(s2, makeOp('deleteStep', { projectId: 'p1', stepId: 's2' }, new Date(now - 60000).toISOString()));
+  assert.equal(singleStepClose({ ...t, stepRef: 's2' }, s2.data.projects, new Set(['p1']), s2.history, now), 'cancelled');
+});
+
+test('team messages: read only up to the newest one shown', async () => {
+  const { seenUpTo } = await import('../docs/rules.js');
+  assert.equal(seenUpTo([{ id: 41 }, { id: 39 }, { id: '45' }]), 45);
+  assert.equal(seenUpTo([]), 0);
+  assert.equal(seenUpTo(null), 0);
+});
+
+test('version check: the first stamp is never taken from the browser store; later ones are never stored', async () => {
+  const { versionRequest } = await import('../docs/rules.js');
+  assert.deepEqual(versionRequest(null, 5), { url: 'version.txt', init: { cache: 'no-cache' } });
+  assert.deepEqual(versionRequest('abc', 5), { url: 'version.txt?check=5', init: { cache: 'no-store' } });
+});
+
+test('diary: an "again at once" asked while a fetch is on its way is not lost when that fetch ends', async () => {
+  const { askDiaryAgain, diaryLoadedAt } = await import('../docs/rules.js');
+  const e = { days: 30, wantDays: 0, loading: true, at: 1000 };
+  askDiaryAgain(e); // a reply finished while the older fetch was on its way
+  e.loading = false;
+  assert.equal(diaryLoadedAt(e, 2000), 0, 'fetched again at once');
+  assert.equal(diaryLoadedAt(e, 3000), 3000, 'the next one counts as fresh');
+  const f = { days: 30, wantDays: 60, loading: false, at: 0 };
+  assert.equal(diaryLoadedAt(f, 2000), 0, 'more days asked for: fetched again');
+  const g = { days: 30, loading: false, at: 500 };
+  askDiaryAgain(g);
+  assert.equal(g.at, 0); assert.ok(!g.stale, 'not loading: just fetched on the next draw');
+  askDiaryAgain(undefined);
+});
+
+test('a team photo that failed is not fetched again on every redraw (only after a minute)', async () => {
+  const { photoNeedsFetch, PHOTO_RETRY_MS } = await import('../docs/rules.js');
+  assert.equal(photoNeedsFetch(undefined, 1000), true, 'never fetched');
+  assert.equal(photoNeedsFetch('loading', 1000), false);
+  assert.equal(photoNeedsFetch(null, 1000), false, 'loading (messages)');
+  assert.equal(photoNeedsFetch('blob:x', 1000), false, 'shown');
+  assert.equal(photoNeedsFetch({ failedAt: 1000 }, 1000 + 5000), false, 'failed 5 s ago: wait');
+  assert.equal(photoNeedsFetch({ failedAt: 1000 }, 1000 + PHOTO_RETRY_MS), true, 'a minute later: try again');
+});
