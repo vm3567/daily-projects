@@ -466,7 +466,7 @@ test('server: review round 2 — an undone Finished survives the server sync; th
   await save([]);
 });
 
-test('server: review round 3 — move notes cannot be faked; a same-day offline update written before a move is kept', { skip }, async () => {
+test('server: review round 3/5 — move notes cannot be faked; a late same-day update never lands on the new holder\'s task', { skip }, async () => {
   const t = (await call('task.save', { assigneeId: id.suresh, title: 'Round three', repeat: 'daily' }, tok.boss)).task;
   const fake = await call('comment.add', { taskId: t.id, text: '↔ Moved from Anita to Suresh.' }, tok.suresh);
   assert.equal(fake.comments.at(-1).text, 'Moved from Anita to Suresh.', 'the sign of a real move note is taken off');
@@ -474,11 +474,10 @@ test('server: review round 3 — move notes cannot be faked; a same-day offline 
   await new Promise((r) => setTimeout(r, 1100));
   await call('task.move', { id: t.id, toId: id.anita }, tok.boss);
   const late = await call('update.save', { taskId: t.id, note: 'written before the move', writtenAt }, tok.suresh);
-  assert.ok(late.ok && late.update.note === 'written before the move', 'kept, and the answer is only his own words');
+  assert.ok(!late.ok && /moved to Anita/.test(late.error), 'today\'s words never go on the new holder\'s task: refused with a clear reason (his text goes back to his box)');
   const after = await call('update.save', { taskId: t.id, note: 'after the move', writtenAt: new Date().toISOString() }, tok.suresh);
   assert.ok(!after.ok, 'written after the move: refused');
-  const again = await call('update.save', { taskId: t.id, note: 'written before the move', writtenAt }, tok.suresh);
-  assert.ok(again.ok, 'sent twice (reply lost)');
+  assert.equal((await call('task.get', { id: t.id }, tok.anita)).updates.length, 0, 'nothing was put on Anita\'s task');
   const rep = (await call('report.week', {}, tok.boss)).people;
   assert.ok(rep.find((p) => p.name === 'Anita'), 'report still works');
 });
@@ -494,4 +493,14 @@ test('server: review round 4 — an older offline update never undoes the person
   assert.equal(back.task.status, 'done', 'still done');
   assert.equal(back.updates[0].note, 'all done', 'the newer update stays');
   assert.ok(!(await call('update.save', { taskId: t.id, note: 'x', writtenAt: '2000-01-01T00:00:00Z' }, tok.anita)).ok, 'a made-up time does not open a door');
+});
+
+test('server: review round 5 — a resend after a lost answer is the same save (photos and Finished still go)', { skip }, async () => {
+  const t = (await call('task.save', { assigneeId: id.suresh, title: 'Round five', repeat: 'once' }, tok.boss)).task;
+  const writtenAt = new Date(Date.now() - 5000).toISOString();
+  const first = await call('update.save', { taskId: t.id, note: 'offline words', state: 'progress', writtenAt, clientId: 'up12345-r5' }, tok.suresh);
+  const again = await call('update.save', { taskId: t.id, note: 'offline words', state: 'progress', writtenAt, clientId: 'up12345-r5' }, tok.suresh);
+  assert.ok(first.ok && again.ok && !again.history, 'the resend is not "older"');
+  assert.equal(again.update.id, first.update.id);
+  assert.ok((await photo(again.update.id, tok.suresh, 'up12345-r5-p0')).ok, 'its photo still goes on');
 });

@@ -81,8 +81,11 @@ function server_sync_projects(): void {
       $ref = (string)$ref;
       $psc = (int)setting('psc:' . md5($ref), '0');
       // the owner's app had changes not saved yet when it sent this project, and nothing was saved since: the saved copy is older
+      // (until the saved projects show the person it was given to — whichever device saves next)
       $psp = json_decode(setting('psp:' . md5($ref), ''), true);
-      if (is_array($psp) && ($psp['base'] ?? '') === setting('dp_head', '') && (int)($psp['at'] ?? 0) > time() - 7 * 86400) continue;
+      $gp = $given[$ref] ?? null;
+      $savedWho = $gp && ($gp['state'] ?? '') === 'active' ? (int)$gp['team']['userId'] : 0;
+      if (is_array($psp) && (int)($psp['at'] ?? 0) > time() - 7 * 86400 && (int)($psp['who'] ?? -1) !== $savedWho) continue;
       if ($psc > time() - 300) { // the owner's app sent this project minutes ago: it knows best — look again once that is over
         $retry = (int)setting('sync_retry', '0');
         if (!$retry || $retry > $psc + 301) set_setting('sync_retry', (string)($psc + 301));

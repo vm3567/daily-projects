@@ -1,6 +1,6 @@
 // Work Task app shell: keeps the screens on the phone so the app opens fast and shows something
 // without internet. Data (api/) and the projects app (projects/, it has its own) are never kept here.
-const CACHE = 'worktask-v8';
+const CACHE = 'worktask-v9';
 const SHELL = ['./', 'index.html', 'app.js', 'styles.css', 'projects/styles.css', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png'];
 
 self.addEventListener('install', (e) => {
@@ -18,7 +18,7 @@ self.addEventListener('fetch', (e) => {
     if (res.ok) { const copy = res.clone(); caches.open(CACHE).then((c) => c.put(e.request, copy)).catch(() => {}); return res; }
     return caches.match(e.request).then((r) => r || res); // the host answered with an error page: the saved copy, if there is one
   });
-  const kept = () => caches.match(e.request).then((r) => r || caches.match('index.html'));
+  const kept = () => caches.match(e.request).then((r) => r || (e.request.mode === 'navigate' ? caches.match('index.html') : Response.error()));
   // the kept (old) copy was shown because the network was slow, and a newer file then arrived: tell the page
   let netDone = false;
   net.then(() => { netDone = true; }, () => { netDone = true; });

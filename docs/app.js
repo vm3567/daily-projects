@@ -2750,6 +2750,7 @@ async function syncSingleSteps(tasks) {
     if (p && p.team) continue; // part of a given project now: that path keeps it
     const step = p && p.steps.find((st) => st.id === t.stepRef);
     if (step && !step.done) continue;
+    if (step && t.reopenedAt && step.doneAt && Date.parse(String(t.reopenedAt).replace(' ', 'T') + '+05:30') > Date.parse(step.doneAt)) continue; // opened again there after your tick
     if (!step && !projects.some((x) => x.id === t.projectRef)) continue; // its project is not on this device: leave it
     try { await teamApi('task.status', { id: t.id, status: step ? 'done' : 'cancelled' }); } catch { /* next time */ }
   }
@@ -2797,7 +2798,8 @@ function tickFinishedTeamTasks(tasks) {
       seen.delete(t.id); // open now: when it is finished again, it is new again (here and on every other device)
       continue;
     }
-    if (t.status !== 'done' || seen.has(t.id)) continue;
+    if (t.status !== 'done') continue;
+    // (handled = the shared 'tn' note below; this device's list only saves work, a team untick on another device clears the note)
     const latest = team.byStep.get(t.stepRef); // the step was given again after this (re-opened): the old task must not tick it
     if (latest && latest.id !== t.id) { seen.add(t.id); continue; }
     const p = store.view.data.projects.find((x) => x.id === t.projectRef) || store.view.data.projects.find((x) => x.steps.some((st) => st.id === t.stepRef));

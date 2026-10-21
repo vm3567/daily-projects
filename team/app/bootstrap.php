@@ -221,6 +221,8 @@ function migrate(PDO $pdo): void {
     "ALTER TABLE comments ADD COLUMN kind VARCHAR(10) NULL",
     "UPDATE comments c JOIN users u ON u.id = c.user_id SET c.kind = 'move' WHERE u.role = 'admin' AND c.text LIKE '↔ Moved from % to %'",
     "ALTER TABLE tasks ADD COLUMN reopened_at DATETIME NULL",
+    // v11: the phone's id of an update, so a resend after a lost reply is known as the same save
+    "ALTER TABLE updates ADD COLUMN client_id VARCHAR(60) NULL",
   ];
   $pdo->exec($steps[0]);
   $done = (int)($pdo->query("SELECT v FROM settings WHERE k = 'schema'")->fetchColumn() ?: 0);

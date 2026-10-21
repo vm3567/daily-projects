@@ -156,7 +156,7 @@ async function sendItem(it, tok) {
   if (it.kind === 'suggest') { await api('suggest', { title: it.title, details: it.details, repeat: it.repeat, clientId: it.clientId }); return; }
   if (it.kind === 'update' && !it.updateId) {
     const twoSteps = it.state === 'finished' && it.needsPhoto && it.files && it.files.length && !it.hadPhoto;
-    const out = await api('update.save', { taskId: it.taskId, note: it.note, state: twoSteps ? 'progress' : it.state, day, writtenAt: it.at });
+    const out = await api('update.save', { taskId: it.taskId, note: it.note, state: twoSteps ? 'progress' : it.state, day, writtenAt: it.at, clientId: it.clientId }); // (a resend after a lost answer = the same save)
     it.updateId = out.update.id; it.thenFinish = !!twoSteps && !out.history;
     if (twoSteps) it.note = out.update.note; // keep the earlier person's words (after a move) for the Finished save
     if (out.history === 'merged' || out.history === 'older') { // kept as words only (the task moved on, or a newer update of theirs stays)
@@ -413,6 +413,7 @@ async function loadList() {
   } catch (e) { failed = e; }
   if (state.user !== me) { state.busy = false; return; } // signed out meanwhile
   if (n !== loadSeq) return; // a newer load started: this answer is old
+  if (state.view !== view) { state.busy = false; if (!state.data) loadList(); return; } // another screen meanwhile (a task opened from People, say)
   state.data = data; state.busy = false;
   if (data && data.fillBy) state.fillBy = data.fillBy; // kept for screens whose list has no time (Tasks, Projects, Search)
   state.loadFailed = !!failed && !data;
@@ -433,6 +434,10 @@ async function loadDetail() {
   try {
     if (sel.startsWith('task:')) {
       detail = await api('task.get', { id: Number(sel.slice(5)) });
+      const now = istDay(new Date());
+      if (detail && detail.fromCache && detail.task && detail.task.today && detail.task.today.day !== now) { // the saved copy is from an earlier day
+        detail = { ...detail, task: { ...detail.task, last: detail.task.today, today: null } };
+      }
       if (me.role === 'admin') people = (await api('users.list')).users.filter((u) => u.active);
     } else if (sel.startsWith('project:')) {
       detail = await api(me.role === 'admin' ? 'project.team' : 'project.mine', { projectRef: sel.slice(8) });
@@ -1476,6 +1481,7 @@ function suggestForm() {
   const err = el('p', { class: 'err', hidden: true });
   const title = el('input', { required: true, placeholder: 'Clean the dryer filters every week' });
   const details = el('textarea', { placeholder: 'Why it is needed (optional)' });
+  const formId = newClientId(); // a retry of this form sends the same id: kept once
   const how = el('select', null, el('option', { value: 'once' }, 'One time'), el('option', { value: 'daily' }, 'Every day'), el('option', { value: 'weekly' }, 'Once a week'));
   const btn = el('button', { class: 'primary', type: 'submit' }, 'Send to my manager');
   return [
@@ -1484,7 +1490,7 @@ function suggestForm() {
     el('form', { class: 'card stack', onSubmit: async (e) => {
       e.preventDefault();
       btn.disabled = true; err.hidden = true;
-      const item = { title: title.value, details: details.value, repeat: how.value, clientId: newClientId() };
+      const item = { title: title.value, details: details.value, repeat: how.value, clientId: formId };
       try { await api('suggest', item); toast('Sent for a yes ✓'); state.section = 'sugg'; go('today'); }
       catch (ex) {
         if (ex instanceof OfflineError) { // kept on the phone, sent when online
@@ -1682,7 +1688,7 @@ function taskForm() {
       try {
         const out = await api('task.save', {
           id: t ? t.id : 0, assigneeId: Number(person.value), title: title.value, details: details.value, project: project.value,
-          repeat: how.value === 'daily7' ? 'daily' : how.value, skipSunday: how.value === 'daily', weekday: Number(weekday.value), dueDate: due.value,
+          repeat: how.value === 'daily7' ? 'daily' : how.value, skipSunday: how.value === 'daily' || (how.value === 'once' && (!t || t.skipSunday)), weekday: Number(weekday.value), dueDate: due.value,
           projectRef: t ? t.projectRef : pre.projectRef, stepRef: t ? t.stepRef : pre.stepRef, needsPhoto: needsPhoto.checked, startDate: start.value,
         });
         if (files.files.length) await uploadTaskFiles(out.task.id, [...files.files].slice(0, 10));
@@ -1854,8 +1860,10 @@ async function liveCheck(quiet = false) {
     const same = (a, b) => JSON.stringify(a, (k, v) => (k === 'time' ? undefined : v)) === JSON.stringify(b, (k, v) => (k === 'time' ? undefined : v));
     if (state.data && same(out, state.data)) return;
     const had = new Set(listOf(state.data).map((t) => t.id));
+    const madeAfter = (t) => !admin || !state.lastLook || Date.parse(String(t.createdAt).replace(' ', 'T') + '+05:30') > state.lastLook - 60000;
     // new to this screen — but not what this person made themselves (an offline step that just went out, a suggestion, a project they gave)
-    const fresh = state.data && view === 'today' ? listOf(out).filter((t) => !had.has(t.id) && !state.knownIds.has(t.id) && t.createdBy !== state.user.id) : [];
+    const fresh = state.data && view === 'today' ? listOf(out).filter((t) => !had.has(t.id) && !state.knownIds.has(t.id) && t.createdBy !== state.user.id && madeAfter(t)) : [];
+    state.lastLook = Date.now();
     for (const t of fresh) state.newIds.add(t.id);
     if (!quiet && Date.now() - (state.pushAt || 0) > 30000) tellNews(fresh, out, state.data); // a notification just said it: not twice
     const a = document.activeElement;
@@ -1946,7 +1954,7 @@ async function pushOff() {
 function pushBanner() {
   const s = pushState();
   if (s !== 'default' && s !== 'granted') return null;
-  try { if (Number(localStorage.getItem('wt.pushLater') || 0) > Date.now()) return null; } catch { /* blocked */ }
+  try { if (Number(localStorage.getItem('wt.pushLater') || 0) > Date.now() || localStorage.getItem(pushOffKey())) return null; } catch { /* blocked */ }
   return el('div', { class: 'push-banner' },
     el('span', null, '🔔 Get a message on this phone when a new task or update comes — like email.'),
     el('span', { class: 'row' },

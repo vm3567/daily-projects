@@ -27,6 +27,7 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(req.url);
   if (req.method !== 'GET' || url.origin !== self.location.origin) return; // GitHub / AI calls are not touched
   if (!url.pathname.startsWith(new URL('./', self.location).pathname)) return; // only the app's own files: never data (../api/)
+  if (url.pathname.endsWith('/version.txt') && url.search) return; // the "new version?" check: always the server, never kept
   event.respondWith(networkFirst(req, url));
 });
 
