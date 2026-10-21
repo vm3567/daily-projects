@@ -173,7 +173,7 @@ const ctx = {
   teamPeople: () => teamPeople(),
   teamDaily: (p) => teamDaily(p),
   teamPhoto: (id) => teamPhoto(id),
-  teamReply: (p, taskId, text, allIds = []) => teamApi('comment.add', { taskId, text })
+  teamReply: (p, taskId, text, allIds = [], clientId = null) => teamApi('comment.add', { taskId, text, ...(clientId ? { clientId } : {}) })
     .then(() => (allIds.length > 1 ? teamApi('tasks.read', { ids: allIds }) : null)) // answered = every message in the box is read
     .then(() => { refreshDaily(p.id); loadTeam(true); toast('Sent ✓'); }),
   teamSeen: (p, taskIds) => teamApi('tasks.read', { ids: taskIds }).then(() => { refreshDaily(p.id); loadTeam(true); }),
@@ -2561,6 +2561,7 @@ function teamProgress(projectId) {
 }
 
 function markTeamWork(tasks, teamDays) {
+  const firstPast = [];
   if (!store || !store.view || !store.canEdit()) return;
   const today = todayIndia();
   const projects = store.view.data.projects;
@@ -2569,10 +2570,10 @@ function markTeamWork(tasks, teamDays) {
     const u = [t.today, t.last].find((x) => x && x.state !== 'stuck');
     if (!u || !u.day || u.day > today) continue;
     const p = projects.find((x) => x.id === t.projectRef) || projects.find((x) => x.steps.some((st) => st.id === t.stepRef));
-    if (p && p.state === 'active' && (!p.teamWorkDate || p.teamWorkDate < u.day)) store.dispatch('teamWorked', { projectId: p.id, day: u.day });
+    if (p && p.state === 'active' && (!p.teamWorkDate || p.teamWorkDate < u.day) && store.dispatch('teamWorked', { projectId: p.id, day: u.day }) && u.day < today) firstPast.push(u.day);
   }
   // every day the team worked on a project (also days this page was not open): those day boxes count it too
-  const past = new Set();
+  const past = new Set(firstPast);
   for (const [ref, days] of Object.entries(teamDays || {})) {
     for (const day of days) {
       const p = store.view.data.projects.find((x) => x.id === ref);
@@ -2697,10 +2698,10 @@ async function syncGivenNow(gen) {
     let p = fresh(id);
     if (!p || !p.team) continue;
     // moved on Work Task (↔ Move to…): follow the new person instead of moving the steps back
-    const onTeam = gen === team.gen ? [...team.byStep.values()].filter((t) => t.projectRef === p.id && t.seq !== null && t.status === 'open') : [];
+    const onTeam = gen === team.gen && team.listAt >= dataFreshAt ? [...team.byStep.values()].filter((t) => t.projectRef === p.id && t.seq !== null && t.status === 'open') : [];
     const moved = onTeam.length && onTeam.every((t) => t.assignee.id === onTeam[0].assignee.id) && onTeam[0].assignee.id !== p.team.userId ? onTeam[0].assignee : null;
     if (moved) {
-      store.dispatch('setProjectTeam', { projectId: p.id, userId: moved.id, name: moved.name, needsPhoto: !!p.team.needsPhoto });
+      store.dispatch('setProjectTeam', { projectId: p.id, userId: moved.id, name: moved.name, needsPhoto: !!p.team.needsPhoto, byTeam: true });
       p = fresh(id);
       if (!p || !p.team) continue;
     }
@@ -2757,8 +2758,12 @@ function adoptStaffSteps(tasks) {
     const p = store.view.data.projects.find((x) => x.id === t.projectRef);
     if (!p) continue; // not here yet (data still loading): next time
     // already in the project (added on an earlier look and kept on this device): now the server may forget it was waiting
-    if (p.steps.some((st) => st.id === t.stepRef)) { adopted.push(t.id); continue; }
-    actMany(p.id, [['addStep', { projectId: p.id, stepId: t.stepRef, text: t.title }]], `👥 ${t.assignee.name} added a step: ${t.title}`);
+    if (p.steps.some((st) => st.id === t.stepRef)) {
+      const saved = store.base && store.base.data.projects.find((x) => x.id === p.id);
+      if (saved && saved.steps.some((st) => st.id === t.stepRef)) adopted.push(t.id);
+      continue;
+    }
+    actMany(p.id, [['addStep', { projectId: p.id, stepId: t.stepRef, text: t.title, byTeam: true }]], `👥 ${t.assignee.name} added a step: ${t.title}`);
   }
   if (adopted.length) teamApi('tasks.adopted', { ids: adopted }).catch(() => { /* asked again next time; adding twice is ignored */ });
 }
@@ -2778,7 +2783,7 @@ function tickFinishedTeamTasks(tasks) {
       const note = p && (p.workNotes || []).find((n) => n.id === 'tn' + t.id);
       const latest = team.byStep.get(t.stepRef);
       if (step && step.done && note && (!latest || latest.id === t.id)) {
-        actMany(p.id, [['untickStep', { projectId: p.id, stepId: step.id }], ['deleteWorkNote', { projectId: p.id, noteId: note.id }]], `↩ ${t.assignee.name} opened “${step.text}” again`);
+        actMany(p.id, [['untickStep', { projectId: p.id, stepId: step.id, byTeam: true }], ['deleteWorkNote', { projectId: p.id, noteId: note.id, byTeam: true }]], `↩ ${t.assignee.name} opened “${step.text}” again`);
         seen.delete(t.id);
       }
       continue;
@@ -2832,6 +2837,7 @@ async function loadTeamOnce() {
     const out = await res.json();
     if (!out.ok || gen !== team.gen) return;
     team.byStep = new Map(out.tasks.map((t) => [t.stepRef, t]));
+    team.listAt = Date.now(); // (a list older than the projects on screen must not move a project back)
     team.fillBy = out.fillBy;
     team.late = out.late;
     // a new message from the team: the project diaries fetch again at once (not after their usual minute)
@@ -2953,11 +2959,10 @@ start();
 let codeStamp = null;
 async function checkNewVersion() {
   try {
-    // every code file of the page: a change to any of them is a new version
-    const parts = await Promise.all(['app.js', 'ui/detail.js', 'ops.js', 'rules.js', 'store.js', 'styles.css'].map((f) => fetch(f, { method: 'HEAD', cache: 'no-store' })
-      .then((r) => (r.ok ? (r.headers.get('etag') || r.headers.get('last-modified') || '') : ''))));
-    if (parts.some((x) => !x)) return; // offline, or a file did not answer: next time
-    const stamp = parts.join('|');
+    // version.txt is written by every upload (tools/deploy-worktask.sh): a different one = a new version
+    const r = await fetch('version.txt', { cache: 'no-store' });
+    const stamp = r.ok ? (await r.text()).trim() : '';
+    if (!stamp) return;
     if (codeStamp === null) { codeStamp = stamp; return; }
     if (stamp !== codeStamp && !document.getElementById('update-ready')) {
       const b = document.createElement('button');

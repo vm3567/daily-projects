@@ -21,6 +21,13 @@ function dp_data(): ?array {
 }
 
 /** The open steps of a given project, as Daily Projects sends them (the same rules as projectSteps() there). */
+/** stepRef => when it was ticked, for the steps done in the saved projects. */
+function server_done_at(array $p): array {
+  $out = [];
+  foreach ((array)($p['steps'] ?? []) as $s) if (!empty($s['done']) && !empty($s['id']) && !empty($s['doneAt'])) $out[(string)$s['id']] = (string)$s['doneAt'];
+  return $out;
+}
+
 function server_steps(array $p, string $today): array {
   $steps = is_array($p['steps'] ?? null) ? $p['steps'] : [];
   $open = [];
@@ -39,6 +46,7 @@ function locked_project_sync(array $me, array $in, string $ref, string $day): ar
   $lk = 'ps:' . md5($ref);
   if (!(int)(one('SELECT GET_LOCK(?, 10) AS l', [$lk])['l'] ?? 0)) throw new ApiError('Busy, try again in a moment.');
   try {
+    if (!empty($in['_server']) && (int)setting('psc:' . md5($ref), '0') >= (int)($in['_since'] ?? PHP_INT_MAX)) return []; // the owner's app just sent it
     db()->beginTransaction();
     $out = project_sync($me, $in, $ref, $day);
     db()->commit();
@@ -57,6 +65,8 @@ function server_sync_projects(): void {
   $data = $owner ? dp_data() : null;
   if (!$data) return;
   $today = today();
+  $since = time();
+  $savedAt = strtotime((string)(one('SELECT at FROM dp_commits WHERE id = ?', [setting('dp_head', '')])['at'] ?? '')) ?: 0;
   $prev = $GLOBALS['me'] ?? null;
   $GLOBALS['me'] = $owner; // as the owner (the owner is not told about their own changes)
   try {
@@ -70,6 +80,7 @@ function server_sync_projects(): void {
     foreach (array_unique([...array_keys($given), ...$refs]) as $ref) {
       $ref = (string)$ref;
       $psc = (int)setting('psc:' . md5($ref), '0');
+      if ($psc && $psc > $savedAt) continue; // the owner's app changed this project after the last save: the next save brings it
       if ($psc > time() - 300) { // the owner's app sent this project minutes ago: it knows best — look again once that is over
         $retry = (int)setting('sync_retry', '0');
         if (!$retry || $retry > $psc + 301) set_setting('sync_retry', (string)($psc + 301));
@@ -86,8 +97,8 @@ function server_sync_projects(): void {
       }
       $in = $p
         ? ['project' => (string)($p['name'] ?? ''), 'assigneeId' => $who, 'steps' => $active ? server_steps($p, $today) : [],
-           'needsPhoto' => !empty($p['team']['needsPhoto']), 'reason' => $p['state'] ?? '', '_server' => true]
-        : ['project' => '', 'assigneeId' => 0, 'steps' => [], '_server' => true, 'reason' => in_array($ref, array_column($data['projects'], 'id'), true) ? 'taken' : 'deleted'];
+           'needsPhoto' => !empty($p['team']['needsPhoto']), 'reason' => $p['state'] ?? '', '_server' => true, 'doneAt' => server_done_at($p), '_since' => $since]
+        : ['project' => '', 'assigneeId' => 0, 'steps' => [], '_server' => true, '_since' => $since, 'reason' => in_array($ref, array_column($data['projects'], 'id'), true) ? 'taken' : 'deleted'];
       try { locked_project_sync($owner, $in, $ref, $today); }
       catch (Throwable $e) { error_log("team sync $ref: " . $e->getMessage()); } // (a switched-off person, say): the others still go
     }
@@ -140,7 +151,10 @@ function team_jobs(): void {
   $due = (int)setting('jobs_at', '0') <= time() - 600;
   $retryDue = ($r = (int)setting('sync_retry', '0')) && $r <= time();
   if (!$syncNow && !$due && !$retryDue) return;
-  if (!(int)(one("SELECT GET_LOCK('wt_jobs', 0) AS l")['l'] ?? 0)) return; // another request is doing it
+  if (!(int)(one("SELECT GET_LOCK('wt_jobs', 0) AS l")['l'] ?? 0)) { // another request is doing it
+    if ($syncNow) set_setting('sync_retry', (string)(time() + 5)); // this save's sync is owed: the next request runs it
+    return;
+  }
   $prev = $GLOBALS['me'] ?? null;
   try {
     $retry = (int)setting('sync_retry', '0');

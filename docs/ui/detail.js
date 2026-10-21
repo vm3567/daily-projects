@@ -78,7 +78,9 @@ function teamMessages(ctx, p) {
     const text = form.elements.reply.value.trim();
     if (!text) return;
     form.elements.reply.disabled = true;
-    try { await ctx.teamReply(p, list[list.length - 1].taskId, text, taskIds); delete (ui.teamReply ||= {})[p.id]; }
+    const cids = (ui.teamReplyCid = ui.teamReplyCid || {});
+    cids[p.id] ||= 'r' + newId() + newId(); // one id per answer: tapping Send again after a lost reply does not send it twice
+    try { await ctx.teamReply(p, list[list.length - 1].taskId, text, taskIds, cids[p.id]); delete (ui.teamReply ||= {})[p.id]; delete cids[p.id]; }
     catch (e) { ctx.toast(e.message, 5000); form.elements.reply.disabled = false; }
   };
   return h('div', { class: 'banner team-msgs', key: 'tmsg-' + p.id },
@@ -403,7 +405,7 @@ function updateBox(ctx, p) {
     onKeydown: (e, el) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); save(el.form, true); } },
     onPaste: (e) => { // a pasted screenshot becomes a photo on this update; another file goes to the project's files
       const files = [...((e.clipboardData && e.clipboardData.files) || [])];
-      if (!files.length) return;
+      if (!files.length || (e.clipboardData.getData('text/plain') || '').trim()) return; // text (cells from Excel come with a picture): the text
       e.preventDefault();
       pasteIntoProject(ctx, p, files);
     },
@@ -708,7 +710,8 @@ function infoChips(ctx, p, today) {
     : h('span', { class: 'info-chip static' + cls, title }, text);
   const out = [];
   if (p.team) {
-    out.push(chip(`👥 ${p.team.name}`, 'Given to the team — tap to change person or take back', () => { ui.giveOpen = ui.giveOpen === p.id ? null : p.id; ui.givePhoto = !!p.team.needsPhoto; ctx.render(); }, ' team'));
+    out.push(chip(`👥 ${p.team.name}`, p.state === 'active' ? 'Given to the team — tap to change person or take back' : 'Given to the team (off their list while not active)',
+      p.state === 'active' ? () => { ui.giveOpen = ui.giveOpen === p.id ? null : p.id; ui.givePhoto = !!p.team.needsPhoto; ctx.render(); } : null, ' team'));
     const tp = ctx.teamProgress ? ctx.teamProgress(p.id) : null;
     if (tp && (tp.lastUpdate || tp.stuck)) {
       const when = !tp.lastUpdate ? 'no update yet' : tp.lastUpdate === today ? 'updated today' : `last update ${fmtDay(tp.lastUpdate)}`;
@@ -991,6 +994,11 @@ function projectDiary(ctx, p, upd) {
   }
   let start = addDays(today, -(shownDays - 1));
   if (created > start) start = created;
+  const needMonth = start.slice(0, 7);
+  if (!store.view.history[needMonth] && store.availableMonths().includes(needMonth) && !(ui.monthLoading ||= {})[needMonth]) {
+    ui.monthLoading[needMonth] = true; // your own ticks and time on those days (the page draws again when they arrive)
+    Promise.resolve(store.loadMonth(needMonth)).catch(() => { ui.monthLoading[needMonth] = false; });
+  }
   const days = [];
   for (let day = today; day >= start; day = addDays(day, -1)) days.push(day);
   return h('section', { class: 'block diary', key: 'diary-' + p.id },
@@ -999,11 +1007,12 @@ function projectDiary(ctx, p, upd) {
     filter ? h('div', { class: 'diary-filter' }, `Only: ${stepText.get(filter) || 'this task'} `,
       h('button', { class: 'link small', type: 'button', onClick: () => { ui.diaryTask = null; ctx.render(); } }, '✕ show all')) : null,
     h('ul', { class: 'diary-days' }, days.map((day) => {
-      const list = (byDay.get(day) || []).filter((e) => !filter || e.stepId === filter).sort((a, b) => (a.at < b.at ? 1 : -1));
+      const list = (byDay.get(day) || []).filter((e) => !filter || e.stepId === filter).sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
       let empty = null;
       if (!list.length) {
         if (weekday(day) === 0) empty = h('span', { class: 'day-tag off' }, 'Off');
         else if (day === today && nowHm < fillBy) empty = h('span', { class: 'day-tag wait' }, 'Waiting for today\'s update');
+        else if (p.team && !(td && td.from && day >= td.from)) empty = h('span', { class: 'muted small' }, '…'); // the team's updates for this day are still loading
         else empty = [h('span', { class: 'day-tag miss' }, 'No progress'), h('span', { class: 'muted small' }, ' no update from anyone')];
       }
       return h('li', { class: 'diary-day', key: 'dd-' + day },
@@ -1016,6 +1025,7 @@ function projectDiary(ctx, p, upd) {
       class: 'link small', type: 'button',
       onClick: () => {
         ui.diaryDays = { projectId: p.id, n: shownDays + 14 };
+        if (ctx.moreDaily && td && td.from && addDays(today, -(shownDays + 13)) < td.from) ctx.moreDaily(p); // the team's older updates too
         const loaded = new Set(Object.keys(store.view.history));
         const older = store.availableMonths().find((m) => !loaded.has(m));
         if (older && addDays(today, -(shownDays + 13)).slice(0, 7) <= older) store.loadMonth(older); // the older days' ticks

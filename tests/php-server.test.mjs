@@ -440,3 +440,28 @@ test('server: review fixes — finished step not made again, a move is followed,
   assert.deepEqual((await open('anita', 'rv1')).map((t) => t.title), ['Two', 'Three (edited)'], 'Anita keeps it, with the change');
   await save([]);
 });
+
+test('server: review round 2 — an undone Finished survives the server sync; the old holder is told; old holders cannot write history', { skip }, async () => {
+  const save = async (projects) => {
+    const head = (await call('dp.head', {}, tok.boss)).head;
+    assert.ok((await call('dp.commit', { parent: head, changes: [{ path: 'data.json', content: JSON.stringify({ projects }) }], message: 'test' }, tok.boss)).ok);
+  };
+  const open = async (who, ref) => { const m = await call('my.today', {}, tok[who]); return [...m.tasks, ...m.other].filter((t) => t.projectRef === ref && t.status === 'open'); };
+  const P = (userId, steps) => ({ id: 'rv2', name: 'Round two', state: 'active', team: { userId, name: 'x' }, steps });
+  await save([P(id.suresh, [{ id: 'q1', text: 'Q one', done: false }, { id: 'q2', text: 'Q two', done: false }])]);
+  const q1 = (await open('suresh', 'rv2'))[0];
+  await call('update.save', { taskId: q1.id, note: 'oops', state: 'finished' }, tok.suresh);
+  const tickedAt = new Date(Date.now() - 60000).toISOString();
+  await save([P(id.suresh, [{ id: 'q1', text: 'Q one', done: true, doneAt: tickedAt }, { id: 'q2', text: 'Q two', done: false }])]); // the owner's app ticked it
+  assert.ok((await call('update.save', { taskId: q1.id, note: 'not yet', state: 'progress' }, tok.suresh)).ok, 'undo');
+  await save([P(id.suresh, [{ id: 'q1', text: 'Q one', done: true, doneAt: tickedAt }, { id: 'q2', text: 'Q two (edit)', done: false }])]);
+  assert.ok((await open('suresh', 'rv2')).some((t) => t.id === q1.id), 'the opened-again step is not closed before the owner\'s app unticks it');
+  // the owner gives it to Anita: Suresh is told it left his list
+  const before = readFileSync(join(dir, 'push.log'), 'utf8').length;
+  await call('project.sync', { projectRef: 'rv2', project: 'Round two', assigneeId: id.anita, steps: [{ stepRef: 'q1', title: 'Q one' }, { stepRef: 'q2', title: 'Q two (edit)' }] }, tok.boss);
+  assert.match(readFileSync(join(dir, 'push.log'), 'utf8').slice(before), /Off your list: Round two/);
+  // Suresh can no longer write history into it for a day before... it was moved today, so yesterday is allowed; a task he never had is not
+  const other = (await call('task.save', { assigneeId: id.anita, title: 'Never Suresh', repeat: 'daily' }, tok.boss)).task;
+  assert.ok(!(await call('update.save', { taskId: other.id, note: 'x', day: istDay(1) }, tok.suresh)).ok, 'not his task on that day');
+  await save([]);
+});

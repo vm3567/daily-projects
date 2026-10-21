@@ -272,7 +272,7 @@ export function personStatus(data, person, today = todayIndia()) {
  * How many projects were green on a past day, worked out from the saved dates and the history.
  * Counts projects that existed and were active that day.
  */
-const NOT_WORK = new Set(['created', 'snoozed', 'woke', 'step_remind', 'team_ticked', 'team_note']); // (the team's work counts through teamDays)
+const NOT_WORK = new Set(['created', 'snoozed', 'woke', 'step_remind', 'team_ticked', 'team_note', 'team_step_added', 'team_step_unticked', 'team_note_deleted', 'team_moved']); // (the team's work counts through teamDays)
 
 /** On that day, was every open step of the project waiting for a "remind me" date? */
 function restingByReminders(p, day) {

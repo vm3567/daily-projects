@@ -297,6 +297,8 @@ function signedOut() {
   state.back = ''; state.moving = 0; state.view = 'today'; state.closed = false;
   state.sel = null; state.detail = null; state.mobileDetail = false; state.menuOpen = false; state.section = 'today'; state.personFilter = 0; state.team = null;
   state.pushOn = false; hideNotice();
+  state.searchQ = ''; state.searchResults = null; state.stepDrafts = {}; state.reportEnd = ''; state.backTo = null; state.taskMenu = 0;
+  state.knownIds.clear(); state.newIds.clear();
   // signed out (also by a password reset): this phone stops getting their notifications, and the icon number goes
   if ('serviceWorker' in navigator && 'PushManager' in window) navigator.serviceWorker.getRegistration().then((r) => r && r.pushManager.getSubscription()).then((sub) => sub && sub.unsubscribe()).catch(() => {});
   if (navigator.clearAppBadge) navigator.clearAppBadge().catch(() => {});
@@ -447,6 +449,7 @@ const LIST_VIEWS = ['today', 'tasks', 'people', 'settings', 'projects', 'report'
 /** go('today' | 'tasks' | 'people' | 'settings') changes the list; anything else ('task:5', 'give', 'edit:5', 'suggest', 'password') opens on the right. */
 function go(view) {
   if (!LIST_VIEWS.includes(view)) { openDetail(view); return; }
+  if (history.state && history.state.wt) history.replaceState(null, ''); // the open task closes: its Back step goes too
   state.view = view;
   state.data = null; state.loadFailed = false;
   state.sel = null; state.detail = null; state.mobileDetail = false; state.menuOpen = false; state.moving = 0;
@@ -458,6 +461,8 @@ function go(view) {
 function formHasText() {
   const app = document.getElementById('app');
   if (!app) return false;
+  if ([...app.querySelectorAll('form select')].some((s) => !s.disabled && s.selectedIndex > 0)) return true;
+  if ([...app.querySelectorAll('form input[type=checkbox]')].some((c) => c.checked !== c.defaultChecked)) return true;
   return [...app.querySelectorAll('textarea, input')].some((i) => {
     if (i.disabled || i.readOnly) return false;
     if (i.type === 'file') return !!(i.files && i.files.length);
@@ -768,7 +773,9 @@ function projectsList() {
 
 /** Manager: one given project — progress, the steps in order (done ones ticked), who added each step. */
 function adminProjectPage(all) {
-  if (!state.detail) return el('p', { class: 'muted' }, 'Loading…');
+  if (!state.detail) {
+    return el('p', { class: 'muted' }, state.detailFailed ? ['Could not open this project. ', el('button', { class: 'link', onClick: () => loadDetail() }, 'Try again')] : 'Loading…');
+  }
   const steps = all.filter((t) => !t.stepRef.endsWith(':whole'));
   const done = steps.filter((t) => t.status === 'done'), open = all.filter((t) => t.status === 'open');
   const cur = open.find((t) => !t.queued);
@@ -1009,7 +1016,7 @@ function taskDiary(t, updates, today, staff) {
   const n = state.diaryDays || 14;
   const notYet = t.queued || t.status === 'suggested'; // a step waiting its turn, a suggestion: no day is "missed"
   const fillBy = (state.data && state.data.fillBy) || '18:00';
-  const start = [t.startDate || '', (t.createdAt || '').slice(0, 10)].sort().pop() || today;
+  const start = [t.startDate || '', (t.createdAt || '').slice(0, 10), t.turnSince || ''].sort().pop() || today; // (a step: from when its turn came)
   const end = t.status !== 'open' && t.doneAt ? t.doneAt.slice(0, 10) : today;
   const byDay = new Map();
   for (const u of updates) byDay.set(u.day, [...(byDay.get(u.day) || []), u]);
@@ -1583,7 +1590,7 @@ function taskDetail() {
       el('button', { onClick: async () => { const why = prompt('Not now — why (optional):', ''); if (why === null) return; try { await api('task.decline', { id: t.id, reason: why }); toast('Answered'); loadView(); } catch (ex) { toast(ex.message, 5000); } } }, 'Not now')) : null,
     admin && t.status === 'open' ? moveBox(t) : null,
     messagesBlock(t.id, comments),
-    t.status === 'suggested' ? null : taskDiary(t, updates, today, false),
+    t.status === 'suggested' || t.declined ? null : taskDiary(t, updates, today, false),
   ];
 }
 
@@ -2001,11 +2008,10 @@ if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.
 let codeStamp = null;
 async function checkNewVersion() {
   try {
-    // every code file of the page: a change to any of them is a new version
-    const parts = await Promise.all(['app.js', 'styles.css', 'sw.js'].map((f) => fetch(f, { method: 'HEAD', cache: 'no-store' })
-      .then((r) => (r.ok ? (r.headers.get('etag') || r.headers.get('last-modified') || '') : ''))));
-    if (parts.some((x) => !x)) return; // offline, or a file did not answer: next time
-    const stamp = parts.join('|');
+    // version.txt is written by every upload (tools/deploy-worktask.sh): a different one = a new version
+    const r = await fetch('version.txt', { cache: 'no-store' });
+    const stamp = r.ok ? (await r.text()).trim() : '';
+    if (!stamp) return;
     if (codeStamp === null) { codeStamp = stamp; return; }
     if (stamp !== codeStamp && !document.getElementById('update-ready')) {
       const b = document.createElement('button');

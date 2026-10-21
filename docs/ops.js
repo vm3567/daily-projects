@@ -414,7 +414,7 @@ const handlers = {
     if (!p.steps.some((s) => !s.done)) at = 0;
     p.steps.splice(at, 0, step);
     touch(p, op);
-    addEvent(state, op, p, 'step_added', text);
+    addEvent(state, op, p, a.byTeam ? 'team_step_added' : 'step_added', text);
     return true;
   },
 
@@ -430,7 +430,7 @@ const handlers = {
     if (userId) p.team = { userId, name, since: old && old.userId === userId ? old.since : indiaDate(op.at), ...(needsPhoto ? { needsPhoto: true } : {}) };
     else delete p.team;
     touch(p, op);
-    addEvent(state, op, p, 'edited', userId ? `Given to ${name}` : `Taken back from ${old.name}`);
+    addEvent(state, op, p, a.byTeam ? 'team_moved' : 'edited', userId ? `Given to ${name}` : `Taken back from ${old.name}`);
     return true;
   },
 
@@ -524,7 +524,7 @@ const handlers = {
     recalcLastTick(p);
     touch(p, op);
     removeTickEvent(state, p, s);
-    addEvent(state, op, p, 'step_unticked', s.text);
+    addEvent(state, op, p, a.byTeam ? 'team_step_unticked' : 'step_unticked', s.text);
     return true;
   },
 
@@ -595,7 +595,7 @@ const handlers = {
     if (i < 0) return false;
     const [n] = p.workNotes.splice(i, 1);
     touch(p, op);
-    addEvent(state, op, p, 'note_deleted', n.text);
+    addEvent(state, op, p, a.byTeam ? 'team_note_deleted' : 'note_deleted', n.text);
     return true;
   },
 

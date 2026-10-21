@@ -9,6 +9,10 @@ KEY="$HOME/.ssh/hostinger_dp"
 HOST=u578596396@145.79.25.173
 D=domains/worktask.in
 SSH="ssh -i $KEY -o IdentitiesOnly=yes -o BatchMode=yes -p 65002"
+# a new version stamp on every upload: open pages offer "New version ready — reload"
+V="$(git rev-parse --short HEAD)-$(date +%s)"
+echo "$V" > team/public_html/version.txt
+echo "$V" > docs/version.txt
 rsync -az -e "$SSH" --exclude config.php --exclude setup-code.txt team/app/ "$HOST:$D/app/"
 rsync -az -e "$SSH" --exclude projects/ team/public_html/ "$HOST:$D/public_html/"
 rsync -az -e "$SSH" --exclude .htaccess docs/ "$HOST:$D/public_html/projects/"

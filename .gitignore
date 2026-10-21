@@ -16,3 +16,7 @@ team/app/config.php
 team/app/setup-code.txt
 team/uploads/
 team/dpdata/
+
+# written by tools/deploy-worktask.sh on every upload
+team/public_html/version.txt
+docs/version.txt
