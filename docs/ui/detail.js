@@ -985,7 +985,7 @@ function projectDiary(ctx, p, upd) {
   }
   const byDay = new Map();
   for (const e of entries) { if (!byDay.has(e.day)) byDay.set(e.day, []); byDay.get(e.day).push(e); }
-  const workOn = (day) => (byDay.get(day) || []).some((e) => e.work);
+  const workOn = (day) => (p.teamDays || []).includes(day) || (byDay.get(day) || []).some((e) => e.work); // (team days saved with the project too)
   const weekday = (day) => new Date(day + 'T00:00:00Z').getUTCDay();
   const nowHm = new Date().toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' });
   const W = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -1015,7 +1015,8 @@ function projectDiary(ctx, p, upd) {
       const list = (byDay.get(day) || []).filter((e) => !filter || e.stepId === filter).sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
       let empty = null;
       if (!list.some((e) => e.work)) { // nothing that counts as work (maybe a Stuck or a message): the day's tag too
-        if (weekday(day) === 0) empty = h('span', { class: 'day-tag off' }, 'Off');
+        if ((p.teamDays || []).includes(day)) empty = h('span', { class: 'day-tag team' }, '👥 Team worked');
+        else if (weekday(day) === 0) empty = h('span', { class: 'day-tag off' }, 'Off');
         else if (day === today && nowHm < fillBy) empty = h('span', { class: 'day-tag wait' }, 'Waiting for today\'s update');
         else if (p.team && !(td && td.from && day >= td.from)) empty = h('span', { class: 'muted small' }, t && t.days >= 120 && !t.loading ? '—' : '…'); // still loading (— older than the team history kept)
         else empty = [h('span', { class: 'day-tag miss' }, 'No progress'), h('span', { class: 'muted small' }, ' no update from anyone')];

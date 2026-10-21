@@ -128,7 +128,7 @@ function tasks_out(array $tasks, string $day): array {
     'today' => update_out($todays[$t['id']] ?? null, $photos), 'last' => update_out($lasts[$t['id']] ?? null, $photos),
     'createdBy' => (int)$t['created_by'], 'createdByName' => user_name((int)$t['created_by']), 'declined' => (int)($t['closed_by'] ?? 0) === -2,
     'closedByPerson' => $t['status'] === 'done' && (int)($t['closed_by'] ?? 0) > 0, // their own Finished (not the manager's Mark done)
-    'reopenedAt' => $t['reopened_at'] ?? null,
+    'reopenedAt' => $t['reopened_at'] ?? null, 'closedFrom' => $t['closed_from'] ?? null,
     'turnSince' => $turnSince[$t['id']] ?? null, 'fromStaff' => (bool)($t['from_staff'] ?? 0), 'needsPhoto' => (bool)($t['needs_photo'] ?? 0), 'files' => $files[$t['id']] ?? [],
     'messages' => $count[$t['id']] ?? 0, 'unread' => $unread[$t['id']] ?? 0, 'lastMessage' => $lastMsg[$t['id']] ?? null,
     // stuck: the newest update says "Stuck" (and the manager has not answered since)
@@ -277,8 +277,8 @@ function handle(string $a, array $in): array {
       }
       $t = own_task($me, (int)($in['taskId'] ?? 0));
       if ($uday < $day) { // an earlier day: only if it was theirs that day (not given to them or started later)
-        $cameLater = one('SELECT id FROM task_moves WHERE task_id = ? AND to_id = ? AND at > ? LIMIT 1', [$t['id'], $me['id'], $uday . ' 23:59:59'])
-          && !one('SELECT id FROM task_moves WHERE task_id = ? AND to_id = ? AND at <= ? LIMIT 1', [$t['id'], $me['id'], $uday . ' 23:59:59']);
+        $first = one('SELECT to_id, at FROM task_moves WHERE task_id = ? AND (from_id = ? OR to_id = ?) ORDER BY at, id LIMIT 1', [$t['id'], $me['id'], $me['id']]);
+        $cameLater = $first && (int)$first['to_id'] === $me['id'] && $first['at'] > $uday . ' 23:59:59'; // (moved away and back: they had it from the start)
         if ($cameLater || $t['start_date'] > $uday || substr((string)$t['created_at'], 0, 10) > $uday) throw new ApiError('That day was before this task was yours, so the update was not saved.');
       }
       $cur = one('SELECT id, user_id, updated_at, client_id FROM updates WHERE task_id = ? AND day = ?', [$t['id'], $uday]);
@@ -488,7 +488,7 @@ function handle(string $a, array $in): array {
       unset($in['_server']);
       set_setting('psc:' . md5($ref), (string)time()); // before the work too: a server sync waiting for the lock sees it
       // its unsaved changes: the saved projects are older than this for the project until they are saved
-      if (!empty($in['pending'])) set_setting('psp:' . md5($ref), json_encode(['who' => (int)($in['assigneeId'] ?? 0), 'at' => time()]));
+      if (!empty($in['pending'])) set_setting('psp:' . md5($ref), json_encode(['who' => (int)($in['assigneeId'] ?? 0), 'base' => txt($in['baseCommit'] ?? '', 40), 'at' => time()]));
       else q('DELETE FROM settings WHERE k = ?', ['psp:' . md5($ref)]);
       $out = locked_project_sync($me, $in, $ref, $day);
       set_setting('psc:' . md5($ref), (string)time()); // the server's own sync leaves this project alone for a few minutes
@@ -580,25 +580,25 @@ function handle(string $a, array $in): array {
       $rows = [];
       foreach ($people as $p) {
         $tasks = all('SELECT * FROM tasks WHERE assignee_id = ? AND status <> ? AND (closed_by IS NULL OR closed_by <> -2) AND start_date <= ? AND (done_at IS NULL OR done_at >= ?)', [$p['id'], 'suggested', $end, $from . ' 00:00:00']);
-        // tasks moved away from this person: theirs until the move
-        $movedAway = [];
-        foreach (all('SELECT m.task_id, MAX(m.at) AS at FROM task_moves m JOIN tasks t ON t.id = m.task_id WHERE m.regive = 0 AND m.from_id = ? AND t.assignee_id <> ? AND m.at >= ? GROUP BY m.task_id', [$p['id'], $p['id'], $from . ' 00:00:00']) as $r) $movedAway[(int)$r['task_id']] = $r['at'];
-        if ($movedAway) $tasks = [...$tasks, ...all('SELECT * FROM tasks WHERE id IN (' . implode(',', array_keys($movedAway)) . ') AND start_date <= ?', [$end])];
+        // tasks this person held at some point (moved away later): who held each task on each day comes from the move history
+        $away = array_map('intval', array_column(all('SELECT DISTINCT m.task_id FROM task_moves m JOIN tasks t ON t.id = m.task_id WHERE m.from_id = ? AND t.assignee_id <> ? AND m.at >= ?', [$p['id'], $p['id'], $from . ' 00:00:00']), 'task_id'));
+        if ($away) $tasks = [...$tasks, ...all('SELECT * FROM tasks WHERE id IN (' . implode(',', $away) . ') AND start_date <= ?', [$end])];
+        $moves = [];
+        foreach ($tasks as $t) $moves[$t['id']] = all('SELECT from_id, to_id, at FROM task_moves WHERE task_id = ? ORDER BY at, id', [$t['id']]);
+        $holder = function (array $t, string $d) use ($moves): int { // who had task t at the end of day d
+          $h = null;
+          foreach ($moves[$t['id']] as $m) { if ($m['at'] <= "$d 23:59:59") $h = (int)$m['to_id']; elseif ($h === null) { $h = (int)$m['from_id']; break; } }
+          return $h ?? (int)$t['assignee_id'];
+        };
         $ups = all('SELECT day, state, task_id FROM updates WHERE user_id = ? AND day BETWEEN ? AND ?', [$p['id'], $from, $end]);
         $sentDays = array_values(array_unique(array_column($ups, 'day')));
-        $movedAt = []; // tasks moved to this person: when (the move note)
-        foreach ($tasks as $t) {
-          $m = one('SELECT MAX(at) AS at FROM task_moves WHERE task_id = ? AND to_id = ?', [$t['id'], $p['id']]);
-          if ($m && $m['at']) $movedAt[$t['id']] = $m['at'];
-        }
         $workDays = []; $missed = [];
         foreach ($days as $d) {
           $due = false;
           foreach ($tasks as $t) {
             if ($t['created_at'] > "$d 23:59:59" || ($t['done_at'] && $t['done_at'] < "$d 00:00:00")) continue;
             if (!empty($t['reopened_at']) && $t['reopened_at'] > "$d 23:59:59" && (empty($t['closed_from']) || $t['closed_from'] <= "$d 23:59:59")) continue; // closed (or off the list) that day
-            if (($movedAt[$t['id']] ?? '') > "$d 23:59:59") continue; // still someone else's that day
-            if (isset($movedAway[$t['id']]) && $movedAway[$t['id']] < "$d 23:59:59") continue; // no longer theirs (from the day it was moved)
+            if ($holder($t, $d) !== (int)$p['id']) continue; // someone else had it that day
             if (due_on($t, $d) && ($t['seq'] === null || !one("SELECT id FROM tasks WHERE project_ref = ? AND assignee_id = ? AND seq IS NOT NULL AND seq < ? AND created_at <= ? AND (done_at IS NULL OR done_at >= ?) LIMIT 1", [$t['project_ref'], $p['id'], $t['seq'], "$d 23:59:59", "$d 00:00:00"]))) { $due = true; break; }
           }
           if ($due || in_array($d, $sentDays, true)) $workDays[] = $d;
@@ -848,7 +848,7 @@ function project_sync(array $me, array $in, string $ref, string $day): array {
   $leftBy = []; // people whose steps went to the new person
   $steps = array_slice((array)($in['steps'] ?? []), 0, 300);
   $keep = [];
-  $pending = (bool)array_filter($open, fn($t) => (int)($t['from_staff'] ?? 0)); // steps the person added, not yet in the project
+  $pending = (bool)one("SELECT id FROM tasks WHERE project_ref = ? AND from_staff = 1 AND status IN ('open', 'done') LIMIT 1", [$ref]); // steps the person added, not yet in the project (finished ones too)
   $skipped = []; // steps finished minutes ago: not made again now (the Daily Projects app tries again later)
   foreach (array_values($steps) as $i => $st) {
     $stepRef = txt($st['stepRef'] ?? '', 80);
@@ -1024,7 +1024,7 @@ function send_task_file(int $id): void {
   if (!is_file($path)) throw new ApiError('File not found.', 404);
   header('Content-Type: ' . $f['mime']);
   header('Content-Disposition: inline; filename="' . str_replace('"', '', $f['name']) . '"');
-  header('Cache-Control: private, max-age=86400');
+  header('Cache-Control: private, max-age=86400'); header('Vary: Authorization', false); // kept only for the same sign-in (address bar / next person: asked again)
   header('Content-Length: ' . filesize($path));
   readfile($path);
 }
@@ -1038,7 +1038,7 @@ function send_comment_photo(int $id): void {
   $path = UPLOAD_DIR . '/' . $c['photo'];
   if (!is_file($path)) throw new ApiError('Photo not found.', 404);
   header('Content-Type: image/jpeg');
-  header('Cache-Control: private, max-age=86400');
+  header('Cache-Control: private, max-age=86400'); header('Vary: Authorization', false); // kept only for the same sign-in (address bar / next person: asked again)
   header('Content-Length: ' . filesize($path));
   readfile($path);
 }
@@ -1052,7 +1052,7 @@ function send_photo(int $id): void {
   $path = UPLOAD_DIR . '/' . $p['file'];
   if (!is_file($path)) throw new ApiError('Photo not found.', 404);
   header('Content-Type: image/jpeg');
-  header('Cache-Control: private, max-age=86400');
+  header('Cache-Control: private, max-age=86400'); header('Vary: Authorization', false); // kept only for the same sign-in (address bar / next person: asked again)
   header('Content-Length: ' . filesize($path));
   readfile($path);
 }

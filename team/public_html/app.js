@@ -752,6 +752,7 @@ function addStepForm(ref) {
         delete state.stepCid[ref]; if (state.stepDrafts) delete state.stepDrafts[ref];
         toast('➕ Step added. Your manager sees it in the project too.');
         inp.value = ''; inp.blur();
+        render(); // (the box is empty again: the list below may redraw)
         await loadList();
       } catch (ex) {
         if (ex instanceof OfflineError) {
@@ -1059,7 +1060,7 @@ function taskDiary(t, updates, today, staff) {
     if (staff && day === today) continue; // today's update is in its own box above
     const ups = byDay.get(day) || [];
     if (!ups.length && day < start) continue; // before its start: nothing to show
-    if (!ups.length && t.reopenedAt && day < String(t.reopenedAt).slice(0, 10)) continue; // closed (or off the list) then; open again since
+    if (!ups.length && t.reopenedAt && day < String(t.reopenedAt).slice(0, 10) && (!t.closedFrom || day >= String(t.closedFrom).slice(0, 10))) continue; // closed that day (open again since)
     if (!ups.length && t.status !== 'open' && day === end) continue; // the day it was closed
     const wd = weekdayOf(day);
     let content;
@@ -1308,6 +1309,7 @@ function updateForm(t) {
       if (twoSteps) await api('update.save', { taskId: t.id, note: d.note, state: 'finished' });
       delete state.drafts[t.id]; delete state.files[t.id]; delete state.editing[t.id];
       toast('Sent ✓');
+      render(); // the empty box at once (a box still holding the sent words would count as "typing" and hold back the reload)
       loadView();
     } catch (ex) {
       if (ex instanceof OfflineError) { // keep it on the phone; it goes out when online

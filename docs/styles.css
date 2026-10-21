@@ -965,3 +965,4 @@ a.team-line.msg { background: #eef4ff; border-color: #93b4f8; color: #1e40af; fo
 .update-ready { position: fixed; z-index: 90; left: 50%; bottom: calc(18px + env(safe-area-inset-bottom)); transform: translateX(-50%); background: #1d4ed8; color: #fff; border: 0; border-radius: 99px; padding: 10px 18px; font-size: 14px; font-weight: 600; cursor: pointer; box-shadow: 0 8px 24px rgba(0,0,0,.2); }
 .diary-items > .day-tag { align-self: flex-start; }
 .diary-items > .muted.small { margin-top: -2px; }
+.day-tag.team { background: #eef4ff; color: #1e40af; }

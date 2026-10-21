@@ -169,7 +169,7 @@ function dp_send_blob(string $sha): void {
   if (!dp_valid_sha($sha)) throw new ApiError('Bad file.', 400);
   $bytes = dp_get_blob($sha);
   header('Content-Type: application/octet-stream');
-  header('Cache-Control: private, max-age=31536000, immutable');
+  header('Cache-Control: private, max-age=31536000, immutable'); header('Vary: Authorization', false); // only for the same sign-in
   header('Content-Length: ' . strlen($bytes));
   echo $bytes;
 }

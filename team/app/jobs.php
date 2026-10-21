@@ -85,7 +85,7 @@ function server_sync_projects(): void {
       $psp = json_decode(setting('psp:' . md5($ref), ''), true);
       $gp = $given[$ref] ?? null;
       $savedWho = $gp && ($gp['state'] ?? '') === 'active' ? (int)$gp['team']['userId'] : 0;
-      if (is_array($psp) && (int)($psp['who'] ?? -1) === $savedWho) { q('DELETE FROM settings WHERE k = ?', ['psp:' . md5($ref)]); $psp = null; } // saved now
+      if (is_array($psp) && (int)($psp['who'] ?? -1) === $savedWho && ($psp['base'] ?? '') !== setting('dp_head', '')) { q('DELETE FROM settings WHERE k = ?', ['psp:' . md5($ref)]); $psp = null; } // saved since
       if (is_array($psp) && (int)($psp['at'] ?? 0) > time() - 7 * 86400) continue;
       if ($psc > time() - 300) { // the owner's app sent this project minutes ago: it knows best — look again once that is over
         $retry = (int)setting('sync_retry', '0');
@@ -100,6 +100,8 @@ function server_sync_projects(): void {
       if ($active) {
         $holders = array_map('intval', array_column(all("SELECT DISTINCT t.assignee_id FROM tasks t JOIN users u ON u.id = t.assignee_id WHERE t.project_ref = ? AND t.seq IS NOT NULL AND t.status = 'open' AND u.active = 1", [$ref]), 'assignee_id'));
         if (count($holders) === 1 && $holders[0] !== $who) $who = $holders[0];
+        elseif (!$holders && ($mv = one("SELECT m.to_id, m.at FROM task_moves m JOIN tasks t ON t.id = m.task_id JOIN users u ON u.id = m.to_id WHERE t.project_ref = ? AND t.seq IS NOT NULL AND m.regive = 0 AND u.active = 1 ORDER BY m.at DESC, m.id DESC LIMIT 1", [$ref]))
+          && strtotime($mv['at']) > (int)setting('psc:' . md5($ref), '0')) $who = (int)$mv['to_id']; // moved after the owner last gave it
       }
       $in = $p
         ? ['project' => (string)($p['name'] ?? ''), 'assigneeId' => $who, 'steps' => $active ? server_steps($p, $today) : [],

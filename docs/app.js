@@ -2776,6 +2776,8 @@ function adoptStaffSteps(tasks) {
     }
     if (adoptedHere.has(t.stepRef)) { adopted.push(t.id); continue; } // added once already and since deleted by you: stays deleted (the server forgets it)
     actMany(p.id, [['addStep', { projectId: p.id, stepId: t.stepRef, text: t.title, byTeam: true }]], `👥 ${t.assignee.name} added a step: ${t.title}`);
+    adoptedHere.add(t.stepRef); // (Undo or a delete right after: it stays deleted)
+    try { localStorage.setItem(ADOPTED_KEY, JSON.stringify([...adoptedHere].slice(-300))); } catch { /* full */ }
   }
   if (adopted.length) teamApi('tasks.adopted', { ids: adopted }).catch(() => { /* asked again next time; adding twice is ignored */ });
 }
@@ -2795,8 +2797,8 @@ function tickFinishedTeamTasks(tasks) {
       const note = p && (p.workNotes || []).find((n) => n.id === 'tn' + t.id);
       const latest = team.byStep.get(t.stepRef);
       if (p && t.stepRef === wholeRef(p.id) && note && (!latest || latest.id === t.id)) actMany(p.id, [['deleteWorkNote', { projectId: p.id, noteId: note.id, byTeam: true }]], `↩ ${t.assignee.name} opened “${p.name}” again`);
-      else if (step && step.done && note && (!latest || latest.id === t.id)) {
-        actMany(p.id, [['untickStep', { projectId: p.id, stepId: step.id, byTeam: true }], ['deleteWorkNote', { projectId: p.id, noteId: note.id, byTeam: true }]], `↩ ${t.assignee.name} opened “${step.text}” again`);
+      else if (step && note && (!latest || latest.id === t.id)) { // (the note says "this finish was handled": it is not finished now)
+        actMany(p.id, [...(step.done ? [['untickStep', { projectId: p.id, stepId: step.id, byTeam: true }]] : []), ['deleteWorkNote', { projectId: p.id, noteId: note.id, byTeam: true }]], `↩ ${t.assignee.name} opened “${step.text}” again`);
       }
       seen.delete(t.id); // open now: when it is finished again, it is new again (here and on every other device)
       continue;
