@@ -79,8 +79,8 @@ function teamMessages(ctx, p) {
     if (!text) return;
     form.elements.reply.disabled = true;
     const cids = (ui.teamReplyCid = ui.teamReplyCid || {});
-    cids[p.id] ||= 'r' + newId() + newId(); // one id per answer: tapping Send again after a lost reply does not send it twice
-    try { await ctx.teamReply(p, list[list.length - 1].taskId, text, taskIds, cids[p.id]); delete (ui.teamReply ||= {})[p.id]; delete cids[p.id]; }
+    if (!cids[p.id] || cids[p.id].text !== text) cids[p.id] = { id: 'r' + newId() + newId(), text }; // a retry of the same words: the same id (never twice)
+    try { await ctx.teamReply(p, list[list.length - 1].taskId, text, taskIds, cids[p.id].id); delete (ui.teamReply ||= {})[p.id]; delete cids[p.id]; }
     catch (e) { ctx.toast(e.message, 5000); form.elements.reply.disabled = false; }
   };
   return h('div', { class: 'banner team-msgs', key: 'tmsg-' + p.id },
@@ -947,7 +947,7 @@ function projectDiary(ctx, p, upd) {
     const files = (p.files || []).filter((f) => f.noteId === n.id);
     const team = n.text.startsWith('👥 ');
     entries.push({
-      day: indiaDate(n.createdAt), at: n.createdAt, work: true, stepId: n.stepId,
+      day: indiaDate(n.createdAt), at: n.createdAt, work: !String(n.text).startsWith('👥 Marked done in Work Task'), stepId: n.stepId,
       node: diaryLine(team ? '👥' : '📝', team ? null : 'You', team ? n.text.slice(3) : n.text, [
         about(n.stepId),
         ...files.map((f) => h('button', { class: 'link small', type: 'button', key: 'f-' + f.id, onClick: () => openFile(ctx, f) }, ` 📷 ${f.name}`)),
@@ -964,7 +964,7 @@ function projectDiary(ctx, p, upd) {
   for (const u of td ? td.updates : []) {
     const words = { stuck: ' · Stuck', finished: ' · Finished' }[u.state] || '';
     entries.push({
-      day: u.day, at: iso(u.at), work: true, stepId: taskStep.get(u.taskId),
+      day: u.day, at: iso(u.at), work: u.state !== 'stuck', stepId: taskStep.get(u.taskId),
       node: diaryLine('👥', u.by, `“${u.note}”${words}`, [
         about(taskStep.get(u.taskId)),
         ...(u.photos || []).map((pid) => {
@@ -976,7 +976,10 @@ function projectDiary(ctx, p, upd) {
   }
   for (const c of td ? td.comments || [] : []) {
     if (c.unread) continue; // new ones are in the message box at the top (not twice)
-    entries.push({ day: c.at.slice(0, 10), at: iso(c.at), work: false, stepId: taskStep.get(c.taskId), node: diaryLine('💬', c.mine ? 'You' : c.by, `“${c.text}”`, [about(taskStep.get(c.taskId))]) });
+    const src = c.photo && ctx.teamMsgPhoto ? ctx.teamMsgPhoto(c.id) : null;
+    entries.push({ day: c.at.slice(0, 10), at: iso(c.at), work: false, stepId: taskStep.get(c.taskId), node: diaryLine('💬', c.mine ? 'You' : c.by, c.text ? `“${c.text}”` : '', [
+      c.photo ? (src ? h('img', { class: 'diary-photo', src, alt: 'Photo', key: 'mp-' + c.id, onClick: () => window.open(src, '_blank', 'noopener') }) : h('span', { class: 'muted small', key: 'mp-' + c.id }, ' 📷 Photo')) : null,
+      about(taskStep.get(c.taskId))]) });
   }
   const byDay = new Map();
   for (const e of entries) { if (!byDay.has(e.day)) byDay.set(e.day, []); byDay.get(e.day).push(e); }

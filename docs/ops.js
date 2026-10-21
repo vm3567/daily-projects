@@ -835,6 +835,7 @@ const handlers = {
     for (const [day, v] of Object.entries(a.scores || {})) {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) continue;
       if (scores[day] && !(a.raise && (Number(v.green) || 0) > scores[day].green)) continue; // kept, unless the team's work raises it
+      if (scores[day]) { scores[day] = { green: Math.min(Number(v.green) || 0, scores[day].total), total: scores[day].total }; changed = true; continue; } // only green goes up
       scores[day] = { green: Number(v.green) || 0, total: Number(v.total) || 0 };
       changed = true;
     }

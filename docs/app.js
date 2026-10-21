@@ -2973,7 +2973,8 @@ let codeStamp = null;
 async function checkNewVersion() {
   try {
     // version.txt is written by every upload (tools/deploy-worktask.sh): a different one = a new version
-    const r = await fetch('version.txt', { cache: 'no-store' });
+    // the first one comes the same way as the page's code (offline: the copy kept with it); later ones always from the server
+    const r = await fetch(codeStamp === null ? 'version.txt' : `version.txt?check=${Date.now()}`, codeStamp === null ? {} : { cache: 'no-store' });
     const stamp = r.ok ? (await r.text()).trim() : '';
     if (!stamp) return;
     if (codeStamp === null) { codeStamp = stamp; return; }

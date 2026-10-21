@@ -115,7 +115,7 @@ function stuck_second_alerts(): void {
       JOIN tasks t ON t.id = u.task_id JOIN users us ON us.id = t.assignee_id
       WHERE u.state = 'stuck' AND u.alert2 = 0 AND t.status = 'open' AND u.updated_at < ? AND u.updated_at > ?
         AND u.day = (SELECT MAX(day) FROM updates WHERE task_id = u.task_id)
-        AND NOT EXISTS (SELECT 1 FROM comments c WHERE c.task_id = u.task_id AND c.user_id <> t.assignee_id AND c.at >= u.updated_at)",
+        AND NOT EXISTS (SELECT 1 FROM comments c WHERE c.task_id = u.task_id AND c.kind IS NULL AND c.user_id <> u.user_id AND c.at >= u.updated_at)",
     [date('Y-m-d H:i:s', time() - 86400), date('Y-m-d H:i:s', time() - 7 * 86400)]);
   foreach ($rows as $r) {
     q('UPDATE updates SET alert2 = 1 WHERE id = ?', [$r['id']]);

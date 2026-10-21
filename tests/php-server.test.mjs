@@ -482,3 +482,16 @@ test('server: review round 3 — move notes cannot be faked; a same-day offline 
   const rep = (await call('report.week', {}, tok.boss)).people;
   assert.ok(rep.find((p) => p.name === 'Anita'), 'report still works');
 });
+
+test('server: review round 4 — an older offline update never undoes the person\'s newer Finished; old-holder photos visible after a move', { skip }, async () => {
+  const t = (await call('task.save', { assigneeId: id.suresh, title: 'Round four', repeat: 'once' }, tok.boss)).task;
+  const earlier = new Date(Date.now() - 2000).toISOString();
+  await new Promise((r) => setTimeout(r, 1100));
+  assert.ok((await call('update.save', { taskId: t.id, note: 'all done', state: 'finished' }, tok.suresh)).ok);
+  const late = await call('update.save', { taskId: t.id, note: 'half done (tablet, offline)', state: 'progress', writtenAt: earlier }, tok.suresh);
+  assert.equal(late.history, 'older');
+  const back = await call('task.get', { id: t.id }, tok.suresh);
+  assert.equal(back.task.status, 'done', 'still done');
+  assert.equal(back.updates[0].note, 'all done', 'the newer update stays');
+  assert.ok(!(await call('update.save', { taskId: t.id, note: 'x', writtenAt: '2000-01-01T00:00:00Z' }, tok.anita)).ok, 'a made-up time does not open a door');
+});

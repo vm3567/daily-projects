@@ -157,8 +157,12 @@ async function sendItem(it, tok) {
   if (it.kind === 'update' && !it.updateId) {
     const twoSteps = it.state === 'finished' && it.needsPhoto && it.files && it.files.length && !it.hadPhoto;
     const out = await api('update.save', { taskId: it.taskId, note: it.note, state: twoSteps ? 'progress' : it.state, day, writtenAt: it.at });
-    it.updateId = out.update.id; it.thenFinish = !!twoSteps;
+    it.updateId = out.update.id; it.thenFinish = !!twoSteps && !out.history;
     if (twoSteps) it.note = out.update.note; // keep the earlier person's words (after a move) for the Finished save
+    if (out.history === 'merged' || out.history === 'older') { // kept as words only (the task moved on, or a newer update of theirs stays)
+      if ((it.files || []).length) toast('The photos of a late update were not added: the task has a newer update now.', 7000);
+      it.files = [];
+    }
     await keep(it);
   }
   while ((it.files || []).length) { // kind 'update' or 'photos'
@@ -415,7 +419,8 @@ async function loadList() {
   if (failed) toast(failed.message, 5000);
   // T-d: a form being filled in (Give a task) is not wiped: the list is redrawn when they stop
   const a = document.activeElement;
-  if ((a && /^(TEXTAREA|INPUT|SELECT)$/.test(a.tagName) && document.getElementById('detail') && document.getElementById('detail').contains(a)) || (state.sel && formHasText())) { state.reloadLater = true; return; }
+  if (state.sel && formHasText()) { state.reloadLater = true; return; } // something typed in the open form: redrawn when they stop
+  void a;
   render();
 }
 
@@ -570,7 +575,7 @@ function menuColumn() {
         const sent = tasks.filter((x) => x.today).length;
         const dot = !tasks.length ? 'grey' : sent === tasks.length ? 'green' : t.late ? 'red' : 'orange';
         return el('li', null, el('button', { class: 'menu-item person' + (state.view === 'today' && state.personFilter === p.id ? ' current' : ''), title: tasks.length ? `${sent} of ${tasks.length} sent today` : 'No tasks today',
-          onClick: () => { state.personFilter = state.personFilter === p.id ? 0 : p.id; if (state.view !== 'today') go('today'); else { state.menuOpen = false; render(); } } },
+          onClick: () => { state.personFilter = state.personFilter === p.id ? 0 : p.id; if (state.view !== 'today') go('today'); else { state.menuOpen = false; if (!state.sel) dropBack(); render(); } } },
         el('span', { class: 'dot ' + dot }), p.name, el('span', { class: 'count' }, tasks.length ? `${sent}/${tasks.length}` : '')));
       })));
     }
@@ -739,11 +744,11 @@ function addStepForm(ref) {
         await api('project.addStep', { projectRef: ref, title, clientId });
         delete state.stepCid[ref];
         toast('➕ Step added. Your manager sees it in the project too.');
-        inp.value = '';
+        inp.value = ''; inp.blur();
         await loadList();
       } catch (ex) {
         if (ex instanceof OfflineError) {
-          try { await queue({ kind: 'step', projectRef: ref, title, clientId }); inp.value = ''; toast('📴 Saved on this phone — it will be added when you are online', 5000); render(); return; }
+          try { await queue({ kind: 'step', projectRef: ref, title, clientId }); delete state.stepCid[ref]; inp.value = ''; toast('📴 Saved on this phone — it will be added when you are online', 5000); render(); return; }
           catch { /* could not keep it */ }
         }
         toast(ex.message, 6000); btn.disabled = false;
@@ -1047,6 +1052,7 @@ function taskDiary(t, updates, today, staff) {
     if (staff && day === today) continue; // today's update is in its own box above
     const ups = byDay.get(day) || [];
     if (!ups.length && day < start) continue; // before its start: nothing to show
+    if (!ups.length && t.status !== 'open' && day === end) continue; // the day it was closed
     const wd = weekdayOf(day);
     let content;
     if (ups.length) {
@@ -1370,7 +1376,7 @@ function messagesBlock(taskId, comments) {
       if (state.sel === 'task:' + taskId && state.detail && state.detail.task && state.detail.task.id === taskId) { state.detail.comments = out.comments; render(); }
     } catch (ex) {
       if (ex instanceof OfflineError) {
-        try { await queue({ kind: 'comment', taskId, text, clientId: cid }); }
+        try { await queue({ kind: 'comment', taskId, text, clientId: cid }); delete state.msgCid[key]; }
         catch { delete state.sending[key]; render(); toast(KEEP_FAIL, 6000); return; } // the text stays in the box
         delete state.drafts['m' + taskId]; delete state.sending[key]; // empty the box, so a second tap does not send it twice
         toast('📴 Saved on this phone — it will be sent when you are online', 5000);
@@ -1840,16 +1846,16 @@ async function liveCheck(quiet = false) {
   const admin = state.user.role === 'admin';
   const action = state.view === 'today' ? (admin ? 'team.today' : 'my.today') : 'tasks.list';
   const body = state.view === 'tasks' ? { status: state.closed ? 'closed' : 'open' } : {};
-  const view = state.view, me = state.user;
+  const view = state.view, me = state.user, closed = state.closed;
   liveBusy = true;
   try {
     const out = await api(action, body);
-    if (out.fromCache || state.user !== me || state.view !== view) return;
+    if (out.fromCache || state.user !== me || state.view !== view || state.closed !== closed) return;
     const same = (a, b) => JSON.stringify(a, (k, v) => (k === 'time' ? undefined : v)) === JSON.stringify(b, (k, v) => (k === 'time' ? undefined : v));
     if (state.data && same(out, state.data)) return;
     const had = new Set(listOf(state.data).map((t) => t.id));
     // new to this screen — but not what this person made themselves (an offline step that just went out, a suggestion, a project they gave)
-    const fresh = state.data ? listOf(out).filter((t) => !had.has(t.id) && !state.knownIds.has(t.id) && t.createdBy !== state.user.id) : [];
+    const fresh = state.data && view === 'today' ? listOf(out).filter((t) => !had.has(t.id) && !state.knownIds.has(t.id) && t.createdBy !== state.user.id) : [];
     for (const t of fresh) state.newIds.add(t.id);
     if (!quiet && Date.now() - (state.pushAt || 0) > 30000) tellNews(fresh, out, state.data); // a notification just said it: not twice
     const a = document.activeElement;
@@ -2036,7 +2042,8 @@ let codeStamp = null;
 async function checkNewVersion() {
   try {
     // version.txt is written by every upload (tools/deploy-worktask.sh): a different one = a new version
-    const r = await fetch('version.txt', { cache: 'no-store' });
+    // the first one comes the same way as the page's code (offline: the copy kept with it); later ones always from the server
+    const r = await fetch(codeStamp === null ? 'version.txt' : `version.txt?check=${Date.now()}`, codeStamp === null ? {} : { cache: 'no-store' });
     const stamp = r.ok ? (await r.text()).trim() : '';
     if (!stamp) return;
     if (codeStamp === null) { codeStamp = stamp; return; }

@@ -228,36 +228,46 @@ function handle(string $a, array $in): array {
       // a closed task can only be changed by the person who finished it today (to fix or undo their own Finished);
       // never when the manager cancelled it, took it back, or marked it done (closed_by is set only by their own Finished)
       // (the newest update: a Finished written offline yesterday and sent today is still theirs to undo)
-      $mine = $t && $t['status'] === 'done' && $t['done_at'] && $t['done_at'] >= date('Y-m-d H:i:s', time() - 12 * 3600) && (int)($t['closed_by'] ?? 0) === $me['id']
+      $wrote = is_string($in['writtenAt'] ?? null) && strtotime($in['writtenAt']) ? date('Y-m-d H:i:s', min(time(), (int)strtotime($in['writtenAt']))) : null;
+      if ($wrote && substr($wrote, 0, 10) !== $uday) $wrote = null; // the time it was written must be on the day it is for
+      // (an undo written offline within 12 hours of their Finished counts too, even if it arrives later)
+      $mine = $t && $t['status'] === 'done' && $t['done_at'] && (int)($t['closed_by'] ?? 0) === $me['id']
+        && ($t['done_at'] >= date('Y-m-d H:i:s', time() - 12 * 3600) || ($wrote && $wrote >= $t['done_at'] && strtotime($wrote) <= strtotime($t['done_at']) + 12 * 3600))
         && ($fin = one('SELECT state, user_id FROM updates WHERE task_id = ? ORDER BY day DESC LIMIT 1', [$t['id']]))
         && $fin['state'] === 'finished' && (int)$fin['user_id'] === $me['id'];
       // written offline before the task was moved to someone else or closed: kept as history for that day, nothing else changes
       // (only someone who still had the task that day: it was moved away from them on or after that day, or closed while theirs)
       // today's update only if it was written (offline) before the move or the close; an earlier day's if moved after that day
-      $wrote = is_string($in['writtenAt'] ?? null) && strtotime($in['writtenAt']) ? date('Y-m-d H:i:s', min(time(), (int)strtotime($in['writtenAt']))) : null;
       $since = $uday < $day ? $uday . ' 00:00:00' : $wrote;
-      $hadIt = $t && $since !== null && (((int)$t['assignee_id'] === $me['id'] && ($uday < $day || ($t['done_at'] && $t['done_at'] >= $since)))
+      $hadIt = $t && $since !== null && (((int)$t['assignee_id'] === $me['id'] && ($wrote ? ($t['done_at'] && $t['done_at'] > $wrote) : $uday < $day)) // closed after it was written
         || one('SELECT id FROM task_moves WHERE task_id = ? AND from_id = ? AND at > ? LIMIT 1', [$t['id'], $me['id'], $since])); // moved after it was written
       // (also today's: written before the move or the close later today)
       if ($t && ((int)$t['assignee_id'] !== $me['id'] || ($t['status'] !== 'open' && !$mine)) && $hadIt) {
         $note = txt($in['note'] ?? '', 4000, true, 'The update');
         $state = in_array($in['state'] ?? '', ['progress', 'finished'], true) ? $in['state'] : 'progress'; // not "Stuck": the task is not theirs now
-        $old = one('SELECT user_id, note FROM updates WHERE task_id = ? AND day = ?', [$t['id'], $uday]);
+        $old = one('SELECT user_id, note, updated_at FROM updates WHERE task_id = ? AND day = ?', [$t['id'], $uday]);
+        if ($old && $wrote && (int)$old['user_id'] === $me['id'] && $old['updated_at'] > $wrote) { // they wrote again later: that one stays
+          return ['update' => update_out(one('SELECT * FROM updates WHERE task_id = ? AND day = ?', [$t['id'], $uday]), []), 'history' => 'older'];
+        }
         if ($old && (int)$old['user_id'] !== $me['id']) { // someone else already wrote for that day: add these words below theirs (once)
           $line = $me['name'] . ': ' . $note;
           if (!str_contains((string)$old['note'], $line)) q('UPDATE updates SET note = ?, updated_at = ? WHERE task_id = ? AND day = ?', [mb_substr(trim((string)$old['note']) . "\n\n" . $line, 0, 8000), now(), $t['id'], $uday]);
           $u = one('SELECT * FROM updates WHERE task_id = ? AND day = ?', [$t['id'], $uday]);
           $u['note'] = $note; $u['user_id'] = $me['id']; // the answer: only what this person wrote, never the other person's update
-          return ['update' => update_out($u, [])];
+          return ['update' => update_out($u, []), 'history' => 'merged']; // (photos cannot go on the other person's update)
         } else {
           q('INSERT INTO updates (task_id, user_id, day, note, state, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)
              ON DUPLICATE KEY UPDATE note = VALUES(note), state = VALUES(state), updated_at = VALUES(updated_at)',
             [$t['id'], $me['id'], $uday, $note, $state, now(), now()]);
         }
         $u = one('SELECT * FROM updates WHERE task_id = ? AND day = ?', [$t['id'], $uday]);
-        return ['update' => update_out($u, photos_of([(int)$u['id']]))];
+        return ['update' => update_out($u, photos_of([(int)$u['id']])), 'history' => 'own'];
       }
       $t = own_task($me, (int)($in['taskId'] ?? 0));
+      if ($wrote && ($cur = one('SELECT user_id, updated_at FROM updates WHERE task_id = ? AND day = ?', [$t['id'], $uday]))
+        && (int)$cur['user_id'] === $me['id'] && $cur['updated_at'] > $wrote) { // an older offline update: their newer one stays (and the task is not reopened)
+        return ['update' => update_out(one('SELECT * FROM updates WHERE task_id = ? AND day = ?', [$t['id'], $uday]), []), 'history' => 'older'];
+      }
       if ((int)$t['assignee_id'] !== $me['id']) throw new ApiError('Only the person doing the task can write its update.', 403);
       if ($t['status'] !== 'open' && !$mine) throw new ApiError('This task is closed.');
       $note = txt($in['note'] ?? '', 4000, true, 'The update');
@@ -374,6 +384,7 @@ function handle(string $a, array $in): array {
       } else {
         $text = (string)preg_replace('/^[↔\s]+/u', '', txt($in['text'] ?? '', 2000, !$c['photo'], 'The message'));
         if ($c['kind'] === 'move') throw new ApiError('This note cannot be changed.');
+        if ($text === '' && !$c['photo']) throw new ApiError('The message is empty.');
         q('UPDATE comments SET text = ?, edited_at = ? WHERE id = ?', [$text, now(), $c['id']]);
       }
       return ['comments' => comments_of((int)$c['task_id'])];
@@ -987,8 +998,10 @@ function send_comment_photo(int $id): void {
 
 function send_photo(int $id): void {
   $me = current_user();
-  $p = one('SELECT p.*, u.user_id FROM photos p JOIN updates u ON u.id = p.update_id WHERE p.id = ?', [$id]);
-  if (!$p || ($me['role'] !== 'admin' && (int)$p['user_id'] !== $me['id'])) throw new ApiError('Photo not found.', 404);
+  $p = one('SELECT p.*, u.user_id, u.task_id FROM photos p JOIN updates u ON u.id = p.update_id WHERE p.id = ?', [$id]);
+  if (!$p) throw new ApiError('Photo not found.', 404);
+  // the manager, the person who took it, or whoever has the task now (after a move they see its earlier photos too)
+  if ($me['role'] !== 'admin' && (int)$p['user_id'] !== $me['id']) own_task($me, (int)$p['task_id']); // 404 for anyone else
   $path = UPLOAD_DIR . '/' . $p['file'];
   if (!is_file($path)) throw new ApiError('Photo not found.', 404);
   header('Content-Type: image/jpeg');
