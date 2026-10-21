@@ -452,7 +452,7 @@ async function loadDetail() {
   state.detail = detail; state.people = people;
   state.detailFailed = !!failed && !detail;
   if (failed) toast(failed.message, 5000);
-  if (!same) render();
+  if (!same) { if (formHasText()) { state.reloadLater = true; return; } render(); } // (never over something being typed)
 }
 
 /** Reload what is on screen (the list, and the open task). */
@@ -734,8 +734,8 @@ function waitingSteps(ref) {
 }
 
 function addStepForm(ref) {
-  const inp = el('input', { placeholder: 'e.g. Order the spare servo motor', maxlength: '300', 'aria-label': 'New step', value: (state.stepDrafts || {})[ref] || '' });
-  if (state.stepDrafts) delete state.stepDrafts[ref];
+  const inp = el('input', { placeholder: 'e.g. Order the spare servo motor', maxlength: '300', 'aria-label': 'New step', value: (state.stepDrafts || {})[ref] || '',
+    onInput: (e) => { (state.stepDrafts ||= {})[ref] = e.target.value; } }); // kept across redraws until added
   const btn = el('button', { class: 'primary', type: 'submit' }, '+ Add step');
   return el('form', {
     class: 'card stack',
@@ -749,13 +749,13 @@ function addStepForm(ref) {
       const clientId = ids[ref].id;
       try {
         await api('project.addStep', { projectRef: ref, title, clientId });
-        delete state.stepCid[ref];
+        delete state.stepCid[ref]; if (state.stepDrafts) delete state.stepDrafts[ref];
         toast('➕ Step added. Your manager sees it in the project too.');
         inp.value = ''; inp.blur();
         await loadList();
       } catch (ex) {
         if (ex instanceof OfflineError) {
-          try { await queue({ kind: 'step', projectRef: ref, title, clientId }); delete state.stepCid[ref]; inp.value = ''; toast('📴 Saved on this phone — it will be added when you are online', 5000); render(); return; }
+          try { await queue({ kind: 'step', projectRef: ref, title, clientId }); delete state.stepCid[ref]; if (state.stepDrafts) delete state.stepDrafts[ref]; inp.value = ''; toast('📴 Saved on this phone — it will be added when you are online', 5000); render(); return; }
           catch { /* could not keep it */ }
         }
         toast(ex.message, 6000); btn.disabled = false;
@@ -1616,7 +1616,7 @@ function taskDetail() {
   const { task: t, updates, comments = [] } = state.detail;
   const admin = state.user.role === 'admin';
 
-  const today = (state.data && state.data.today) || istDay(new Date());
+  const today = (state.data && !state.data.stale && !state.data.fromCache && state.data.today) || istDay(new Date());
   return [
     admin ? taskMenu(t) : null,
     taskChips(t, today, admin),

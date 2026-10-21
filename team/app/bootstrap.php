@@ -223,6 +223,9 @@ function migrate(PDO $pdo): void {
     "ALTER TABLE tasks ADD COLUMN reopened_at DATETIME NULL",
     // v11: the phone's id of an update, so a resend after a lost reply is known as the same save
     "ALTER TABLE updates ADD COLUMN client_id VARCHAR(60) NULL",
+    // v12: when a reopened task had been closed (its closed days are not 'missed'); a re-give is not a move away from someone
+    "ALTER TABLE tasks ADD COLUMN closed_from DATETIME NULL",
+    "ALTER TABLE task_moves ADD COLUMN regive TINYINT(1) NOT NULL DEFAULT 0",
   ];
   $pdo->exec($steps[0]);
   $done = (int)($pdo->query("SELECT v FROM settings WHERE k = 'schema'")->fetchColumn() ?: 0);

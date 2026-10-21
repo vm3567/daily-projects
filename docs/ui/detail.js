@@ -20,6 +20,8 @@ const HISTORY_WORDS = {
   file_added: 'File added', file_removed: 'File removed', deleted: 'Deleted', reviewed: 'OK for today',
   snoozed: 'Snoozed', woke: 'Woken up', step_remind: 'Remind me', time_added: 'Time added', time_logged: 'Time logged',
   group_added: 'Group added', group_renamed: 'Group renamed', group_deleted: 'Group deleted',
+  team_ticked: 'Done by the team', team_note: 'Team note', team_step_added: 'Step added by the team', team_step_unticked: 'Opened again by the team',
+  team_note_deleted: 'Team note removed', team_moved: 'Moved in Work Task',
 };
 
 /** Text box that saves on its own: after a short pause in typing, and when leaving the box. */
@@ -1012,7 +1014,7 @@ function projectDiary(ctx, p, upd) {
     h('ul', { class: 'diary-days' }, days.map((day) => {
       const list = (byDay.get(day) || []).filter((e) => !filter || e.stepId === filter).sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
       let empty = null;
-      if (!list.length) {
+      if (!list.some((e) => e.work)) { // nothing that counts as work (maybe a Stuck or a message): the day's tag too
         if (weekday(day) === 0) empty = h('span', { class: 'day-tag off' }, 'Off');
         else if (day === today && nowHm < fillBy) empty = h('span', { class: 'day-tag wait' }, 'Waiting for today\'s update');
         else if (p.team && !(td && td.from && day >= td.from)) empty = h('span', { class: 'muted small' }, t && t.days >= 120 && !t.loading ? '—' : '…'); // still loading (— older than the team history kept)

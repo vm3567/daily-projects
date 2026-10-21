@@ -2644,7 +2644,7 @@ function teamPeople() {
 const projectSteps = (p) => {
   const today = todayIndia();
   const open = p.steps.filter((x) => !x.done && !(x.snoozedUntil && x.snoozedUntil > today)).map((x) => ({ stepRef: x.id, title: x.text, details: x.note || '', dueDate: x.dueDate || null }));
-  if (open.length || p.steps.some((x) => !x.done)) return open; // (only snoozed steps left: nothing to do today)
+  if (open.length || p.steps.length) return open; // (steps all done or snoozed: nothing to do; the whole-project task is only for no steps at all)
   // no steps at all: the person still gets the project, as one task with its name, until steps are added
   return [{ stepRef: wholeRef(p.id), title: p.name, details: p.status || '' }];
 };
@@ -2768,13 +2768,14 @@ function adoptStaffSteps(tasks) {
     // already in the project (added on an earlier look and kept on this device): now the server may forget it was waiting
     if (p.steps.some((st) => st.id === t.stepRef)) {
       const saved = store.base && store.base.data.projects.find((x) => x.id === p.id);
-      if (saved && saved.steps.some((st) => st.id === t.stepRef)) adopted.push(t.id);
+      if (saved && saved.steps.some((st) => st.id === t.stepRef)) {
+        adopted.push(t.id);
+        if (!adoptedHere.has(t.stepRef)) { adoptedHere.add(t.stepRef); try { localStorage.setItem(ADOPTED_KEY, JSON.stringify([...adoptedHere].slice(-300))); } catch { /* full */ } }
+      }
       continue;
     }
     if (adoptedHere.has(t.stepRef)) { adopted.push(t.id); continue; } // added once already and since deleted by you: stays deleted (the server forgets it)
     actMany(p.id, [['addStep', { projectId: p.id, stepId: t.stepRef, text: t.title, byTeam: true }]], `👥 ${t.assignee.name} added a step: ${t.title}`);
-    adoptedHere.add(t.stepRef);
-    try { localStorage.setItem(ADOPTED_KEY, JSON.stringify([...adoptedHere].slice(-300))); } catch { /* full */ }
   }
   if (adopted.length) teamApi('tasks.adopted', { ids: adopted }).catch(() => { /* asked again next time; adding twice is ignored */ });
 }
@@ -2793,7 +2794,8 @@ function tickFinishedTeamTasks(tasks) {
       const step = p && p.steps.find((st) => st.id === t.stepRef);
       const note = p && (p.workNotes || []).find((n) => n.id === 'tn' + t.id);
       const latest = team.byStep.get(t.stepRef);
-      if (step && step.done && note && (!latest || latest.id === t.id)) {
+      if (p && t.stepRef === wholeRef(p.id) && note && (!latest || latest.id === t.id)) actMany(p.id, [['deleteWorkNote', { projectId: p.id, noteId: note.id, byTeam: true }]], `↩ ${t.assignee.name} opened “${p.name}” again`);
+      else if (step && step.done && note && (!latest || latest.id === t.id)) {
         actMany(p.id, [['untickStep', { projectId: p.id, stepId: step.id, byTeam: true }], ['deleteWorkNote', { projectId: p.id, noteId: note.id, byTeam: true }]], `↩ ${t.assignee.name} opened “${step.text}” again`);
       }
       seen.delete(t.id); // open now: when it is finished again, it is new again (here and on every other device)

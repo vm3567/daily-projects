@@ -37,14 +37,14 @@ function server_steps(array $p, string $today): array {
     $open[] = ['stepRef' => (string)$s['id'], 'title' => (string)($s['text'] ?? ''), 'details' => (string)($s['note'] ?? ''), 'dueDate' => $s['dueDate'] ?? null];
   }
   if ($open) return $open;
-  foreach ($steps as $s) if (empty($s['done'])) return []; // only snoozed steps left: nothing to do today
+  if ($steps) return []; // steps all done or snoozed: nothing to do (the whole-project task is only for a project with no steps at all)
   return [['stepRef' => $p['id'] . ':whole', 'title' => (string)($p['name'] ?? 'Project'), 'details' => (string)($p['status'] ?? '')]];
 }
 
 /** One project.sync, one at a time per project (the same lock as the owner's app uses). */
 function locked_project_sync(array $me, array $in, string $ref, string $day): array {
   $lk = 'ps:' . md5($ref);
-  if (!(int)(one('SELECT GET_LOCK(?, 10) AS l', [$lk])['l'] ?? 0)) throw new ApiError('Busy, try again in a moment.');
+  if (!(int)(one('SELECT GET_LOCK(?, 10) AS l', [$lk])['l'] ?? 0)) throw new ApiError('Busy, try again in a moment.', 503);
   try {
     if (!empty($in['_server']) && (int)setting('psc:' . md5($ref), '0') >= (int)($in['_since'] ?? PHP_INT_MAX)) return []; // the owner's app just sent it
     db()->beginTransaction();
@@ -85,7 +85,8 @@ function server_sync_projects(): void {
       $psp = json_decode(setting('psp:' . md5($ref), ''), true);
       $gp = $given[$ref] ?? null;
       $savedWho = $gp && ($gp['state'] ?? '') === 'active' ? (int)$gp['team']['userId'] : 0;
-      if (is_array($psp) && (int)($psp['at'] ?? 0) > time() - 7 * 86400 && (int)($psp['who'] ?? -1) !== $savedWho) continue;
+      if (is_array($psp) && (int)($psp['who'] ?? -1) === $savedWho) { q('DELETE FROM settings WHERE k = ?', ['psp:' . md5($ref)]); $psp = null; } // saved now
+      if (is_array($psp) && (int)($psp['at'] ?? 0) > time() - 7 * 86400) continue;
       if ($psc > time() - 300) { // the owner's app sent this project minutes ago: it knows best — look again once that is over
         $retry = (int)setting('sync_retry', '0');
         if (!$retry || $retry > $psc + 301) set_setting('sync_retry', (string)($psc + 301));
@@ -141,7 +142,8 @@ function evening_summary(): void {
 
 /** Today in numbers: tasks due, updates sent, who has not sent, who is stuck (with days). */
 function day_summary(string $day): array {
-  $tasks = array_values(array_filter(tasks_out(all(TASK_SELECT . " WHERE t.status = 'open' OR t.done_at >= ?", [$day . ' 00:00:00']), $day), fn($t) => $t['dueToday'] || $t['today']));
+  $tasks = array_values(array_filter(tasks_out(all(TASK_SELECT . " WHERE t.status = 'open' OR t.done_at >= ?", [$day . ' 00:00:00']), $day),
+    fn($t) => ($t['dueToday'] || $t['today']) && !($t['status'] === 'cancelled' && str_ends_with((string)$t['stepRef'], ':whole')))); // (a replaced whole-project task: its update counts on the step)
   $missing = []; $stuck = [];
   foreach ($tasks as $t) {
     if (!$t['today'] && $t['dueToday']) $missing[$t['assignee']['name']] = true;

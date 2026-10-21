@@ -148,6 +148,7 @@ test('server: photo needed, closed tasks, late offline updates', { skip }, async
   await call('task.status', { id: c.id, status: 'cancelled' }, tok.boss);
   assert.ok(!(await call('update.save', { taskId: c.id, note: 'x', state: 'finished' }, tok.suresh)).ok, 'a cancelled task takes no updates');
   const d = (await call('task.save', { assigneeId: id.suresh, title: 'Daily log', repeat: 'daily', skipSunday: false }, tok.boss)).task;
+  sql(`UPDATE wt.tasks SET created_at = NOW() - INTERVAL 3 DAY, start_date = CURDATE() - INTERVAL 3 DAY WHERE id = ${d.id}`); // (a task that was already there yesterday)
   assert.equal((await call('update.save', { taskId: d.id, note: 'yesterday', day: istDay(1) }, tok.suresh)).update.day, istDay(1), 'written yesterday counts for yesterday');
   assert.match((await call('update.save', { taskId: d.id, note: 'old', day: istDay(5) }, tok.suresh)).error || '', /more than 2 days/);
   assert.equal((await call('task.save', { assigneeId: id.suresh, title: 'bad date', repeat: 'once', dueDate: '2026-02-30' }, tok.boss)).s, 400);
@@ -180,10 +181,11 @@ test('server: project daily updates (day by day, for the project page)', { skip 
   const steps = [{ stepRef: 'd1', title: 'Mix glaze' }, { stepRef: 'd2', title: 'Fire kiln' }];
   await call('project.sync', { projectRef: 'pd', project: 'Daily P', assigneeId: id.suresh, steps }, tok.boss);
   const cur = (await call('my.today', {}, tok.suresh)).tasks.find((x) => x.project === 'Daily P');
+  sql(`UPDATE wt.tasks SET created_at = NOW() - INTERVAL 1 DAY, start_date = CURDATE() - INTERVAL 1 DAY WHERE project_ref = 'pd'`); // (given yesterday)
   await call('update.save', { taskId: cur.id, note: 'Mixed 20 kg', state: 'progress', day: istDay(1) }, tok.suresh);
   await call('update.save', { taskId: cur.id, note: 'Viscosity ok', state: 'progress' }, tok.suresh);
   const d = await call('project.updates', { projectRef: 'pd', days: 7 }, tok.boss);
-  assert.ok(d.ok && d.tasks.length === 2 && d.since === istDay(0));
+  assert.ok(d.ok && d.tasks.length === 2 && d.since === istDay(1));
   assert.deepEqual(d.updates.map((u) => [u.day, u.note, u.by]), [[istDay(0), 'Viscosity ok', 'Suresh'], [istDay(1), 'Mixed 20 kg', 'Suresh']], 'newest first, with the day it was written');
   assert.equal((await call('project.updates', { projectRef: 'pd' }, tok.suresh)).s, 403, 'staff cannot read the whole project log');
   assert.deepEqual((await call('project.updates', { projectRef: 'none' }, tok.boss)).tasks, [], 'a project with no team work has an empty log');
@@ -503,4 +505,17 @@ test('server: review round 5 — a resend after a lost answer is the same save (
   assert.ok(first.ok && again.ok && !again.history, 'the resend is not "older"');
   assert.equal(again.update.id, first.update.id);
   assert.ok((await photo(again.update.id, tok.suresh, 'up12345-r5-p0')).ok, 'its photo still goes on');
+});
+
+test('server: review round 7 — a project whose steps are all done is not put back as a whole-project task', { skip }, async () => {
+  const save = async (projects) => {
+    const head = (await call('dp.head', {}, tok.boss)).head;
+    assert.ok((await call('dp.commit', { parent: head, changes: [{ path: 'data.json', content: JSON.stringify({ projects }) }], message: 'test' }, tok.boss)).ok);
+  };
+  const open = async () => { const m = await call('my.today', {}, tok.suresh); return [...m.tasks, ...m.other].filter((t) => t.projectRef === 'rv7' && t.status === 'open'); };
+  await save([{ id: 'rv7', name: 'Last step', state: 'active', team: { userId: id.suresh, name: 'Suresh' }, steps: [{ id: 'z1', text: 'Only step', done: false }] }]);
+  assert.equal((await open()).length, 1);
+  await save([{ id: 'rv7', name: 'Last step', state: 'active', team: { userId: id.suresh, name: 'Suresh' }, steps: [{ id: 'z1', text: 'Only step', done: true, doneAt: new Date().toISOString() }] }]);
+  assert.deepEqual(await open(), [], 'nothing on the list (no "Last step" whole-project task)');
+  await save([]);
 });
