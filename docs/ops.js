@@ -132,6 +132,13 @@ function keepTeamSteps(now, back, dropIds) {
   else delete back.teamDropped;
 }
 
+/** A team tick / untick you undid stays undone (see teamUndoKey in rules.js): kept through every later Undo too. */
+function keepTeamUndone(now, back, mark) {
+  const list = [...new Set([...(back.teamUndone || []), ...((now && now.teamUndone) || []), ...(mark ? [mark.slice(0, 80)] : [])])];
+  if (list.length) back.teamUndone = list.slice(-300);
+  else delete back.teamUndone;
+}
+
 function addEvent(state, op, project, kind, detail = '', extra = null) {
   const month = opMonth(op);
   if (!state.history[month]) state.history[month] = [];
@@ -404,6 +411,7 @@ const handlers = {
     const i = list.findIndex((x) => x.id === snap.id);
     const back = clone(snap);
     if (i >= 0) keepTeamSteps(list[i], back, Array.isArray(a.dropTeamSteps) ? a.dropTeamSteps : []);
+    keepTeamUndone(i >= 0 ? list[i] : null, back, typeof a.teamUndone === 'string' ? a.teamUndone : null);
     if (i >= 0) list[i] = back;
     else list.splice(Math.min(Math.max(0, a.index ?? 0), list.length), 0, back);
     const undone = [a.undoOpId, ...(Array.isArray(a.undoOpIds) ? a.undoOpIds : [])].filter(Boolean).flatMap((id) => [id, id + 't']);

@@ -1,7 +1,7 @@
 // Work Task: the team app. Staff see and fill their own tasks; the manager gives tasks and sees everything.
 // No outside libraries. All text from the server is put on screen as text (never as HTML).
 
-import { addDay, weekdayOf, dueOn, itemKey, diaryRows, fieldChanged, lateValue, afterFlush, boxStillThere, updateSaveBody, redrawHow, projectRowState, giveBackShow, keptNotice, noticeHow, pasteWaits } from './logic.js'; // the rules (checked in tests/team-app.test.mjs)
+import { addDay, weekdayOf, dueOn, itemKey, diaryRows, fieldChanged, lateValue, afterFlush, boxStillThere, updateSaveBody, redrawHow, projectRowState, giveBackShow, keptNotice, noticeHow, pasteWaits, msgBoxSent, redrawAfterSend, taskSaveBody } from './logic.js'; // the rules (checked in tests/team-app.test.mjs)
 
 const TOKEN_KEY = 'wt.token';
 const state = {
@@ -510,7 +510,7 @@ function dropBack() { if (history.state && history.state.wt) { ignorePop = true;
 window.addEventListener('popstate', () => {
   if (ignorePop) { ignorePop = false; if (state.sel || state.menuOpen) pushBack(); return; } // something opened meanwhile: it gets its Back step
   if (!state.user) return;
-  if (state.menuOpen) { state.menuOpen = false; render(); if (state.sel) pushBack(); return; }
+  if (state.menuOpen) { state.menuOpen = false; menuRender(); if (state.sel) pushBack(); return; }
   if (state.sel) closeDetail(true);
 });
 
@@ -557,7 +557,7 @@ function render() {
     class: layoutClass(wide),
   },
   el('aside', { id: 'menu' }, menuColumn()),
-  el('div', { class: 'scrim', onClick: () => { state.menuOpen = false; if (!state.sel) dropBack(); render(); } }),
+  el('div', { class: 'scrim', onClick: () => { state.menuOpen = false; if (!state.sel) dropBack(); menuRender(); } }),
   el('main', { id: 'list' }, listColumn(wide)),
   wide ? null : el('section', { id: 'detail' }, detailColumn())));
   if (sameScreen) ['list', 'detail'].forEach((id, i) => { const n = document.getElementById(id); if (n) n.scrollTop = keep[i]; });
@@ -582,6 +582,18 @@ function softRender() {
   if (l.parentNode) l.parentNode.className = layoutClass(wide);
   [m, l].forEach((c) => c.querySelectorAll('input, textarea, select').forEach((x) => { x.dataset.init = x.type === 'checkbox' ? String(x.checked) : x.value; }));
   setBadge();
+}
+
+/** Open or close the ☰ menu: only the menu and the layout's class change, so a Give / Edit / Add a person form half filled is kept. */
+function menuRender() {
+  const menu = document.getElementById('menu'), layout = menu && menu.parentNode;
+  if (!layout) { render(); return; }
+  if (!formHasText(menu)) {
+    const m = el('aside', { id: 'menu' }, menuColumn());
+    menu.replaceWith(m);
+    m.querySelectorAll('input, textarea, select').forEach((x) => { x.dataset.init = x.type === 'checkbox' ? String(x.checked) : x.value; });
+  }
+  layout.className = layoutClass(isWide());
 }
 
 const brandBig = () => el('div', { class: 'brand-big' }, el('img', { src: 'icons/icon-192.png', alt: '', width: 40, height: 40 }), el('h1', null, 'Work Task'));
@@ -666,7 +678,7 @@ function listColumn(wide) {
   let title = titles[state.view];
   if (admin && state.view === 'today' && state.personFilter && state.team) { const p = state.team.people.find((x) => x.id === state.personFilter); if (p) title = p.name; }
   const head = el('div', { class: 'list-head' },
-    el('button', { class: 'icon menu-btn', 'aria-label': 'Menu', onClick: () => { state.menuOpen = true; pushBack(); render(); } }, '☰'),
+    el('button', { class: 'icon menu-btn', 'aria-label': 'Menu', onClick: () => { state.menuOpen = true; pushBack(); menuRender(); } }, '☰'),
     el('h2', null, title),
     state.view === 'settings' ? null : el('button', { class: 'icon', title: 'Get latest', 'aria-label': 'Refresh', onClick: () => loadView() }, '↻'));
   const bar = el('div', { id: 'bar' }, offlineBar(), pushBanner());
@@ -1344,7 +1356,7 @@ function updateForm(t) {
       delete state.sending[t.id];
       if (!document.contains(btn)) { // redrawn while sending: the new Send button was drawn greyed out
         if (!err.hidden) toast(err.textContent, 6000);
-        if (state.view === 'today') { if (!formHasText()) render(); else state.reloadLater = true; } // (never over a form typed in meanwhile)
+        if (redrawAfterSend({ view: state.view, sel: state.sel, taskId: t.id })) { if (!formHasText()) render(); else state.reloadLater = true; } // (never over a form typed in meanwhile; the rule: logic.js)
       }
     }
   } }, 'Send');
@@ -1439,23 +1451,30 @@ function msgPhoto(id) {
 }
 /** 📷 in the messages: the photo goes with what is typed in the box (if anything). Needs the internet. */
 function msgPhotoButton(taskId, box, key) {
-  const input = el('input', { type: 'file', accept: 'image/*', class: 'hidden-file', onChange: () => { const f = input.files[0]; input.value = ''; if (f) sendMsgPhoto(taskId, f, box.value || ''); } });
+  const input = el('input', { type: 'file', accept: 'image/*', class: 'hidden-file', onChange: () => { const f = input.files[0]; input.value = ''; if (f) sendMsgPhoto(taskId, f, box.value || '', box); } });
   return el('label', { class: 'btn', title: 'Send a photo' }, '📷 Photo', input);
 }
-async function sendMsgPhoto(taskId, f, text) {
+async function sendMsgPhoto(taskId, f, text, box) {
   const key = 'm' + taskId;
   if (state.offline) { toast('Photos in messages need the internet. Try again when online.', 5000); return; }
   state.sending[key] = true;
   toast('Sending photo…');
   const fd = new FormData();
   fd.append('taskId', String(taskId)); fd.append('text', text); fd.append('clientId', newClientId()); fd.append('file', f, 'photo.jpg');
+  let sent = false;
   try {
     const out = await api('comment.photo', fd, true);
+    sent = true;
     delete state.drafts[key];
     toast('Sent ✓');
     if (state.sel === 'task:' + taskId && state.detail) state.detail.comments = out.comments;
   } catch (ex) { toast(ex instanceof OfflineError ? 'Photos in messages need the internet. Try again when online.' : ex.message, 6000); }
-  finally { delete state.sending[key]; if (!formHasText()) render(); else state.reloadLater = true; } // (a form opened meanwhile is not wiped)
+  finally {
+    delete state.sending[key];
+    // the box still holds just the words that went: empty it, so it is not "typing" and a second tap cannot send them twice (the rule: logic.js)
+    if (sent && box && document.contains(box) && msgBoxSent(box.value, text)) { box.value = ''; box.dataset.init = ''; }
+    if (!formHasText()) render(); else state.reloadLater = true; // (a form opened meanwhile is not wiped)
+  }
 }
 
 // Ctrl+V on an open task: in the message box = a photo message; otherwise staff add it to today's update, the manager as an instruction file
@@ -1470,7 +1489,7 @@ document.addEventListener('paste', (e) => {
   const inMessages = e.target && e.target.tagName === 'TEXTAREA' && /^(Reply|Ask)/.test(e.target.placeholder || ''); // the message box
   if (inMessages) {
     if (!images.length) { toast('Only photos can go in a message. Ask your manager to add other files to the task.', 5000); return; }
-    sendMsgPhoto(t.id, images[0], e.target.value || '');
+    sendMsgPhoto(t.id, images[0], e.target.value || '', e.target);
     return;
   }
   if (state.user.role === 'admin') { toast('📎 Adding to the task…'); uploadTaskFiles(t.id, files.slice(0, 10)).then(() => { toast('📎 Added ✓'); loadDetail(); }).catch((ex) => toast(ex.message, 6000)); return; }
@@ -1696,16 +1715,17 @@ function taskForm() {
   how.addEventListener('change', sync);
   sync();
   const btn = el('button', { class: 'primary', type: 'submit' }, editing ? 'Save' : 'Give task');
+  const formId = editing ? '' : newClientId(); // one per form: a second tap after a lost answer gives the task once
   return [
     el('form', { class: 'card stack', onSubmit: async (e) => {
       e.preventDefault();
       err.hidden = true; btn.disabled = true;
       try {
-        const out = await api('task.save', {
+        const out = await api('task.save', taskSaveBody({
           id: t ? t.id : 0, assigneeId: Number(person.value), title: title.value, details: details.value, project: project.value,
           repeat: how.value === 'daily7' ? 'daily' : how.value, skipSunday: how.value === 'daily' || (how.value === 'once' && (!t || t.skipSunday)), weekday: Number(weekday.value), dueDate: due.value,
           projectRef: t ? t.projectRef : pre.projectRef, stepRef: t ? t.stepRef : pre.stepRef, needsPhoto: needsPhoto.checked, startDate: start.value || (t && t.startDate && t.startDate > todayIs ? todayIs : ''),
-        });
+        }, formId));
         if (files.files.length) await uploadTaskFiles(out.task.id, [...files.files].slice(0, 10));
         const fromProjects = !editing && pre.stepRef && state.user.owner;
         state.prefill = null;

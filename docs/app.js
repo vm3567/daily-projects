@@ -15,7 +15,7 @@ import { ServerRepo, SERVER_TOKEN_KEY } from './serverrepo.js';
 import { MockRepo } from './mockrepo.js';
 import { device } from './device.js';
 import { DATA_OWNER, DATA_REPO, DATA_BRANCH, MOVED_TO, REFRESH_MS, AI_DAILY_LIMIT, BRIEF_CLAIM_MINUTES, WAIT_RED_DAYS, NO_WORK_NOTE_DAYS } from './config.js';
-import { dotColour, greenByTeamOnly, isSnoozed, restUntil, awakeProjects, activeProjects, nextStep, todayIndia, isSundayIndia, colourCounts, isOverdue, indiaDate, waitingDays, daysWithoutWork, dayScore, greenStreak, addDays, monthOf, fmtMinutes, takeBackWaits, staffStepAction, pasteGoesToProject, singleStepClose, versionRequest, askDiaryAgain, diaryLoadedAt, photoNeedsFetch } from './rules.js';
+import { dotColour, greenByTeamOnly, isSnoozed, restUntil, awakeProjects, activeProjects, nextStep, todayIndia, isSundayIndia, colourCounts, isOverdue, indiaDate, waitingDays, daysWithoutWork, dayScore, greenStreak, addDays, monthOf, fmtMinutes, takeBackWaits, staffStepAction, pasteGoesToProject, singleStepClose, versionRequest, askDiaryAgain, diaryLoadedAt, photoNeedsFetch, teamUndoKey, teamActionUndone, teamProgressOf, projectKeyIgnored, teamMovedTo, serverHolder } from './rules.js';
 import { newId, clone, opMonth, groupHasTimer, cleanLink, carriedOps } from './ops.js';
 import * as ai from './ai.js';
 import { parseVoice } from './voice.js';
@@ -67,8 +67,9 @@ function toast(text, ms = 3500, undo = null) {
 /**
  * Several changes to one project as ONE action with one Undo (e.g. note + tick + next step).
  * `steps` is a list of [type, args]. Returns the ops that were applied, or null.
+ * `undoMark`: a team tick / untick (teamUndoKey): its Undo is remembered, so the next team load does not do it again.
  */
-function actMany(projectId, steps, message) {
+function actMany(projectId, steps, message, undoMark = null) {
   const list = store.view.data.projects;
   const index = list.findIndex((x) => x.id === projectId);
   const before = index >= 0 ? clone(list[index]) : null;
@@ -79,7 +80,7 @@ function actMany(projectId, steps, message) {
     const months = [...new Set(ops.map(opMonth))];
     // (a step the person added, taken away by this Undo, is remembered as deleted on every device)
     const dropTeamSteps = ops.filter((o) => o.type === 'addStep' && o.args.byTeam).map((o) => o.args.stepId);
-    if (store.dispatch('restoreProject', { project: before, index, undoOpIds: ops.map((o) => o.id), undoMonth: months[0], dropTeamSteps })) toast('Undone', 1500);
+    if (store.dispatch('restoreProject', { project: before, index, undoOpIds: ops.map((o) => o.id), undoMonth: months[0], dropTeamSteps, teamUndone: undoMark })) toast('Undone', 1500);
   } : null;
   if (message) toast(message, 5000, undo);
   return { ops, undo };
@@ -2466,7 +2467,7 @@ function onKey(e) {
     if (ui.navStack && ui.navStack.length) goBack(); else handled = false;
   } else if (k === 'ArrowDown' || k === 'j') moveSelection(1);
   else if (k === 'ArrowUp' || k === 'k') moveSelection(-1);
-  else if (ui.view === 'people' && 'xswi'.includes(k)) handled = false; // project keys do nothing on People
+  else if (projectKeyIgnored(ui, k)) handled = false; // project keys do nothing on People, or where the project is not on screen
   else if (k === 'x') {
     const ns = p && p.state === 'active' && nextStep(p, todayIndia(), { dueOnly: true });
     if (ns) {
@@ -2559,10 +2560,7 @@ function teamPhoto(id) {
 /** The team sent an update on a project today: it counts as work (green, shown with 👥). Once a day per project. */
 /** A given project on the team: steps done / open, the step they are on, their last update. */
 function teamProgress(projectId) {
-  const list = [...team.byStep.values()].filter((t) => t.projectRef === projectId && t.seq !== null && t.seq !== undefined && !String(t.stepRef).endsWith(':whole'));
-  const open = list.filter((t) => t.status === 'open'), done = list.filter((t) => t.status === 'done');
-  const days = [...team.byStep.values()].filter((t) => t.projectRef === projectId).map((t) => (t.today || t.last || {}).day).filter(Boolean).sort();
-  return { open: open.length, done: done.length, current: open.find((t) => !t.queued) || null, lastUpdate: days[days.length - 1] || null, stuck: open.some((t) => t.stuck) };
+  return teamProgressOf([...team.byStep.values()], projectId); // (rules.js: a project given as one task counts for stuck too)
 }
 
 function markTeamWork(tasks, teamDays) {
@@ -2708,8 +2706,8 @@ async function syncGivenNow(gen) {
     let p = fresh(id);
     if (!p || !p.team) continue;
     // moved on Work Task (↔ Move to…): follow the new person instead of moving the steps back
-    const onTeam = gen === team.gen && team.listAt >= dataFreshAt ? [...team.byStep.values()].filter((t) => t.projectRef === p.id && t.seq !== null && t.status === 'open') : [];
-    const moved = onTeam.length && onTeam.every((t) => t.assignee.id === onTeam[0].assignee.id) && onTeam[0].assignee.id !== p.team.userId ? onTeam[0].assignee : null;
+    // (also when the new person has finished every step: the newest finish tells, rules.js)
+    const moved = gen === team.gen && team.listAt >= dataFreshAt ? teamMovedTo(p, [...team.byStep.values()]) : null;
     if (moved) {
       store.dispatch('setProjectTeam', { projectId: p.id, userId: moved.id, name: moved.name, needsPhoto: !!p.team.needsPhoto, byTeam: true });
       p = fresh(id);
@@ -2725,6 +2723,9 @@ async function syncGivenNow(gen) {
       // a re-opened step that was just finished is not made yet: sent again next time
       rememberSync(id, notSent(out, steps).length ? SYNC_RETRY : sig);
       delete team.syncErr[id];
+      // the server followed a Work Task move this app had not seen: record the new person (once; the next sync sends them)
+      const now = serverHolder(out, p.state === 'active' ? p.team.userId : 0, [...(team.people || []), ...[...team.byStep.values()].map((t) => t.assignee)]);
+      if (now && fresh(id) && fresh(id).team) store.dispatch('setProjectTeam', { projectId: id, userId: now.id, name: now.name, needsPhoto: !!p.team.needsPhoto, byTeam: true });
     } catch (e) {
       // try again next time; say it once, so new steps do not quietly reach nobody
       if (e.message !== 'No connection' && team.syncErr[id] !== e.message) {
@@ -2792,9 +2793,10 @@ function tickFinishedTeamTasks(tasks) {
       const step = p && p.steps.find((st) => st.id === t.stepRef);
       const note = p && (p.workNotes || []).find((n) => n.id === 'tn' + t.id);
       const latest = team.byStep.get(t.stepRef);
-      if (p && t.stepRef === wholeRef(p.id) && note && (!latest || latest.id === t.id)) actMany(p.id, [['deleteWorkNote', { projectId: p.id, noteId: note.id, byTeam: true }]], `↩ ${t.assignee.name} opened “${p.name}” again`);
+      if (teamActionUndone(p, t)) { /* you undid this untick: it stays as you left it (every device) */ }
+      else if (p && t.stepRef === wholeRef(p.id) && note && (!latest || latest.id === t.id)) actMany(p.id, [['deleteWorkNote', { projectId: p.id, noteId: note.id, byTeam: true }]], `↩ ${t.assignee.name} opened “${p.name}” again`, teamUndoKey(t));
       else if (step && note && (!latest || latest.id === t.id)) { // (the note says "this finish was handled": it is not finished now)
-        actMany(p.id, [...(step.done ? [['untickStep', { projectId: p.id, stepId: step.id, byTeam: true }]] : []), ['deleteWorkNote', { projectId: p.id, noteId: note.id, byTeam: true }]], `↩ ${t.assignee.name} opened “${step.text}” again`);
+        actMany(p.id, [...(step.done ? [['untickStep', { projectId: p.id, stepId: step.id, byTeam: true }]] : []), ['deleteWorkNote', { projectId: p.id, noteId: note.id, byTeam: true }]], `↩ ${t.assignee.name} opened “${step.text}” again`, teamUndoKey(t));
       }
       seen.delete(t.id); // open now: when it is finished again, it is new again (here and on every other device)
       continue;
@@ -2807,9 +2809,9 @@ function tickFinishedTeamTasks(tasks) {
     const p = store.view.data.projects.find((x) => x.id === t.projectRef) || store.view.data.projects.find((x) => x.steps.some((st) => st.id === t.stepRef));
     if (p && t.stepRef === wholeRef(p.id)) { // the project with no steps, finished as one task: a note, you decide on Finish
       seen.add(t.id);
-      if (!(p.workNotes || []).some((n) => n.id === 'tn' + t.id)) {
+      if (!(p.workNotes || []).some((n) => n.id === 'tn' + t.id) && !teamActionUndone(p, t)) {
         const words = (t.today || t.last) ? (t.today || t.last).note : '';
-        actMany(p.id, [['addWorkNote', { projectId: p.id, noteId: 'tn' + t.id, team: true, at: serverTime(t.doneAt), text: `👥 ${t.assignee.name} finished the project${words ? ': ' + words : '.'}` }]], `✓ ${t.assignee.name} finished: ${p.name}`);
+        actMany(p.id, [['addWorkNote', { projectId: p.id, noteId: 'tn' + t.id, team: true, at: serverTime(t.doneAt), text: `👥 ${t.assignee.name} finished the project${words ? ': ' + words : '.'}` }]], `✓ ${t.assignee.name} finished: ${p.name}`, teamUndoKey(t));
       }
       continue;
     }
@@ -2819,13 +2821,14 @@ function tickFinishedTeamTasks(tasks) {
     if (step.done) continue;
     // handled on another device already (its note is saved with the data): an un-tick by hand there stays
     if ((p.workNotes || []).some((n) => n.id === 'tn' + t.id)) continue;
+    if (teamActionUndone(p, t)) continue; // you undid this tick: it stays open (every device)
     const words = (t.today || t.last) ? (t.today || t.last).note : '';
     actMany(p.id, [
       ['tickStep', { projectId: p.id, stepId: step.id, byTeam: true, at: serverTime(t.doneAt) }], // their day, not your work today
       // always a note (same id on every device), so no other device ticks it again
       ['addWorkNote', { projectId: p.id, noteId: 'tn' + t.id, stepId: step.id, team: true, at: serverTime(t.doneAt),
         text: t.closedByPerson === false ? `👥 Marked done in Work Task: “${step.text}” (${t.assignee.name}'s step)` : `👥 ${t.assignee.name} finished “${step.text}”${words ? ': ' + words : '.'}` }],
-    ], `✓ ${t.assignee.name} finished: ${step.text}`);
+    ], `✓ ${t.assignee.name} finished: ${step.text}`, teamUndoKey(t));
   }
   // keep every id the server still sends (60 days), so none of them looks new again
   const live = new Set(tasks.map((t) => t.id));

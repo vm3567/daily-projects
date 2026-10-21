@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { addDay, weekdayOf, dueOn, itemKey, diaryRows, fieldChanged, lateValue, afterFlush, boxStillThere, updateSaveBody, redrawHow, projectRowState, giveBackShow, keptNotice, noticeHow, pasteWaits } from '../team/public_html/logic.js';
+import { addDay, weekdayOf, dueOn, itemKey, diaryRows, fieldChanged, lateValue, afterFlush, boxStillThere, updateSaveBody, redrawHow, projectRowState, giveBackShow, keptNotice, noticeHow, pasteWaits, msgBoxSent, redrawAfterSend, taskSaveBody } from '../team/public_html/logic.js';
 const APP = readFileSync(new URL('../team/public_html/app.js', import.meta.url), 'utf8');
 
 // Wed 21 Oct 2026 is "today" in these checks; 18 Oct is a Sunday.
@@ -83,7 +83,9 @@ test('team: the search box is never "typing" (a new search must not stop Mark do
   assert.equal(fieldChanged({ tagName: 'INPUT', type: 'text', value: 'kiln', init: 'kiln' }), false, 'unchanged since drawn');
   assert.equal(fieldChanged({ tagName: 'TEXTAREA', type: 'textarea', value: 'words' }), true, 'no init: text counts');
   assert.equal(fieldChanged({ tagName: 'INPUT', type: 'file', fileCount: 1 }), true, 'a picked file');
-  assert.equal(fieldChanged({ tagName: 'INPUT', type: 'password', value: 'x', init: '' }), false);
+  // (round 11: a password typed on Change password now counts as typing, so a redraw cannot empty it; see the password check below)
+  assert.equal(fieldChanged({ tagName: 'INPUT', type: 'password', value: 'x', init: '' }), true);
+  assert.equal(fieldChanged({ tagName: 'INPUT', type: 'password', value: 'x' }), false, 'a sign-in box (never drawn by render): not typing');
   assert.match(APP.slice(APP.indexOf('function formHasText')), /^[^]{0,200}fieldChanged\(/, 'formHasText uses this rule');
 });
 
@@ -186,12 +188,13 @@ test('team: the offline bar redraw keeps the "turn on notifications" banner', ()
 
 test('team: a finished send never redraws over a form opened and typed in meanwhile', () => {
   const photo = APP.slice(APP.indexOf('async function sendMsgPhoto'), APP.indexOf('// Ctrl+V on an open task'));
-  assert.match(photo, /finally \{[^\n]*if \(!formHasText\(\)\) render\(\); else state\.reloadLater = true;/);
+  assert.match(photo, /finally \{[^]*if \(!formHasText\(\)\) render\(\); else state\.reloadLater = true;/); // (round 11: the finally block spans lines now)
   assert.ok(!/finally \{ delete state\.sending\[key\]; render\(\); \}/.test(photo));
   const send = APP.slice(APP.indexOf("toast('Sent ✓');\n      if (document.contains(btn)"), APP.indexOf("}, 'Send');"));
   assert.ok(send.length > 0, 'the update Send checks before redrawing');
   assert.match(send, /if \(document\.contains\(btn\) \|\| !formHasText\(\)\) render\(\);[^\n]*\n\s*else state\.reloadLater = true;/);
-  assert.match(send, /if \(state\.view === 'today'\) \{ if \(!formHasText\(\)\) render\(\); else state\.reloadLater = true; \}/);
+  // (round 11: the redraw is no longer only on the Today list, see the check below; still never over typing)
+  assert.match(send, /if \(redrawAfterSend\(\{ view: state\.view, sel: state\.sel, taskId: t\.id \}\)\) \{ if \(!formHasText\(\)\) render\(\); else state\.reloadLater = true; \}/);
 });
 
 test('team: Ctrl+V of a photo while the update waits on the phone is refused (it would go nowhere)', () => {
@@ -202,4 +205,54 @@ test('team: Ctrl+V of a photo while the update waits on the phone is refused (it
   assert.ok(!pasteWaits(box, 6, false)); assert.ok(!pasteWaits([{ kind: 'comment', taskId: 5 }], 5, false)); assert.ok(!pasteWaits(undefined, 5, false));
   const paste = APP.slice(APP.indexOf("document.addEventListener('paste'"), APP.indexOf('async function editMessage'));
   assert.ok(paste.indexOf('pasteWaits(state.outbox, t.id') > 0 && paste.indexOf('pasteWaits(') < paste.indexOf('addTaskPhotos('), 'checked before the photo is added');
+});
+
+test('team: a photo message sent with words empties the box (the words are not sent twice) and the photo shows', () => {
+  assert.ok(msgBoxSent('crack near the base', 'crack near the base'), 'the box holds just what went: emptied');
+  assert.ok(!msgBoxSent('crack near the base, and more', 'crack near the base'), 'more typed since: kept');
+  assert.ok(!msgBoxSent('', '') && !msgBoxSent('later words', ''), 'a photo with no words: the box is left alone');
+  const photo = APP.slice(APP.indexOf('async function sendMsgPhoto'), APP.indexOf('// Ctrl+V on an open task'));
+  assert.match(photo, /async function sendMsgPhoto\(taskId, f, text, box\)/);
+  assert.match(photo, /sent = true;/);
+  const fin = photo.slice(photo.indexOf('finally {'));
+  assert.ok(fin.indexOf("msgBoxSent(box.value, text)) { box.value = ''; box.dataset.init = ''; }") > 0, 'the sent words are taken out of the box');
+  assert.ok(fin.indexOf('msgBoxSent(') < fin.indexOf('if (!formHasText()) render()'), '… before the "are they typing" check, so the redraw happens');
+  assert.match(APP, /sendMsgPhoto\(taskId, f, box\.value \|\| '', box\)/, 'the 📷 button passes its box');
+  assert.match(APP, /sendMsgPhoto\(t\.id, images\[0\], e\.target\.value \|\| '', e\.target\)/, 'Ctrl+V passes its box');
+});
+
+test('team: opening or closing the ☰ menu never wipes a half-filled form', () => {
+  const fn = APP.slice(APP.indexOf('function menuRender()'), APP.indexOf('const brandBig'));
+  assert.ok(fn.length > 0, 'menuRender exists');
+  assert.ok(!/main|listColumn|detailColumn/.test(fn), 'only the menu is drawn again, never the list or the form on the right');
+  assert.match(fn, /layout\.className = layoutClass\(isWide\(\)\)/);
+  assert.match(APP, /state\.menuOpen = true; pushBack\(\); menuRender\(\);/, '☰ opens with menuRender');
+  assert.match(APP, /state\.menuOpen = false; if \(!state\.sel\) dropBack\(\); menuRender\(\);/, 'the scrim closes with menuRender');
+  assert.match(APP, /if \(state\.menuOpen\) \{ state\.menuOpen = false; menuRender\(\);/, 'phone Back closes with menuRender');
+  assert.ok(!/state\.menuOpen = (true|false);[^\n]{0,40}\brender\(\)/.test(APP), 'no plain render() for the menu');
+});
+
+test("team: 'Give task' carries one clientId per form (a second tap after a lost answer gives the task once)", () => {
+  assert.deepEqual(taskSaveBody({ id: 0, title: 'x' }, 'abc'), { id: 0, title: 'x', clientId: 'abc' }, 'a new task carries it');
+  assert.deepEqual(taskSaveBody({ id: 7, title: 'x' }, 'abc'), { id: 7, title: 'x' }, 'a change to a task never does');
+  assert.deepEqual(taskSaveBody({ id: 0, title: 'x' }, ''), { id: 0, title: 'x' });
+  const form = APP.slice(APP.indexOf('function taskForm()'), APP.indexOf("'Give task');") + 400);
+  assert.match(form, /const formId = editing \? '' : newClientId\(\);/, 'made once when the form is drawn, kept for its retries');
+  const submit = APP.slice(APP.indexOf('function taskForm()'));
+  assert.match(submit, /api\('task\.save', taskSaveBody\(\{/);
+  assert.match(submit, /\}, formId\)\);/);
+});
+
+test('team: typed passwords on Change password count as typing (a redraw never empties them)', () => {
+  assert.ok(fieldChanged({ type: 'password', value: 'secret12', init: '' }), 'typed since drawn');
+  assert.ok(!fieldChanged({ type: 'password', value: '', init: '' }), 'empty');
+  assert.ok(!fieldChanged({ type: 'password', value: 'x', init: 'x' }), 'unchanged');
+  assert.ok(!fieldChanged({ type: 'password', value: 'autofilled' }), 'a box never drawn by render (sign-in) is not typing');
+});
+
+test('team: a refused update Send redraws its greyed Send button on any list the task is open from', () => {
+  assert.ok(redrawAfterSend({ view: 'search', sel: 'task:5', taskId: 5 }), 'opened from Search');
+  assert.ok(redrawAfterSend({ view: 'tasks', sel: 'task:5', taskId: 5 }), 'opened from Tasks');
+  assert.ok(redrawAfterSend({ view: 'today', sel: '', taskId: 5 }), 'Today as before');
+  assert.ok(!redrawAfterSend({ view: 'search', sel: 'task:6', taskId: 5 }), 'another task open: left alone');
 });

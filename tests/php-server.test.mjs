@@ -790,3 +790,65 @@ test('regression: "Seen" and Send mark messages read only up to the newest one s
   d = await call('project.updates', { projectRef: 'rs10' }, tok.boss);
   assert.ok(!d.comments.some((c) => c.unread), 'without upTo: all read, as before');
 });
+
+test('regression: a step\'s turn still starts when the step before it finished, after the project is sent again without it', { skip }, async () => {
+  const S = (...r) => r.map((x) => ({ stepRef: x, title: 'Turn ' + x }));
+  await call('project.sync', { projectRef: 'rg21', project: 'Turn P', assigneeId: id.suresh, steps: S('rg21a', 'rg21b', 'rg21c') }, tok.boss);
+  const [a, b] = await openOf('suresh', 'rg21');
+  sql(`UPDATE wt.tasks SET created_at = NOW() - INTERVAL 6 DAY, start_date = CURDATE() - INTERVAL 6 DAY WHERE project_ref = 'rg21'`);
+  assert.ok((await call('update.save', { taskId: a.id, note: 'done', state: 'finished' }, tok.suresh)).ok);
+  sql(`UPDATE wt.tasks SET done_at = '${istDay(2)} 10:00:00' WHERE id = ${a.id}`);
+  await call('project.sync', { projectRef: 'rg21', project: 'Turn P', assigneeId: id.suresh, steps: S('rg21b', 'rg21c') }, tok.boss); // a ticked
+  assert.equal((await call('task.get', { id: b.id }, tok.suresh)).task.turnSince, istDay(2), 'b\'s turn began when a finished');
+  await call('project.sync', { projectRef: 'rg21', project: 'Turn P', assigneeId: id.suresh, steps: S('rg21b') }, tok.boss); // c (waiting) deleted
+  await call('project.sync', { projectRef: 'rg21', project: 'Turn P', assigneeId: id.suresh, steps: S('rg21b', 'rg21d') }, tok.boss); // d added
+  assert.equal((await call('task.get', { id: b.id }, tok.suresh)).task.turnSince, istDay(2), 'a waiting step deleted later does not move b\'s turn');
+  const d = (await openOf('suresh', 'rg21')).find((t) => t.stepRef === 'rg21d');
+  assert.ok(d.queued && d.seq > b.seq, 'd waits after b');
+  await call('project.sync', { projectRef: 'rg21', project: '', assigneeId: 0, steps: [] }, tok.boss);
+});
+
+test('regression: my.today does not list a whole-project task that steps replaced today', { skip }, async () => {
+  await call('project.sync', { projectRef: 'rg22', project: 'Replaced P', assigneeId: id.suresh, steps: [{ stepRef: 'rg22:whole', title: 'Replaced P' }] }, tok.boss);
+  const w = (await openOf('suresh', 'rg22'))[0];
+  assert.ok((await call('update.save', { taskId: w.id, note: 'whole words', state: 'progress' }, tok.suresh)).ok);
+  await call('project.sync', { projectRef: 'rg22', project: 'Replaced P', assigneeId: id.suresh, steps: [{ stepRef: 'rg22s', title: 'R one' }] }, tok.boss);
+  const m = await call('my.today', {}, tok.suresh);
+  const mine = [...m.tasks, ...m.other].filter((t) => t.projectRef === 'rg22');
+  assert.deepEqual(mine.map((t) => t.stepRef), ['rg22s'], 'only the step (it carries the words)');
+  assert.equal(mine[0].today?.note, 'whole words');
+  await call('project.sync', { projectRef: 'rg22', project: '', assigneeId: 0, steps: [] }, tok.boss);
+});
+
+test('regression: "Give task" sent twice with the same clientId makes one task', { skip }, async () => {
+  const body = { assigneeId: id.anita, title: 'Give once check', repeat: 'once', clientId: 'give-form-0001' };
+  const n = pushLen();
+  const one = await call('task.save', body, tok.boss);
+  const two = await call('task.save', body, tok.boss); // the answer was lost, tapped again
+  assert.ok(one.task && two.task);
+  assert.equal(two.task.id, one.task.id, 'the same task comes back');
+  assert.equal(Number(String(sql("USE wt; SELECT COUNT(*) FROM wt.tasks WHERE title = 'Give once check'")).trim().split('\n').pop()), 1);
+  assert.equal(pushSince(n).split('\n').filter((l) => l.includes('Give once check')).length, 1, 'one notice');
+  const other = await call('task.save', { ...body, clientId: 'give-form-0002' }, tok.boss);
+  assert.notEqual(other.task.id, one.task.id, 'a new form is a new task');
+  const plain = await call('task.save', { assigneeId: id.anita, title: 'Give once check' }, tok.boss);
+  assert.ok(plain.task.id !== one.task.id && plain.task.id !== other.task.id, 'no clientId: made as before');
+});
+
+test('regression: the projects app naming the old person after a Work Task move keeps the project with the new person', { skip }, async () => {
+  const psc = 'psc:' + md5('rg23');
+  const r0 = await call('project.sync', { projectRef: 'rg23', project: 'Moved P', assigneeId: id.suresh, steps: [{ stepRef: 'rg23a', title: 'M one' }] }, tok.boss);
+  assert.equal(r0.assigneeId, id.suresh);
+  sql(`USE wt; UPDATE wt.settings SET v = v - 10 WHERE k = '${psc}'`); // given a little while ago
+  const a = (await openOf('suresh', 'rg23'))[0];
+  await call('task.move', { id: a.id, toId: id.anita }, tok.boss); // Move to… in Work Task
+  assert.ok((await call('update.save', { taskId: a.id, note: 'all done', state: 'finished' }, tok.anita)).ok); // no open steps left
+  const r = await call('project.sync', { projectRef: 'rg23', project: 'Moved P', assigneeId: id.suresh, steps: [{ stepRef: 'rg23b', title: 'M two' }] }, tok.boss);
+  assert.equal(r.assigneeId, id.anita, 'the answer names who has it now');
+  assert.deepEqual((await openOf('anita', 'rg23')).map((t) => t.stepRef), ['rg23b'], 'the new step goes to Anita');
+  assert.deepEqual(await openOf('suresh', 'rg23'), [], 'not to Suresh');
+  const back = await call('project.sync', { projectRef: 'rg23', project: 'Moved P', assigneeId: id.suresh, steps: [{ stepRef: 'rg23b', title: 'M two' }] }, tok.boss);
+  assert.equal(back.assigneeId, id.suresh, 'given back by the owner after that: honoured');
+  assert.deepEqual((await openOf('suresh', 'rg23')).map((t) => t.stepRef), ['rg23b']);
+  await call('project.sync', { projectRef: 'rg23', project: '', assigneeId: 0, steps: [] }, tok.boss);
+});

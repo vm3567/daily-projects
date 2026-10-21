@@ -69,7 +69,9 @@ export function diaryRows(t, updates, today, opts = {}) {
 export function fieldChanged(f) {
   if (f.disabled || f.readOnly) return false;
   if (f.type === 'file') return !!f.fileCount;
-  if (['radio', 'hidden', 'submit', 'button', 'password', 'search'].includes(f.type)) return false;
+  if (['radio', 'hidden', 'submit', 'button', 'search'].includes(f.type)) return false;
+  // a password box counts only once drawn and then typed in (Change password); never an empty or never-drawn one (sign-in)
+  if (f.type === 'password') return f.init !== undefined && String(f.value ?? '') !== f.init && String(f.value ?? '') !== '';
   const now = f.type === 'checkbox' ? String(!!f.checked) : String(f.value ?? '');
   if (f.init !== undefined) return now !== f.init; // changed since the screen was drawn
   return f.type !== 'checkbox' && f.tagName !== 'SELECT' && now.trim() !== '';
@@ -149,3 +151,16 @@ export const noticeHow = ({ copyOpen = false, copy = false }) => (copy ? 'add' :
 
 /** Ctrl+V of a photo on a task whose update waits on the phone (and is not being changed): refused, it would go nowhere. */
 export const pasteWaits = (outbox, taskId, editing) => !editing && (outbox || []).some((x) => (x.kind === 'update' || x.kind === 'photos') && x.taskId === taskId);
+
+/** A photo message went: the box is emptied only if it still holds just the words that went with the photo (more typed since: kept). */
+export const msgBoxSent = (boxValue, sentText) => String(sentText || '') !== '' && boxValue === sentText;
+
+/** An update Send whose button was redrawn meanwhile: redraw (the new Send button is no longer grey) if the task is still open, on any list. */
+export const redrawAfterSend = ({ view = '', sel = '', taskId }) => view === 'today' || sel === 'task:' + taskId;
+
+/** The body of task.save: a new task carries the form's clientId (a second tap after a lost answer gives it once); a change never does. */
+export function taskSaveBody(fields, clientId) {
+  const b = { ...fields };
+  if (!b.id && clientId) b.clientId = clientId;
+  return b;
+}

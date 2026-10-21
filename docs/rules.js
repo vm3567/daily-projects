@@ -474,3 +474,52 @@ export function photoNeedsFetch(v, now = Date.now()) {
   if (v === undefined) return true;
   return !!v && typeof v === 'object' && now - v.failedAt >= PHOTO_RETRY_MS;
 }
+
+/** A team tick / untick / finished note you undid: remembered in the project (every device) per task and per finish or
+ *  re-open, so the next team load does not do it again. A new finish (new time) or a new re-open counts as new. */
+export function teamUndoKey(t) {
+  return 'tn' + t.id + (t.status === 'open' ? '@r' + (t.reopenedAt || '') : '@d' + (t.doneAt || ''));
+}
+export function teamActionUndone(p, t) {
+  return !!p && (p.teamUndone || []).includes(teamUndoKey(t));
+}
+
+/** A given project on the team: steps done / open, the step they are on, their last update, stuck.
+ *  A project given as one task (no steps, ':whole') counts for stuck too. */
+export function teamProgressOf(tasks, projectId) {
+  const given = tasks.filter((t) => t.projectRef === projectId && t.seq !== null && t.seq !== undefined);
+  const list = given.filter((t) => !String(t.stepRef).endsWith(':whole'));
+  const open = list.filter((t) => t.status === 'open'), done = list.filter((t) => t.status === 'done');
+  const days = tasks.filter((t) => t.projectRef === projectId).map((t) => (t.today || t.last || {}).day).filter(Boolean).sort();
+  return { open: open.length, done: done.length, current: open.find((t) => !t.queued) || null, lastUpdate: days[days.length - 1] || null,
+    stuck: given.some((t) => t.status === 'open' && t.stuck) };
+}
+
+/** Keys that act on the open project (x tick, s add step, w work note, i): not while its page is not on screen. */
+export function projectKeyIgnored(ui, k) {
+  if (ui.view === 'people') return 'xswi'.includes(k); // project keys do nothing on People
+  return ['diary', 'settings', 'dashboard', 'time'].includes(ui.view) && !ui.search && 'xsw'.includes(k); // no project column there
+}
+
+/** Moved on Work Task (↔ Move to…): the person to follow now, or null. `tasks` = the team list (fresh), `p` = the project.
+ *  All open steps with one other person: them. None open: the person who finished the newest one, when that was
+ *  after the day you gave it to the one on record (same day: not sure, left alone). */
+/** After project.sync: the server says who has the project now (it follows a Work Task move the app had not seen).
+ * Returns that person's id when the app must follow it, else null. People: the team list ({id, name}). */
+export function serverHolder(out, sentId, people) {
+  const id = out && Number(out.assigneeId);
+  if (!id || !sentId || id === sentId) return null; // 0 = taken back, as sent
+  const who = (people || []).find((u) => u && u.id === id);
+  return { id, name: who ? who.name : 'Team member' }; // follow even if the name is not known yet: a later sync must not give it back
+}
+
+export function teamMovedTo(p, tasks) {
+  if (!p || !p.team) return null;
+  const mine = tasks.filter((t) => t.projectRef === p.id && t.seq !== null && t.seq !== undefined);
+  const open = mine.filter((t) => t.status === 'open');
+  if (open.length) return open.every((t) => t.assignee.id === open[0].assignee.id) && open[0].assignee.id !== p.team.userId ? open[0].assignee : null;
+  const done = mine.filter((t) => t.status === 'done' && t.doneAt && t.assignee).sort((a, b) => (a.doneAt < b.doneAt ? -1 : a.doneAt > b.doneAt ? 1 : a.id - b.id));
+  const last = done[done.length - 1];
+  if (!last || last.assignee.id === p.team.userId) return null;
+  return p.team.since && String(last.doneAt).slice(0, 10) > p.team.since ? last.assignee : null;
+}

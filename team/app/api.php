@@ -115,7 +115,7 @@ function tasks_out(array $tasks, string $day): array {
   $turnSince = [];
   foreach ($tasks as $t) {
     if ($t['seq'] === null || !$t['project_ref']) continue;
-    $prev = one("SELECT MAX(done_at) AS d FROM tasks WHERE project_ref = ? AND seq IS NOT NULL AND seq < ? AND status IN ('done', 'cancelled') AND id <> ?", [$t['project_ref'], $t['seq'], $t['id']]);
+    $prev = one("SELECT MAX(done_at) AS d FROM tasks WHERE project_ref = ? AND seq IS NOT NULL AND seq < ? AND status IN ('done', 'cancelled') AND (closed_by IS NULL OR closed_by <> -3) AND id <> ?", [$t['project_ref'], $t['seq'], $t['id']]);
     if ($prev && $prev['d']) $turnSince[$t['id']] = substr($prev['d'], 0, 10);
   }
   return array_map(fn($t) => [
@@ -211,7 +211,7 @@ function handle(string $a, array $in): array {
     // ---------- staff: my tasks ----------
     case 'my.today': {
       $tasks = all(TASK_SELECT . " WHERE t.assignee_id = ? AND (t.status = 'open' OR t.done_at >= ?) ORDER BY t.repeat_kind = 'once', t.due_date IS NULL, t.due_date, t.project_ref, t.seq, t.id", [$me['id'], $day . ' 00:00:00']);
-      $out = tasks_out($tasks, $day);
+      $out = array_values(array_filter(tasks_out($tasks, $day), fn($t) => !($t['status'] === 'cancelled' && str_ends_with((string)$t['stepRef'], ':whole')))); // a replaced whole-project task: its words are on the step
       $due = array_values(array_filter($out, fn($t) => $t['dueToday'] || ($t['today'] !== null)));
       $other = array_values(array_filter($out, fn($t) => !$t['dueToday'] && $t['today'] === null && $t['status'] === 'open'));
       // my suggestions: waiting for a yes, or said no this week (with the reason in the messages)
@@ -494,6 +494,7 @@ function handle(string $a, array $in): array {
       // One at a time per project (two taps, or two devices, would otherwise make every step twice).
       $ref = txt($in['projectRef'] ?? '', 80, true, 'The project');
       unset($in['_server']);
+      $in['_psc'] = (int)setting('psc:' . md5($ref), '0'); // when the owner's app last sent it (a Work Task move after that is followed)
       set_setting('psc:' . md5($ref), (string)time()); // before the work too: a server sync waiting for the lock sees it
       // its unsaved changes: the saved projects are older than this for the project until they are saved
       $oldPsp = setting('psp:' . md5($ref), '');
@@ -506,6 +507,9 @@ function handle(string $a, array $in): array {
         throw $e;
       }
       set_setting('psc:' . md5($ref), (string)time()); // the server's own sync leaves this project alone for a few minutes
+      if (!empty($in['pending']) && isset($out['assigneeId']) && $out['assigneeId'] !== (int)($in['assigneeId'] ?? 0) && is_array($pp = json_decode(setting('psp:' . md5($ref), ''), true))) {
+        set_setting('psp:' . md5($ref), json_encode(['who' => $out['assigneeId']] + $pp)); // a followed move: the app saves the new person
+      }
       return $out;
     }
     case 'task.move': { // one task — or, for a step of a given project, all its open steps
@@ -711,8 +715,10 @@ function handle(string $a, array $in): array {
         if ($start = date_or_null($in['startDate'] ?? null)) q('UPDATE tasks SET start_date = ? WHERE id = ?', [$start, $id]);
         audit($me['id'], 'task_edit', "#$id $title");
       } else {
-        q('INSERT INTO tasks (title, details, assignee_id, repeat_kind, skip_sunday, weekday, due_date, project, project_ref, step_ref, updated_at, created_by, start_date, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
-          [...$vals, $me['id'], $day, now()]);
+        $cid = client_id($in['clientId'] ?? null); // the form's id: a resend (reply lost) gives back the task already made
+        if ($cid && ($dup = one('SELECT id FROM tasks WHERE created_by = ? AND client_id = ?', [$me['id'], $cid]))) return ['task' => tasks_out([own_task($me, (int)$dup['id'])], $day)[0]];
+        q('INSERT INTO tasks (title, details, assignee_id, repeat_kind, skip_sunday, weekday, due_date, project, project_ref, step_ref, updated_at, created_by, start_date, created_at, client_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+          [...$vals, $me['id'], $day, now(), $cid]);
         $id = (int)db()->lastInsertId();
         q('UPDATE tasks SET needs_photo = ? WHERE id = ?', [empty($in['needsPhoto']) ? 0 : 1, $id]);
         audit($me['id'], 'task_new', "#$id $title");
@@ -833,7 +839,7 @@ function carry_whole_update(string $ref, int $who): void {
 function add_staff_step(array $me, string $ref, string $title, array $mine, string $day, ?string $cid): int {
   $stepRef = 'w' . substr(hash('sha256', $me['id'] . ':' . ($cid ?? bin2hex(random_bytes(16)))), 0, 24); // made here from who + the phone's id
   if ($t = one('SELECT id FROM tasks WHERE step_ref = ? AND created_by = ?', [$stepRef, $me['id']])) return (int)$t['id']; // sent twice (reply lost): kept once
-  $seq = (int)(one("SELECT MAX(seq) AS m FROM tasks WHERE project_ref = ? AND seq IS NOT NULL AND status = 'open'", [$ref])['m'] ?? 0) + 1;
+  $seq = (int)(one("SELECT MAX(seq) AS m FROM tasks WHERE project_ref = ? AND seq IS NOT NULL", [$ref])['m'] ?? 0) + 1; // after the closed steps too (see project_sync)
   $photo = (int)setting('pp:' . md5($ref), '0');
   q("INSERT INTO tasks (title, details, assignee_id, created_by, repeat_kind, skip_sunday, weekday, due_date, start_date, project, project_ref, step_ref, status, seq, needs_photo, from_staff, created_at, updated_at)
      VALUES (?, '', ?, ?, 'once', 1, NULL, NULL, ?, ?, ?, ?, 'open', ?, ?, 1, ?, ?)",
@@ -851,6 +857,11 @@ function add_staff_step(array $me, string $ref, string $title, array $mine, stri
 function project_sync(array $me, array $in, string $ref, string $day): array {
   $name = txt($in['project'] ?? '', 200);
   $who = (int)($in['assigneeId'] ?? 0);
+  // moved in Work Task (Move to…) after the owner's app last sent it, and the app still names the old person
+  // (it did not see the move, say the new person finished every step first): the project stays with the new person
+  if ($who && empty($in['_server']) && isset($in['_psc'])
+    && ($mv = one("SELECT m.from_id, m.to_id, m.at FROM task_moves m JOIN tasks t ON t.id = m.task_id WHERE t.project_ref = ? AND t.seq IS NOT NULL AND m.regive = 0 ORDER BY m.at DESC, m.id DESC LIMIT 1", [$ref]))
+    && (int)$mv['from_id'] === $who && strtotime($mv['at']) > (int)$in['_psc'] && one('SELECT id FROM users WHERE id = ? AND active = 1', [(int)$mv['to_id']])) $who = (int)$mv['to_id'];
   $photo = empty($in['needsPhoto']) ? 0 : 1;
   $open = all("SELECT * FROM tasks WHERE project_ref = ? AND seq IS NOT NULL AND status = 'open'", [$ref]);
   if (!$who) {
@@ -859,7 +870,7 @@ function project_sync(array $me, array $in, string $ref, string $day): array {
     if (empty($in['_server'])) audit($me['id'], 'project_taken_back', $name);
     $why = ['paused' => 'Your manager paused this project. It comes back to you when it starts again.', 'finished' => 'Your manager finished this project. Thank you!'][$in['reason'] ?? ''] ?? 'Your manager took this project back. Nothing more to do on it.';
     if ($open) notify(array_map(fn($t) => (int)$t['assignee_id'], $open), 'task', '📁 Off your list: ' . ($name ?: ($open[0]['project'] ?? 'a project')), $why, '/', 'p' . md5($ref));
-    return ['tasks' => []];
+    return ['tasks' => [], 'assigneeId' => 0];
   }
   $person = one('SELECT id, active FROM users WHERE id = ?', [$who]);
   if (!$person || !$person['active']) throw new ApiError('Choose who will do it.');
@@ -880,7 +891,10 @@ function project_sync(array $me, array $in, string $ref, string $day): array {
   $keep = [];
   $pending = (bool)one("SELECT id FROM tasks WHERE project_ref = ? AND from_staff = 1 AND status IN ('open', 'done') LIMIT 1", [$ref]); // steps the person added, not yet in the project (finished ones too)
   $skipped = []; // steps finished minutes ago: not made again now (the Daily Projects app tries again later)
-  foreach (array_values($steps) as $i => $st) {
+  // open steps are numbered after the closed ones, so a finished step stays before them (its finish day starts the next step's turn)
+  $base = 1 + (int)(one("SELECT MAX(seq) AS m FROM tasks WHERE project_ref = ? AND seq IS NOT NULL AND status IN ('done', 'cancelled')", [$ref])['m'] ?? -1);
+  foreach (array_values($steps) as $j => $st) {
+    $i = $base + $j;
     $stepRef = txt($st['stepRef'] ?? '', 80);
     $title = txt($st['title'] ?? '', 300);
     $details = txt($st['details'] ?? '', 4000);
@@ -931,7 +945,7 @@ function project_sync(array $me, array $in, string $ref, string $day): array {
     $news[] = $title;
   }
   // 'cancelled', not 'done': only the person's own Finished means done (so an un-ticked step goes back to them, and is never ticked by itself)
-  $n = count($steps); // the person's own new steps stay at the end, after the project's steps
+  $n = $base + count($steps); // the person's own new steps stay at the end, after the project's steps
   $closed = [];
   // the server's own sync: a step opened again after it was ticked (their undo, Open again) waits for the owner's app to untick it
   $tickedAt = (array)($in['doneAt'] ?? []);
@@ -943,7 +957,9 @@ function project_sync(array $me, array $in, string $ref, string $day): array {
       q('UPDATE tasks SET seq = ?, project = ? WHERE id = ?', [$n++, $name ?: null, $t['id']]);
       continue;
     }
-    q("UPDATE tasks SET status = 'cancelled', done_at = ?, updated_at = ? WHERE id = ?", [now(), now(), $t['id']]);
+    // -3: removed while it waited its turn, so it never starts the next step's turn (see turnSince)
+    $waiting = (int)$t['seq'] > min(array_map(fn($o) => (int)$o['seq'], array_filter($open, fn($o) => (int)$o['assignee_id'] === (int)$t['assignee_id'])));
+    q("UPDATE tasks SET status = 'cancelled', done_at = ?, closed_by = ?, updated_at = ? WHERE id = ?", [now(), $waiting ? -3 : null, now(), $t['id']]);
     if ((int)$t['assignee_id'] === $who && $t['step_ref'] !== "$ref:whole") $closed[] = $t['title']; // (the whole-project task simply makes way for the steps)
     if ((int)$t['assignee_id'] !== $who) $leftBy[] = (int)$t['assignee_id']; // someone else's step, gone as the project goes to a new person: they are told it is off their list
   }
@@ -960,7 +976,7 @@ function project_sync(array $me, array $in, string $ref, string $day): array {
     notify([$who], 'task', $hadSome ? ($n === 1 ? "➕ New step in $name" : "➕ $n new steps in $name") : "📁 New project for you: $name",
       $hadSome ? implode(' · ', array_slice($news, 0, 3)) : "$n step" . ($n > 1 ? 's' : '') . '. First: ' . $news[0], '/', 'p' . md5($ref));
   }
-  return ['tasks' => tasks_out(all(TASK_SELECT . " WHERE t.project_ref = ? AND t.seq IS NOT NULL AND t.status = 'open' ORDER BY t.seq", [$ref]), $day), 'skipped' => $skipped];
+  return ['tasks' => tasks_out(all(TASK_SELECT . " WHERE t.project_ref = ? AND t.seq IS NOT NULL AND t.status = 'open' ORDER BY t.seq", [$ref]), $day), 'skipped' => $skipped, 'assigneeId' => $who]; // assigneeId: who has the project now
 }
 
 /** A photo for today's update: made smaller (max 1600 px), turned the right way up, saved as JPEG. */

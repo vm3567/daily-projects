@@ -840,3 +840,91 @@ test('a team photo that failed is not fetched again on every redraw (only after 
   assert.equal(photoNeedsFetch({ failedAt: 1000 }, 1000 + 5000), false, 'failed 5 s ago: wait');
   assert.equal(photoNeedsFetch({ failedAt: 1000 }, 1000 + PHOTO_RETRY_MS), true, 'a minute later: try again');
 });
+
+test('Undo of a team tick (or untick) is remembered, so the next team load does not do it again', async () => {
+  const { teamUndoKey, teamActionUndone } = await import('../docs/rules.js');
+  const s = withProject('2026-10-01');
+  const t = { id: 7, status: 'done', doneAt: '2026-10-02 09:00:00', stepRef: 's1' };
+  const before = clone(s.data.projects[0]);
+  const tick = op('tickStep', { projectId: 'p1', stepId: 's1', byTeam: true }, '2026-10-02');
+  const note = op('addWorkNote', { projectId: 'p1', noteId: 'tn7', stepId: 's1', team: true, text: 'Ravi finished' }, '2026-10-02');
+  applyOps(s, [tick, note]);
+  assert.equal(teamActionUndone(s.data.projects[0], t), false, 'not undone yet');
+  applyOp(s, op('restoreProject', { project: before, index: 0, undoOpIds: [tick.id, note.id], teamUndone: teamUndoKey(t) }, '2026-10-02', '10:00:05'));
+  const p = s.data.projects[0];
+  assert.equal(p.steps[0].done, false);
+  assert.ok(!(p.workNotes || []).some((n) => n.id === 'tn7'));
+  assert.equal(teamActionUndone(p, t), true, 'the same finished task is not ticked again');
+  assert.equal(teamActionUndone(p, { ...t, doneAt: '2026-10-05 09:00:00' }), false, 'finished again later: new');
+  assert.equal(teamActionUndone(p, { ...t, status: 'open', reopenedAt: '2026-10-03 09:00:00' }), false, 'a re-open is its own action');
+  // a later, unrelated Undo (an older snapshot) keeps the mark
+  const snap = clone(p);
+  delete snap.teamUndone;
+  const pr = op('setProjectField', { projectId: 'p1', field: 'priority', value: 'high' }, '2026-10-02', '11:00:00');
+  applyOp(s, pr);
+  applyOp(s, op('restoreProject', { project: snap, index: 0, undoOpId: pr.id }, '2026-10-02', '11:00:02'));
+  assert.equal(teamActionUndone(s.data.projects[0], t), true, 'kept through another Undo');
+  // a normal Undo leaves no mark
+  const s2 = withProject('2026-10-01');
+  const b2 = clone(s2.data.projects[0]);
+  const t2 = op('tickStep', { projectId: 'p1', stepId: 's1' }, '2026-10-02');
+  applyOp(s2, t2);
+  applyOp(s2, op('restoreProject', { project: b2, index: 0, undoOpId: t2.id }, '2026-10-02', '10:00:03'));
+  assert.equal(s2.data.projects[0].teamUndone, undefined);
+});
+
+test('a project given as one task (no steps) shows stuck when that task is stuck', async () => {
+  const { teamProgressOf } = await import('../docs/rules.js');
+  const whole = { id: 1, projectRef: 'p1', stepRef: 'p1:whole', seq: 1, status: 'open', stuck: true, today: { day: '2026-10-21', state: 'stuck' } };
+  const tp = teamProgressOf([whole], 'p1');
+  assert.equal(tp.stuck, true);
+  assert.equal(tp.lastUpdate, '2026-10-21');
+  assert.equal(tp.open, 0, 'step counts leave the whole task out');
+  assert.equal(teamProgressOf([{ ...whole, stuck: false }], 'p1').stuck, false);
+  assert.equal(teamProgressOf([{ ...whole, status: 'done' }], 'p1').stuck, false, 'finished: not stuck');
+  assert.equal(teamProgressOf([{ id: 2, projectRef: 'p1', stepRef: 's1', seq: 1, status: 'open', stuck: true }], 'p1').stuck, true, 'a stuck step still counts');
+});
+
+test('project keys (x s w) do nothing where the open project is not on screen', async () => {
+  const { projectKeyIgnored } = await import('../docs/rules.js');
+  for (const view of ['diary', 'settings', 'dashboard', 'time']) {
+    for (const k of 'xsw') assert.equal(projectKeyIgnored({ view, search: '' }, k), true, `${view} ${k}`);
+    assert.equal(projectKeyIgnored({ view, search: 'kiln' }, 'x'), false, 'a search shows the project column');
+    assert.equal(projectKeyIgnored({ view, search: '' }, 'n'), false);
+  }
+  for (const k of 'xswi') assert.equal(projectKeyIgnored({ view: 'people', search: '' }, k), true);
+  assert.equal(projectKeyIgnored({ view: 'today', search: '' }, 'x'), false);
+  assert.equal(projectKeyIgnored({ view: 'group:g1', search: '' }, 'x'), false);
+});
+
+test('a Work Task move is followed even when the new person has finished every step', async () => {
+  const { teamMovedTo } = await import('../docs/rules.js');
+  const A = { id: 2, name: 'Arun' }, B = { id: 3, name: 'Bala' };
+  const p = { id: 'p1', team: { userId: 2, name: 'Arun', since: '2026-10-10' } };
+  const task = (id, assignee, status, doneAt = null) => ({ id, projectRef: 'p1', stepRef: 's' + id, seq: id, assignee, status, doneAt });
+  // open steps with B: B
+  assert.deepEqual(teamMovedTo(p, [task(1, A, 'done', '2026-10-11 10:00:00'), task(2, B, 'open')]), B);
+  // moved to B, B finished them all: still B
+  assert.deepEqual(teamMovedTo(p, [task(1, A, 'done', '2026-10-11 10:00:00'), task(2, B, 'done', '2026-10-15 10:00:00')]), B);
+  // all finished by the one on record: no move
+  assert.equal(teamMovedTo(p, [task(1, A, 'done', '2026-10-11 10:00:00'), task(2, A, 'done', '2026-10-12 10:00:00')]), null);
+  // you gave it to A after B had finished everything (A has nothing yet): stays with A
+  assert.equal(teamMovedTo({ ...p, team: { ...p.team, since: '2026-10-16' } }, [task(2, B, 'done', '2026-10-15 10:00:00')]), null);
+  assert.equal(teamMovedTo({ ...p, team: { ...p.team, since: '2026-10-15' } }, [task(2, B, 'done', '2026-10-15 10:00:00')]), null, 'same day: not sure, left alone');
+  // open steps with two people, or with the one on record: no move
+  assert.equal(teamMovedTo(p, [task(1, A, 'open'), task(2, B, 'open')]), null);
+  assert.equal(teamMovedTo(p, [task(1, A, 'open'), task(2, B, 'done', '2026-10-15 10:00:00')]), null);
+  assert.equal(teamMovedTo({ id: 'p1' }, [task(2, B, 'open')]), null, 'not given');
+  assert.equal(teamMovedTo(p, [{ ...task(2, B, 'open'), seq: null }]), null, 'a single step is not the project');
+});
+
+test('after project.sync the app follows the person the server names (a Work Task move it had not seen)', async () => {
+  const { serverHolder } = await import('../docs/rules.js');
+  const people = [{ id: 3, name: 'Valar' }, { id: 4, name: 'Ruthuraj' }];
+  assert.deepEqual(serverHolder({ assigneeId: 4 }, 3, people), { id: 4, name: 'Ruthuraj' }, 'moved on Work Task: follow the new person');
+  assert.equal(serverHolder({ assigneeId: 3 }, 3, people), null, 'same person: nothing to do');
+  assert.equal(serverHolder({ assigneeId: 0 }, 3, people), null, 'taken back as sent');
+  assert.equal(serverHolder({ assigneeId: 4 }, 0, people), null, 'the app took it back: never re-give');
+  assert.equal(serverHolder({}, 3, people), null, 'an older server without the field: nothing changes');
+  assert.equal(serverHolder({ assigneeId: 9 }, 3, people).id, 9, 'followed even when the name is not loaded yet');
+});
