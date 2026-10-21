@@ -5,7 +5,8 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, execFileSync } from 'node:child_process';
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync, existsSync, readFileSync } from 'node:fs';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, createHash } from 'node:crypto';
+const md5 = (x) => createHash('md5').update(x).digest('hex');
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -518,4 +519,155 @@ test('server: review round 7 — a project whose steps are all done is not put b
   await save([{ id: 'rv7', name: 'Last step', state: 'active', team: { userId: id.suresh, name: 'Suresh' }, steps: [{ id: 'z1', text: 'Only step', done: true, doneAt: new Date().toISOString() }] }]);
   assert.deepEqual(await open(), [], 'nothing on the list (no "Last step" whole-project task)');
   await save([]);
+});
+
+// ---------------------------------------------------------------- regression checks for the review rounds (one per fix)
+const saveProjects = async (projects) => {
+  const head = (await call('dp.head', {}, tok.boss)).head;
+  const r = await call('dp.commit', { parent: head, changes: [{ path: 'data.json', content: JSON.stringify({ projects }) }], message: 'test' }, tok.boss);
+  assert.ok(r.ok, r.error);
+};
+const openOf = async (who, ref) => { const m = await call('my.today', {}, tok[who]); return [...m.tasks, ...m.other].filter((t) => t.projectRef === ref && t.status === 'open'); };
+const pushSince = (n) => readFileSync(join(dir, 'push.log'), 'utf8').slice(n);
+const pushLen = () => readFileSync(join(dir, 'push.log'), 'utf8').length;
+
+test('regression: a project skipped because the owner\'s app just sent it is synced once the 5 minutes are over', { skip }, async () => {
+  await saveProjects([{ id: 'rg1', name: 'Retry P', state: 'active', team: { userId: id.suresh, name: 'S' }, steps: [{ id: 'g1', text: 'One', done: false }] }]);
+  await call('project.sync', { projectRef: 'rg1', project: 'Retry P', assigneeId: id.suresh, steps: [{ stepRef: 'g1', title: 'One' }] }, tok.boss); // owner's app: psc now
+  await saveProjects([{ id: 'rg1', name: 'Retry P', state: 'active', team: { userId: id.suresh, name: 'S' }, steps: [{ id: 'g1', text: 'One', done: false }, { id: 'g2', text: 'Two', done: false }] }]);
+  assert.deepEqual((await openOf('suresh', 'rg1')).map((t) => t.title), ['One'], 'skipped for now (the owner\'s app knows best)');
+  sql(`USE wt; UPDATE wt.settings SET v = UNIX_TIMESTAMP() - 400 WHERE k = '${'psc:' + md5('rg1')}'; UPDATE wt.settings SET v = UNIX_TIMESTAMP() - 1 WHERE k = 'sync_retry'`);
+  await call('me', {}, tok.anita); // any request runs the owed sync
+  assert.deepEqual((await openOf('suresh', 'rg1')).map((t) => t.title), ['One', 'Two'], 'synced after the wait');
+  await saveProjects([]);
+});
+
+test('regression: the whole-project update is carried once, and only onto the same person\'s step', { skip }, async () => {
+  const W = (who, steps) => ({ id: 'rg2', name: 'Carry P', state: 'active', team: { userId: who, name: 'x' }, steps });
+  await saveProjects([W(id.suresh, [])]);
+  const whole = (await openOf('suresh', 'rg2'))[0];
+  await call('update.save', { taskId: whole.id, note: 'whole-day words', state: 'progress' }, tok.suresh);
+  await saveProjects([W(id.anita, [{ id: 'c1', text: 'C one', done: false }])]); // given to Anita with steps
+  const a1 = (await openOf('anita', 'rg2'))[0];
+  assert.equal((await call('task.get', { id: a1.id }, tok.anita)).task.today, null, 'Anita does not start with Suresh\'s words');
+  await saveProjects([]);
+  sql("DELETE FROM wt.settings WHERE k LIKE 'cw:%'");
+  await saveProjects([W(id.suresh, [])]);
+  const w2 = (await openOf('suresh', 'rg2'))[0];
+  await call('update.save', { taskId: w2.id, note: 'mine', state: 'progress' }, tok.suresh);
+  await saveProjects([W(id.suresh, [{ id: 'd1', text: 'D one', done: false }, { id: 'd2', text: 'D two', done: false }])]);
+  const [d1, d2] = await openOf('suresh', 'rg2');
+  assert.equal((await call('task.get', { id: d1.id }, tok.suresh)).task.today.note, 'mine', 'his own words count for his first step');
+  await call('update.save', { taskId: d1.id, note: 'done', state: 'finished' }, tok.suresh);
+  await saveProjects([W(id.suresh, [{ id: 'd1', text: 'D one', done: true, doneAt: new Date().toISOString() }, { id: 'd2', text: 'D two', done: false }])]);
+  assert.equal((await call('task.get', { id: d2.id }, tok.suresh)).task.today, null, 'not copied again onto the next step');
+  await saveProjects([]);
+});
+
+test('regression: staff cannot pick a step\'s id; two people with the same phone id get different steps', { skip }, async () => {
+  await call('project.sync', { projectRef: 'rg3a', project: 'A', assigneeId: id.suresh, steps: [{ stepRef: 'h1', title: 'H' }] }, tok.boss);
+  await call('project.sync', { projectRef: 'rg3b', project: 'B', assigneeId: id.anita, steps: [{ stepRef: 'h2', title: 'H2' }] }, tok.boss);
+  const s1 = (await call('project.addStep', { projectRef: 'rg3a', title: 'X', clientId: 'h2xxxxxx-1' }, tok.suresh)).task;
+  const s2 = (await call('project.addStep', { projectRef: 'rg3b', title: 'Y', clientId: 'h2xxxxxx-1' }, tok.anita)).task;
+  assert.ok(s1.stepRef !== s2.stepRef && !s1.stepRef.includes('h2xxxxxx'), 'made by the server');
+  await call('project.sync', { projectRef: 'rg3a', project: '', assigneeId: 0, steps: [] }, tok.boss);
+  await call('project.sync', { projectRef: 'rg3b', project: '', assigneeId: 0, steps: [] }, tok.boss);
+});
+
+test('regression: giving a project again after a take-back is not a move away from the old person', { skip }, async () => {
+  const steps = [{ stepRef: 'k1', title: 'K one' }];
+  await call('project.sync', { projectRef: 'rg4', project: 'Regive P', assigneeId: id.suresh, steps }, tok.boss);
+  await call('project.sync', { projectRef: 'rg4', project: 'Regive P', assigneeId: 0, steps: [], reason: 'taken' }, tok.boss);
+  const n = pushLen();
+  await call('project.sync', { projectRef: 'rg4', project: 'Regive P', assigneeId: id.anita, steps }, tok.boss);
+  assert.ok(!/Off your list: Regive P/.test(pushSince(n)), 'Suresh is not told again');
+  assert.equal((await openOf('anita', 'rg4')).length, 1);
+  const t = (await openOf('anita', 'rg4'))[0];
+  assert.ok(!(await call('update.save', { taskId: t.id, note: 'x', day: istDay(1) }, tok.suresh)).ok, 'Suresh cannot write into it now');
+  await call('project.sync', { projectRef: 'rg4', project: '', assigneeId: 0, steps: [] }, tok.boss);
+});
+
+test('regression: the owner\'s unsaved change of person is not undone by another device\'s save', { skip }, async () => {
+  const P = (who) => ({ id: 'rg5', name: 'Unsaved P', state: 'active', team: { userId: who, name: 'x' }, steps: [{ id: 'm1', text: 'M', done: false }] });
+  await saveProjects([P(id.suresh)]);
+  const base = (await call('dp.head', {}, tok.boss)).head;
+  await call('project.sync', { projectRef: 'rg5', project: 'Unsaved P', assigneeId: id.anita, steps: [{ stepRef: 'm1', title: 'M' }], baseCommit: base, pending: true }, tok.boss);
+  sql(`USE wt; UPDATE wt.settings SET v = UNIX_TIMESTAMP() - 400 WHERE k = '${'psc:' + md5('rg5')}'`);
+  await saveProjects([P(id.suresh)]); // another device saves (still says Suresh)
+  assert.equal((await openOf('anita', 'rg5')).length, 1, 'still with Anita');
+  await saveProjects([P(id.anita)]); // the change of person is saved
+  assert.equal((await openOf('anita', 'rg5')).length, 1);
+  await saveProjects([]);
+});
+
+test('regression: the second Stuck alert names who wrote Stuck, and stops once the task is moved', { skip }, async () => {
+  const t = (await call('task.save', { assigneeId: id.suresh, title: 'Stuck check', repeat: 'once' }, tok.boss)).task;
+  const u = (await call('update.save', { taskId: t.id, note: 'No clay', state: 'stuck' }, tok.suresh)).update;
+  await call('task.move', { id: t.id, toId: id.anita }, tok.boss);
+  sql(`UPDATE wt.updates SET updated_at = NOW() - INTERVAL 25 HOUR WHERE id = ${u.id}; UPDATE wt.settings SET v = '0' WHERE k = 'jobs_at'`);
+  const n = pushLen();
+  await call('me', {}, tok.anita);
+  assert.ok(!/Stuck check/.test(pushSince(n)), 'moved to Anita: no "still stuck" alert about Suresh\'s old Stuck');
+});
+
+test('regression: messages — a "moved" note is not a message to answer; an edit cannot empty a message or change a move note', { skip }, async () => {
+  const t = (await call('task.save', { assigneeId: id.suresh, title: 'Msg check', repeat: 'once', project: 'Msg P', projectRef: 'rg7', stepRef: 'rg7s' }, tok.boss)).task;
+  await call('task.move', { id: t.id, toId: id.anita }, tok.boss);
+  const d = await call('project.updates', { projectRef: 'rg7' }, tok.boss);
+  assert.ok(d.comments.some((c) => c.kind === 'move') && !d.comments.some((c) => c.unread), 'the move note is not "new"');
+  const c = (await call('comment.add', { taskId: t.id, text: 'hello' }, tok.anita)).comments.at(-1);
+  assert.ok(!(await call('comment.edit', { id: c.id, text: '↔ ' }, tok.anita)).ok, 'empty after the sign is refused');
+  const moveNote = (await call('task.get', { id: t.id }, tok.boss)).comments.find((x) => x.text.startsWith('↔ Moved'));
+  assert.ok(!(await call('comment.edit', { id: moveNote.id, text: 'changed' }, tok.boss)).ok, 'a move note cannot be changed');
+});
+
+test('regression: updates for an earlier day — only by who had the task that day; moved away and back is fine', { skip }, async () => {
+  const t = (await call('task.save', { assigneeId: id.suresh, title: 'Earlier day', repeat: 'daily', skipSunday: false }, tok.boss)).task;
+  sql(`UPDATE wt.tasks SET created_at = NOW() - INTERVAL 3 DAY, start_date = CURDATE() - INTERVAL 3 DAY WHERE id = ${t.id}`);
+  await call('task.move', { id: t.id, toId: id.anita }, tok.boss);
+  assert.ok(!(await call('update.save', { taskId: t.id, note: 'x', day: istDay(1) }, tok.anita)).ok, 'Anita got it today: yesterday was not hers');
+  await call('task.move', { id: t.id, toId: id.suresh }, tok.boss);
+  const r = await call('update.save', { taskId: t.id, note: 'yesterday, offline', day: istDay(1) }, tok.suresh);
+  assert.ok(r.ok, 'Suresh had it yesterday (moved away and back today)');
+});
+
+test('regression: photos — kept by the browser only for the same sign-in; the new holder sees earlier photos', { skip }, async () => {
+  const t = (await call('task.save', { assigneeId: id.suresh, title: 'Photo check', repeat: 'once' }, tok.boss)).task;
+  const u = (await call('update.save', { taskId: t.id, note: 'with photo', state: 'progress' }, tok.suresh)).update;
+  const p = await photo(u.id, tok.suresh);
+  await call('task.move', { id: t.id, toId: id.anita }, tok.boss);
+  const r = await fetch(`${B}photo&id=${p.photoId}`, { headers: { Authorization: 'Bearer ' + tok.anita } });
+  assert.equal(r.status, 200, 'Anita (holds it now) sees Suresh\'s earlier photo');
+  assert.match(r.headers.get('vary') || '', /Authorization/, 'browser copy tied to the sign-in');
+  assert.equal((await fetch(`${B}photo&id=${p.photoId}`)).status, 401, 'no sign-in: refused');
+});
+
+test('regression: suggestions — only real ones in My suggestions; declined ones never count as missed work', { skip }, async () => {
+  const sg = (await call('suggest', { title: 'Declined one', clientId: 'sgdecl-0001' }, tok.anita)).task;
+  await call('task.decline', { id: sg.id, reason: 'later' }, tok.boss);
+  const mine = await call('my.today', {}, tok.anita);
+  assert.ok(mine.suggestions.some((x) => x.id === sg.id && x.declined), 'declined: shown as declined');
+  assert.ok(!mine.suggestions.some((x) => x.fromStaff), 'a step added to a project is never listed as a suggestion');
+  const anita = (await call('report.week', {}, tok.boss)).people.find((p) => p.name === 'Anita');
+  assert.ok(anita, 'report works');
+});
+
+test('regression: the evening summary counts a replaced whole-project task once', { skip }, async () => {
+  await call('project.sync', { projectRef: 'rg11', project: 'Sum P', assigneeId: id.suresh, steps: [{ stepRef: 'rg11:whole', title: 'Sum P' }] }, tok.boss);
+  const w = (await openOf('suresh', 'rg11'))[0];
+  await call('update.save', { taskId: w.id, note: 'today', state: 'progress' }, tok.suresh);
+  await call('project.addStep', { projectRef: 'rg11', title: 'Real step', clientId: 'sumstep-0001' }, tok.suresh);
+  const tt = await call('team.today', {}, tok.boss);
+  assert.ok(!tt.tasks.some((t) => t.projectRef === 'rg11' && t.status === 'cancelled'), 'the replaced whole task is not listed next to its step');
+  await call('project.sync', { projectRef: 'rg11', project: '', assigneeId: 0, steps: [] }, tok.boss);
+});
+
+test('regression: finished staff-added steps keep the whole-project task from coming back', { skip }, async () => {
+  await call('project.sync', { projectRef: 'rg12', project: 'Own steps P', assigneeId: id.suresh, steps: [{ stepRef: 'rg12:whole', title: 'Own steps P' }] }, tok.boss);
+  const s = (await call('project.addStep', { projectRef: 'rg12', title: 'My step', clientId: 'ownstep-0001' }, tok.suresh)).task;
+  await call('update.save', { taskId: s.id, note: 'done', state: 'finished' }, tok.suresh);
+  await call('project.sync', { projectRef: 'rg12', project: 'Own steps P', assigneeId: id.suresh, steps: [{ stepRef: 'rg12:whole', title: 'Own steps P' }], _server: true }, tok.boss);
+  sql(`USE wt; UPDATE wt.settings SET v = '0' WHERE k = '${'psc:' + md5('rg12')}'`);
+  assert.deepEqual((await openOf('suresh', 'rg12')).filter((t) => t.stepRef === 'rg12:whole'), [], 'no whole-project task again');
+  await call('project.sync', { projectRef: 'rg12', project: '', assigneeId: 0, steps: [] }, tok.boss);
 });

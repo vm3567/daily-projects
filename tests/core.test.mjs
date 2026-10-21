@@ -670,3 +670,16 @@ test('unknown or broken changes are skipped, never stop the app', async () => {
   assert.equal(r.files, 1);
   assert.equal(carriedOps('nope').ok.length, 0);
 });
+
+test('regression: automatic team changes are never counted as your own work; a raised score keeps its total', async () => {
+  const { dayScore } = await import('../docs/rules.js');
+  const s = withProject('2026-10-01');
+  applyOp(s, op('addStep', { projectId: 'p1', stepId: 'st9', text: 'Team step', byTeam: true }, '2026-10-03'));
+  applyOp(s, op('setProjectTeam', { projectId: 'p1', userId: 3, name: 'Valar', byTeam: true }, '2026-10-03'));
+  applyOp(s, op('tickStep', { projectId: 'p1', stepId: 'st9', byTeam: true, at: '2026-10-03T05:00:00.000Z' }, '2026-10-03'));
+  applyOp(s, op('untickStep', { projectId: 'p1', stepId: 'st9', byTeam: true }, '2026-10-03', '11:00:00'));
+  assert.deepEqual(dayScore(s.data, s.history, '2026-10-03'), { green: 0, total: 1 }, 'none of these is your work');
+  applyOp(s, op('recordScores', { scores: { '2026-10-03': { green: 0, total: 3 } } }, '2026-10-04'));
+  applyOp(s, op('recordScores', { scores: { '2026-10-03': { green: 2, total: 1 } }, raise: true }, '2026-10-05'));
+  assert.deepEqual(s.data.dayScores['2026-10-03'], { green: 2, total: 3 }, 'only green goes up; the saved total stays');
+});

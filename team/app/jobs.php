@@ -99,7 +99,9 @@ function server_sync_projects(): void {
       $who = $active ? (int)$p['team']['userId'] : 0;
       if ($active) {
         $holders = array_map('intval', array_column(all("SELECT DISTINCT t.assignee_id FROM tasks t JOIN users u ON u.id = t.assignee_id WHERE t.project_ref = ? AND t.seq IS NOT NULL AND t.status = 'open' AND u.active = 1", [$ref]), 'assignee_id'));
-        if (count($holders) === 1 && $holders[0] !== $who) $who = $holders[0];
+        // (only a real Work Task move made after the owner's last give — never the old holder of a change of person made in the projects)
+        if (count($holders) === 1 && $holders[0] !== $who && one("SELECT m.id FROM task_moves m JOIN tasks t ON t.id = m.task_id WHERE t.project_ref = ? AND t.seq IS NOT NULL AND m.regive = 0 AND m.to_id = ? AND m.at > ? LIMIT 1",
+            [$ref, $holders[0], date('Y-m-d H:i:s', (int)setting('psc:' . md5($ref), '0'))])) $who = $holders[0];
         elseif (!$holders && ($mv = one("SELECT m.to_id, m.at FROM task_moves m JOIN tasks t ON t.id = m.task_id JOIN users u ON u.id = m.to_id WHERE t.project_ref = ? AND t.seq IS NOT NULL AND m.regive = 0 AND u.active = 1 ORDER BY m.at DESC, m.id DESC LIMIT 1", [$ref]))
           && strtotime($mv['at']) > (int)setting('psc:' . md5($ref), '0')) $who = (int)$mv['to_id']; // moved after the owner last gave it
       }

@@ -1,6 +1,8 @@
 // Work Task: the team app. Staff see and fill their own tasks; the manager gives tasks and sees everything.
 // No outside libraries. All text from the server is put on screen as text (never as HTML).
 
+import { addDay, weekdayOf, dueOn, itemKey, diaryRows } from './logic.js'; // the rules (checked in tests/team-app.test.mjs)
+
 const TOKEN_KEY = 'wt.token';
 const state = {
   token: load(TOKEN_KEY), user: null, view: 'today', data: null, people: [], closed: false,
@@ -207,7 +209,6 @@ function giveBack(it, why) {
 }
 
 /** What a waiting item belongs to: later items of the same thing wait behind one that keeps failing. */
-const itemKey = (it) => (it.kind === 'step' ? 'p:' + it.projectRef : it.kind === 'suggest' ? 's:' + it.id : 't:' + it.taskId);
 
 async function doFlush() {
   if (!state.user) return;
@@ -877,7 +878,6 @@ function reportScreen() {
     el('p', { class: 'meta' }, 'Days sent: days with at least one update, out of the days they had work. Missed: days with work and no update.'),
   ];
 }
-const addDay = (day, n) => { const x = new Date(day + 'T00:00:00Z'); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); };
 
 /** Manager on another page: keep the "Needs you" number in the menu fresh. */
 let teamCountBusy = false;
@@ -1015,14 +1015,6 @@ function todayCard(t, today) {
 }
 
 const LATE_HM = () => new Date().toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' });
-const weekdayOf = (day) => new Date(day + 'T00:00:00Z').getUTCDay();
-/** Is this task due on that day? (the same rule as the server) */
-function dueOn(t, day) {
-  if (t.startDate && day < t.startDate) return false;
-  const wd = weekdayOf(day);
-  if (t.repeat === 'weekly') return wd === (t.weekday ?? 1);
-  return !(t.skipSunday && wd === 0);
-}
 
 /** One line of small chips about a task: who, project, how often, its date, the photo rule, closed. */
 function taskChips(t, today, admin) {
@@ -1043,46 +1035,26 @@ function taskChips(t, today, admin) {
 /** What's happening on this task, day by day: every update with its time; Sunday = Off; a due day with nothing = No progress. */
 function taskDiary(t, updates, today, staff) {
   const n = state.diaryDays || 14;
-  const notYet = t.queued || t.status === 'suggested'; // a step waiting its turn, a suggestion: no day is "missed"
   const fillBy = (state.data && state.data.fillBy) || state.fillBy || '18:00';
-  const start = [t.startDate || '', (t.createdAt || '').slice(0, 10), t.turnSince || ''].sort().pop() || today; // (a step: from when its turn came)
-  const end = t.status !== 'open' && t.doneAt ? t.doneAt.slice(0, 10) : today;
-  const byDay = new Map();
-  for (const u of updates) byDay.set(u.day, [...(byDay.get(u.day) || []), u]);
-  // the server sends the newest 60 days with an update: never call days older than those "No progress"
-  const oldest = updates.length >= 60 ? updates.map((u) => u.day).sort()[0] : '';
-  const firstUpdate = updates.map((u) => u.day).sort()[0] || start;
-  const begin = firstUpdate < start ? firstUpdate : start; // an update written before the step's turn still shows
-  const lower = oldest > begin ? oldest : begin;
-  const from = addDay(end, -(n - 1)) > lower ? addDay(end, -(n - 1)) : lower;
-  const rows = [];
-  for (let day = end; day >= from; day = addDay(day, -1)) {
-    if (staff && day === today) continue; // today's update is in its own box above
-    const ups = byDay.get(day) || [];
-    if (!ups.length && day < start) continue; // before its start: nothing to show
-    if (!ups.length && t.reopenedAt && day < String(t.reopenedAt).slice(0, 10) && (!t.closedFrom || day >= String(t.closedFrom).slice(0, 10))) continue; // closed that day (open again since)
-    if (!ups.length && t.status !== 'open' && day === end) continue; // the day it was closed
+  const { rows, more } = diaryRows(t, updates, today, { staff, n, fillBy, nowHm: LATE_HM() }); // (the rules: logic.js)
+  const items = rows.map(({ day, kind, ups }) => {
     const wd = weekdayOf(day);
-    let content;
-    if (ups.length) {
-      content = ups.map((u) => el('div', { class: 'diary-entry' },
-        el('div', { class: 'diary-line' }, el('span', { class: 'diary-icon' }, u.state === 'stuck' ? '⚠️' : u.state === 'finished' ? '✅' : '📝'),
-          el('div', { class: 'diary-text' }, el('strong', null, (staff && u.byId === state.user.id ? 'You' : u.by) + ' '),
-            u.state !== 'progress' ? [stateTag(u.state), ' '] : null, el('span', { class: 'pre' }, u.note), thumbs(u.photos))),
-        el('span', { class: 'diary-time' }, fmtTime(u.at))));
-    } else if (notYet || !dueOn(t, day)) {
-      if (wd !== 0) continue; // not a day for this task (a weekly task, say)
-      content = el('span', { class: 'day-tag off' }, 'Off');
-    } else if (day === today && LATE_HM() < fillBy) content = el('span', { class: 'day-tag wait' }, 'Waiting for today\'s update');
-    else content = [el('span', { class: 'day-tag miss' }, 'No progress'), el('span', { class: 'muted small' }, ' no update')];
-    rows.push(el('li', { class: 'diary-day' },
+    const content = kind === 'ups' ? ups.map((u) => el('div', { class: 'diary-entry' },
+      el('div', { class: 'diary-line' }, el('span', { class: 'diary-icon' }, u.state === 'stuck' ? '⚠️' : u.state === 'finished' ? '✅' : '📝'),
+        el('div', { class: 'diary-text' }, el('strong', null, (staff && u.byId === state.user.id ? 'You' : u.by) + ' '),
+          u.state !== 'progress' ? [stateTag(u.state), ' '] : null, el('span', { class: 'pre' }, u.note), thumbs(u.photos))),
+      el('span', { class: 'diary-time' }, fmtTime(u.at))))
+      : kind === 'off' ? el('span', { class: 'day-tag off' }, 'Off')
+        : kind === 'wait' ? el('span', { class: 'day-tag wait' }, 'Waiting for today\'s update')
+          : [el('span', { class: 'day-tag miss' }, 'No progress'), el('span', { class: 'muted small' }, ' no update')];
+    return el('li', { class: 'diary-day' },
       el('div', { class: 'diary-date' }, el('strong', null, day === today ? 'Today' : LONG_DAYS[wd]), el('span', { class: 'muted small' }, day === today ? fmtDay(day) : fmtDay(day).slice(4))),
-      el('div', { class: 'diary-items' }, content)));
-  }
+      el('div', { class: 'diary-items' }, content));
+  });
   return [
     el('h2', null, staff ? '📅 Earlier days' : "📅 What's happening"),
-    rows.length ? el('ul', { class: 'diary-days' }, rows) : el('p', { class: 'muted small' }, 'Nothing yet.'),
-    from > lower ? el('button', { class: 'link small', onClick: () => { state.diaryDays = n + 14; render(); } }, 'Show older days') : null,
+    items.length ? el('ul', { class: 'diary-days' }, items) : el('p', { class: 'muted small' }, 'Nothing yet.'),
+    more ? el('button', { class: 'link small', onClick: () => { state.diaryDays = n + 14; render(); } }, 'Show older days') : null,
   ];
 }
 
