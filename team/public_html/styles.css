@@ -119,6 +119,8 @@ textarea { min-height: 84px; }
 .notice-main { flex: 1; min-width: 0; text-align: left; padding: 12px 14px; display: flex; flex-direction: column; gap: 2px; }
 .notice-main strong { font-size: 15px; }
 .notice-main span { font-size: 13.5px; opacity: .92; white-space: pre-line; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.notice-copy { user-select: text; -webkit-user-select: text; cursor: text; max-height: 50vh; overflow-y: auto; }
+.notice-copy span { display: block; -webkit-line-clamp: none; overflow: visible; }
 .notice-x { padding: 0 14px; font-size: 16px; opacity: .85; }
 .notice-x:hover, .notice-main:hover strong { opacity: 1; text-decoration: underline; }
 @media (prefers-reduced-motion: reduce) { .notice.in { animation: none; } }

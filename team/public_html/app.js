@@ -1,7 +1,7 @@
 // Work Task: the team app. Staff see and fill their own tasks; the manager gives tasks and sees everything.
 // No outside libraries. All text from the server is put on screen as text (never as HTML).
 
-import { addDay, weekdayOf, dueOn, itemKey, diaryRows } from './logic.js'; // the rules (checked in tests/team-app.test.mjs)
+import { addDay, weekdayOf, dueOn, itemKey, diaryRows, fieldChanged, lateValue, afterFlush, boxStillThere, updateSaveBody, redrawHow } from './logic.js'; // the rules (checked in tests/team-app.test.mjs)
 
 const TOKEN_KEY = 'wt.token';
 const state = {
@@ -41,18 +41,19 @@ function toast(text, ms = 3000) {
 
 /** The coloured bar at the top, like a new-mail alert: blue = new task / project / message, green = an update. */
 let noticeTimer = 0;
-function notice(kind, title, body, onOpen) {
+function notice(kind, title, body, onOpen, opts = {}) {
   let n = document.getElementById('notice');
   if (!n) { n = el('div', { id: 'notice', role: 'status' }); document.body.append(n); }
   n.className = 'notice ' + (kind === 'update' ? 'green' : kind === 'stuck' ? 'amber' : 'blue');
   n.replaceChildren(
-    el('button', { class: 'notice-main', onClick: () => { hideNotice(); if (onOpen) onOpen(); } },
-      el('strong', null, title), body ? el('span', null, body) : null),
+    opts.copy ? el('div', { class: 'notice-main notice-copy' }, el('strong', null, title), body ? el('span', null, body) : null) // (words to copy: not a button)
+      : el('button', { class: 'notice-main', onClick: () => { hideNotice(); if (onOpen) onOpen(); } },
+        el('strong', null, title), body ? el('span', null, body) : null),
     el('button', { class: 'notice-x', 'aria-label': 'Close', onClick: hideNotice }, '✕'));
   n.hidden = false;
   n.classList.remove('in'); void n.offsetWidth; n.classList.add('in'); // slide in again for each new one
   clearTimeout(noticeTimer);
-  noticeTimer = setTimeout(hideNotice, 12000);
+  if (!opts.stay) noticeTimer = setTimeout(hideNotice, 12000); // (words to copy stay until closed)
 }
 function hideNotice() { const n = document.getElementById('notice'); if (n) n.hidden = true; }
 
@@ -158,7 +159,7 @@ async function sendItem(it, tok) {
   if (it.kind === 'suggest') { await api('suggest', { title: it.title, details: it.details, repeat: it.repeat, clientId: it.clientId }); return; }
   if (it.kind === 'update' && !it.updateId) {
     const twoSteps = it.state === 'finished' && it.needsPhoto && it.files && it.files.length && !it.hadPhoto;
-    const out = await api('update.save', { taskId: it.taskId, note: it.note, state: twoSteps ? 'progress' : it.state, day, writtenAt: it.at, clientId: it.clientId }); // (a resend after a lost answer = the same save)
+    const out = await api('update.save', updateSaveBody({ taskId: it.taskId, note: it.note, state: twoSteps ? 'progress' : it.state, day, writtenAt: it.at, clientId: it.clientId })); // (a resend after a lost answer = the same save)
     it.updateId = out.update.id; it.thenFinish = !!twoSteps && !out.history;
     if (twoSteps) it.note = out.update.note; // keep the earlier person's words (after a move) for the Finished save
     if (out.history === 'merged' || out.history === 'older') { // kept as words only (the task moved on, or a newer update of theirs stays)
@@ -180,7 +181,7 @@ async function sendItem(it, tok) {
     await keep(it);
   }
   mine();
-  if (it.thenFinish) await api('update.save', { taskId: it.taskId, note: it.note, state: 'finished', day });
+  if (it.thenFinish) await api('update.save', updateSaveBody({ taskId: it.taskId, note: it.note, day, clientId: it.clientId, finish: true }));
 }
 
 let flushP = null;
@@ -195,7 +196,12 @@ function flushOutbox() {
   return flushP;
 }
 
-/** A waiting item is given up on: put the text (and photos) back in the box, so nothing written is lost. */
+/** The task as this screen last saw it (the open task, or the lists). */
+const knownTask = (id) => (state.detail && state.detail.task && state.detail.task.id === id ? state.detail.task
+  : [...((state.data && state.data.tasks) || []), ...((state.data && state.data.other) || [])].find((x) => x.id === id));
+
+/** A waiting item is given up on: put the text (and photos) back in the box, so nothing written is lost.
+ *  An update or a message also shows the whole words in a notice that stays (the task may be moved or closed: no box). */
 function giveBack(it, why) {
   if (it.kind === 'comment') { if (!state.drafts['m' + it.taskId]) state.drafts['m' + it.taskId] = it.text; }
   else if (it.kind === 'update' && !it.updateId && !state.drafts[it.taskId]) {
@@ -204,15 +210,21 @@ function giveBack(it, why) {
   }
   else if (it.kind === 'step') { (state.stepDrafts ||= {})[it.projectRef] = it.title; }
   const words = it.note || it.text || it.title || '';
-  const back = it.kind === 'photos' || it.kind === 'suggest' ? '' : it.kind === 'step' ? ' The step is back in the Add a step box.' : ' Your text is back in the box.';
-  toast(`Could not send "${words.slice(0, 60)}": ${String(why).replace(/\.$/, '')}.${back}`, it.kind === 'suggest' ? 15000 : 10000);
+  const reason = String(why).replace(/\.$/, '');
+  if ((it.kind === 'comment' || (it.kind === 'update' && !it.updateId)) && words) {
+    const box = boxStillThere(knownTask(it.taskId), state.user && state.user.id) ? ' They are also back in the box.' : ' Copy them if you need them.';
+    notice('stuck', `Could not send: ${reason}.`, `Your words:\n${words}\n\n${box.trim()}`, null, { stay: true, copy: true });
+    return;
+  }
+  const back = it.kind === 'photos' || it.kind === 'suggest' ? '' : it.kind === 'step' ? ' The step is back in the Add a step box.' : '';
+  toast(`Could not send "${words.slice(0, 60)}": ${reason}.${back}`, it.kind === 'suggest' ? 15000 : 10000);
 }
 
 /** What a waiting item belongs to: later items of the same thing wait behind one that keeps failing. */
 
 async function doFlush() {
   if (!state.user) return;
-  let sent = 0;
+  let sent = 0, gave = 0;
   const uid = state.user.id, tok = state.token;
   const stuck = new Set(); // tasks with an item the server keeps failing on: later items for them wait behind it
   try {
@@ -230,7 +242,7 @@ async function doFlush() {
           it.tries = (it.tries || 0) + 1;
           if (it.tries >= 20 && Date.now() - new Date(it.at) > 12 * 3600000) { // failing for half a day: give up on it
             await outbox('readwrite', (s) => s.delete(it.id));
-            giveBack(it, ex.message);
+            giveBack(it, ex.message); gave++;
             continue;
           }
           await keep(it);
@@ -239,7 +251,7 @@ async function doFlush() {
           continue;
         }
         await outbox('readwrite', (s) => s.delete(it.id)); // refused by the server (e.g. task closed): say so, do not retry forever
-        giveBack(it, ex.message);
+        giveBack(it, ex.message); gave++;
       }
     }
   } finally {
@@ -248,8 +260,10 @@ async function doFlush() {
     // reload only screens that show the sent items: a reload would wipe a form being typed
     const v = state.sel || state.view, a = document.activeElement;
     const typing = (a && /^(TEXTAREA|INPUT|SELECT)$/.test(a.tagName) && document.getElementById('app').contains(a)) || formHasText();
-    if (sent && typing) state.reloadLater = true; // reload once they stop typing (next screen, or back to the app)
-    if (sent && !typing && state.user && !state.user.mustChange && (v === 'today' || v === 'tasks' || v.startsWith('task:') || v.startsWith('project:'))) loadView(); else refreshBar();
+    // (an item given back is redrawn too: its "Waiting to send" card goes, the box with the words comes back)
+    const next = state.user && !state.user.mustChange ? afterFlush({ sent, gaveBack: gave, typing, view: v }) : 'bar';
+    if (next === 'later') state.reloadLater = true; // reload once they stop typing (next screen, or back to the app)
+    if (next === 'reload') loadView(); else refreshBar();
   }
 }
 
@@ -421,7 +435,7 @@ async function loadList() {
   if (failed) toast(failed.message, 5000);
   // T-d: a form being filled in (Give a task) is not wiped: the list is redrawn when they stop
   const a = document.activeElement;
-  if (state.sel && formHasText()) { state.reloadLater = true; return; } // something typed in the open form: redrawn when they stop
+  if (state.sel && formHasText()) { softRender(); return; } // something typed in the open form: only the menu and list are redrawn (or later)
   void a;
   render();
 }
@@ -477,17 +491,11 @@ function go(view) {
 }
 
 /** Something is typed (or a file picked) in a form on screen: a redraw now would wipe it. */
-function formHasText() {
-  const app = document.getElementById('app');
-  if (!app) return false;
-  return [...app.querySelectorAll('textarea, input, select')].some((i) => {
-    if (i.disabled || i.readOnly) return false;
-    if (i.type === 'file') return !!(i.files && i.files.length);
-    if (['radio', 'hidden', 'submit', 'button', 'password'].includes(i.type)) return false;
-    const now = i.type === 'checkbox' ? String(i.checked) : i.value;
-    if (i.dataset.init !== undefined) return now !== i.dataset.init; // changed since the screen was drawn
-    return i.type !== 'checkbox' && i.tagName !== 'SELECT' && now.trim() !== '';
-  });
+function formHasText(root = document.getElementById('app')) {
+  if (!root) return false;
+  return [...root.querySelectorAll('textarea, input, select')].some((i) => fieldChanged({ // (the rule: logic.js)
+    tagName: i.tagName, type: i.type, disabled: i.disabled, readOnly: i.readOnly, value: i.value, checked: i.checked,
+    fileCount: i.files ? i.files.length : 0, init: i.dataset.init }));
 }
 
 // the phone's Back button closes the open task (or the menu) instead of leaving the app
@@ -540,9 +548,9 @@ function render() {
   // keep where each column was scrolled (the screen is drawn again after every change)
   const keep = ['list', 'detail'].map((id) => { const n = document.getElementById(id); return n ? n.scrollTop : 0; });
   const sameScreen = lastRender && state.renderKey === `${state.view}|${state.sel}`;
-  const wide = state.view === 'people' || state.view === 'settings' || state.view === 'report';
+  const wide = isWide();
   root.replaceChildren(el('div', {
-    class: ['layout', wide ? 'wide' : '', state.mobileDetail && !wide ? 'show-detail' : '', state.menuOpen ? 'menu-open' : ''].filter(Boolean).join(' '),
+    class: layoutClass(wide),
   },
   el('aside', { id: 'menu' }, menuColumn()),
   el('div', { class: 'scrim', onClick: () => { state.menuOpen = false; if (!state.sel) dropBack(); render(); } }),
@@ -552,6 +560,23 @@ function render() {
   state.renderKey = `${state.view}|${state.sel}`; lastRender = Date.now();
   // how each field looked when drawn (so a preset choice or a restored draft is not "typing")
   root.querySelectorAll('input, textarea, select').forEach((x) => { x.dataset.init = x.type === 'checkbox' ? String(x.checked) : x.value; });
+  setBadge();
+}
+
+const isWide = () => state.view === 'people' || state.view === 'settings' || state.view === 'report';
+const layoutClass = (wide) => ['layout', wide ? 'wide' : '', state.mobileDetail && !wide ? 'show-detail' : '', state.menuOpen ? 'menu-open' : ''].filter(Boolean).join(' ');
+
+/** Redraw for a click in the menu or the list: a Give / Edit form half filled in on the right is kept as it is. */
+function softRender() {
+  const menu = document.getElementById('menu'), list = document.getElementById('list'), detail = document.getElementById('detail');
+  const how = redrawHow({ typed: formHasText(), listTyped: formHasText(list) || formHasText(menu), hasDetail: !!detail && !!menu && !!list && !isWide() }); // (the rule: logic.js)
+  if (how === 'all') { render(); return; }
+  if (how === 'later') { state.reloadLater = true; return; }
+  const top = list.scrollTop, wide = isWide();
+  const m = el('aside', { id: 'menu' }, menuColumn()), l = el('main', { id: 'list' }, listColumn(wide));
+  menu.replaceWith(m); list.replaceWith(l); l.scrollTop = top;
+  if (l.parentNode) l.parentNode.className = layoutClass(wide);
+  [m, l].forEach((c) => c.querySelectorAll('input, textarea, select').forEach((x) => { x.dataset.init = x.type === 'checkbox' ? String(x.checked) : x.value; }));
   setBadge();
 }
 
@@ -583,7 +608,14 @@ function menuColumn() {
         const sent = tasks.filter((x) => x.today).length;
         const dot = !tasks.length ? 'grey' : sent === tasks.length ? 'green' : t.late ? 'red' : 'orange';
         return el('li', null, el('button', { class: 'menu-item person' + (state.view === 'today' && state.personFilter === p.id ? ' current' : ''), title: tasks.length ? `${sent} of ${tasks.length} sent today` : 'No tasks today',
-          onClick: () => { state.personFilter = state.personFilter === p.id ? 0 : p.id; if (state.view !== 'today') go('today'); else { state.menuOpen = false; if (!state.sel) dropBack(); render(); } } },
+          onClick: () => {
+            state.personFilter = state.personFilter === p.id ? 0 : p.id;
+            if (state.view !== 'today' && !formHasText()) { go('today'); return; }
+            state.menuOpen = false;
+            if (state.view !== 'today') { state.view = 'today'; state.data = null; state.loadFailed = false; loadList(); } // (a half-filled form on the right stays open)
+            if (!state.sel) dropBack();
+            softRender();
+          } },
         el('span', { class: 'dot ' + dot }), p.name, el('span', { class: 'count' }, tasks.length ? `${sent}/${tasks.length}` : '')));
       })));
     }
@@ -929,7 +961,7 @@ function teamList() {
         : el('span', { class: 'tag ' + (sent === tasks.length ? 'green' : d.late ? 'red' : 'amber') }, `${sent} of ${tasks.length} sent`);
       return [sec(p.name, tag), el('ul', { class: 'list-body' }, tasks.map(row))];
     }),
-    filt ? el('p', { class: 'list-note' }, el('button', { class: 'link', onClick: () => { state.personFilter = 0; render(); } }, '← Show everyone')) : null,
+    filt ? el('p', { class: 'list-note' }, el('button', { class: 'link', onClick: () => { state.personFilter = 0; softRender(); } }, '← Show everyone')) : null,
   ];
 }
 
@@ -1272,13 +1304,13 @@ function updateForm(t) {
     const cid = newClientId(); // the same id online and in the outbox: a photo whose reply was lost is not kept twice
     let updateId = 0; // set once the update itself is on the server
     try {
-      const out = await api('update.save', { taskId: t.id, note: d.note, state: twoSteps ? 'progress' : d.state });
+      const out = await api('update.save', updateSaveBody({ taskId: t.id, note: d.note, state: twoSteps ? 'progress' : d.state, clientId: cid })); // (a timed-out save then queued is the same save)
       updateId = out.update.id;
       if (twoSteps) d.note = out.update.note; // after a move the server put the earlier person's words above: keep them for the Finished save
       const left = files.length ? await uploadPhotos(updateId, files, cid) : [];
       if (left.length) throw Object.assign(new OfflineError('offline'), { left, sentPhotos: files.length - left.length });
       if (files.length) { files.length = 0; delete state.files[t.id]; d.photosSent = true; } // the photos went: a second Send only repeats the last step
-      if (twoSteps) await api('update.save', { taskId: t.id, note: d.note, state: 'finished' });
+      if (twoSteps) await api('update.save', updateSaveBody({ taskId: t.id, note: d.note, clientId: cid, finish: true }));
       delete state.drafts[t.id]; delete state.files[t.id]; delete state.editing[t.id];
       toast('Sent ✓');
       render(); // the empty box at once (a box still holding the sent words would count as "typing" and hold back the reload)
@@ -1766,8 +1798,9 @@ function peopleScreen() {
 }
 
 function settingsScreen() {
-  const fill = el('input', { type: 'time', value: '18:00' });
-  api('team.today').then((d) => { fill.value = d.fillBy; }).catch(() => {});
+  const fill = el('input', { type: 'time', value: state.fillBy || '18:00' });
+  // the saved time, if it came after drawing: only into an untouched box, and as its "drawn" value (not typing)
+  api('team.today').then((d) => { if (!d.fillBy) return; state.fillBy = d.fillBy; if (lateValue(fill.value, fill.dataset.init, d.fillBy) === d.fillBy) { fill.value = d.fillBy; fill.dataset.init = d.fillBy; } }).catch(() => {});
   return [
     el('h1', null, 'Settings'),
     el('form', { class: 'card stack', onSubmit: async (e) => {
@@ -1912,12 +1945,12 @@ async function turnOnPush() {
   if (!pushOk()) return;
   try { localStorage.removeItem(pushOffKey()); } catch { /* blocked */ }
   const p = await Notification.requestPermission();
-  if (p !== 'granted') { render(); if (p === 'denied') openDetail('notify'); return; }
+  if (p !== 'granted') { softRender(); if (p === 'denied') openDetail('notify'); return; }
   try {
     await subscribePush();
     notice('task', '🔔 Notifications are on', 'New tasks, new project steps and messages will come to this phone, like email.');
   } catch (e) { toast('Could not turn on notifications: ' + e.message, 6000); }
-  render();
+  softRender(); // (a half-filled Give / Edit form is kept)
 }
 async function pushOff() {
   if (!pushOk()) return;
@@ -1936,7 +1969,7 @@ function pushBanner() {
     el('span', null, '🔔 Get a message on this phone when a new task or update comes — like email.'),
     el('span', { class: 'row' },
       el('button', { class: 'primary', onClick: () => turnOnPush() }, 'Turn on'),
-      el('button', { class: 'link', onClick: () => { try { localStorage.setItem('wt.pushLater', String(Date.now() + 3 * 86400000)); } catch { /* blocked */ } render(); } }, 'Later')));
+      el('button', { class: 'link', onClick: () => { try { localStorage.setItem('wt.pushLater', String(Date.now() + 3 * 86400000)); } catch { /* blocked */ } softRender(); } }, 'Later')));
 }
 
 function notifyPage() {

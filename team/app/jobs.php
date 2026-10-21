@@ -85,7 +85,11 @@ function server_sync_projects(): void {
       $psp = json_decode(setting('psp:' . md5($ref), ''), true);
       $gp = $given[$ref] ?? null;
       $savedWho = $gp && ($gp['state'] ?? '') === 'active' ? (int)$gp['team']['userId'] : 0;
-      if (is_array($psp) && (int)($psp['who'] ?? -1) === $savedWho && ($psp['base'] ?? '') !== setting('dp_head', '')) { q('DELETE FROM settings WHERE k = ?', ['psp:' . md5($ref)]); $psp = null; } // saved since
+      // (and only once the saved project holds its step changes too: its new steps are there, the steps it closed are not open)
+      $savedOpen = $savedWho ? array_column(server_steps($gp, $today), 'stepRef') : [];
+      $savedIds = $gp ? array_map(fn($s) => (string)($s['id'] ?? ''), array_filter((array)($gp['steps'] ?? []), 'is_array')) : [];
+      if (is_array($psp) && (int)($psp['who'] ?? -1) === $savedWho && ($psp['base'] ?? '') !== setting('dp_head', '')
+        && !array_diff((array)($psp['add'] ?? []), $savedIds) && !array_intersect((array)($psp['drop'] ?? []), $savedOpen)) { q('DELETE FROM settings WHERE k = ?', ['psp:' . md5($ref)]); $psp = null; } // saved since
       if (is_array($psp) && (int)($psp['at'] ?? 0) > time() - 7 * 86400) continue;
       if ($psc > time() - 300) { // the owner's app sent this project minutes ago: it knows best — look again once that is over
         $retry = (int)setting('sync_retry', '0');

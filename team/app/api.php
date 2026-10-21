@@ -271,6 +271,8 @@ function handle(string $a, array $in): array {
              ON DUPLICATE KEY UPDATE note = VALUES(note), state = VALUES(state), updated_at = VALUES(updated_at)',
             [$t['id'], $me['id'], $uday, $note, $state, now(), now()]);
           if ($ucid) q('UPDATE updates SET client_id = ? WHERE task_id = ? AND day = ?', [$ucid, $t['id'], $uday]);
+          // today's words (written offline) for a whole-project task replaced by steps since: they count for their first step too
+          if ($uday === $day && $t['status'] === 'cancelled' && $t['project_ref'] && $t['step_ref'] === $t['project_ref'] . ':whole') carry_whole_update((string)$t['project_ref'], $me['id']);
         }
         $u = one('SELECT * FROM updates WHERE task_id = ? AND day = ?', [$t['id'], $uday]);
         return ['update' => update_out($u, photos_of([(int)$u['id']])), 'history' => 'own'];
@@ -488,9 +490,15 @@ function handle(string $a, array $in): array {
       unset($in['_server']);
       set_setting('psc:' . md5($ref), (string)time()); // before the work too: a server sync waiting for the lock sees it
       // its unsaved changes: the saved projects are older than this for the project until they are saved
-      if (!empty($in['pending'])) set_setting('psp:' . md5($ref), json_encode(['who' => (int)($in['assigneeId'] ?? 0), 'base' => txt($in['baseCommit'] ?? '', 40), 'at' => time()]));
+      $oldPsp = setting('psp:' . md5($ref), '');
+      if (!empty($in['pending'])) set_setting('psp:' . md5($ref), json_encode(['who' => (int)($in['assigneeId'] ?? 0), 'base' => txt($in['baseCommit'] ?? '', 40), 'at' => time()] + pending_steps($ref, $in)));
       else q('DELETE FROM settings WHERE k = ?', ['psp:' . md5($ref)]);
-      $out = locked_project_sync($me, $in, $ref, $day);
+      try {
+        $out = locked_project_sync($me, $in, $ref, $day);
+      } catch (Throwable $e) { // not done (busy, or the person is switched off): the owner's app keeps the old person, so the old marker is back
+        if ($oldPsp === '') q('DELETE FROM settings WHERE k = ?', ['psp:' . md5($ref)]); else set_setting('psp:' . md5($ref), $oldPsp);
+        throw $e;
+      }
       set_setting('psc:' . md5($ref), (string)time()); // the server's own sync leaves this project alone for a few minutes
       return $out;
     }
@@ -785,6 +793,19 @@ function handle(string $a, array $in): array {
   throw new ApiError('Unknown request.', 404);
 }
 
+/** What the owner's app changed in the project's steps and has not saved yet (against the saved projects now):
+ *  'add' = steps it sent that the saved project does not have, 'drop' = steps open in the saved project that it did not send. */
+function pending_steps(string $ref, array $in): array {
+  if (!(int)($in['assigneeId'] ?? 0)) return []; // taken back: only who it is with counts
+  $data = dp_data();
+  $saved = null;
+  foreach ($data['projects'] ?? [] as $p) if (is_array($p) && (string)($p['id'] ?? '') === $ref) $saved = $p;
+  $sent = array_values(array_filter(array_map(fn($s) => is_array($s) ? (string)($s['stepRef'] ?? '') : '', (array)($in['steps'] ?? [])), 'strlen'));
+  $known = $saved ? array_map(fn($s) => (string)($s['id'] ?? ''), array_filter((array)($saved['steps'] ?? []), 'is_array')) : [];
+  $open = $saved ? array_column(server_steps($saved, today()), 'stepRef') : [];
+  return ['add' => array_values(array_diff($sent, $known, ["$ref:whole"])), 'drop' => array_values(array_diff($open, $sent))];
+}
+
 /** The whole-project task was replaced by steps today and already had today's update: it counts for the current step too. */
 function carry_whole_update(string $ref, int $who): void {
   $day = today();
@@ -792,9 +813,10 @@ function carry_whole_update(string $ref, int $who): void {
   $w = one("SELECT u.* FROM tasks t JOIN updates u ON u.task_id = t.id AND u.day = ? WHERE t.project_ref = ? AND t.step_ref = ? AND t.status = 'cancelled' AND t.done_at >= ? AND u.user_id = ? LIMIT 1",
     [$day, $ref, $ref . ':whole', $day . ' 00:00:00', $who]); // only their own words, for their own step
   if (!$w) return;
-  set_setting('cw:' . md5($ref), $day);
   $cur = one("SELECT id FROM tasks WHERE project_ref = ? AND seq IS NOT NULL AND status = 'open' AND assignee_id = ? AND step_ref <> ? ORDER BY seq, id LIMIT 1", [$ref, $who, $ref . ':whole']);
-  if (!$cur || one('SELECT id FROM updates WHERE task_id = ? AND day = ?', [$cur['id'], $day])) return;
+  if (!$cur) return; // no step of theirs yet: carried when there is one
+  set_setting('cw:' . md5($ref), $day);
+  if (one('SELECT id FROM updates WHERE task_id = ? AND day = ?', [$cur['id'], $day])) return;
   q('INSERT INTO updates (task_id, user_id, day, note, state, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
     [$cur['id'], $w['user_id'], $day, $w['note'], $w['state'] === 'finished' ? 'progress' : $w['state'], $w['created_at'], $w['updated_at']]);
 }
@@ -915,6 +937,7 @@ function project_sync(array $me, array $in, string $ref, string $day): array {
     }
     q("UPDATE tasks SET status = 'cancelled', done_at = ?, updated_at = ? WHERE id = ?", [now(), now(), $t['id']]);
     if ((int)$t['assignee_id'] === $who && $t['step_ref'] !== "$ref:whole") $closed[] = $t['title']; // (the whole-project task simply makes way for the steps)
+    if ((int)$t['assignee_id'] !== $who) $leftBy[] = (int)$t['assignee_id']; // someone else's step, gone as the project goes to a new person: they are told it is off their list
   }
   carry_whole_update($ref, $who);
   $leftBy = array_values(array_diff(array_unique($leftBy), [$who]));

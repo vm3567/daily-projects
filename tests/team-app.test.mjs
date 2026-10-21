@@ -2,7 +2,9 @@
 // Each check here guards a fix, so a later change cannot quietly bring the problem back.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { addDay, weekdayOf, dueOn, itemKey, diaryRows } from '../team/public_html/logic.js';
+import { readFileSync } from 'node:fs';
+import { addDay, weekdayOf, dueOn, itemKey, diaryRows, fieldChanged, lateValue, afterFlush, boxStillThere, updateSaveBody, redrawHow } from '../team/public_html/logic.js';
+const APP = readFileSync(new URL('../team/public_html/app.js', import.meta.url), 'utf8');
 
 // Wed 21 Oct 2026 is "today" in these checks; 18 Oct is a Sunday.
 const TODAY = '2026-10-21';
@@ -73,4 +75,66 @@ test('team: outbox — one stuck item only holds back items of the same thing', 
   assert.equal(itemKey({ kind: 'photos', taskId: 5 }), 't:5');
   assert.equal(itemKey({ kind: 'step', projectRef: 'P1' }), 'p:P1');
   assert.notEqual(itemKey({ kind: 'suggest', id: 1 }), itemKey({ kind: 'suggest', id: 2 }), 'suggestions never block each other');
+});
+
+test('team: the search box is never "typing" (a new search must not stop Mark done / Move from redrawing the task)', () => {
+  assert.equal(fieldChanged({ tagName: 'INPUT', type: 'search', value: 'kiln 3', init: 'kiln' }), false, 'search box changed since drawn: not typing');
+  assert.equal(fieldChanged({ tagName: 'INPUT', type: 'text', value: 'kiln 3', init: 'kiln' }), true, 'a text box changed: typing');
+  assert.equal(fieldChanged({ tagName: 'INPUT', type: 'text', value: 'kiln', init: 'kiln' }), false, 'unchanged since drawn');
+  assert.equal(fieldChanged({ tagName: 'TEXTAREA', type: 'textarea', value: 'words' }), true, 'no init: text counts');
+  assert.equal(fieldChanged({ tagName: 'INPUT', type: 'file', fileCount: 1 }), true, 'a picked file');
+  assert.equal(fieldChanged({ tagName: 'INPUT', type: 'password', value: 'x', init: '' }), false);
+  assert.match(APP.slice(APP.indexOf('function formHasText')), /^[^]{0,200}fieldChanged\(/, 'formHasText uses this rule');
+});
+
+test('team: Settings "due by" — the saved time arriving late fills only an untouched box', () => {
+  assert.equal(lateValue('18:00', '18:00', '17:30'), '17:30', 'untouched: the saved time is shown');
+  assert.equal(lateValue('19:00', '18:00', '17:30'), '19:00', 'changed meanwhile: their choice stays');
+  assert.match(APP, /lateValue\(fill\.value, fill\.dataset\.init, d\.fillBy\)[^\n]*fill\.dataset\.init = d\.fillBy/, 'the box\'s drawn value follows the saved time (else Settings counts as typing for ever)');
+});
+
+test('team: after sending the outbox, an item given back also redraws the screen', () => {
+  assert.equal(afterFlush({ sent: 0, gaveBack: 1, view: 'task:5' }), 'reload', 'refused and given back: the Waiting card goes');
+  assert.equal(afterFlush({ sent: 0, gaveBack: 1, view: 'today' }), 'reload');
+  assert.equal(afterFlush({ sent: 2, view: 'tasks' }), 'reload');
+  assert.equal(afterFlush({ sent: 1, gaveBack: 1, typing: true, view: 'today' }), 'later', 'never over typing');
+  assert.equal(afterFlush({ sent: 0, gaveBack: 0, view: 'today' }), 'bar');
+  assert.equal(afterFlush({ sent: 1, view: 'people' }), 'bar');
+  assert.match(APP, /afterFlush\(\{ sent, gaveBack: gave,/, 'doFlush counts what it gave back');
+});
+
+test('team: a refused update says "back in the box" only when the box is still there', () => {
+  const t = { id: 4, status: 'open', assignee: { id: 3 } };
+  assert.ok(boxStillThere(t, 3));
+  assert.ok(!boxStillThere({ ...t, assignee: { id: 9 } }, 3), 'moved to someone else: no box');
+  assert.ok(!boxStillThere({ ...t, status: 'done' }, 3), 'closed: no box');
+  assert.ok(!boxStillThere(undefined, 3), 'not on this phone any more');
+  assert.match(APP, /notice\('stuck', `Could not send[^\n]*\$\{words\}[^\n]*stay: true, copy: true/, 'the whole words are shown, and stay until closed');
+});
+
+test('team: every update save carries a clientId (a timed-out online save that is then queued is the same save)', () => {
+  const first = updateSaveBody({ taskId: 4, note: 'n', state: 'progress', clientId: 'abc' });
+  assert.equal(first.clientId, 'abc');
+  const fin = updateSaveBody({ taskId: 4, note: 'n', state: 'progress', clientId: 'abc', finish: true, day: '2026-10-21', writtenAt: 'x' });
+  assert.equal(fin.state, 'finished'); assert.equal(fin.clientId, 'abc-f', 'the Finished save has its own id');
+  assert.equal(fin.writtenAt, undefined);
+  assert.equal(updateSaveBody({ taskId: 4, note: 'n', state: 'stuck', clientId: 'a', day: 'd', writtenAt: 'w' }).writtenAt, 'w');
+  const calls = APP.match(/api\('update\.save',[^\n]*/g) || [];
+  assert.ok(calls.length >= 4, 'the online save, its Finished, the outbox save, its Finished');
+  for (const c of calls) assert.match(c, /updateSaveBody\(\{[^}]*clientId/, `update.save without a clientId: ${c.slice(0, 80)}`);
+});
+
+test('team: menu and list clicks never redraw over a half-filled Give / Edit form', () => {
+  assert.equal(redrawHow({ typed: false }), 'all');
+  assert.equal(redrawHow({ typed: true, hasDetail: true }), 'lists', 'typed in the form on the right: only the menu and list');
+  assert.equal(redrawHow({ typed: true, listTyped: true, hasDetail: true }), 'later');
+  assert.equal(redrawHow({ typed: true, hasDetail: false }), 'later');
+  for (const where of [/'← Show everyone'/, /'Later'\)/]) {
+    const line = APP.split('\n').find((l) => where.test(l));
+    assert.ok(line && /softRender\(\)/.test(line) && !/[^t]render\(\)/.test(line.replace(/softRender\(\)/g, '')), `uses softRender: ${where}`);
+  }
+  const push = APP.slice(APP.indexOf('async function turnOnPush'), APP.indexOf('async function pushOff'));
+  assert.ok(!/(^|[^t])render\(\)/m.test(push.replace(/softRender\(\)/g, '')), 'Turn on notifications keeps the form');
+  const person = APP.slice(APP.indexOf("class: 'menu-item person'"), APP.indexOf("el('span', { class: 'dot ' + dot })"));
+  assert.match(person, /softRender\(\)/); assert.match(person, /!formHasText\(\)\) \{ go\('today'\)/, 'go(today) only when nothing is typed');
 });

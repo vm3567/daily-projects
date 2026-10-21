@@ -671,3 +671,59 @@ test('regression: finished staff-added steps keep the whole-project task from co
   assert.deepEqual((await openOf('suresh', 'rg12')).filter((t) => t.stepRef === 'rg12:whole'), [], 'no whole-project task again');
   await call('project.sync', { projectRef: 'rg12', project: '', assigneeId: 0, steps: [] }, tok.boss);
 });
+
+const pspRows = (ref) => Number(sql(`USE wt; SELECT COUNT(*) FROM wt.settings WHERE k = '${'psp:' + md5(ref)}'`).toString().trim().split('\n').pop());
+
+test('regression: another device\'s save does not undo the owner\'s unsaved tick (the marker waits for the step change to be saved)', { skip }, async () => {
+  const P = (done) => ({ id: 'rg15', name: 'Tick P', state: 'active', team: { userId: id.suresh, name: 'S' }, steps: [{ id: 'q1', text: 'Q one', done, ...(done ? { doneAt: new Date().toISOString() } : {}) }] });
+  await saveProjects([P(false)]);
+  assert.equal((await openOf('suresh', 'rg15')).length, 1);
+  const base = (await call('dp.head', {}, tok.boss)).head;
+  await call('project.sync', { projectRef: 'rg15', project: 'Tick P', assigneeId: id.suresh, steps: [], baseCommit: base, pending: true }, tok.boss); // ticked on the laptop, not saved yet
+  assert.deepEqual(await openOf('suresh', 'rg15'), []);
+  sql(`USE wt; UPDATE wt.settings SET v = UNIX_TIMESTAMP() - 400 WHERE k = '${'psc:' + md5('rg15')}'`);
+  const n = pushLen();
+  await saveProjects([P(false)]); // the phone saves something else (the tick is not in it)
+  assert.deepEqual(await openOf('suresh', 'rg15'), [], 'the ticked step does not come back');
+  assert.ok(!/New step in Tick P/.test(pushSince(n)), 'no "New step" news');
+  assert.equal(pspRows('rg15'), 1, 'the marker stays');
+  await saveProjects([P(true)]); // the laptop's tick is saved
+  assert.equal(pspRows('rg15'), 0, 'cleared once the tick is saved');
+  await saveProjects([]);
+});
+
+test('regression: a project.sync that fails does not leave the "unsaved changes" marker behind', { skip }, async () => {
+  const P = (steps) => ({ id: 'rg16', name: 'Fail P', state: 'active', team: { userId: id.suresh, name: 'S' }, steps });
+  await saveProjects([P([{ id: 'r1', text: 'R one', done: false }])]);
+  const base = (await call('dp.head', {}, tok.boss)).head;
+  const r = await call('project.sync', { projectRef: 'rg16', project: 'Fail P', assigneeId: 999999, steps: [{ stepRef: 'r1', title: 'R one' }], baseCommit: base, pending: true }, tok.boss);
+  assert.ok(!r.ok, 'refused (no such person)');
+  assert.equal(pspRows('rg16'), 0, 'no marker left');
+  sql(`USE wt; UPDATE wt.settings SET v = UNIX_TIMESTAMP() - 400 WHERE k = '${'psc:' + md5('rg16')}'`);
+  await saveProjects([P([{ id: 'r1', text: 'R one', done: false }, { id: 'r2', text: 'R two', done: false }])]); // e.g. /add
+  assert.deepEqual((await openOf('suresh', 'rg16')).map((t) => t.title), ['R one', 'R two'], 'the server still delivers the new step');
+  await saveProjects([]);
+});
+
+test('regression: the old holder is told when their step is closed as the project goes to someone else', { skip }, async () => {
+  await call('project.sync', { projectRef: 'rg17', project: 'Handover P', assigneeId: id.suresh, steps: [{ stepRef: 'n1', title: 'N one' }] }, tok.boss);
+  const n = pushLen();
+  await call('project.sync', { projectRef: 'rg17', project: 'Handover P', assigneeId: id.anita, steps: [{ stepRef: 'n2', title: 'N two' }] }, tok.boss); // n1 ticked, n2 added, given to Anita
+  assert.deepEqual(await openOf('suresh', 'rg17'), []);
+  const toSuresh = pushSince(n).split('\n').filter(Boolean).map((l) => JSON.parse(l)).filter((x) => x.user === id.suresh);
+  assert.ok(toSuresh.some((x) => /Off your list: Handover P/.test(JSON.stringify(x.msg))), 'Suresh is told it is off his list');
+  await call('project.sync', { projectRef: 'rg17', project: '', assigneeId: 0, steps: [] }, tok.boss);
+});
+
+test('regression: an offline update on the whole-project task, sent after steps replaced it, counts for the first step', { skip }, async () => {
+  await call('project.sync', { projectRef: 'rg18', project: 'Late whole P', assigneeId: id.suresh, steps: [{ stepRef: 'rg18:whole', title: 'Late whole P' }] }, tok.boss);
+  const w = (await openOf('suresh', 'rg18'))[0];
+  const writtenAt = new Date(Date.now() - 120000).toISOString(); // written offline before the steps came
+  await call('project.sync', { projectRef: 'rg18', project: 'Late whole P', assigneeId: id.suresh, steps: [{ stepRef: 'lw1', title: 'LW one' }] }, tok.boss);
+  const s1 = (await openOf('suresh', 'rg18'))[0];
+  assert.equal(s1.title, 'LW one');
+  const r = await call('update.save', { taskId: w.id, note: 'offline whole words', state: 'progress', writtenAt, clientId: 'lwhole-0001' }, tok.suresh);
+  assert.ok(r.ok, r.error);
+  assert.equal((await call('task.get', { id: s1.id }, tok.suresh)).task.today?.note, 'offline whole words', 'the first step has today\'s update');
+  await call('project.sync', { projectRef: 'rg18', project: '', assigneeId: 0, steps: [] }, tok.boss);
+});

@@ -60,3 +60,55 @@ export function diaryRows(t, updates, today, opts = {}) {
   }
   return { rows, more: from > lower };
 }
+
+/**
+ * Has the person changed this field since the screen was drawn? (a redraw now would wipe it)
+ * f: { tagName, type, disabled, readOnly, value, checked, fileCount, init } — init = the value when drawn (data-init).
+ * The search box is never "typing": its words are kept (state.searchQ) and redrawn with the screen.
+ */
+export function fieldChanged(f) {
+  if (f.disabled || f.readOnly) return false;
+  if (f.type === 'file') return !!f.fileCount;
+  if (['radio', 'hidden', 'submit', 'button', 'password', 'search'].includes(f.type)) return false;
+  const now = f.type === 'checkbox' ? String(!!f.checked) : String(f.value ?? '');
+  if (f.init !== undefined) return now !== f.init; // changed since the screen was drawn
+  return f.type !== 'checkbox' && f.tagName !== 'SELECT' && now.trim() !== '';
+}
+
+/** A value that arrives after the field was drawn: taken only if the person has not changed the field meanwhile. */
+export const lateValue = (value, init, answer) => (init === undefined || value === init ? answer : value);
+
+/**
+ * After the outbox was sent: what to redraw. sent = items that went, gaveBack = items refused and given back.
+ * 'reload' (the list and the open task), 'later' (they are typing: once they stop), 'bar' (only the waiting bar).
+ */
+export function afterFlush({ sent = 0, gaveBack = 0, typing = false, view = '' }) {
+  if (!sent && !gaveBack) return 'bar';
+  if (typing) return 'later';
+  return ['today', 'tasks'].includes(view) || view.startsWith('task:') || view.startsWith('project:') ? 'reload' : 'bar';
+}
+
+/** A refused update or message: is there still a box this person can open to find the words? (else they are shown in full) */
+export const boxStillThere = (task, userId) => !!task && task.status === 'open' && (!task.assignee || task.assignee.id === userId);
+
+/**
+ * The body of an update.save. Every save carries a clientId (online too), so a save whose answer was lost and that
+ * then went to the outbox is seen by the server as the same save. The "Finished" after the photos has its own id.
+ */
+export function updateSaveBody({ taskId, note, state, clientId, day, writtenAt, finish = false }) {
+  const b = { taskId, note, state: finish ? 'finished' : state };
+  if (day) b.day = day;
+  if (writtenAt && !finish) b.writtenAt = writtenAt;
+  if (clientId) b.clientId = finish ? clientId + '-f' : clientId;
+  return b;
+}
+
+/**
+ * A redraw asked for by a click in the menu or the list (a person filter, "Show everyone", the notifications banner):
+ * 'all' (nothing typed), 'lists' (something typed in the open form on the right: redraw only the menu and the list),
+ * 'later' (the typing is in the list itself, or there is no right column: redrawn once they stop).
+ */
+export function redrawHow({ typed = false, listTyped = false, hasDetail = false }) {
+  if (!typed) return 'all';
+  return hasDetail && !listTyped ? 'lists' : 'later';
+}

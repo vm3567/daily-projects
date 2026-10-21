@@ -683,3 +683,99 @@ test('regression: automatic team changes are never counted as your own work; a r
   applyOp(s, op('recordScores', { scores: { '2026-10-03': { green: 2, total: 1 } }, raise: true }, '2026-10-05'));
   assert.deepEqual(s.data.dayScores['2026-10-03'], { green: 2, total: 3 }, 'only green goes up; the saved total stays');
 });
+
+// ---------------------------------------------------------------- review round 9 (projects page + Work Task)
+
+test('a team-added step you delete or undo stays away on every device (kept in the data, not per device)', async () => {
+  const { staffStepAction } = await import('../docs/rules.js');
+  // Undo of the adoption toast: the step is remembered as deleted in the project itself
+  const s = withProject('2026-10-01');
+  const before = clone(s.data.projects[0]);
+  const add = op('addStep', { projectId: 'p1', stepId: 'st1', text: 'Fix kiln door', byTeam: true }, '2026-10-02');
+  assert.equal(applyOp(s, add), true);
+  assert.equal(s.data.projects[0].steps.find((x) => x.id === 'st1').addedByTeam, true);
+  applyOp(s, op('restoreProject', { project: before, index: 0, undoOpIds: [add.id], dropTeamSteps: ['st1'] }, '2026-10-02', '10:00:05'));
+  assert.ok(!s.data.projects[0].steps.some((x) => x.id === 'st1'), 'undone');
+  assert.deepEqual(s.data.projects[0].teamDropped, ['st1'], 'remembered in the shared data');
+  // another device (or tab) sees the task still waiting on the server: it must not add the step again
+  assert.equal(applyOp(s, op('addStep', { projectId: 'p1', stepId: 'st1', text: 'Fix kiln door', byTeam: true }, '2026-10-02', '10:01:00')), false);
+  assert.equal(staffStepAction('st1', s.data.projects[0], null), 'wait', 'the server is told only once the drop is saved');
+  assert.equal(staffStepAction('st1', s.data.projects[0], clone(s.data.projects[0])), 'adopted');
+  // a step you delete by hand: same
+  const s2 = withProject('2026-10-01');
+  applyOp(s2, op('addStep', { projectId: 'p1', stepId: 'st2', text: 'Glaze test', byTeam: true }, '2026-10-02'));
+  const del = op('deleteStep', { projectId: 'p1', stepId: 'st2' }, '2026-10-02', '11:00:00');
+  applyOp(s2, del);
+  assert.deepEqual(s2.data.projects[0].teamDropped, ['st2']);
+  assert.equal(applyOp(s2, op('addStep', { projectId: 'p1', stepId: 'st2', text: 'Glaze test', byTeam: true }, '2026-10-02', '11:01:00')), false);
+  assert.equal(staffStepAction('st2', s2.data.projects[0], null), 'wait');
+  // ... and Undo of that delete brings it back and forgets the drop
+  const s3 = withProject('2026-10-01');
+  applyOp(s3, op('addStep', { projectId: 'p1', stepId: 'st3', text: 'Order frit', byTeam: true }, '2026-10-02'));
+  const snap = clone(s3.data.projects[0]);
+  const d3 = op('deleteStep', { projectId: 'p1', stepId: 'st3' }, '2026-10-02', '11:00:00');
+  applyOp(s3, d3);
+  applyOp(s3, op('restoreProject', { project: snap, index: 0, undoOpId: d3.id }, '2026-10-02', '11:00:03'));
+  assert.ok(s3.data.projects[0].steps.some((x) => x.id === 'st3'));
+  assert.equal(s3.data.projects[0].teamDropped, undefined);
+  // a new staff step that was never added here: add it
+  assert.equal(staffStepAction('new', s3.data.projects[0], null), 'add');
+  // a plain (not team) step you delete is not remembered
+  const s4 = withProject('2026-10-01');
+  applyOp(s4, op('deleteStep', { projectId: 'p1', stepId: 's1' }, '2026-10-02'));
+  assert.equal(s4.data.projects[0].teamDropped, undefined);
+});
+
+test('Undo of another change keeps a team step added meanwhile (no silent cancel of the person\'s step)', async () => {
+  const { staffStepAction } = await import('../docs/rules.js');
+  const s = withProject('2026-10-01');
+  const before = clone(s.data.projects[0]);
+  const tick = op('tickStep', { projectId: 'p1', stepId: 's1' }, '2026-10-02');
+  applyOp(s, tick);
+  // the laptop adopted the person's step and saved it; the phone's waiting tick + Undo are replayed on top
+  applyOp(s, op('addStep', { projectId: 'p1', stepId: 'st1', text: 'Fix kiln door', byTeam: true }, '2026-10-02', '10:00:02'));
+  applyOp(s, op('restoreProject', { project: before, index: 0, undoOpId: tick.id }, '2026-10-02', '10:00:04'));
+  const p = s.data.projects[0];
+  assert.equal(p.steps.find((x) => x.id === 's1').done, false, 'the tick is undone');
+  assert.ok(p.steps.some((x) => x.id === 'st1'), 'the person\'s step stays');
+  assert.equal(p.teamDropped, undefined, 'and is not counted as deleted by you');
+  assert.equal(staffStepAction('st1', p, clone(p)), 'adopted');
+});
+
+test('a single given step: its task is not closed while the tick or delete can still be undone', async () => {
+  const { singleStepCloseWaits, UNDO_GRACE_MS } = await import('../docs/rules.js');
+  const now = Date.parse('2026-10-02T10:00:10+05:30');
+  const tickedAt = new Date(now - 5000).toISOString();
+  assert.equal(singleStepCloseWaits({ id: 's1', done: true, doneAt: tickedAt }, 's1', {}, now), true, 'ticked 5 s ago: Undo still on screen');
+  assert.equal(singleStepCloseWaits({ id: 's1', done: true, doneAt: tickedAt }, 's1', {}, now + UNDO_GRACE_MS), false, 'later: close it');
+  // deleted: the delete is found in the history (by step id)
+  const s = withProject('2026-10-01');
+  const del = makeOp('deleteStep', { projectId: 'p1', stepId: 's1' }, new Date(now - 3000).toISOString());
+  applyOp(s, del);
+  assert.equal(singleStepCloseWaits(null, 's1', s.history, now), true, 'deleted 3 s ago: wait');
+  assert.equal(singleStepCloseWaits(null, 's1', s.history, now + UNDO_GRACE_MS), false, 'later: cancel it');
+  assert.equal(singleStepCloseWaits(null, 's2', s.history, now), false, 'another step: no wait');
+});
+
+test('a deleted given project is taken back only once the delete is saved and Undo is gone', async () => {
+  const { takeBackWaits, UNDO_GRACE_MS } = await import('../docs/rules.js');
+  const now = Date.parse('2026-10-02T10:00:10+05:30');
+  const s = withProject('2026-10-01');
+  applyOp(s, makeOp('deleteProject', { projectId: 'p1' }, new Date(now - 4000).toISOString()));
+  assert.equal(takeBackWaits('p1', new Set(['p1']), s.history, now), true, 'still in the saved data (only a waiting change)');
+  assert.equal(takeBackWaits('p1', null, s.history, now), true, 'saved data not loaded');
+  assert.equal(takeBackWaits('p1', new Set(), s.history, now), true, 'saved, but Undo is still on screen');
+  assert.equal(takeBackWaits('p1', new Set(), s.history, now + UNDO_GRACE_MS), false, 'later: take it back');
+  assert.equal(takeBackWaits('gone', new Set(), {}, now), false, 'deleted long ago (no recent delete): take it back');
+});
+
+test('Ctrl+V picture goes to the project only when its page is on screen (not under a sheet)', async () => {
+  const { pasteGoesToProject } = await import('../docs/rules.js');
+  const ui = { selected: 'p1', view: 'all', search: '', mobile: 'detail' };
+  assert.equal(pasteGoesToProject(ui), true);
+  assert.equal(pasteGoesToProject(ui, { viewerOpen: true }), false, 'Ctrl+K Jump / a draft sheet is open');
+  assert.equal(pasteGoesToProject({ ...ui, showKeys: true }), false, 'the shortcuts list is open');
+  assert.equal(pasteGoesToProject({ ...ui, selected: null }), false);
+  assert.equal(pasteGoesToProject({ ...ui, view: 'diary' }), false);
+  assert.equal(pasteGoesToProject({ ...ui, mobile: 'list' }, { narrow: true }), false);
+});

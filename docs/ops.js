@@ -113,6 +113,25 @@ function moveInList(list, id, afterId, beforeId) {
   return true;
 }
 
+/** A step the person added on Work Task that you deleted (or undid): remembered in the data, so no device adds it back. */
+function dropTeamStep(p, stepId) {
+  p.teamDropped = [...(p.teamDropped || []).filter((x) => x !== stepId), stepId].slice(-300);
+}
+
+/** Undo puts a project back as it was, but a step the person added on Work Task since then stays
+ *  (unless this Undo is the one that takes that very step away: then it is remembered as deleted). */
+function keepTeamSteps(now, back, dropIds) {
+  const had = new Set(back.steps.map((x) => x.id));
+  now.steps.forEach((st, k) => {
+    if (!st.addedByTeam || had.has(st.id)) return;
+    if (dropIds.includes(st.id)) { dropTeamStep(back, st.id); return; }
+    back.steps.splice(Math.min(k, back.steps.length), 0, clone(st));
+  });
+  const dropped = [...new Set([...(back.teamDropped || []), ...(now.teamDropped || [])])].filter((x) => !back.steps.some((st) => st.id === x));
+  if (dropped.length) back.teamDropped = dropped.slice(-300);
+  else delete back.teamDropped;
+}
+
 function addEvent(state, op, project, kind, detail = '', extra = null) {
   const month = opMonth(op);
   if (!state.history[month]) state.history[month] = [];
@@ -383,8 +402,10 @@ const handlers = {
     if (!snap || !snap.id) return false;
     const list = state.data.projects;
     const i = list.findIndex((x) => x.id === snap.id);
-    if (i >= 0) list[i] = clone(snap);
-    else list.splice(Math.min(Math.max(0, a.index ?? 0), list.length), 0, clone(snap));
+    const back = clone(snap);
+    if (i >= 0) keepTeamSteps(list[i], back, Array.isArray(a.dropTeamSteps) ? a.dropTeamSteps : []);
+    if (i >= 0) list[i] = back;
+    else list.splice(Math.min(Math.max(0, a.index ?? 0), list.length), 0, back);
     const undone = [a.undoOpId, ...(Array.isArray(a.undoOpIds) ? a.undoOpIds : [])].filter(Boolean).flatMap((id) => [id, id + 't']);
     for (const id of undone) {
       for (const events of Object.values(state.history)) {
@@ -399,6 +420,7 @@ const handlers = {
   addStep(state, op, a) {
     const p = findProject(state.data, a.projectId);
     if (!p || p.steps.some((s) => s.id === a.stepId)) return false;
+    if (a.byTeam && (p.teamDropped || []).includes(a.stepId)) return false; // a team step you deleted or undid: stays away (every device)
     const text = cleanText(a.text, 1000).trim();
     if (!text) return false;
     const step = {
@@ -408,6 +430,7 @@ const handlers = {
     };
     const link = cleanLink(a.link);
     if (link) step.link = link; // the mail or web page this step came from (✉ Open mail)
+    if (a.byTeam) step.addedByTeam = true; // the person added it on Work Task (a delete is remembered, see teamDropped)
     // New steps go after the last unfinished step (above the Done section).
     let at = p.steps.length;
     for (let i = p.steps.length - 1; i >= 0; i--) if (!p.steps[i].done) { at = i + 1; break; }
@@ -533,8 +556,9 @@ const handlers = {
     const i = p ? p.steps.findIndex((x) => x.id === a.stepId) : -1;
     if (i < 0) return false;
     const [s] = p.steps.splice(i, 1);
+    if (s.addedByTeam) dropTeamStep(p, s.id);
     touch(p, op); // lastTickDate stays as it is
-    addEvent(state, op, p, 'step_deleted', s.text);
+    addEvent(state, op, p, 'step_deleted', s.text, { stepId: s.id });
     return true;
   },
 

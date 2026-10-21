@@ -380,3 +380,47 @@ export function percents(rows) {
   for (let k = 0; k < left; k++) out[order[k % order.length][1]]++;
   return out;
 }
+
+// ---------------------------------------------------------------- team (worktask.in)
+
+/** Longer than any Undo button (a step tick or delete: 6 s, a project delete: 10 s). */
+export const UNDO_GRACE_MS = 15000;
+
+const recent = (at, now, ms = UNDO_GRACE_MS) => !!at && now - Date.parse(at) < ms;
+const lastEvent = (history, test) => {
+  let found = null;
+  for (const events of Object.values(history || {})) for (const e of events || []) if (test(e) && (!found || e.at > found.at)) found = e;
+  return found;
+};
+
+/** A step given on its own was ticked or deleted: wait while that can still be undone, before closing the person's task. */
+export function singleStepCloseWaits(step, stepId, history, now = Date.now()) {
+  if (step) return !!step.done && recent(step.doneAt, now);
+  const del = lastEvent(history, (e) => e.kind === 'step_deleted' && e.stepId === stepId);
+  return !!del && recent(del.at, now);
+}
+
+/** A given project is gone from the screen: take it back from the person only once the delete is saved
+ *  and can no longer be undone. `savedIds` = the project ids in the saved data (null = not loaded). */
+export function takeBackWaits(ref, savedIds, history, now = Date.now()) {
+  if (!savedIds || savedIds.has(ref)) return true; // the delete is not saved yet
+  const del = lastEvent(history, (e) => e.kind === 'deleted' && e.projectId === ref);
+  return !!del && recent(del.at, now);
+}
+
+/** A step the person added on Work Task: 'add' it to the project, tell the server it is 'adopted' (it may forget it), or 'wait'.
+ *  `p` = the project on screen, `saved` = the same project in the saved data. A step you deleted or undid stays away. */
+export function staffStepAction(stepRef, p, saved) {
+  const inSaved = (list) => !!saved && (saved[list] || []).some((x) => (typeof x === 'string' ? x : x.id) === stepRef);
+  if (p.steps.some((st) => st.id === stepRef)) return inSaved('steps') ? 'adopted' : 'wait';
+  if ((p.teamDropped || []).includes(stepRef)) return inSaved('teamDropped') ? 'adopted' : 'wait';
+  return 'add';
+}
+
+/** Ctrl+V with a picture: it goes to the open project only when that project's page is what is on screen. */
+export function pasteGoesToProject(ui, { viewerOpen = false, narrow = false } = {}) {
+  if (!ui.selected || viewerOpen || ui.showKeys) return false; // a sheet (Jump, a draft, a photo) or the shortcuts list is on top
+  const wideView = ['diary', 'settings', 'dashboard', 'time'].includes(ui.view) && !ui.search;
+  if (wideView || (ui.view === 'people' && !ui.search) || ui.round || ui.capture) return false;
+  return !(narrow && ui.mobile !== 'detail');
+}

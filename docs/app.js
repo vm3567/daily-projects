@@ -15,7 +15,7 @@ import { ServerRepo, SERVER_TOKEN_KEY } from './serverrepo.js';
 import { MockRepo } from './mockrepo.js';
 import { device } from './device.js';
 import { DATA_OWNER, DATA_REPO, DATA_BRANCH, MOVED_TO, REFRESH_MS, AI_DAILY_LIMIT, BRIEF_CLAIM_MINUTES, WAIT_RED_DAYS, NO_WORK_NOTE_DAYS } from './config.js';
-import { dotColour, greenByTeamOnly, isSnoozed, restUntil, awakeProjects, activeProjects, nextStep, todayIndia, isSundayIndia, colourCounts, isOverdue, indiaDate, waitingDays, daysWithoutWork, dayScore, greenStreak, addDays, monthOf, fmtMinutes } from './rules.js';
+import { dotColour, greenByTeamOnly, isSnoozed, restUntil, awakeProjects, activeProjects, nextStep, todayIndia, isSundayIndia, colourCounts, isOverdue, indiaDate, waitingDays, daysWithoutWork, dayScore, greenStreak, addDays, monthOf, fmtMinutes, singleStepCloseWaits, takeBackWaits, staffStepAction, pasteGoesToProject } from './rules.js';
 import { newId, clone, opMonth, groupHasTimer, cleanLink, carriedOps } from './ops.js';
 import * as ai from './ai.js';
 import { parseVoice } from './voice.js';
@@ -77,7 +77,9 @@ function actMany(projectId, steps, message) {
   if (!ops.length) return null;
   const undo = before ? () => {
     const months = [...new Set(ops.map(opMonth))];
-    if (store.dispatch('restoreProject', { project: before, index, undoOpIds: ops.map((o) => o.id), undoMonth: months[0] })) toast('Undone', 1500);
+    // (a step the person added, taken away by this Undo, is remembered as deleted on every device)
+    const dropTeamSteps = ops.filter((o) => o.type === 'addStep' && o.args.byTeam).map((o) => o.args.stepId);
+    if (store.dispatch('restoreProject', { project: before, index, undoOpIds: ops.map((o) => o.id), undoMonth: months[0], dropTeamSteps })) toast('Undone', 1500);
   } : null;
   if (message) toast(message, 5000, undo);
   return { ops, undo };
@@ -2515,8 +2517,6 @@ function sendNow() {
 
 /** Team tasks given from a step, by step id, so each step can show the person's latest update. */
 const team = { byStep: new Map(), fillBy: '18:00', late: false, at: 0, gen: 0, syncErr: {}, busy: new Set(), loading: false, again: false, alerts: { stuck: 0, unread: 0, suggestions: 0 }, messages: [] };
-const ADOPTED_KEY = 'dp.teamAdopted'; // staff steps this device put into a project (deleted later = stays deleted)
-const adoptedHere = new Set((() => { try { return JSON.parse(localStorage.getItem('dp.teamAdopted') || '[]'); } catch { return []; } })());
 const TICKED_KEY = 'dp.teamTicked'; // team tasks already ticked on this device (so an un-tick by hand stays)
 
 /** 👥 in the top bar, with a red number when the team needs you (stuck, new messages, suggestions). */
@@ -2731,8 +2731,10 @@ async function syncGivenNow(gen) {
   }
   // a given project that was deleted: take its steps back from the person
   const ids = new Set(store.view.data.projects.map((p) => p.id));
+  const savedIds = store.base ? new Set(store.base.data.projects.map((p) => p.id)) : null;
   for (const ref of Object.keys(m)) {
     if (ids.has(ref)) continue;
+    if (takeBackWaits(ref, savedIds, store.view.history)) continue; // not saved yet, or Undo still on screen: next time
     try {
       await teamApi('project.sync', { projectRef: ref, project: '', assigneeId: 0, steps: [], reason: 'deleted' });
       rememberSync(ref, null);
@@ -2751,6 +2753,7 @@ async function syncSingleSteps(tasks) {
     if (p && p.team) continue; // part of a given project now: that path keeps it
     const step = p && p.steps.find((st) => st.id === t.stepRef);
     if (step && !step.done) continue;
+    if (singleStepCloseWaits(step, t.stepRef, store.view.history)) continue; // Undo still on screen: next time
     if (step && t.reopenedAt && step.doneAt && Date.parse(String(t.reopenedAt).replace(' ', 'T') + '+05:30') > Date.parse(step.doneAt)) continue; // opened again there after your tick
     if (!step && !projects.some((x) => x.id === t.projectRef)) continue; // its project is not on this device: leave it
     try { await teamApi('task.status', { id: t.id, status: step ? 'done' : 'cancelled' }); } catch { /* next time */ }
@@ -2765,19 +2768,12 @@ function adoptStaffSteps(tasks) {
     if (!t.fromStaff) continue; // (a step added just before the project was taken back counts too: it is not lost)
     const p = store.view.data.projects.find((x) => x.id === t.projectRef);
     if (!p) continue; // not here yet (data still loading): next time
-    // already in the project (added on an earlier look and kept on this device): now the server may forget it was waiting
-    if (p.steps.some((st) => st.id === t.stepRef)) {
-      const saved = store.base && store.base.data.projects.find((x) => x.id === p.id);
-      if (saved && saved.steps.some((st) => st.id === t.stepRef)) {
-        adopted.push(t.id);
-        if (!adoptedHere.has(t.stepRef)) { adoptedHere.add(t.stepRef); try { localStorage.setItem(ADOPTED_KEY, JSON.stringify([...adoptedHere].slice(-300))); } catch { /* full */ } }
-      }
-      continue;
-    }
-    if (adoptedHere.has(t.stepRef)) { adopted.push(t.id); continue; } // added once already and since deleted by you: stays deleted (the server forgets it)
+    // already in the project, or deleted / undone by you (kept in the saved data, so every device knows): once saved, the server may forget it
+    const saved = store.base && store.base.data.projects.find((x) => x.id === p.id);
+    const what = staffStepAction(t.stepRef, p, saved);
+    if (what === 'adopted') adopted.push(t.id);
+    if (what !== 'add') continue;
     actMany(p.id, [['addStep', { projectId: p.id, stepId: t.stepRef, text: t.title, byTeam: true }]], `👥 ${t.assignee.name} added a step: ${t.title}`);
-    adoptedHere.add(t.stepRef); // (Undo or a delete right after: it stays deleted)
-    try { localStorage.setItem(ADOPTED_KEY, JSON.stringify([...adoptedHere].slice(-300))); } catch { /* full */ }
   }
   if (adopted.length) teamApi('tasks.adopted', { ids: adopted }).catch(() => { /* asked again next time; adding twice is ignored */ });
 }
@@ -2944,11 +2940,9 @@ function start() {
   document.addEventListener('keydown', onKey);
   // Ctrl+V anywhere on an open project: a screenshot or a copied file is added to it (the update box handles its own paste)
   document.addEventListener('paste', (e) => {
-    if (e.defaultPrevented || !store || !store.view || !ui.selected) return;
-    // the project page must be on screen (not the Diary, Dashboard, Settings, Time, People, the round or Quick capture)
-    const wideView = ['diary', 'settings', 'dashboard', 'time'].includes(ui.view) && !ui.search;
-    if (wideView || (ui.view === 'people' && !ui.search) || ui.round || ui.capture) return;
-    if (matchMedia('(max-width: 760px)').matches && ui.mobile !== 'detail') return;
+    if (e.defaultPrevented || !store || !store.view) return;
+    // the project page must be on screen (not the Diary, Dashboard, Settings, Time, People, the round, Quick capture, or a sheet on top)
+    if (!pasteGoesToProject(ui, { viewerOpen: !document.getElementById('viewer').hidden, narrow: matchMedia('(max-width: 760px)').matches })) return;
     if (e.clipboardData && (e.clipboardData.getData('text/plain') || '').trim()) return; // text with a picture of it: the text
     const files = [...((e.clipboardData && e.clipboardData.files) || [])];
     if (!files.length) return; // plain text: pasted as usual
