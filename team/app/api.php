@@ -521,11 +521,17 @@ function handle(string $a, array $in): array {
         $tasks = all('SELECT * FROM tasks WHERE assignee_id = ? AND status <> ? AND start_date <= ? AND (done_at IS NULL OR done_at >= ?)', [$p['id'], 'suggested', $end, $from . ' 00:00:00']);
         $ups = all('SELECT day, state, task_id FROM updates WHERE user_id = ? AND day BETWEEN ? AND ?', [$p['id'], $from, $end]);
         $sentDays = array_values(array_unique(array_column($ups, 'day')));
+        $movedAt = []; // tasks moved to this person: when (the move note)
+        foreach ($tasks as $t) {
+          $m = one("SELECT MAX(at) AS at FROM comments WHERE task_id = ? AND text LIKE ?", [$t['id'], '↔ Moved from % to ' . str_replace(['%', '_'], ['\\%', '\\_'], $p['name']) . '.']);
+          if ($m && $m['at']) $movedAt[$t['id']] = $m['at'];
+        }
         $workDays = []; $missed = [];
         foreach ($days as $d) {
           $due = false;
           foreach ($tasks as $t) {
             if ($t['created_at'] > "$d 23:59:59" || ($t['done_at'] && $t['done_at'] < "$d 00:00:00")) continue;
+            if (($movedAt[$t['id']] ?? '') > "$d 23:59:59") continue; // still someone else's that day
             if (due_on($t, $d) && ($t['seq'] === null || !one("SELECT id FROM tasks WHERE project_ref = ? AND assignee_id = ? AND seq IS NOT NULL AND seq < ? AND created_at <= ? AND (done_at IS NULL OR done_at >= ?) LIMIT 1", [$t['project_ref'], $p['id'], $t['seq'], "$d 23:59:59", "$d 00:00:00"]))) { $due = true; break; }
           }
           if ($due || in_array($d, $sentDays, true)) $workDays[] = $d;
@@ -637,6 +643,7 @@ function handle(string $a, array $in): array {
       $t = own_task($me, (int)($in['id'] ?? 0));
       $st = in_array($in['status'] ?? '', ['open', 'done', 'cancelled'], true) ? $in['status'] : 'open';
       if ($t['status'] === 'suggested') throw new ApiError('Answer the suggestion with Yes or Not now.');
+      if ($st === 'cancelled' && $t['seq'] !== null && $t['project_ref']) throw new ApiError('This is a step of a given project: delete it (or take the project back) on your projects page.');
       if ($st === 'open' && !(int)(one('SELECT active FROM users WHERE id = ?', [$t['assignee_id']])['active'] ?? 0)) throw new ApiError('This person is switched off. Move the task to someone else first.');
       if ($st !== $t['status']) notify([(int)$t['assignee_id']], 'task',
         ['done' => '✓ Your manager closed a task', 'cancelled' => '✖️ A task was cancelled', 'open' => '↩️ A task is open again'][$st], $t['title'], '/#open=' . $t['id'], 't' . $t['id']);
@@ -783,6 +790,8 @@ function project_sync(array $me, array $in, string $ref, string $day): array {
     // just finished by the person (the manager's step will tick itself in a moment): do not make it again.
     // Finished longer ago and the step is open again (un-ticked by the manager): it is made again below.
     if (one("SELECT id FROM tasks WHERE step_ref = ? AND status = 'done' AND done_at >= ?", [$stepRef, date('Y-m-d H:i:s', time() - 10 * 60)])) { $skipped[] = $stepRef; continue; }
+    // the server's own sync (saved data, maybe not ticked yet): a step this person already finished is never made again
+    if (!empty($in['_server']) && one("SELECT id FROM tasks WHERE project_ref = ? AND step_ref = ? AND status = 'done' LIMIT 1", [$ref, $stepRef])) { $skipped[] = $stepRef; continue; }
     // a single step given earlier: it becomes part of the project hand-over
     $single = one("SELECT * FROM tasks WHERE step_ref = ? AND status = 'open' AND seq IS NULL", [$stepRef]);
     // or this step's task from before the project was paused or taken back: opened again, so its notes and photos stay with it

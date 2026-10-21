@@ -78,7 +78,7 @@ function teamMessages(ctx, p) {
     const text = form.elements.reply.value.trim();
     if (!text) return;
     form.elements.reply.disabled = true;
-    try { await ctx.teamReply(p, list[list.length - 1].taskId, text); ui.teamReply = ''; }
+    try { await ctx.teamReply(p, list[list.length - 1].taskId, text, taskIds); delete (ui.teamReply ||= {})[p.id]; }
     catch (e) { ctx.toast(e.message, 5000); form.elements.reply.disabled = false; }
   };
   return h('div', { class: 'banner team-msgs', key: 'tmsg-' + p.id },
@@ -91,7 +91,7 @@ function teamMessages(ctx, p) {
         c.photo ? (src ? h('img', { class: 'diary-photo', src, alt: 'Photo', onClick: () => window.open(src, '_blank', 'noopener') }) : h('span', { class: 'muted small' }, '📷 photo')) : null);
     }),
     h('form', { class: 'row', onSubmit: (e) => { e.preventDefault(); send(e.target); } },
-      h('input', { name: 'reply', key: 'reply-' + p.id, placeholder: 'Answer…', autocomplete: 'off', value: ui.teamReply || '', onInput: (e, el) => { ui.teamReply = el.value; } }),
+      h('input', { name: 'reply', key: 'reply-' + p.id, placeholder: 'Answer…', autocomplete: 'off', value: (ui.teamReply || {})[p.id] || '', onInput: (e, el) => { (ui.teamReply = typeof ui.teamReply === 'object' && ui.teamReply ? ui.teamReply : {})[p.id] = el.value; } }),
       h('button', { class: 'btn primary small', type: 'submit' }, 'Send'),
       h('button', { class: 'btn small', type: 'button', title: 'Mark as read without answering', onClick: () => ctx.teamSeen(p, taskIds).catch((e) => ctx.toast(e.message, 5000)) }, '✓ Seen')));
 }

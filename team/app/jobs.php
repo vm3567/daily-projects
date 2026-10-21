@@ -69,12 +69,23 @@ function server_sync_projects(): void {
     $refs = array_column(all("SELECT DISTINCT project_ref FROM tasks WHERE seq IS NOT NULL AND status = 'open' AND project_ref IS NOT NULL"), 'project_ref');
     foreach (array_unique([...array_keys($given), ...$refs]) as $ref) {
       $ref = (string)$ref;
-      if ((int)setting('psc:' . md5($ref), '0') > time() - 300) continue; // the owner's app sent this project minutes ago: it knows best
+      $psc = (int)setting('psc:' . md5($ref), '0');
+      if ($psc > time() - 300) { // the owner's app sent this project minutes ago: it knows best — look again once that is over
+        $retry = (int)setting('sync_retry', '0');
+        if (!$retry || $retry > $psc + 301) set_setting('sync_retry', (string)($psc + 301));
+        continue;
+      }
       $p = $given[$ref] ?? null;
       $active = $p && ($p['state'] ?? '') === 'active';
       if (!$active && !one("SELECT id FROM tasks WHERE project_ref = ? AND seq IS NOT NULL AND status = 'open' LIMIT 1", [$ref])) continue; // nothing on anyone's list
+      // moved to someone else in Work Task (Move to…), and the owner's app has not taken that over yet: follow the move
+      $who = $active ? (int)$p['team']['userId'] : 0;
+      if ($active) {
+        $holders = array_map('intval', array_column(all("SELECT DISTINCT t.assignee_id FROM tasks t JOIN users u ON u.id = t.assignee_id WHERE t.project_ref = ? AND t.seq IS NOT NULL AND t.status = 'open' AND u.active = 1", [$ref]), 'assignee_id'));
+        if (count($holders) === 1 && $holders[0] !== $who) $who = $holders[0];
+      }
       $in = $p
-        ? ['project' => (string)($p['name'] ?? ''), 'assigneeId' => $active ? (int)$p['team']['userId'] : 0, 'steps' => $active ? server_steps($p, $today) : [],
+        ? ['project' => (string)($p['name'] ?? ''), 'assigneeId' => $who, 'steps' => $active ? server_steps($p, $today) : [],
            'needsPhoto' => !empty($p['team']['needsPhoto']), 'reason' => $p['state'] ?? '', '_server' => true]
         : ['project' => '', 'assigneeId' => 0, 'steps' => [], '_server' => true, 'reason' => in_array($ref, array_column($data['projects'], 'id'), true) ? 'taken' : 'deleted'];
       try { locked_project_sync($owner, $in, $ref, $today); }
@@ -127,10 +138,13 @@ function day_summary(string $day): array {
 function team_jobs(): void {
   $syncNow = !empty($GLOBALS['sync_projects']);
   $due = (int)setting('jobs_at', '0') <= time() - 600;
-  if (!$syncNow && !$due) return;
+  $retryDue = ($r = (int)setting('sync_retry', '0')) && $r <= time();
+  if (!$syncNow && !$due && !$retryDue) return;
   if (!(int)(one("SELECT GET_LOCK('wt_jobs', 0) AS l")['l'] ?? 0)) return; // another request is doing it
   $prev = $GLOBALS['me'] ?? null;
   try {
+    $retry = (int)setting('sync_retry', '0');
+    if ($retry && $retry <= time()) { set_setting('sync_retry', '0'); $syncNow = true; } // a project skipped minutes ago (see server_sync_projects)
     if ($syncNow || setting('dp_sync_day') !== today()) { set_setting('dp_sync_day', today()); server_sync_projects(); }
     if ($due) {
       set_setting('jobs_at', (string)time());

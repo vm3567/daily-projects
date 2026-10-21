@@ -418,3 +418,25 @@ test('server: given projects follow the saved projects by themselves; messages, 
   const tt = await call('team.today', {}, tok.boss);
   assert.ok(tt.people.find((p) => p.name === 'Suresh').lastUpdate, 'last update day per person');
 });
+
+test('server: review fixes — finished step not made again, a move is followed, project steps not cancelled here', { skip }, async () => {
+  const save = async (projects) => {
+    const head = (await call('dp.head', {}, tok.boss)).head;
+    assert.ok((await call('dp.commit', { parent: head, changes: [{ path: 'data.json', content: JSON.stringify({ projects }) }], message: 'test' }, tok.boss)).ok);
+  };
+  const open = async (who, ref) => { const m = await call('my.today', {}, tok[who]); return [...m.tasks, ...m.other].filter((t) => t.projectRef === ref && t.status === 'open'); };
+  const proj = (userId, steps) => ({ id: 'rv1', name: 'Review P', state: 'active', team: { userId, name: 'x' }, steps });
+  await save([proj(id.suresh, [{ id: 'r1', text: 'One', done: false }, { id: 'r2', text: 'Two', done: false }])]);
+  const one = (await open('suresh', 'rv1')).find((t) => t.title === 'One');
+  await call('update.save', { taskId: one.id, note: 'done', state: 'finished' }, tok.suresh);
+  sql(`UPDATE wt.tasks SET done_at = NOW() - INTERVAL 2 HOUR WHERE id = ${one.id}`);
+  await save([proj(id.suresh, [{ id: 'r1', text: 'One', done: false }, { id: 'r2', text: 'Two', done: false }, { id: 'r3', text: 'Three', done: false }])]);
+  assert.deepEqual((await open('suresh', 'rv1')).map((t) => t.title), ['Two', 'Three'], 'the finished step (not ticked yet in the projects) is not made again');
+  const two = (await open('suresh', 'rv1'))[0];
+  assert.equal((await call('task.status', { id: two.id, status: 'cancelled' }, tok.boss)).s, 400, 'a project step is deleted in the projects app, not cancelled here');
+  await call('task.move', { id: two.id, toId: id.anita }, tok.boss);
+  await save([proj(id.suresh, [{ id: 'r2', text: 'Two', done: false }, { id: 'r3', text: 'Three (edited)', done: false }])]);
+  assert.deepEqual((await open('suresh', 'rv1')), [], 'not moved back to Suresh');
+  assert.deepEqual((await open('anita', 'rv1')).map((t) => t.title), ['Two', 'Three (edited)'], 'Anita keeps it, with the change');
+  await save([]);
+});

@@ -1,6 +1,6 @@
 // Work Task app shell: keeps the screens on the phone so the app opens fast and shows something
 // without internet. Data (api/) and the projects app (projects/, it has its own) are never kept here.
-const CACHE = 'worktask-v5';
+const CACHE = 'worktask-v6';
 const SHELL = ['./', 'index.html', 'app.js', 'styles.css', 'projects/styles.css', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png'];
 
 self.addEventListener('install', (e) => {
@@ -19,8 +19,16 @@ self.addEventListener('fetch', (e) => {
     return res;
   });
   const kept = () => caches.match(e.request).then((r) => r || caches.match('index.html'));
+  // the kept (old) copy was shown because the network was slow, and a newer file then arrived: tell the page
+  let netDone = false;
+  net.then(() => { netDone = true; }, () => { netDone = true; });
+  const stamp = (r) => (r && (r.headers.get('etag') || r.headers.get('last-modified'))) || '';
   // weak signal (connected, but nothing moves): after 4 seconds use the kept copy, if there is one
   const slow = new Promise((resolve) => setTimeout(() => caches.match(e.request).then(resolve, () => resolve(null)), 4000));
+  slow.then((old) => {
+    if (!old || netDone || !/\.(js|css|html)$|\/$/.test(url.pathname)) return;
+    net.then((res) => { if (res.ok && stamp(res) !== stamp(old)) self.clients.matchAll({ type: 'window' }).then((cs) => cs.forEach((c) => c.postMessage({ type: 'new-version' }))); }).catch(() => {});
+  });
   e.respondWith(Promise.race([net, slow.then((r) => r || net)]).catch(() => kept()));
 });
 

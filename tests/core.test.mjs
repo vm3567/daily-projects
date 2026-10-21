@@ -53,6 +53,20 @@ test('daily dots: red each new day, yellow when opened, green only after a real 
   assert.equal(daysWithoutWork(p, '2026-10-09'), 3);
 });
 
+test('a step ticked for the team is their work on their day, not your work today', async () => {
+  const { lastWorkDate } = await import('../docs/rules.js');
+  const s = withProject('2026-10-01');
+  const p = s.data.projects[0];
+  applyOp(s, op('tickStep', { projectId: 'p1', stepId: 's1', byTeam: true, at: '2026-10-02T10:00:00.000Z' }, '2026-10-05'));
+  applyOp(s, op('addWorkNote', { projectId: 'p1', noteId: 'tn9', team: true, at: '2026-10-02T10:00:00.000Z', text: '👥 Ravi finished “Order clay”' }, '2026-10-05'));
+  assert.ok(p.steps.find((x) => x.id === 's1').done);
+  assert.equal(p.steps.find((x) => x.id === 's1').doneAt, '2026-10-02T10:00:00.000Z', 'done on their day');
+  assert.equal(p.workNotes[0].createdAt, '2026-10-02T10:00:00.000Z');
+  assert.notEqual(lastWorkDate(p), '2026-10-05', 'not your work on the day the tick arrived');
+  applyOp(s, op('untickStep', { projectId: 'p1', stepId: 's1' }, '2026-10-05', '11:00:00'));
+  assert.ok(!p.steps.find((x) => x.id === 's1').done && !p.steps.find((x) => x.id === 's1').byTeam, 'opened again by the person: unticked');
+});
+
 test('team work on an earlier day (page closed that day) counts for that day box, and raises its score', async () => {
   const { dayScore } = await import('../docs/rules.js');
   const s = fresh();

@@ -134,7 +134,7 @@ function removeTickEvent(state, project, step) {
   let best = null;
   for (const [m, list] of Object.entries(state.history)) {
     list.forEach((e, i) => {
-      if (e.kind !== 'step_ticked' || e.projectId !== project.id) return;
+      if ((e.kind !== 'step_ticked' && e.kind !== 'team_ticked') || e.projectId !== project.id) return;
       const same = e.stepId ? e.stepId === step.id : e.detail === step.text; // older lines have no stepId
       if (same && (!best || e.at > best.at)) best = { m, i, at: e.at };
     });
@@ -153,9 +153,15 @@ function markWork(project, op) {
   project.workDate = laterDate(project.workDate, indiaDate(op.at));
 }
 
+/** When the team did it (a time from the server), never later than the change itself. */
+function teamTime(v, op) {
+  const ms = typeof v === 'string' ? Date.parse(v) : NaN;
+  return Number.isFinite(ms) && ms < Date.parse(op.at) ? new Date(ms).toISOString() : op.at;
+}
+
 function recalcLastTick(project) {
   let last = null;
-  for (const s of project.steps) if (s.done && s.doneAt) last = laterDate(last, indiaDate(s.doneAt));
+  for (const s of project.steps) if (s.done && s.doneAt && !s.byTeam) last = laterDate(last, indiaDate(s.doneAt));
   project.lastTickDate = last;
 }
 
@@ -472,9 +478,11 @@ const handlers = {
     const s = p && p.steps.find((x) => x.id === a.stepId);
     if (!s || s.done) return false;
     s.done = true;
-    s.doneAt = op.at;
+    // ticked for the team (they finished it, maybe days ago): their day, and not your own work today
+    s.doneAt = a.byTeam ? teamTime(a.at, op) : op.at;
     s.updatedAt = op.at;
-    p.lastTickDate = laterDate(p.lastTickDate, indiaDate(op.at));
+    if (a.byTeam) s.byTeam = true;
+    else p.lastTickDate = laterDate(p.lastTickDate, indiaDate(op.at));
     if (s.repeat) {
       // A repeating step comes back: a fresh copy, due on the next date (same id on every replay).
       const doneDay = indiaDate(op.at);
@@ -495,7 +503,7 @@ const handlers = {
       // keep data small: older finished copies of this repeating step are dropped (the Diary keeps them)
       p.steps = p.steps.filter((x) => x === s || !(x.done && x.repeat === s.repeat && x.text === s.text));
     }
-    addEvent(state, op, p, 'step_ticked', s.text, { stepId: s.id });
+    addEvent(state, op, p, a.byTeam ? 'team_ticked' : 'step_ticked', s.text, { stepId: s.id });
     return true;
   },
 
@@ -506,6 +514,7 @@ const handlers = {
     s.done = false;
     s.doneAt = null;
     s.updatedAt = op.at;
+    delete s.byTeam;
     if (s.spawnedCopy) {
       // un-ticking a repeating step takes back the copy it made (if not started)
       const k = p.steps.findIndex((x) => x.id === s.spawnedCopy && !x.done);
@@ -560,9 +569,11 @@ const handlers = {
     if (!p || !text || p.workNotes.some((n) => n.id === a.noteId)) return false;
     // A note can belong to a step ("what I did on this step"); it stays even if the step is later ticked.
     const stepId = a.stepId && p.steps.some((s) => s.id === a.stepId) ? a.stepId : null;
-    p.workNotes.unshift({ id: a.noteId, text, stepId, createdAt: op.at, updatedAt: op.at });
+    // a note for the team's work (their day, not your work today)
+    const at = a.team ? teamTime(a.at, op) : op.at;
+    p.workNotes.unshift({ id: a.noteId, text, stepId, createdAt: at, updatedAt: at, ...(a.team ? { team: true } : {}) });
     touch(p, op);
-    addEvent(state, op, p, 'note_added', text);
+    addEvent(state, op, p, a.team ? 'team_note' : 'note_added', text);
     return true;
   },
 

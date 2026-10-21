@@ -173,7 +173,9 @@ const ctx = {
   teamPeople: () => teamPeople(),
   teamDaily: (p) => teamDaily(p),
   teamPhoto: (id) => teamPhoto(id),
-  teamReply: (p, taskId, text) => teamApi('comment.add', { taskId, text }).then(() => { refreshDaily(p.id); loadTeam(true); toast('Sent ✓'); }),
+  teamReply: (p, taskId, text, allIds = []) => teamApi('comment.add', { taskId, text })
+    .then(() => (allIds.length > 1 ? teamApi('tasks.read', { ids: allIds }) : null)) // answered = every message in the box is read
+    .then(() => { refreshDaily(p.id); loadTeam(true); toast('Sent ✓'); }),
   teamSeen: (p, taskIds) => teamApi('tasks.read', { ids: taskIds }).then(() => { refreshDaily(p.id); loadTeam(true); }),
   teamMsgPhoto: (id) => teamMsgPhoto(id),
   moreDaily: (p) => { const e = daily.get(p.id); teamDaily(p, (e ? e.days : 30) + 30); },
@@ -2578,11 +2580,16 @@ function markTeamWork(tasks, teamDays) {
       if (store.dispatch('teamWorked', { projectId: p.id, day }) && day < today) past.add(day);
     }
   }
-  if (past.size) { // days already scored without this work: score them again (a score only goes up)
-    const scores = {};
-    for (const d of past) { const sc = dayScore(store.view.data, store.view.history, d); if (sc.total) scores[d] = sc; }
-    if (Object.keys(scores).length) store.dispatch('recordScores', { scores, raise: true });
-  }
+  if (past.size) rescoreDays([...past]); // days already scored without this work: score them again (a score only goes up)
+}
+
+/** Score these past days again, with their months' history loaded first (else your own work those days is missing). */
+async function rescoreDays(days) {
+  const months = [...new Set(days.map(monthOf))].filter((m) => !store.view.history[m] && store.availableMonths().includes(m));
+  try { for (const m of months) await store.loadMonth(m); } catch { return; } // offline: next time
+  const scores = {};
+  for (const d of days) { const sc = dayScore(store.view.data, store.view.history, d); if (sc.total) scores[d] = sc; }
+  if (Object.keys(scores).length && store.canEdit()) store.dispatch('recordScores', { scores, raise: true });
 }
 
 /** The diary of this project is fetched again with the next redraw (after a reply, or a new message). */
@@ -2594,7 +2601,8 @@ function teamMsgPhoto(id) {
   if (msgPhotos.has(id)) return msgPhotos.get(id);
   msgPhotos.set(id, null);
   fetch('../api/?a=comment.photo&id=' + id, { headers: { Authorization: 'Bearer ' + serverToken() } })
-    .then((r) => (r.ok ? r.blob() : null)).then((b) => { if (b) { msgPhotos.set(id, URL.createObjectURL(b)); render(); } }).catch(() => {});
+    .then((r) => (r.ok ? r.blob() : null)).then((b) => { if (b) { msgPhotos.set(id, URL.createObjectURL(b)); render(); } else msgPhotos.delete(id); })
+    .catch(() => msgPhotos.delete(id)); // failed: tried again on the next draw
   return null;
 }
 
@@ -2761,7 +2769,20 @@ function tickFinishedTeamTasks(tasks) {
   try { done = JSON.parse(localStorage.getItem(TICKED_KEY) || '[]'); } catch { done = []; }
   if (!Array.isArray(done)) done = [];
   const seen = new Set(done);
+  const serverTime = (v) => (v ? v.replace(' ', 'T') + '+05:30' : null); // server times are India time
   for (const t of tasks) {
+    if (t.status === 'open') {
+      // ticked here because they finished it, then opened again (their undo, or the manager's Open again): untick
+      const p = store.view.data.projects.find((x) => x.id === t.projectRef);
+      const step = p && p.steps.find((st) => st.id === t.stepRef);
+      const note = p && (p.workNotes || []).find((n) => n.id === 'tn' + t.id);
+      const latest = team.byStep.get(t.stepRef);
+      if (step && step.done && note && (!latest || latest.id === t.id)) {
+        actMany(p.id, [['untickStep', { projectId: p.id, stepId: step.id }], ['deleteWorkNote', { projectId: p.id, noteId: note.id }]], `↩ ${t.assignee.name} opened “${step.text}” again`);
+        seen.delete(t.id);
+      }
+      continue;
+    }
     if (t.status !== 'done' || seen.has(t.id)) continue;
     const latest = team.byStep.get(t.stepRef); // the step was given again after this (re-opened): the old task must not tick it
     if (latest && latest.id !== t.id) { seen.add(t.id); continue; }
@@ -2770,7 +2791,7 @@ function tickFinishedTeamTasks(tasks) {
       seen.add(t.id);
       if (!(p.workNotes || []).some((n) => n.id === 'tn' + t.id)) {
         const words = (t.today || t.last) ? (t.today || t.last).note : '';
-        actMany(p.id, [['addWorkNote', { projectId: p.id, noteId: 'tn' + t.id, text: `👥 ${t.assignee.name} finished the project${words ? ': ' + words : '.'}` }]], `✓ ${t.assignee.name} finished: ${p.name}`);
+        actMany(p.id, [['addWorkNote', { projectId: p.id, noteId: 'tn' + t.id, team: true, at: serverTime(t.doneAt), text: `👥 ${t.assignee.name} finished the project${words ? ': ' + words : '.'}` }]], `✓ ${t.assignee.name} finished: ${p.name}`);
       }
       continue;
     }
@@ -2782,9 +2803,9 @@ function tickFinishedTeamTasks(tasks) {
     if ((p.workNotes || []).some((n) => n.id === 'tn' + t.id)) continue;
     const words = (t.today || t.last) ? (t.today || t.last).note : '';
     actMany(p.id, [
-      ['tickStep', { projectId: p.id, stepId: step.id }],
+      ['tickStep', { projectId: p.id, stepId: step.id, byTeam: true, at: serverTime(t.doneAt) }], // their day, not your work today
       // always a note (same id on every device), so no other device ticks it again
-      ['addWorkNote', { projectId: p.id, noteId: 'tn' + t.id, stepId: step.id, text: `👥 ${t.assignee.name} finished “${step.text}”${words ? ': ' + words : '.'}` }],
+      ['addWorkNote', { projectId: p.id, noteId: 'tn' + t.id, stepId: step.id, team: true, at: serverTime(t.doneAt), text: `👥 ${t.assignee.name} finished “${step.text}”${words ? ': ' + words : '.'}` }],
     ], `✓ ${t.assignee.name} finished: ${step.text}`);
   }
   // keep every id the server still sends (60 days), so none of them looks new again
@@ -2900,6 +2921,11 @@ function start() {
   // Ctrl+V anywhere on an open project: a screenshot or a copied file is added to it (the update box handles its own paste)
   document.addEventListener('paste', (e) => {
     if (e.defaultPrevented || !store || !store.view || !ui.selected) return;
+    // the project page must be on screen (not the Diary, Dashboard, Settings, Time, People, the round or Quick capture)
+    const wideView = ['diary', 'settings', 'dashboard', 'time'].includes(ui.view) && !ui.search;
+    if (wideView || (ui.view === 'people' && !ui.search) || ui.round || ui.capture) return;
+    if (matchMedia('(max-width: 760px)').matches && ui.mobile !== 'detail') return;
+    if (e.clipboardData && (e.clipboardData.getData('text/plain') || '').trim()) return; // text with a picture of it: the text
     const files = [...((e.clipboardData && e.clipboardData.files) || [])];
     if (!files.length) return; // plain text: pasted as usual
     const p = store.view.data.projects.find((x) => x.id === ui.selected);
@@ -2927,9 +2953,11 @@ start();
 let codeStamp = null;
 async function checkNewVersion() {
   try {
-    const r = await fetch('app.js', { method: 'HEAD', cache: 'no-store' });
-    const stamp = r.ok ? (r.headers.get('etag') || r.headers.get('last-modified')) : null;
-    if (!stamp) return;
+    // every code file of the page: a change to any of them is a new version
+    const parts = await Promise.all(['app.js', 'ui/detail.js', 'ops.js', 'rules.js', 'store.js', 'styles.css'].map((f) => fetch(f, { method: 'HEAD', cache: 'no-store' })
+      .then((r) => (r.ok ? (r.headers.get('etag') || r.headers.get('last-modified') || '') : ''))));
+    if (parts.some((x) => !x)) return; // offline, or a file did not answer: next time
+    const stamp = parts.join('|');
     if (codeStamp === null) { codeStamp = stamp; return; }
     if (stamp !== codeStamp && !document.getElementById('update-ready')) {
       const b = document.createElement('button');

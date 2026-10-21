@@ -85,15 +85,18 @@ export function dotColour(project, today = todayIndia()) {
  * Last day with a real update: a written update (work note), a ticked step, a follow-up, time logged,
  * or a team member's update (teamWorkDate). Renaming, moving steps or other edits do not count.
  */
+/** The newest note you wrote yourself (a 👥 note about the team's work is their work, counted by teamWorkDate). */
+const ownNote = (project) => (project.workNotes || []).find((n) => !n.team && !String(n.text || '').startsWith('👥 '));
 export function lastWorkDate(project) {
-  const note = project.workNotes && project.workNotes.length ? indiaDate(project.workNotes[0].createdAt) : null; // newest first
+  const n = ownNote(project);
+  const note = n ? indiaDate(n.createdAt) : null; // newest first
   return laterDate(laterDate(project.workDate, project.lastTickDate), laterDate(project.teamWorkDate, note));
 }
 
 /** Green today only because the team sent an update (shown with 👥). */
 export function greenByTeamOnly(project, today = todayIndia()) {
-  return project.teamWorkDate === today && laterDate(laterDate(project.workDate, project.lastTickDate),
-    project.workNotes && project.workNotes.length ? indiaDate(project.workNotes[0].createdAt) : null) !== today;
+  const n = ownNote(project);
+  return project.teamWorkDate === today && laterDate(laterDate(project.workDate, project.lastTickDate), n ? indiaDate(n.createdAt) : null) !== today;
 }
 
 /** Days since the last real update. */
@@ -269,7 +272,7 @@ export function personStatus(data, person, today = todayIndia()) {
  * How many projects were green on a past day, worked out from the saved dates and the history.
  * Counts projects that existed and were active that day.
  */
-const NOT_WORK = new Set(['created', 'snoozed', 'woke', 'step_remind']);
+const NOT_WORK = new Set(['created', 'snoozed', 'woke', 'step_remind', 'team_ticked', 'team_note']); // (the team's work counts through teamDays)
 
 /** On that day, was every open step of the project waiting for a "remind me" date? */
 function restingByReminders(p, day) {

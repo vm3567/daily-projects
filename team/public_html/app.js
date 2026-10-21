@@ -4,7 +4,7 @@
 const TOKEN_KEY = 'wt.token';
 const state = {
   token: load(TOKEN_KEY), user: null, view: 'today', data: null, people: [], closed: false,
-  sel: null, detail: null, mobileDetail: false, menuOpen: false, section: 'today', personFilter: 0, newIds: new Set(),
+  sel: null, detail: null, mobileDetail: false, menuOpen: false, section: 'today', personFilter: 0, newIds: new Set(), knownIds: new Set(),
   drafts: {}, editing: {}, files: {}, sending: {}, busy: false, prefill: null, newPerson: null,
 };
 const photoUrls = new Map();
@@ -152,7 +152,7 @@ async function sendItem(it, tok) {
   if (it.kind === 'update' && !it.updateId && daysBetween(day, istDay(new Date())) > 2) // the server would save it as today's update
     throw new Error(`This update was written on ${fmtDay(day)}, too long ago to send. Please write it again for today`);
   if (it.kind === 'comment') { await api('comment.add', { taskId: it.taskId, text: it.text, day, clientId: it.clientId }); return; }
-  if (it.kind === 'step') { await api('project.addStep', { projectRef: it.projectRef, title: it.title, clientId: it.clientId }); return; }
+  if (it.kind === 'step') { const out = await api('project.addStep', { projectRef: it.projectRef, title: it.title, clientId: it.clientId }); if (out.task) state.knownIds.add(out.task.id); return; }
   if (it.kind === 'suggest') { await api('suggest', { title: it.title, details: it.details, repeat: it.repeat, clientId: it.clientId }); return; }
   if (it.kind === 'update' && !it.updateId) {
     const twoSteps = it.state === 'finished' && it.needsPhoto && it.files && it.files.length && !it.hadPhoto;
@@ -196,7 +196,10 @@ function giveBack(it, why) {
     state.drafts[it.taskId] = { note: it.note, state: it.state }; state.editing[it.taskId] = true;
     if ((it.files || []).length) state.files[it.taskId] = it.files.slice(0, 5);
   }
-  toast(`Could not send "${(it.note || it.text || '').slice(0, 40)}": ${String(why).replace(/\.$/, '')}.${it.kind === 'photos' ? '' : ' Your text is back in the box.'}`, 10000);
+  else if (it.kind === 'step') { (state.stepDrafts ||= {})[it.projectRef] = it.title; }
+  const words = it.note || it.text || it.title || '';
+  const back = it.kind === 'photos' || it.kind === 'suggest' ? '' : it.kind === 'step' ? ' The step is back in the Add a step box.' : ' Your text is back in the box.';
+  toast(`Could not send "${words.slice(0, 60)}": ${String(why).replace(/\.$/, '')}.${back}`, it.kind === 'suggest' ? 15000 : 10000);
 }
 
 async function doFlush() {
@@ -238,7 +241,7 @@ async function doFlush() {
     const v = state.sel || state.view, a = document.activeElement;
     const typing = (a && /^(TEXTAREA|INPUT|SELECT)$/.test(a.tagName) && document.getElementById('app').contains(a)) || formHasText();
     if (sent && typing) state.reloadLater = true; // reload once they stop typing (next screen, or back to the app)
-    if (sent && !typing && state.user && !state.user.mustChange && (v === 'today' || v === 'tasks' || v.startsWith('task:'))) loadView(); else refreshBar();
+    if (sent && !typing && state.user && !state.user.mustChange && (v === 'today' || v === 'tasks' || v.startsWith('task:') || v.startsWith('project:'))) loadView(); else refreshBar();
   }
 }
 
@@ -701,7 +704,8 @@ function waitingSteps(ref) {
 }
 
 function addStepForm(ref) {
-  const inp = el('input', { placeholder: 'e.g. Order the spare servo motor', maxlength: '300', 'aria-label': 'New step' });
+  const inp = el('input', { placeholder: 'e.g. Order the spare servo motor', maxlength: '300', 'aria-label': 'New step', value: (state.stepDrafts || {})[ref] || '' });
+  if (state.stepDrafts) delete state.stepDrafts[ref];
   const btn = el('button', { class: 'primary', type: 'submit' }, '+ Add step');
   return el('form', {
     class: 'card stack',
@@ -953,7 +957,7 @@ function myTaskDetail() {
     taskFiles(t),
     todayCard(t, today),
     messagesBlock(t.id, comments),
-    taskDiary(t, updates, today, true),
+    t.status === 'suggested' || (t.status !== 'open' && !updates.length) ? null : taskDiary(t, updates, today, true),
   ];
 }
 
@@ -1003,12 +1007,16 @@ function taskChips(t, today, admin) {
 /** What's happening on this task, day by day: every update with its time; Sunday = Off; a due day with nothing = No progress. */
 function taskDiary(t, updates, today, staff) {
   const n = state.diaryDays || 14;
+  const notYet = t.queued || t.status === 'suggested'; // a step waiting its turn, a suggestion: no day is "missed"
   const fillBy = (state.data && state.data.fillBy) || '18:00';
   const start = [t.startDate || '', (t.createdAt || '').slice(0, 10)].sort().pop() || today;
   const end = t.status !== 'open' && t.doneAt ? t.doneAt.slice(0, 10) : today;
   const byDay = new Map();
   for (const u of updates) byDay.set(u.day, [...(byDay.get(u.day) || []), u]);
-  const from = addDay(end, -(n - 1)) > start ? addDay(end, -(n - 1)) : start;
+  // the server sends the newest 60 days with an update: never call days older than those "No progress"
+  const oldest = updates.length >= 60 ? updates.map((u) => u.day).sort()[0] : '';
+  const lower = oldest > start ? oldest : start;
+  const from = addDay(end, -(n - 1)) > lower ? addDay(end, -(n - 1)) : lower;
   const rows = [];
   for (let day = end; day >= from; day = addDay(day, -1)) {
     if (staff && day === today) continue; // today's update is in its own box above
@@ -1021,7 +1029,7 @@ function taskDiary(t, updates, today, staff) {
           el('div', { class: 'diary-text' }, el('strong', null, (staff && u.byId === state.user.id ? 'You' : u.by) + ' '),
             u.state !== 'progress' ? [stateTag(u.state), ' '] : null, el('span', { class: 'pre' }, u.note), thumbs(u.photos))),
         el('span', { class: 'diary-time' }, fmtTime(u.at))));
-    } else if (!dueOn(t, day)) {
+    } else if (notYet || !dueOn(t, day)) {
       if (wd !== 0) continue; // not a day for this task (a weekly task, say)
       content = el('span', { class: 'day-tag off' }, 'Off');
     } else if (day === today && LATE_HM() < fillBy) content = el('span', { class: 'day-tag wait' }, 'Waiting for today\'s update');
@@ -1033,7 +1041,7 @@ function taskDiary(t, updates, today, staff) {
   return [
     el('h2', null, staff ? '📅 Earlier days' : "📅 What's happening"),
     rows.length ? el('ul', { class: 'diary-days' }, rows) : el('p', { class: 'muted small' }, 'Nothing yet.'),
-    from > start ? el('button', { class: 'link small', onClick: () => { state.diaryDays = n + 14; render(); } }, 'Show older days') : null,
+    from > lower ? el('button', { class: 'link small', onClick: () => { state.diaryDays = n + 14; render(); } }, 'Show older days') : null,
   ];
 }
 
@@ -1061,7 +1069,7 @@ function taskMenu(t) {
     el('button', { class: 'menu-row', onClick: () => { close(); go('edit:' + t.id); } }, '✎ Edit task'),
     el('button', { class: 'menu-row', onClick: () => { close(); state.moving = t.id; render(); } }, '↔ Move to another person…'),
     el('label', { class: 'menu-row' }, '📎 Add instruction photo / PDF', input),
-    el('button', { class: 'menu-row danger', onClick: async () => {
+    t.seq !== null && t.seq !== undefined ? null : el('button', { class: 'menu-row danger', onClick: async () => {
       close();
       if (!confirm('Cancel this task?')) { render(); return; }
       try { await api('task.status', { id: t.id, status: 'cancelled' }); toast('Cancelled'); loadView(); } catch (ex) { toast(ex.message, 5000); }
@@ -1400,6 +1408,7 @@ document.addEventListener('paste', (e) => {
   if (e.defaultPrevented || !state.user || !state.sel || !state.sel.startsWith('task:') || !state.detail || !state.detail.task) return;
   const files = [...((e.clipboardData && e.clipboardData.files) || [])];
   if (!files.length) return; // plain text: pasted as usual
+  if ((e.clipboardData.getData('text/plain') || '').trim()) return; // text with a picture of it (cells from Excel, Word): the text
   e.preventDefault();
   const t = state.detail.task;
   const images = files.filter((f) => f.type.startsWith('image/'));
@@ -1795,7 +1804,7 @@ let liveBusy = false;
 const listOf = (d) => [...((d && d.tasks) || []), ...((d && d.other) || []), ...((d && d.suggestions) || [])];
 /** Every 20 seconds while the app is open: anything new? New tasks get a "New" mark and a message at the bottom. */
 async function liveCheck(quiet = false) {
-  if (liveBusy || !state.user || state.user.mustChange || document.visibilityState !== 'visible' || state.offline || state.busy) return;
+  if (liveBusy || !state.user || state.user.mustChange || document.visibilityState !== 'visible' || state.busy) return;
   refreshTeamCount();
   if (state.view !== 'today' && state.view !== 'tasks') return;
   const admin = state.user.role === 'admin';
@@ -1809,7 +1818,8 @@ async function liveCheck(quiet = false) {
     const same = (a, b) => JSON.stringify(a, (k, v) => (k === 'time' ? undefined : v)) === JSON.stringify(b, (k, v) => (k === 'time' ? undefined : v));
     if (state.data && same(out, state.data)) return;
     const had = new Set(listOf(state.data).map((t) => t.id));
-    const fresh = state.data ? listOf(out).filter((t) => !had.has(t.id)) : [];
+    // new to this screen — but not what this person made themselves (an offline step that just went out, a suggestion, a project they gave)
+    const fresh = state.data ? listOf(out).filter((t) => !had.has(t.id) && !state.knownIds.has(t.id) && t.createdBy !== state.user.id) : [];
     for (const t of fresh) state.newIds.add(t.id);
     if (!quiet && Date.now() - (state.pushAt || 0) > 30000) tellNews(fresh, out, state.data); // a notification just said it: not twice
     const a = document.activeElement;
@@ -1834,7 +1844,9 @@ function tellNews(fresh, out, before) {
       const had = listOf(before).some((t) => t.projectRef === steps[0].projectRef);
       notice('task', had ? (steps.length === 1 ? `➕ New step in ${p}` : `➕ ${steps.length} new steps in ${p}`) : `📁 New project for you: ${p}`, names,
         () => openDetail(state.user.role === 'admin' ? 'task:' + steps[0].id : 'project:' + steps[0].projectRef));
-    } else notice('task', fresh.length === 1 ? '📥 New task for you' : `📥 ${fresh.length} new tasks`, names, () => openDetail('task:' + fresh[0].id));
+    } else if (state.user.role === 'admin' && fresh.every((t) => t.status === 'suggested')) {
+      notice('msg', fresh.length === 1 ? `💡 ${fresh[0].assignee.name} suggests a task` : `💡 ${fresh.length} new suggestions`, names, () => openDetail('task:' + fresh[0].id));
+    } else notice('task', state.user.role === 'admin' ? (fresh.length === 1 ? '📥 New task' : `📥 ${fresh.length} new tasks`) : (fresh.length === 1 ? '📥 New task for you' : `📥 ${fresh.length} new tasks`), names, () => openDetail('task:' + fresh[0].id));
     return;
   }
   if (state.user.role !== 'admin' || !before) return;
@@ -1946,6 +1958,8 @@ if ('serviceWorker' in navigator) {
       if (document.visibilityState === 'visible') notice(m.kind, m.title || 'Work Task', m.body || '', id ? () => openDetail('task:' + id[1]) : () => go('today'));
       liveCheck(true);
       if (state.sel && state.sel.startsWith('task:')) loadDetail();
+    } else if (d.type === 'new-version') {
+      codeStamp = 'old'; checkNewVersion(); // the page runs an old copy: offer the reload
     } else if (d.type === 'open') {
       const id = /^#open=(\d+)$/.exec(d.hash || '');
       if (id) openDetail('task:' + id[1]); else go('today');
@@ -1987,9 +2001,11 @@ if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.
 let codeStamp = null;
 async function checkNewVersion() {
   try {
-    const r = await fetch('app.js', { method: 'HEAD', cache: 'no-store' });
-    const stamp = r.ok ? (r.headers.get('etag') || r.headers.get('last-modified')) : null;
-    if (!stamp) return;
+    // every code file of the page: a change to any of them is a new version
+    const parts = await Promise.all(['app.js', 'styles.css', 'sw.js'].map((f) => fetch(f, { method: 'HEAD', cache: 'no-store' })
+      .then((r) => (r.ok ? (r.headers.get('etag') || r.headers.get('last-modified') || '') : ''))));
+    if (parts.some((x) => !x)) return; // offline, or a file did not answer: next time
+    const stamp = parts.join('|');
     if (codeStamp === null) { codeStamp = stamp; return; }
     if (stamp !== codeStamp && !document.getElementById('update-ready')) {
       const b = document.createElement('button');

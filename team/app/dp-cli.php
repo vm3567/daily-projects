@@ -36,7 +36,7 @@ try {
       if (!is_array($in)) fail('Bad input.');
       try {
         $r = dp_commit($me, (string)($in['parent'] ?? ''), (array)($in['changes'] ?? []), (string)($in['message'] ?? 'via Claude'));
-        try { server_sync_projects(); } catch (Throwable $e) { /* the team lists catch up on the next save */ }
+        try { server_sync_projects(); push_flush(); } catch (Throwable $e) { /* the team lists catch up on the next save */ }
       } catch (ApiError $e) {
         if ($e->status === 409) fail('Another device saved first.', 3);
         throw $e;
