@@ -306,38 +306,14 @@ export function workDoneByTag(data, history, groupId, fromDay, toDay) {
 }
 
 /**
- * "📋 Copy list": tasks as a numbered list to paste into an AI chat or an email.
- * opts: { title, about } (a project's name and description, or "Tasks"). Returns { text, html }.
- * Each task: its name, the next step, the person it is given to, overdue, its description and last update.
+ * "📋 Copy list": just the task names, numbered (owner asked: no other details), to paste into an AI chat or an email.
+ * Returns { text, html }.
  */
-export function tasksListText(tasks, today, opts = {}) {
-  const lines = [];
-  const items = (tasks || []).map((p) => {
-    const ns = p.state === 'active' ? nextStep(p, today) : null;
-    const last = lastNoteOf(p);
-    const bits = [
-      p.state !== 'active' ? `(${p.state})` : ns ? `Next: ${ns.text}` : 'No next step',
-      p.team && p.team.name ? `with ${p.team.name}` : '',
-      p.deadline && p.deadline < today && p.state === 'active' ? `overdue since ${mailDate(p.deadline)}` : '',
-    ].filter(Boolean);
-    return { name: p.name, bits, about: p.about || '', last: last ? `${mailDate(last.day)}: ${last.note}` : '' };
-  });
-  if (opts.title) lines.push(opts.title);
-  if (opts.about) lines.push(opts.about);
-  if (opts.title || opts.about) lines.push('');
-  items.forEach((x, i) => {
-    lines.push(`${i + 1}. ${x.name} — ${x.bits.join(' · ')}`);
-    if (x.about) lines.push(`   About: ${x.about}`);
-    if (x.last) lines.push(`   Last update: ${x.last}`);
-  });
-  if (!items.length) lines.push('No tasks.');
-  const font = 'font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#222;';
-  const html = `<div style="${font}">`
-    + (opts.title ? `<p style="margin:0 0 4px 0;"><b>${escHtml(opts.title)}</b></p>` : '')
-    + (opts.about ? `<p style="margin:0 0 8px 0;color:#555;">${escHtml(opts.about)}</p>` : '')
-    + (items.length ? `<ol style="margin:0;padding-left:22px;">${items.map((x) => `<li style="margin:0 0 6px 0;"><b>${escHtml(x.name)}</b> — ${escHtml(x.bits.join(' · '))}`
-      + (x.about ? `<br><span style="color:#555;">About: ${escHtml(x.about)}</span>` : '')
-      + (x.last ? `<br><span style="color:#555;">Last update: ${escHtml(x.last)}</span>` : '') + '</li>').join('')}</ol>` : '<p>No tasks.</p>')
-    + '</div>';
-  return { text: lines.join('\n'), html };
+export function tasksListText(tasks) {
+  const names = (tasks || []).map((p) => p.name);
+  const text = names.length ? names.map((n, i) => `${i + 1}. ${n}`).join('\n') : 'No tasks.';
+  const html = names.length
+    ? `<ol style="font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#222;margin:0;padding-left:22px;">${names.map((n) => `<li>${escHtml(n)}</li>`).join('')}</ol>`
+    : '<p>No tasks.</p>';
+  return { text, html };
 }

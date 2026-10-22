@@ -1875,17 +1875,27 @@ test('✉ Replies from tasks made from an email: waiting while the newest email 
   assert.ok(repliesOf(s.data, '2026-10-22').ready.some((x) => x.id === 't1'));
 });
 
-test('📋 Copy list: tasks as a numbered list (title, description, next step, person, overdue, about, last update), rich and plain, text made safe', async () => {
+test('📋 Copy list: just the task names, numbered (owner asked: no other details), rich and plain, text made safe', async () => {
   const { tasksListText } = await import('../docs/reports.js');
-  const today = '2026-10-22';
-  const tasks = [
-    { name: 'Kiln 2', state: 'active', deadline: '2026-10-20', about: 'SV changed in the power failure', team: { name: 'Ruthuraj' },
-      steps: [{ id: 'a', text: 'Check the SV', done: false }], workNotes: [{ text: 'Checked <b>servo</b>', createdAt: '2026-10-21T06:00:00Z' }] },
-    { name: 'Kiln 1', state: 'active', steps: [], workNotes: [] },
-  ];
-  const { text, html } = tasksListText(tasks, today, { title: '📂 Kilns', about: 'All kiln problems' });
-  assert.match(text, /^📂 Kilns\nAll kiln problems\n\n1\. Kiln 2 — Next: Check the SV · with Ruthuraj · overdue since 20 Oct\n   About: SV changed in the power failure\n   Last update: 21 Oct: Checked <b>servo<\/b>\n2\. Kiln 1 — No next step$/);
-  assert.match(html, /<ol[^>]*><li[^>]*><b>Kiln 2<\/b>/);
-  assert.ok(html.includes('Checked &lt;b&gt;servo&lt;/b&gt;') && !html.includes('<b>servo'), 'made safe in the rich copy');
-  assert.match(tasksListText([], today).text, /No tasks\./);
+  const tasks = [{ name: 'Kiln 2 <b>', about: 'SV changed', team: { name: 'Ruthuraj' }, steps: [{ id: 'a', text: 'Check the SV', done: false }] }, { name: 'Kiln 1' }];
+  const { text, html } = tasksListText(tasks);
+  assert.equal(text, '1. Kiln 2 <b>\n2. Kiln 1');
+  assert.ok(!/SV|Ruthuraj|Next/.test(text), 'no details');
+  assert.match(html, /<ol[^>]*><li>Kiln 2 &lt;b&gt;<\/li><li>Kiln 1<\/li><\/ol>/);
+  assert.equal(tasksListText([]).text, 'No tasks.');
+});
+
+test('📂 delete question: a project says its tasks are kept (they only leave it); a task asks plainly', async () => {
+  const { deleteQuestion } = await import('../docs/rules.js');
+  const s = { data: emptyData(), history: {} };
+  const g = s.data.groups[0].id;
+  applyOp(s, op('createProject', { projectId: 'k1', name: 'Kiln 1', groupId: g }, '2026-10-22'));
+  applyOp(s, op('createProject', { projectId: 'k2', name: 'Kiln 2', groupId: g }, '2026-10-22'));
+  applyOp(s, op('createMainProject', { projectId: 'm', name: 'Kilns', groupId: g, childId: 'k1' }, '2026-10-22'));
+  applyOp(s, op('addToProject', { projectId: 'k2', parentId: 'm' }, '2026-10-22'));
+  const main = s.data.projects.find((p) => p.id === 'm');
+  assert.match(deleteQuestion(s.data, main), /Delete the project "Kilns"\?\n\nIts 2 tasks are kept — they just leave this project\./);
+  assert.match(deleteQuestion(s.data, s.data.projects.find((p) => p.id === 'k1')), /^Delete "Kiln 1"\?/);
+  applyOp(s, op('deleteProject', { projectId: 'm' }, '2026-10-22'));
+  assert.equal(s.data.projects.filter((p) => ['k1', 'k2'].includes(p.id)).length, 2, 'the tasks are still there after the delete');
 });

@@ -18,7 +18,7 @@ import { MockRepo } from './mockrepo.js';
 import { device } from './device.js';
 import { DATA_OWNER, DATA_REPO, DATA_BRANCH, MOVED_TO, REFRESH_MS, AI_DAILY_LIMIT, BRIEF_CLAIM_MINUTES, WAIT_RED_DAYS, NO_WORK_NOTE_DAYS } from './config.js';
 import { dotColour, greenByTeamOnly, isSnoozed, restUntil, restReason, onlyDaysLabel, openIdFromHash, awakeProjects, activeProjects, nextStep, todayIndia, isSundayIndia, colourCounts, isOverdue, indiaDate, waitingDays, daysWithoutWork, dayScore, greenStreak, addDays, monthOf, fmtMinutes, takeBackWaits, staffStepAction, pasteGoesToProject, singleStepClose, versionRequest, askDiaryAgain, diaryLoadedAt, photoNeedsFetch, teamUndoKey, teamActionUndone, teamProgressOf, projectKeyIgnored, teamMovedTo, serverHolder, keepMovedStep, teamMemberFor, repliesOf, mailThreads, replyMailto, MAILTO_BODY_MAX, emailPath, pasteReason } from './rules.js';
-import { parentIdsOf, isMainProject, mainProjects, activeTasks, todayWithoutEmptyMains, mainSummary, childrenOf } from './rules.js';
+import { parentIdsOf, isMainProject, mainProjects, activeTasks, todayWithoutEmptyMains, mainSummary, childrenOf, deleteQuestion } from './rules.js';
 import { newId, clone, opMonth, groupHasTimer, cleanLink, carriedOps } from './ops.js';
 import * as ai from './ai.js';
 import { parseVoice } from './voice.js';
@@ -42,6 +42,7 @@ const ui = {
   mobile: 'list', // list | detail (phone only)
   menuOpen: false,
   briefFolded: !!saved.briefFolded,
+  taskFilter: saved.taskFilter === 'loose' ? 'loose' : 'all', // ✅ Tasks: 'all' tasks, or 'loose' = only tasks not in any 📂 project
   sort: saved.sortV === 2 && saved.sort === 'mine' ? 'mine' : 'red', // 'red' = red first (red, yellow, green, grey: the default); 'mine' = my drag order, kept only when picked after this became the default
   adding: false,
   openStep: null,
@@ -147,7 +148,7 @@ function restoreScrollOnce() {
 
 function rememberUi() {
   device.setUi({
-    scroll: device.ui().scroll, view: ui.view, selected: ui.selected, briefFolded: ui.briefFolded, sort: ui.sort, sortV: 2, showDone: ui.showDone, showMore: ui.showMore, folded: ui.folded });
+    scroll: device.ui().scroll, view: ui.view, selected: ui.selected, briefFolded: ui.briefFolded, sort: ui.sort, sortV: 2, taskFilter: ui.taskFilter, showDone: ui.showDone, showMore: ui.showMore, folded: ui.folded });
 }
 
 const ctx = {
@@ -646,7 +647,7 @@ function visibleProjects() {
   const q = ui.search.trim().toLowerCase();
   if (q) return all.filter((p) => projectMatches(p, q));
   if (ui.view === 'today') return todayWithoutEmptyMains(awakeProjects(store.view.data, todayIndia()), todayIndia()); // a 📂 project with no own step: its tasks show instead
-  if (ui.view === 'all') return activeTasks(store.view.data); // ✅ Tasks: tasks only, each once (projects are on 📂 Projects)
+  if (ui.view === 'all') return activeTasks(store.view.data).filter((p) => ui.taskFilter !== 'loose' || !parentIdsOf(p).length); // ✅ Tasks: tasks only, each once; 'No project' = loose tasks
   if (ui.view === 'mains') return mainProjects(store.view.data).filter((p) => p.state !== 'finished'); // 📂 Projects: projects only, a list like Tasks
   if (ui.view === 'paused') return all.filter((p) => p.state === 'paused');
   if (ui.view === 'finished') return all.filter((p) => p.state === 'finished');
@@ -730,7 +731,7 @@ function markShownOpened() {
 
 /** "📋 Copy list": the tasks as a numbered list (rich for email, plain for an AI chat), copied in one tap. */
 async function copyList(tasks, opts = {}) {
-  const { text, html } = tasksListText(tasks, todayIndia(), opts);
+  const { text, html } = tasksListText(tasks);
   const n = (tasks || []).length;
   try {
     if (window.ClipboardItem && navigator.clipboard && navigator.clipboard.write) {
@@ -1434,7 +1435,7 @@ function rowMenu() {
     item('↗', 'Open', () => select(p.id)),
     !isMainProject(store.view.data, p) ? item('📂', 'Add to a project…', () => { select(p.id); openMainBox(ctx, p, 'parent'); }) : null,
     item('🗑', `Delete ${kindWord(p)}…`, () => {
-      if (!confirm(`Delete "${p.name}"?\n\nYou can press Undo for a few seconds after.`)) return;
+      if (!confirm(deleteQuestion(store.view.data, p))) return;
       act('deleteProject', { projectId: p.id }, `Deleted: ${p.name}`, 10000);
       if (ui.selected === p.id) { ui.selected = null; ui.mobile = 'list'; }
     }));
@@ -1459,7 +1460,7 @@ function shownOrder(list) {
 }
 
 function canDrag() {
-  return !ui.search && ui.sort === 'mine';
+  return !ui.search && ui.sort === 'mine' && ui.view !== 'all';
 }
 
 /** Right-click on a person (People list or the side menu): the things you can do with them. */
@@ -1579,7 +1580,7 @@ let redOrder = null; // fixed "Red first" order, so rows do not jump while you o
 function resetRedOrder() { redOrder = null; }
 
 function sortForView(list, today) {
-  if (ui.sort !== 'red' || ui.search) return list;
+  if ((ui.sort !== 'red' && ui.view !== 'all') || ui.search) return list; // (✅ Tasks is always red first)
   const ids = list.map((p) => p.id);
   if (redOrder && redOrder.view === ui.view && ids.length === redOrder.ids.length && ids.every((id) => redOrder.pos.has(id))) {
     return [...list].sort((a, b) => redOrder.pos.get(a.id) - redOrder.pos.get(b.id));
@@ -1594,6 +1595,17 @@ function computeRedFirst(list, today) {
     .map((p, i) => ({ p, i, c: COLOUR_ORDER[rowColour(p, today)], r: PRIORITY_ORDER[p.priority] ?? 1 }))
     .sort((a, b) => a.c - b.c || a.r - b.r || a.i - b.i)
     .map((x) => x.p);
+}
+
+/** ✅ Tasks: "All tasks 19" | "No project 7" (both red first). */
+function taskFilterSwitch() {
+  const all = activeTasks(store.view.data);
+  const loose = all.filter((p) => !parentIdsOf(p).length).length;
+  const opt = (value, label) => h('button', {
+    class: 'seg' + (ui.taskFilter === value ? ' on' : ''), 'aria-pressed': String(ui.taskFilter === value),
+    onClick: () => { ui.taskFilter = value; resetRedOrder(); rememberUi(); render(); },
+  }, label);
+  return h('div', { class: 'segmented', role: 'group', 'aria-label': 'Which tasks' }, opt('all', `All tasks ${all.length}`), opt('loose', `No project ${loose}`));
 }
 
 function sortSwitch() {
@@ -1785,7 +1797,7 @@ function renderListColumn() {
     ui.view === 'today' && !ui.search ? renderBrief() : null,
     h('div', { class: 'list-tools' },
       ui.view === 'mains' && !ui.search ? renderProjectsHead(ctx) : ui.view === 'finished' || ui.view === 'paused' || ui.search ? null : newProjectForm(),
-      showSort && !ui.adding ? sortSwitch() : null,
+      ui.view === 'all' && !ui.search && !ui.adding ? taskFilterSwitch() : showSort && !ui.adding ? sortSwitch() : null,
       !ui.search && list.length && ui.view !== 'mains' ? h('button', { class: 'btn small copy-list', type: 'button', title: 'Copy these as a numbered list (for an AI chat or an email)', onClick: () => copyList(currentList(), { title: viewTitle() }) }, '📋 Copy list') : null),
     ...listParts(list, today),
     empty,

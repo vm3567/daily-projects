@@ -3,7 +3,7 @@
 import { h, fmtDay, fmtTime, fmtSize, HAS_KEYBOARD } from './dom.js';
 
 const MOD = /Mac|iPhone|iPad/.test(globalThis.navigator ? navigator.platform || navigator.userAgent || '' : '') ? '⌘' : 'Ctrl';
-import { dotColour, isSnoozed, restUntil, restReason, onlyDaysOf, onlyDaysLabel, onlyDaysChip, remindOnceChip, indiaDateTime, WEEKDAYS, weekdayOf, stepWaitsForReminder, daysBetween, addDays, todayIndia, isOverdue, indiaDate, waitingDays, lastWorkDate, nextStep, stepLinkedTo, personStatus, minutesBetween, fmtMinutes, weekStart, seenUpTo } from '../rules.js';
+import { dotColour, isSnoozed, restUntil, restReason, onlyDaysOf, onlyDaysLabel, onlyDaysChip, remindOnceChip, indiaDateTime, WEEKDAYS, weekdayOf, stepWaitsForReminder, daysBetween, addDays, todayIndia, isOverdue, indiaDate, waitingDays, lastWorkDate, nextStep, stepLinkedTo, personStatus, minutesBetween, fmtMinutes, weekStart, seenUpTo, deleteQuestion } from '../rules.js';
 import { WAIT_RED_DAYS } from '../config.js';
 import { newId, PRIORITIES, cleanUrl, groupHasTimer, MAX_SNOOZE_DAYS, ABOUT_MAX } from '../ops.js';
 
@@ -807,7 +807,7 @@ function projectMenu(ctx, p) {
     // 📂 a task can be in several projects; a project is never inside another one
     !isMainProject(store.view.data, p) ? item('📂 Add to a project…', () => openMainBox(ctx, p, 'parent')) : null,
     item(`🗑 Delete ${kindWord(ctx, p)}`, () => {
-      if (!confirm(`Delete "${p.name}"?\n\nYou can press Undo for a few seconds after.`)) return;
+      if (!confirm(deleteQuestion(ctx.store.view.data, p))) return;
       ctx.act('deleteProject', { projectId: p.id }, `Deleted: ${p.name}`, 10000);
       ui.selected = null; ui.mobile = 'list';
     }, ' danger'));
@@ -859,7 +859,7 @@ function deleteButton(ctx, p) {
   return h('button', {
     class: 'btn icon-btn danger-soft', title: `Delete this ${kindWord(ctx, p)}`, 'aria-label': `Delete this ${kindWord(ctx, p)}`,
     onClick: () => {
-      if (!confirm(`Delete "${p.name}"?\n\nYou can press Undo for a few seconds after.`)) return;
+      if (!confirm(deleteQuestion(ctx.store.view.data, p))) return;
       ctx.act('deleteProject', { projectId: p.id }, `Deleted: ${p.name}`, 10000);
       ui.selected = null; ui.mobile = 'list'; ctx.render();
     },

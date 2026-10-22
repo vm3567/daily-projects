@@ -954,3 +954,12 @@ export function keepMovedStep(step, task, teamLoaded) {
   if (!teamLoaded || !task) return true; // not known yet (list not loaded, or older than the task): keep it
   return task.status === 'open'; // let it go only once the person's task is known to be finished or closed
 }
+
+/** The delete question: a 📂 project says its tasks are kept (they only leave it); a task asks plainly. */
+export function deleteQuestion(data, p) {
+  const n = childrenOf(data, p.id).length;
+  if (isMainProject(data, p)) {
+    return `Delete the project "${p.name}"?\n\n${n ? `Its ${n} task${n === 1 ? ' is' : 's are'} kept — ${n === 1 ? 'it just leaves' : 'they just leave'} this project.` : 'It has no tasks.'}\n\nYou can press Undo for a few seconds after.`;
+  }
+  return `Delete "${p.name}"?\n\nYou can press Undo for a few seconds after.`;
+}
