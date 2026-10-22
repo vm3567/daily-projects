@@ -1018,7 +1018,7 @@ function project_sync(array $me, array $in, string $ref, string $day): array {
   $name = txt($in['project'] ?? '', 200);
   // the project's short description (one line, at most 300): the team sees it under the project name
   if (array_key_exists('about', $in)) {
-    $about = txt(preg_replace('/\s+/u', ' ', (string)$in['about']) ?? '', 300);
+    $about = txt(preg_replace('/\s+/u', ' ', (string)$in['about']) ?? '', 1000); // (same limit as ABOUT_MAX in docs/ops.js)
     if ($about === '') q('DELETE FROM settings WHERE k = ?', ['pab:' . md5($ref)]); else set_setting('pab:' . md5($ref), $about);
   }
   $who = (int)($in['assigneeId'] ?? 0);

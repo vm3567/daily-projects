@@ -239,7 +239,7 @@ test('project page: the short description shows in grey under the name, or a fai
   const full = box(el);
   assert.equal(full.value, 'Glaze for the new basin line');
   assert.ok(!full.className.includes('empty'));
-  assert.equal(full.getAttribute('maxlength'), '300');
+  assert.equal(full.getAttribute('maxlength'), '1000', 'owner asked for 1000 letters, 22 Oct');
   assert.equal(full.getAttribute('oneLine'), null, 'oneLine is not put on the page');
   // right under the title row
   const kids = el.childNodes.filter((c) => c.nodeType === 1);

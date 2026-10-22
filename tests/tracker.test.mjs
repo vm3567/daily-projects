@@ -68,11 +68,11 @@ test('only-on sets the days and the phone reminder; "every" clears; a wrong day 
   assert.throws(() => tracker('only-on', 'kiln', 'Funday'), /Not a day/);
 });
 
-test('set-about saves the project\'s short description (cut to 300 letters)', () => {
+test('set-about saves the project\'s short description (cut to 1000 letters)', () => {
   tracker('set-about', 'kiln', 'Find', 'why', 'element', '3', 'keeps', 'failing');
   assert.equal(data().projects[0].about, 'Find why element 3 keeps failing');
-  tracker('set-about', 'kiln', 'x'.repeat(400));
-  assert.equal(data().projects[0].about.length, 300);
+  tracker('set-about', 'kiln', 'x'.repeat(1200));
+  assert.equal(data().projects[0].about.length, 1000);
 });
 
 test('summary, today list and show are readable', () => {

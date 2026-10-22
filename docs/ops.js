@@ -16,7 +16,7 @@ export const START_GROUPS = ['Acton', 'Personal', 'Ceramic Ninja'];
 export const PRIORITIES = ['high', 'medium', 'low'];
 export const DEFAULT_TARGET_DAYS = 30; // new projects get a target date 30 days ahead
 const PROJECT_FIELDS = ['name', 'groupId', 'priority', 'deadline', 'notes', 'tagId', 'status', 'about'];
-export const ABOUT_MAX = 300; // the project's short description (one line)
+export const ABOUT_MAX = 1000; // the project's description (owner asked for 1000 letters, 22 Oct)
 export const MAX_SNOOZE_DAYS = 365;
 const STEP_FIELDS = ['text', 'dueDate', 'note', 'waiting', 'waitingOn', 'repeat'];
 

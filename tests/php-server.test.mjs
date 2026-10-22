@@ -857,7 +857,7 @@ test('regression: the projects app naming the old person after a Work Task move 
   await call('project.sync', { projectRef: 'rg23', project: '', assigneeId: 0, steps: [] }, tok.boss);
 });
 
-test('project description: project.sync stores about; the team sees it as projectAbout (overview, project pages, tasks); cut to 300', { skip }, async () => {
+test('project description: project.sync stores about; the team sees it as projectAbout (overview, project pages, tasks); cut to 1000', { skip }, async () => {
   const pab = () => String(sql(`USE wt; SELECT COUNT(*) FROM wt.settings WHERE k = '${'pab:' + md5('ab1')}'`)).trim().split('\n').pop();
   const sync = (about) => call('project.sync', { projectRef: 'ab1', project: 'About P', about, assigneeId: id.suresh, steps: [{ stepRef: 'ab1a', title: 'A one' }, { stepRef: 'ab1b', title: 'A two' }] }, tok.boss);
   const r = await sync('  Glaze  for the\nnew basin line ');
@@ -869,8 +869,8 @@ test('project description: project.sync stores about; the team sees it as projec
   const mine = await openOf('suresh', 'ab1');
   assert.ok(mine.length === 2 && mine.every((t) => t.projectAbout === 'Glaze for the new basin line'), 'my.today tasks');
   assert.equal((await call('task.get', { id: mine[0].id }, tok.suresh)).task.projectAbout, 'Glaze for the new basin line', 'the task page');
-  await sync('y'.repeat(400));
-  assert.equal((await openOf('suresh', 'ab1'))[0].projectAbout.length, 300, 'cut to 300');
+  await sync('y'.repeat(1200));
+  assert.equal((await openOf('suresh', 'ab1'))[0].projectAbout.length, 1000, 'cut to 1000 (owner asked for 1000 letters, 22 Oct)');
   await sync('Changed words');
   assert.equal((await openOf('suresh', 'ab1'))[0].projectAbout, 'Changed words', 'a change is sent again');
   await call('project.sync', { projectRef: 'ab1', project: 'About P', assigneeId: id.suresh, steps: [{ stepRef: 'ab1a', title: 'A one' }, { stepRef: 'ab1b', title: 'A two' }] }, tok.boss);

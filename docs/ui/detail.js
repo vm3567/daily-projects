@@ -485,7 +485,7 @@ function notesLog(ctx, p, notesShown) {
 /** The project's short description, in grey under the name. Click to change it; it saves by itself. */
 function aboutLine(ctx, p) {
   return autoField('textarea', {
-    class: 'about-input' + (p.about ? '' : ' empty'), value: p.about || '', key: 'about-' + p.id, rows: Math.min(4, Math.max(1, Math.ceil((p.about || '').length / 80))), maxlength: ABOUT_MAX, oneLine: true,
+    class: 'about-input' + (p.about ? '' : ' empty'), value: p.about || '', key: 'about-' + p.id, rows: Math.min(8, Math.max(1, Math.ceil((p.about || '').length / 80))), maxlength: ABOUT_MAX, oneLine: true,
     placeholder: '+ Add a short description', 'aria-label': 'Short description of this project', title: 'Click to change the short description',
   }, (v) => ctx.store.dispatch('setProjectField', { projectId: p.id, field: 'about', value: v }));
 }

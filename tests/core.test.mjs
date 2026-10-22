@@ -929,7 +929,7 @@ test('after project.sync the app follows the person the server names (a Work Tas
   assert.equal(serverHolder({ assigneeId: 9 }, 3, people).id, 9, 'followed even when the name is not loaded yet');
 });
 
-test('project description (about): saves trimmed, one line, at most 300; empty clears; no history line', () => {
+test('project description (about): saves trimmed, one line, at most 1000; empty clears; no history line', () => {
   const s = withProject('2026-10-01');
   const p = s.data.projects[0];
   assert.equal(p.about, undefined, 'a new project has no description yet (older saved data has none either)');
@@ -938,8 +938,8 @@ test('project description (about): saves trimmed, one line, at most 300; empty c
   assert.equal(p.about, 'New glaze for the basin line', 'spaces collapsed, trimmed');
   assert.equal((s.history['2026-10'] || []).length, before, 'no history line (it saves while typing)');
   assert.equal(applyOp(s, op('setProjectField', { projectId: 'p1', field: 'about', value: 'New glaze for the basin line ' }, '2026-10-02')), false, 'the same words: not a change');
-  assert.ok(applyOp(s, op('setProjectField', { projectId: 'p1', field: 'about', value: 'x'.repeat(400) }, '2026-10-02')));
-  assert.equal(p.about.length, 300, 'cut to 300');
+  assert.ok(applyOp(s, op('setProjectField', { projectId: 'p1', field: 'about', value: 'x'.repeat(1200) }, '2026-10-02')));
+  assert.equal(p.about.length, 1000, 'cut to 1000 (owner asked for 1000 letters, 22 Oct)');
   assert.ok(applyOp(s, op('setProjectField', { projectId: 'p1', field: 'about', value: '   ' }, '2026-10-02')));
   assert.equal(p.about, '', 'empty clears it');
   assert.equal(applyOp(s, op('setProjectField', { projectId: 'nope', field: 'about', value: 'Hi' }, '2026-10-02')), false, 'unknown project refused');
