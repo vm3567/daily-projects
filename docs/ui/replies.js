@@ -3,7 +3,7 @@
 // sent from the app or the server. "Open in Outlook" makes a draft in the same thread; you press Send there.
 
 import { h, fmtDay, fmtTime } from './dom.js';
-import { mailThreads, repliesOf, replyState, replyRoundAt, indiaDate, todayIndia } from '../rules.js';
+import { mailThreads, mailThreadOf, repliesOf, replyState, replyRoundAt, indiaDate, todayIndia } from '../rules.js';
 import { REPLY_MAX } from '../ops.js';
 
 const daysWord = (n) => (n <= 0 ? 'today' : n === 1 ? '1 day' : `${n} days`);
@@ -110,6 +110,21 @@ export function emailCard(ctx, m, today = todayIndia()) {
       h('span', { class: 'muted small' }, `💬 ${m.count} email${m.count === 1 ? '' : 's'}`),
       mailLink(m)),
     replyArea(ctx, m, today));
+}
+
+/** A task made from an email: EMAIL THREAD — each email (📧 them / ↩ you), when, its first lines and Open ↗ (newest last). */
+export function emailThreadBlock(ctx, p) {
+  const th = mailThreadOf(p);
+  if (!th.length) return null;
+  return h('section', { class: 'block email-thread', key: 'et-' + p.id },
+    h('h3', null, `EMAIL THREAD (${th.length})`),
+    h('ul', { class: 'thread-list' }, th.map((e, i) => h('li', { class: 'thread-row' + (e.fromMe ? ' me' : ''), key: `th-${p.id}-${i}` },
+      h('div', { class: 'thread-head' },
+        h('strong', null, e.fromMe ? '↩ You' : `📧 ${e.fromName || 'Them'}`),
+        h('span', { class: 'muted small' }, ` · ${whenText(e.at)} `),
+        typeof e.link === 'string' && /^https?:\/\//i.test(e.link)
+          ? h('a', { class: 'tag link-chip', href: e.link, target: '_blank', rel: 'noopener noreferrer', title: 'Open this email in Outlook' }, 'Open ↗') : null),
+      e.preview ? h('div', { class: 'muted small thread-preview' }, e.preview) : null))));
 }
 
 /** The email cards of one project (the project's own thread first, then its open steps' threads). */

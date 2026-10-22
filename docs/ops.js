@@ -9,7 +9,7 @@
 // applyOp(state, op) changes the state in place and returns true, or returns false
 // when the operation must be skipped (for example, its item no longer exists).
 
-import { indiaDate, monthOf, laterDate, addDays, REPEATS, nextRepeatDate, waitingAgain, WEEKDAYS, indiaDateTime, validRemindOnce, remindOnceText, canPutUnder } from './rules.js';
+import { indiaDate, monthOf, laterDate, addDays, REPEATS, nextRepeatDate, waitingAgain, WEEKDAYS, indiaDateTime, validRemindOnce, remindOnceText, canPutUnder, parentIdsOf, normalizeParents } from './rules.js';
 import { AI_DAILY_LIMIT, BRIEF_CLAIM_MINUTES } from './config.js';
 
 export const START_GROUPS = ['Acton', 'Personal', 'Ceramic Ninja'];
@@ -235,6 +235,13 @@ function teamTime(v, op) {
   return Number.isFinite(ms) && ms < Date.parse(op.at) ? new Date(ms).toISOString() : op.at;
 }
 
+/** The projects a task is in (parentIds; an older parentId is folded in). An empty list: the field goes. */
+function setParents(p, ids) {
+  const list = [...new Set(ids.filter((x) => typeof x === 'string' && x && x !== p.id))];
+  delete p.parentId;
+  if (list.length) p.parentIds = list; else delete p.parentIds;
+}
+
 function recalcLastTick(project) {
   let last = null;
   for (const s of project.steps) if (s.done && s.doneAt && !s.byTeam) last = laterDate(last, indiaDate(s.doneAt));
@@ -268,58 +275,92 @@ const handlers = {
     };
     data.projects.unshift(project); // new projects go to the top
     addEvent(state, op, project, 'created', project.name);
-    // "+ New project here" on a main project's page: made already under it (one level only)
+    // "+ New task here" on a project's page: made already in it
     const main = typeof a.parentId === 'string' ? findProject(data, a.parentId) : null;
     if (main && canPutUnder(data, project, main)) {
-      project.parentId = main.id;
+      project.parentIds = [main.id];
+      main.isMain = true;
       addEvent(state, { ...op, id: op.id + 'm' }, main, 'main_changed', `${project.name} added`);
     }
     return true;
   },
 
   /**
-   * 📂 Put a project under a main project (parentId), or take it out (parentId null). Only one level:
-   * a main project cannot be under another, and a project that holds others cannot go under one.
-   * Not work (the dot does not change). Undo: restoreProject of the project (both history lines go).
+   * 📂 Add a task to a project (a task can be in several projects). A project is never inside another one.
+   * Not work (the dot does not change). Undo: restoreProject of the task (both history lines go).
+   */
+  addToProject(state, op, a) {
+    const { data } = state;
+    const p = findProject(data, a.projectId);
+    const main = typeof a.parentId === 'string' ? findProject(data, a.parentId) : null;
+    if (!p || !main) return false;
+    const now = parentIdsOf(p);
+    if (now.includes(main.id) || !canPutUnder(data, p, main)) return false;
+    setParents(p, [...now, main.id]);
+    main.isMain = true;
+    p.updatedAt = op.at;
+    addEvent(state, op, p, 'main_changed', `Added to 📂 ${main.name}`);
+    addEvent(state, { ...op, id: op.id + 'm' }, main, 'main_changed', `${p.name} added`);
+    return true;
+  },
+
+  /** 📂 Take a task out of one project (it stays in its other projects). Not work. */
+  removeFromProject(state, op, a) {
+    const { data } = state;
+    const p = findProject(data, a.projectId);
+    if (!p || typeof a.parentId !== 'string') return false;
+    const now = parentIdsOf(p);
+    if (!now.includes(a.parentId)) return false;
+    setParents(p, now.filter((x) => x !== a.parentId));
+    p.updatedAt = op.at;
+    const main = findProject(data, a.parentId);
+    addEvent(state, op, p, 'main_changed', main ? `Taken out of 📂 ${main.name}` : 'Taken out of a project');
+    if (main) addEvent(state, { ...op, id: op.id + 'm' }, main, 'main_changed', `${p.name} taken out`);
+    return true;
+  },
+
+  /**
+   * The older way (changes saved before a task could be in several projects, still replayed): parentId = a project →
+   * the task is in that one project only (out of the others); parentId null → out of every project. Not work.
    */
   setParent(state, op, a) {
     const { data } = state;
     const p = findProject(data, a.projectId);
     if (!p) return false;
-    const old = p.parentId ? findProject(data, p.parentId) : null;
+    const now = parentIdsOf(p);
+    const old = now.length ? findProject(data, now[0]) : null;
     if (a.parentId === null || a.parentId === undefined || a.parentId === '') {
-      if (!p.parentId) return false;
-      delete p.parentId;
+      if (!now.length) return false;
+      setParents(p, []);
       p.updatedAt = op.at;
-      addEvent(state, op, p, 'main_changed', old ? `Taken out of 📂 ${old.name}` : 'Taken out of its main project');
+      addEvent(state, op, p, 'main_changed', old ? `Taken out of 📂 ${old.name}` : 'Taken out of its project');
       if (old) addEvent(state, { ...op, id: op.id + 'm' }, old, 'main_changed', `${p.name} taken out`);
       return true;
     }
     const main = typeof a.parentId === 'string' ? findProject(data, a.parentId) : null;
-    if (!main || p.parentId === main.id || !canPutUnder(data, p, main)) return false;
-    p.parentId = main.id;
+    if (!main || (now.length === 1 && now[0] === main.id) || !canPutUnder(data, p, main)) return false;
+    setParents(p, [main.id]);
+    main.isMain = true;
     p.updatedAt = op.at;
-    addEvent(state, op, p, 'main_changed', `Put under 📂 ${main.name}`);
+    addEvent(state, op, p, 'main_changed', `Added to 📂 ${main.name}`);
     addEvent(state, { ...op, id: op.id + 'm' }, main, 'main_changed', `${p.name} added`);
-    if (old) addEvent(state, { ...op, id: op.id + 't' }, old, 'main_changed', `${p.name} taken out`);
+    if (old && old.id !== main.id) addEvent(state, { ...op, id: op.id + 't' }, old, 'main_changed', `${p.name} taken out`);
     return true;
   },
 
-  /** A new main project (isMain, so it shows even while empty); with childId, that project goes under it in the same change (one Undo). */
+  /** A new project (isMain, so it shows even while empty); with childId, that task is added to it in the same change (one Undo). */
   createMainProject(state, op, a) {
     const { data } = state;
     const child = typeof a.childId === 'string' && a.childId ? findProject(data, a.childId) : null;
-    if (a.childId && (!child || child.isMain || data.projects.some((x) => x.parentId === child.id))) return false;
+    if (a.childId && (!child || child.isMain || data.projects.some((x) => parentIdsOf(x).includes(child.id)))) return false;
     if (!handlers.createProject(state, op, { projectId: a.projectId, name: a.name, groupId: child ? child.groupId : a.groupId })) return false;
     const main = findProject(data, a.projectId);
     main.isMain = true;
     if (child) {
-      const old = child.parentId ? findProject(data, child.parentId) : null;
-      child.parentId = main.id;
+      setParents(child, [...parentIdsOf(child), main.id]); // it stays in its other projects too
       child.updatedAt = op.at;
-      addEvent(state, { ...op, id: op.id + 'm' }, child, 'main_changed', `Put under 📂 ${main.name}`);
+      addEvent(state, { ...op, id: op.id + 'm' }, child, 'main_changed', `Added to 📂 ${main.name}`);
       addEvent(state, { ...op, id: op.id + 't' }, main, 'main_changed', `${child.name} added`);
-      if (old) addEvent(state, { ...op, id: op.id + 'u' }, old, 'main_changed', `${child.name} taken out`);
     }
     return true;
   },
@@ -552,7 +593,7 @@ const handlers = {
     const i = data.projects.findIndex((p) => p.id === a.projectId);
     if (i < 0) return false;
     const [p] = data.projects.splice(i, 1);
-    for (const c of data.projects) if (c.parentId === p.id) delete c.parentId; // its projects stay, just no longer under it
+    for (const c of data.projects) if (parentIdsOf(c).includes(p.id)) setParents(c, parentIdsOf(c).filter((x) => x !== p.id)); // its tasks stay, just no longer in it
     addEvent(state, op, p, 'deleted', p.name);
     return true;
   },
@@ -568,11 +609,11 @@ const handlers = {
     keepTeamUndone(i >= 0 ? list[i] : null, back, typeof a.teamUndone === 'string' ? a.teamUndone : null);
     if (i >= 0) list[i] = back;
     else list.splice(Math.min(Math.max(0, a.index ?? 0), list.length), 0, back);
-    // Undo of deleting a main project: its projects go back under it ({ childId: mainId }; only the link, nothing else of theirs)
-    if (a.parentIds && typeof a.parentIds === 'object') {
+    // Undo of deleting a project: its tasks go back into it ({ childId: projectId }; only the link, nothing else of theirs)
+    if (a.parentIds && typeof a.parentIds === 'object' && !Array.isArray(a.parentIds)) {
       for (const [cid, pid] of Object.entries(a.parentIds)) {
         const c = list.find((x) => x.id === cid);
-        if (c && pid === snap.id && !c.parentId && c.id !== snap.id) c.parentId = pid;
+        if (c && pid === snap.id && c.id !== snap.id && !parentIdsOf(c).includes(pid)) setParents(c, [...parentIdsOf(c), pid]);
       }
     }
     if (typeof a.removeProjectId === 'string' && a.removeProjectId !== snap.id) { // Undo of "Make it a project": the new one goes
@@ -1362,6 +1403,7 @@ export function carriedOps(list) {
 }
 
 export function applyOps(state, ops) {
+  if (state && state.data) normalizeParents(state.data); // older saved data (parentId) read the new way
   const applied = [];
   for (const op of ops) if (applyOp(state, op)) applied.push(op);
   return applied;

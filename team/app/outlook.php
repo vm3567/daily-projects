@@ -1,6 +1,7 @@
 <?php
-// Outlook → Daily Projects Inbox. The owner connects their Outlook once (Microsoft sign-in); after that, every new email
-// in their Outlook Inbox becomes one item in the Daily Projects 📥 Inbox (replies in the same thread join that item).
+// Outlook → Daily Projects. The owner connects their Outlook once (Microsoft sign-in); after that, every new email thread
+// in their Outlook Inbox becomes one task "📧 <subject>" in Daily Projects; later emails in the same thread (and the owner's
+// own replies, seen in Sent Items) are added to that task's email thread.
 // No AI. Only the subject, the sender, the time, the first lines (bodyPreview) and the link to open it in Outlook are read:
 // never attachments, never the whole email.
 //
@@ -12,6 +13,8 @@ const OL_SCOPES = 'offline_access User.Read Mail.ReadWrite'; // ReadWrite: for a
 const OL_EVERY = 600;        // check at most every 10 minutes (plus "Check now")
 const OL_PAGES = 5;          // pages of 50 emails per check
 const OL_STATE_SECONDS = 600; // the sign-in must come back within 10 minutes
+const OL_THREAD_MAX = 50;    // a task keeps its newest 50 emails (THREAD_MAX in docs/rules.js)
+const OL_THREAD_PREVIEW = 300; // letters of each email kept in the thread
 
 class OlError extends Exception {}
 
@@ -193,6 +196,7 @@ function ol_mail_parts(array $m): array {
     'from' => ol_one_line((string)($from['name'] ?? '') ?: (string)($from['address'] ?? ''), 80) ?: 'unknown sender',
     'when' => ol_when((string)($m['receivedDateTime'] ?? '')),
     'preview' => ol_one_line((string)($m['bodyPreview'] ?? ''), 200),
+    'long' => ol_one_line((string)($m['bodyPreview'] ?? ''), OL_THREAD_PREVIEW), // for the task's email thread
     'link' => ol_link((string)($m['webLink'] ?? '')),
     'conv' => mb_substr((string)($m['conversationId'] ?? ''), 0, 400),
     'address' => (string)($from['address'] ?? ''),
@@ -219,13 +223,63 @@ function ol_mail_info(object $mail, array $x): void {
   if ($me !== '' && strtolower($addr) === $me) $mail->fromMe = true; else unset($mail->fromMe); // your own email: nothing to answer
 }
 
+/** Is this address the owner's own (the connected Outlook account)? */
+function ol_is_me(string $addr): bool {
+  $me = strtolower(setting('ol_account'));
+  return $me !== '' && strtolower(trim($addr)) === $me;
+}
+
+/** The task made from this email thread (a project object with `mail` and a `thread`), or null. */
+function ol_thread_task(object $data, string $conv): ?object {
+  if ($conv === '') return null;
+  foreach ((is_array($data->projects ?? null) ? $data->projects : []) as $p) {
+    if (is_object($p) && is_array($p->thread ?? null) && is_object($p->mail ?? null) && ($p->mail->conversationId ?? null) === $conv) return $p;
+  }
+  return null;
+}
+
+/** Add one email to a task's thread (oldest first, newest last, at most OL_THREAD_MAX). False when it is there already. */
+function ol_thread_add(object $p, array $e): bool {
+  $list = is_array($p->thread ?? null) ? $p->thread : [];
+  foreach ($list as $old) if (is_object($old) && $e['messageId'] !== '' && ($old->messageId ?? '') === $e['messageId']) return false;
+  $entry = ['at' => $e['at'], 'fromName' => mb_substr($e['fromName'], 0, 120), 'fromMe' => $e['fromMe'], 'preview' => mb_substr($e['preview'], 0, OL_THREAD_PREVIEW)];
+  if ($e['link']) $entry['link'] = $e['link'];
+  if ($e['messageId'] !== '' && mb_strlen($e['messageId']) <= 400) $entry['messageId'] = $e['messageId'];
+  $list[] = (object)$entry;
+  usort($list, fn($a, $b) => strcmp((string)($a->at ?? ''), (string)($b->at ?? '')));
+  $p->thread = array_values(array_slice($list, -OL_THREAD_MAX));
+  return true;
+}
+
+/** A new email thread → a new task "📧 subject" at the top of the list (not your work: no step, the dot is not green). */
+function ol_new_task(object $data, array &$hist, array $x, string $at): object {
+  $groups = is_array($data->groups ?? null) ? $data->groups : [];
+  $day = date('Y-m-d', strtotime($at));
+  $id = ol_rand_id('mt');
+  $mail = (object)['conversationId' => $x['conv']];
+  ol_mail_info($mail, $x);
+  $task = (object)[
+    'id' => $id, 'groupId' => (string)(is_object($groups[0] ?? null) ? ($groups[0]->id ?? 'g1') : 'g1'),
+    'name' => mb_substr('📧 ' . $x['subject'], 0, 200), 'priority' => 'medium', 'deadline' => null, 'notes' => '',
+    'links' => [], 'state' => 'active', 'lastTickDate' => null, 'lastActivityDate' => $day, 'activeSince' => $day,
+    'stateChangedAt' => $at, 'createdAt' => $at, 'updatedAt' => $at, 'steps' => [], 'workNotes' => [], 'files' => [],
+    'mail' => $mail, 'thread' => [],
+  ];
+  ol_thread_add($task, ['at' => $x['at'] ?: $at, 'fromName' => $x['from'], 'fromMe' => ol_is_me($x['address']), 'preview' => $x['long'], 'link' => $x['link'], 'messageId' => $x['id']]);
+  if (!isset($data->projects) || !is_array($data->projects)) $data->projects = [];
+  array_unshift($data->projects, $task);
+  $hist[date('Y-m', strtotime($at))][] = (object)['id' => ol_rand_id('mk'), 'projectId' => $id, 'projectName' => $task->name, 'kind' => 'mail_task',
+    'detail' => mb_substr("Email from {$x['from']}: {$x['subject']}", 0, 2000), 'at' => $at];
+  return $task;
+}
+
 /**
  * Put one email into the saved data (objects, as read from data.json):
- *  - its thread is still an Inbox item → that item: "💬 N emails · latest from …", the newest start and link;
+ *  - its thread is a task made from an email → the email joins that task's thread (no new task, no note, not your work:
+ *    the task's state, dot and day score do not change); the task's `mail` keeps the newest email;
+ *  - its thread is still an Inbox item (from before emails became tasks) → that item: "💬 N emails · latest from …";
  *  - its thread became a step or a project → a short note there ('mail_note': not your work);
- *  - its thread was there before and was removed → a fresh "↩ New reply: …" item;
- *  - otherwise a new item "📧 subject — from name".
- * The same rules as the operations addInbox / updateInbox / addMailNote in docs/ops.js.
+ *  - otherwise (also when its task was deleted) → a new task "📧 subject".
  */
 function ol_apply(object $data, array &$hist, array $m, bool $threadSeen, string $at): string {
   $x = ol_mail_parts($m);
@@ -233,6 +287,12 @@ function ol_apply(object $data, array &$hist, array $m, bool $threadSeen, string
   if (!isset($data->inbox) || !is_array($data->inbox)) $data->inbox = [];
   $projects = is_array($data->projects ?? null) ? $data->projects : [];
   if ($conv !== '') {
+    $task = ol_thread_task($data, $conv);
+    if ($task) {
+      ol_thread_add($task, ['at' => $x['at'] ?: $at, 'fromName' => $x['from'], 'fromMe' => ol_is_me($x['address']), 'preview' => $x['long'], 'link' => $x['link'], 'messageId' => $x['id']]);
+      ol_mail_info($task->mail, $x); // the newest email (for a later reply draft, and the ✉ Replies days)
+      return 'thread';
+    }
     foreach ($data->inbox as $it) {
       if (!is_object($it) || !is_object($it->mail ?? null) || ($it->mail->conversationId ?? null) !== $conv) continue;
       $n = max(1, (int)($it->mail->count ?? 1)) + 1;
@@ -266,15 +326,14 @@ function ol_apply(object $data, array &$hist, array $m, bool $threadSeen, string
       return 'note';
     }
   }
-  $item = [
-    'id' => ol_rand_id('ol'),
-    'text' => mb_substr(($threadSeen ? "↩ New reply: {$x['subject']} — from {$x['from']}" : "📧 {$x['subject']} — from {$x['from']}"), 0, 1000),
-    'createdAt' => $at,
-  ];
-  if ($x['link']) $item['link'] = (object)['url' => $x['link'], 'title' => $x['subject']];
-  $item['note'] = mb_substr($x['when'] . ($x['preview'] !== '' ? " · {$x['preview']}" : ''), 0, 600);
-  if ($conv !== '') { $item['mail'] = (object)['conversationId' => $conv, 'count' => 1]; ol_mail_info($item['mail'], $x); }
-  $data->inbox[] = (object)$item;
+  if ($conv === '') { // (Microsoft always sends a thread id; without one there is no thread to join: an Inbox item, as before)
+    $item = ['id' => ol_rand_id('ol'), 'text' => mb_substr("📧 {$x['subject']} — from {$x['from']}", 0, 1000), 'createdAt' => $at];
+    if ($x['link']) $item['link'] = (object)['url' => $x['link'], 'title' => $x['subject']];
+    $item['note'] = mb_substr($x['when'] . ($x['preview'] !== '' ? " · {$x['preview']}" : ''), 0, 600);
+    $data->inbox[] = (object)$item;
+    return 'new';
+  }
+  ol_new_task($data, $hist, $x, $at);
   return $threadSeen ? 'reply' : 'new';
 }
 
@@ -389,23 +448,43 @@ function ol_mark_replied(object $data, array &$hist, string $conv, string $sentA
   return $n;
 }
 
+/**
+ * Your reply (seen in Sent Items) joins the email thread of its task as "↩ You" (not your work). The task's `mail` notes
+ * that the newest email is yours (fromMe, its time) but keeps the other person's email, so a later reply draft goes to them.
+ */
+function ol_thread_sent(object $data, array $m): bool {
+  $conv = mb_substr((string)($m['conversationId'] ?? ''), 0, 400);
+  $task = ol_thread_task($data, $conv);
+  $at = ol_iso((string)($m['sentDateTime'] ?? ''));
+  if (!$task || $at === '') return false;
+  $added = ol_thread_add($task, ['at' => $at, 'fromName' => 'You', 'fromMe' => true, 'preview' => ol_one_line((string)($m['bodyPreview'] ?? ''), OL_THREAD_PREVIEW),
+    'link' => ol_link((string)($m['webLink'] ?? '')), 'messageId' => (string)($m['id'] ?? '')]);
+  if (!$added) return false;
+  $was = strtotime((string)($task->mail->at ?? '')) ?: 0;
+  if (strtotime($at) >= $was) { $task->mail->at = $at; $task->mail->fromMe = true; }
+  return true;
+}
+
 /** Look in Sent Items since the last look: a reply sent in a thread that waits for one ticks it as replied. */
 function ol_check_sent(string $token): void {
   $since = setting('ol_sent_since') ?: gmdate('Y-m-d\TH:i:s\Z', time() - 86400);
-  $sent = ol_list($token, 'sentitems', 'conversationId,sentDateTime', 'sentDateTime', gmdate('Y-m-d\TH:i:s\Z', (int)strtotime($since) - 300));
+  $sent = ol_list($token, 'sentitems', 'id,conversationId,sentDateTime,bodyPreview,webLink', 'sentDateTime', gmdate('Y-m-d\TH:i:s\Z', (int)strtotime($since) - 300));
   $last = strtotime($since);
   $by = []; // the newest reply of each thread
+  $all = [];
   foreach ($sent as $m) {
     $t = (string)($m['sentDateTime'] ?? '');
     $u = strtotime($t);
     $conv = mb_substr((string)($m['conversationId'] ?? ''), 0, 400);
     if (!$u || $conv === '') continue;
     $last = max($last, $u);
+    $all[] = $m;
     if (!isset($by[$conv]) || strtotime($by[$conv]) < $u) $by[$conv] = $t;
   }
   if ($by) {
-    ol_write(function (object $data, array &$hist) use ($by): bool {
+    ol_write(function (object $data, array &$hist) use ($by, $all): bool {
       $n = 0;
+      foreach ($all as $m) $n += ol_thread_sent($data, $m) ? 1 : 0;
       foreach ($by as $conv => $t) $n += ol_mark_replied($data, $hist, (string)$conv, $t);
       return $n > 0;
     }, '✉ Replied in Outlook');

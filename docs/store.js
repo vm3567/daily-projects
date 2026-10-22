@@ -5,7 +5,7 @@ import { applyOp, applyOps, emptyData, makeOp, opMonth, commitMessage, clone } f
 
 /** History months an operation touches (its own, plus the month of a change it undoes). */
 const monthsOfOp = (op) => [opMonth(op), op.args && op.args.undoMonth].filter(Boolean);
-import { todayIndia, monthOf } from './rules.js';
+import { todayIndia, monthOf, normalizeParents } from './rules.js';
 import { AuthError, NetworkError, ClashError } from './github.js';
 import { SAVE_DELAY_MS } from './config.js';
 
@@ -105,7 +105,7 @@ export class Store extends EventTarget {
 
     const snap = await this.repo.snapshot();
     const dataSha = snap.entries.get(DATA_PATH);
-    const data = dataSha ? JSON.parse(await this.repo.blobText(dataSha)) : emptyData();
+    const data = normalizeParents(dataSha ? JSON.parse(await this.repo.blobText(dataSha)) : emptyData()); // older data: parentId → parentIds
     const base = { data, history: {}, commit: snap.commit, tree: snap.tree, entries: snap.entries };
     await this.ensureMonths(base, keepMonths);
     this.base = base;
@@ -142,7 +142,7 @@ export class Store extends EventTarget {
     let snap = null;
     try { snap = JSON.parse(localStorage.getItem(SNAPSHOT_KEY) || 'null'); } catch { snap = null; }
     if (!snap || !snap.data) return false;
-    this.base = { data: snap.data, history: snap.history || {}, commit: snap.commit, tree: snap.tree, entries: new Map(snap.entries || []) };
+    this.base = { data: normalizeParents(snap.data), history: snap.history || {}, commit: snap.commit, tree: snap.tree, entries: new Map(snap.entries || []) };
     this.snapshotAt = snap.at;
     this.recompute();
     this.setStatus(quiet ? 'checking' : 'offline', quiet ? '' : 'No connection');

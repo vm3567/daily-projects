@@ -1,4 +1,4 @@
-// The right column: everything about one project, all editable in place.
+// The right column: everything about one task (or 📂 project), all editable in place.
 
 import { h, fmtDay, fmtTime, fmtSize, HAS_KEYBOARD } from './dom.js';
 
@@ -9,14 +9,17 @@ import { newId, PRIORITIES, cleanUrl, groupHasTimer, MAX_SNOOZE_DAYS, ABOUT_MAX 
 
 const STATUS_OLD_DAYS = 7; // a status older than this turns grey and asks for an update
 import { uploadFiles, openFile, uploadBlob } from './files.js';
-import { projectEmailCards } from './replies.js';
+import { projectEmailCards, emailThreadBlock } from './replies.js';
 import { mainBox, mainChip, subProjectsBlock, openMainBox } from './mains.js';
-import { isMainProject, parentOf } from '../rules.js';
+import { isMainProject } from '../rules.js';
+
+/** 'project' for a 📂 project, 'task' for everything else (what the app once called a project). */
+const kindWord = (ctx, p) => (isMainProject(ctx.store.view.data, p) ? 'project' : 'task');
 
 const REPEAT_WORD = { daily: 'every day', weekly: 'every week', monthly: 'every month' };
 const COLOUR_WORD = { green: 'Done for today', yellow: 'Opened today', red: 'Not looked at today', grey: 'Paused or finished' };
 const HISTORY_WORDS = {
-  created: 'Project created', edited: 'Changed', renamed: 'Renamed', group_changed: 'Moved to group',
+  created: 'Task created', edited: 'Changed', renamed: 'Renamed', group_changed: 'Moved to group',
   step_added: 'Step added', step_edited: 'Step changed', step_ticked: 'Step done', step_unticked: 'Step un-ticked',
   step_deleted: 'Step deleted', note_added: 'Work note', note_edited: 'Work note changed', note_deleted: 'Work note deleted',
   paused: 'Paused', unpaused: 'Unpaused', finished: 'Finished', reopened: 'Reopened',
@@ -24,9 +27,9 @@ const HISTORY_WORDS = {
   snoozed: 'Snoozed', woke: 'Woken up', step_remind: 'Remind me', time_added: 'Time added', time_logged: 'Time logged',
   group_added: 'Group added', group_renamed: 'Group renamed', group_deleted: 'Group deleted',
   team_ticked: 'Done by the team', team_note: 'Team note', team_step_added: 'Step added by the team', team_step_unticked: 'Opened again by the team',
-  team_note_deleted: 'Team note removed', team_moved: 'Moved in Work Task', mail_note: 'Email reply',
+  team_note_deleted: 'Team note removed', team_moved: 'Moved in Work Task', mail_note: 'Email reply', mail_task: 'Task made from an email',
   reply_prepared: 'Reply prepared', reply_sent: 'Reply sent', mail_replied: 'Reply sent (seen in Outlook)',
-  step_to_project: 'Step made a project', main_changed: 'Main project',
+  step_to_project: 'Step made a task', main_changed: '📂 Project',
 };
 
 /** Text box that saves on its own: after a short pause in typing, and when leaving the box. */
@@ -144,7 +147,7 @@ function stepNotes(p, s) {
 function makeItAProject(ctx, p, s, tt) {
   if (tt && tt.status === 'open' && !confirm(`${tt.assignee.name}'s task stays with ${p.name}. Continue?`)) return;
   const newProjectId = newId();
-  const done = ctx.act('stepToProject', { projectId: p.id, stepId: s.id, newProjectId }, `↗ Now its own project: ${s.text}`, 8000);
+  const done = ctx.act('stepToProject', { projectId: p.id, stepId: s.id, newProjectId }, `↗ Now its own task: ${s.text}`, 8000);
   if (!done) return;
   ctx.ui.openStep = null;
   ctx.openProject(newProjectId);
@@ -154,8 +157,8 @@ function makeItAProject(ctx, p, s, tt) {
 /** A step made into its own project: "→ moved to project: <name>", a link that opens it. */
 function movedLink(ctx, s) {
   const to = ctx.store.view.data.projects.find((x) => x.id === s.movedTo);
-  return to ? h('button', { class: 'link small moved-to', type: 'button', title: 'Open that project', onClick: () => ctx.openProject(to.id) }, ` → moved to project: ${to.name}`)
-    : h('span', { class: 'muted small' }, ' → moved to a project (deleted)');
+  return to ? h('button', { class: 'link small moved-to', type: 'button', title: 'Open that task', onClick: () => ctx.openProject(to.id) }, ` → moved to task: ${to.name}`)
+    : h('span', { class: 'muted small' }, ' → moved to a task (deleted)');
 }
 
 /** 👥 on a step given to the team: who, and today's update (or that it is missing). Opens the team task. */
@@ -270,9 +273,9 @@ function stepRow(ctx, p, s, box = null) {
         title: live ? 'See the daily updates for this step' : 'Give this step to a team member; their daily updates show here',
       }, live ? `👥 Team task: ${tt.assignee.name}` : '👥 Give to team') : null,
       s.done ? null : h('button', {
-        class: 'btn small', title: 'This step is really a project of its own: make it one (the step is ticked here, with a link)',
+        class: 'btn small', title: 'This step is really a task of its own: make it one (the step is ticked here, with a link)',
         onClick: () => makeItAProject(ctx, p, s, live ? tt : null),
-      }, '↗ Make it a project'),
+      }, '↗ Make it a task'),
       h('button', {
         class: 'btn danger small',
         onClick: () => ctx.act('deleteStep', { projectId: p.id, stepId: s.id }, `Step deleted: ${s.text}`),
@@ -431,7 +434,7 @@ function updateBox(ctx, p) {
       class: 'chip' + (due && due.id === st.id ? ' on' : ''), type: 'button', key: 'ab-' + st.id, title: st.text,
       onClick: () => { u.about = st.id; ctx.render(); focusUpdate(p); },
     }, st.text.length > 28 ? st.text.slice(0, 26) + '…' : st.text)),
-    h('button', { class: 'chip' + (due ? '' : ' on'), type: 'button', onClick: () => { u.about = 'project'; ctx.render(); focusUpdate(p); } }, 'Whole project')) : null,
+    h('button', { class: 'chip' + (due ? '' : ' on'), type: 'button', onClick: () => { u.about = 'project'; ctx.render(); focusUpdate(p); } }, `Whole ${kindWord(ctx, p)}`)) : null,
   h('input', {
     name: 'note', key: 'wn-' + p.id, autocomplete: 'off', enterkeyhint: 'done', 'data-mention': '1', value: u.note,
     placeholder: 'What happened today?', title: HAS_KEYBOARD ? 'Key: W' : null,
@@ -488,7 +491,7 @@ function notesLog(ctx, p, notesShown) {
 function aboutLine(ctx, p) {
   return autoField('textarea', {
     class: 'about-input' + (p.about ? '' : ' empty'), value: p.about || '', key: 'about-' + p.id, rows: Math.min(8, Math.max(1, Math.ceil((p.about || '').length / 80))), maxlength: ABOUT_MAX, oneLine: true,
-    placeholder: '+ Add a short description', 'aria-label': 'Short description of this project', title: 'Click to change the short description',
+    placeholder: '+ Add a short description', 'aria-label': `Short description of this ${kindWord(ctx, p)}`, title: 'Click to change the short description',
   }, (v) => ctx.store.dispatch('setProjectField', { projectId: p.id, field: 'about', value: v }));
 }
 
@@ -500,7 +503,7 @@ function statusLine(ctx, p) {
   return h('div', { class: 'status-line' + (old ? ' old' : '') + (p.status ? '' : ' empty'), key: 'status-' + p.id },
     h('span', { class: 'status-label' }, 'Status'),
     autoField('input', {
-      class: 'status-input', value: p.status || '', key: 'st-in-' + p.id, maxlength: 200, 'aria-label': 'Status: one line on where this project stands',
+      class: 'status-input', value: p.status || '', key: 'st-in-' + p.id, maxlength: 200, 'aria-label': `Status: one line on where this ${kindWord(ctx, p)} stands`,
       placeholder: 'add one line on where it stands…',
     }, (v) => store.dispatch('setProjectField', { projectId: p.id, field: 'status', value: v })),
     p.status ? h('span', { class: 'muted small status-age' }, age === 0 ? 'updated today' : old ? `${age} days old — update status?` : `${age} day${age === 1 ? '' : 's'} ago`) : null);
@@ -640,7 +643,7 @@ function notesBox(ctx, p) {
   else sign = h('span', { class: 'save-sign muted' }, p.notes ? 'Saved ✓' : 'Saves by itself as you type');
   return h('div', null,
     h('textarea', {
-      class: 'notes-box', value: p.notes, rows: 4, placeholder: 'Free notes for this project', key: 'notes-' + p.id, 'data-mention': '1',
+      class: 'notes-box', value: p.notes, rows: 4, placeholder: `Free notes for this ${kindWord(ctx, p)}`, key: 'notes-' + p.id, 'data-mention': '1',
       onInput: (e, el) => {
         if ((ns[p.id] || {}).state !== 'typing') { ns[p.id] = { state: 'typing' }; ctx.render(); }
         clearTimeout(notesTimers[p.id]);
@@ -736,13 +739,13 @@ function stateButtons(ctx, p) {
     return [
       running
         ? h('button', { class: 'btn timer-on', title: 'Stop the timer', onClick: () => ctx.stopTimer() }, `⏸ ${ctx.clockText(t.start)}`)
-        : timed ? h('button', { class: 'btn', title: 'Start timing your work on this project', onClick: () => ctx.startTimer(p) }, '▶ Start') : null,
+        : timed ? h('button', { class: 'btn', title: `Start timing your work on this ${kindWord(ctx, p)}`, onClick: () => ctx.startTimer(p) }, '▶ Start') : null,
       // 💤 Snooze on the page itself (the owner uses it daily; also in the ⋯ menu)
       !isSnoozed(p, todayIndia()) || restReason(p, todayIndia()) === 'onlyDays' ? h('button', {
         class: 'btn', title: 'Hide it from Today for some days',
         onClick: () => { ui.snoozeOpen = p.id; ctx.render(); setTimeout(() => { const n = document.querySelector(`[data-key="snooze-${p.id}"]`); if (n) { n.focus(); n.select(); } }, 30); },
       }, '💤 Snooze') : null,
-      h('button', { class: 'btn', onClick: () => ctx.act('finish', { projectId: p.id }, `Finished: ${p.name} (moved to Finished)`) }, 'Finish'),
+      h('button', { class: 'btn', onClick: () => ctx.act('finish', { projectId: p.id }, `Finished: ${p.name} (moved to Finished)`) }, `Finish ${kindWord(ctx, p)}`),
       menuButton(ctx, p),
       navButtons(ctx),
     ];
@@ -750,7 +753,7 @@ function stateButtons(ctx, p) {
   if (p.state === 'paused') {
     return [
       h('button', { class: 'btn primary', onClick: () => store.dispatch('unpause', { projectId: p.id }) }, 'Unpause'),
-      h('button', { class: 'btn', onClick: () => ctx.act('finish', { projectId: p.id }, `Finished: ${p.name} (moved to Finished)`) }, 'Finish'),
+      h('button', { class: 'btn', onClick: () => ctx.act('finish', { projectId: p.id }, `Finished: ${p.name} (moved to Finished)`) }, `Finish ${kindWord(ctx, p)}`),
       deleteButton(ctx, p),
       navButtons(ctx),
     ];
@@ -774,8 +777,8 @@ function navButtons(ctx) {
   const prev = ctx.neighbourProject(-1), next = ctx.neighbourProject(1);
   return h('span', { class: 'nav-pn' },
     ctx.canGoBack() ? h('button', { class: 'btn icon-btn', title: 'Back to where you came from (Backspace)', 'aria-label': 'Back', onClick: () => ctx.goBack() }, '↩') : null,
-    h('button', { class: 'btn icon-btn', disabled: prev ? undefined : true, 'aria-label': 'Previous project', title: prev ? `Previous: ${prev.name} (←)` : 'First in this list', onClick: () => prev && ctx.openInList(prev.id) }, '‹'),
-    h('button', { class: 'btn icon-btn', disabled: next ? undefined : true, 'aria-label': 'Next project', title: next ? `Next: ${next.name} (→)` : 'Last in this list', onClick: () => next && ctx.openInList(next.id) }, '›'));
+    h('button', { class: 'btn icon-btn', disabled: prev ? undefined : true, 'aria-label': 'Previous', title: prev ? `Previous: ${prev.name} (←)` : 'First in this list', onClick: () => prev && ctx.openInList(prev.id) }, '‹'),
+    h('button', { class: 'btn icon-btn', disabled: next ? undefined : true, 'aria-label': 'Next', title: next ? `Next: ${next.name} (→)` : 'Last in this list', onClick: () => next && ctx.openInList(next.id) }, '›'));
 }
 
 function menuButton(ctx, p) {
@@ -794,16 +797,16 @@ function projectMenu(ctx, p) {
   const item = (label, fn, cls = '') => h('button', { class: 'menu-row' + cls, onClick: go(fn) }, label);
   return h('div', { class: 'proj-menu', key: 'pm-' + p.id, role: 'menu' },
     p.state === 'active' && (!isSnoozed(p, today) || restReason(p, today) === 'onlyDays') ? item('💤 Snooze…', () => { ui.snoozeOpen = p.id; setTimeout(() => { const n = document.querySelector(`[data-key="snooze-${p.id}"]`); if (n) { n.focus(); n.select(); } }, 30); }) : null,
-    p.state === 'active' && ctx.onServer ? item(p.team ? `👥 Change person (now ${p.team.name})` : '👥 Give project to…', () => { ui.giveOpen = p.id; ui.givePhoto = p.team ? !!p.team.needsPhoto : false; }) : null,
+    p.state === 'active' && ctx.onServer ? item(p.team ? `👥 Change person (now ${p.team.name})` : `👥 Give ${kindWord(ctx, p)} to…`, () => { ui.giveOpen = p.id; ui.givePhoto = p.team ? !!p.team.needsPhoto : false; }) : null,
     p.state === 'active' && ctx.onServer && p.team ? item('↩ Take back from ' + p.team.name, () => { if (confirm(`Take "${p.name}" back from ${p.team.name}? Their open steps are removed from their list.`)) ctx.takeBackProject(p); }) : null,
     p.state === 'active' ? item('📅 Only on…', () => { ui.onlyDaysOpen = p.id; }) : null,
     p.state === 'active' ? item('🔔 Remind me once…', () => { ui.remindOnceOpen = p.id; }) : null,
     p.state === 'active' ? item('⏸ Pause', () => ctx.act('pause', { projectId: p.id }, `Paused: ${p.name}`)) : null,
     timed ? item('⏱ Add time', () => addTimePrompt(ctx, p)) : null,
     item('✎ Group, priority, target date', () => { ui.editMeta = true; }),
-    // 📂 one level only: a main project is not put under another
-    !isMainProject(store.view.data, p) || parentOf(store.view.data, p) ? item('📂 Put under a main project…', () => openMainBox(ctx, p, 'parent')) : null,
-    item('🗑 Delete project', () => {
+    // 📂 a task can be in several projects; a project is never inside another one
+    !isMainProject(store.view.data, p) ? item('📂 Add to a project…', () => openMainBox(ctx, p, 'parent')) : null,
+    item(`🗑 Delete ${kindWord(ctx, p)}`, () => {
       if (!confirm(`Delete "${p.name}"?\n\nYou can press Undo for a few seconds after.`)) return;
       ctx.act('deleteProject', { projectId: p.id }, `Deleted: ${p.name}`, 10000);
       ui.selected = null; ui.mobile = 'list';
@@ -844,7 +847,7 @@ function infoChips(ctx, p, today) {
   const timed = groupHasTimer(g);
   if (timed || logs.length) {
     const total = minutesBetween(p, '0000-01-01', today, timer);
-    out.push(total ? chip(`⏱ ${fmtMinutes(total)}`, 'Time on this project — tap for details', () => { ui.showTime = ui.showTime === p.id ? null : p.id; ctx.render(); })
+    out.push(total ? chip(`⏱ ${fmtMinutes(total)}`, `Time on this ${kindWord(ctx, p)} — tap for details`, () => { ui.showTime = ui.showTime === p.id ? null : p.id; ctx.render(); })
       : chip('⏱ Add time', 'Add time worked (not timed)', () => addTimePrompt(ctx, p)));
   }
   return h('div', { class: 'info-chips', key: 'ic-' + p.id }, out, peopleChips(ctx, p));
@@ -854,7 +857,7 @@ function infoChips(ctx, p, today) {
 function deleteButton(ctx, p) {
   const { ui } = ctx;
   return h('button', {
-    class: 'btn icon-btn danger-soft', title: 'Delete this project', 'aria-label': 'Delete this project',
+    class: 'btn icon-btn danger-soft', title: `Delete this ${kindWord(ctx, p)}`, 'aria-label': `Delete this ${kindWord(ctx, p)}`,
     onClick: () => {
       if (!confirm(`Delete "${p.name}"?\n\nYou can press Undo for a few seconds after.`)) return;
       ctx.act('deleteProject', { projectId: p.id }, `Deleted: ${p.name}`, 10000);
@@ -931,7 +934,7 @@ export function renderDetail(ctx) {
   const { store, ui } = ctx;
   const p = store.view.data.projects.find((x) => x.id === ui.selected);
   if (!p) {
-    return h('div', { class: 'empty' }, h('p', null, 'Pick a project on the left,'), h('p', null, 'or add one with "+ New project".'));
+    return h('div', { class: 'empty' }, h('p', null, 'Pick a task on the left,'), h('p', null, 'or add one with "+ New task".'));
   }
   const today = todayIndia();
   const colour = dotColour(p, today);
@@ -950,7 +953,7 @@ export function renderDetail(ctx) {
   const chip = (name, label) => (show[name] ? null : h('button', { class: 'chip', onClick: () => openPart(name) }, label));
   const notesShown = ui.notesLimit || 3;
   const upd = updateBox(ctx, p);
-  // The project is green: offer the next project that still needs you, right here.
+  // Green: offer the next task that still needs you, right here.
   const np = p.state === 'active' && colour === 'green' && ctx.nextOpenProject ? ctx.nextOpenProject(p.id) : null;
 
   const hasFiles = (e) => e.dataTransfer && [...(e.dataTransfer.types || [])].includes('Files');
@@ -977,10 +980,10 @@ export function renderDetail(ctx) {
     h('div', { class: 'detail-top' },
       h('button', { class: 'icon back', 'aria-label': 'Back to list', onClick: () => { ui.mobile = 'list'; ctx.render(); } }, '←'),
       h('span', { class: `dot ${colour}`, title: COLOUR_WORD[colour] }),
-      autoField('input', { class: 'title-input', value: p.name, 'aria-label': 'Project name', title: 'Click to change the project name', key: 'name-' + p.id },
+      autoField('input', { class: 'title-input', value: p.name, 'aria-label': `${kindWord(ctx, p) === 'task' ? 'Task' : 'Project'} name`, title: `Click to change the ${kindWord(ctx, p)} name`, key: 'name-' + p.id },
         (v) => store.dispatch('setProjectField', { projectId: p.id, field: 'name', value: v })),
       h('button', {
-        class: 'icon edit-title', title: 'Change the project name', 'aria-label': 'Change the project name',
+        class: 'icon edit-title', title: `Change the ${kindWord(ctx, p)} name`, 'aria-label': `Change the ${kindWord(ctx, p)} name`,
         onClick: () => { const n = document.querySelector(`[data-key="name-${p.id}"]`); if (n) { n.focus(); n.select(); } },
       }, '✎'),
       h('div', { class: 'state-buttons' }, stateButtons(ctx, p))),
@@ -997,9 +1000,9 @@ export function renderDetail(ctx) {
     ui.showTime === p.id ? timeLine(ctx, p, today) : null,
     teamMessages(ctx, p),
     statusLine(ctx, p),
-    p.state !== 'active' ? h('p', { class: 'banner' }, p.state === 'paused' ? 'This project is paused. It is hidden from Today.' : 'This project is finished.') : null,
-    mainChip(ctx, p), // 📂 Kilns › (this project is under a main project)
-    subProjectsBlock(ctx, p, today), // a main project: its projects
+    p.state !== 'active' ? h('p', { class: 'banner' }, p.state === 'paused' ? `This ${kindWord(ctx, p)} is paused. It is hidden from Today.` : `This ${kindWord(ctx, p)} is finished.`) : null,
+    mainChip(ctx, p), // 📂 Kilns › 📂 Supplier approval › (the projects this task is in)
+    subProjectsBlock(ctx, p, today), // a 📂 project: TASKS (N)
 
     section(stepsTitle(),
       h('ul', { class: 'steps sortable-steps', key: 'steps-' + p.id, 'data-project': p.id },
@@ -1021,6 +1024,7 @@ export function renderDetail(ctx) {
         ui.showDone ? h('ul', { class: 'steps' }, doneSteps.slice(0, ui.doneLimit || 10).map((s) => stepRow(ctx, p, s))) : null,
         ui.showDone && doneSteps.length > (ui.doneLimit || 10)
           ? h('button', { class: 'link small', onClick: () => { ui.doneLimit = (ui.doneLimit || 10) + 30; ctx.render(); } }, `Show older (${doneSteps.length - (ui.doneLimit || 10)})`) : null) : null),
+    emailThreadBlock(ctx, p), // a task made from an email: EMAIL THREAD (📧 them / ↩ you)
 
     projectDiary(ctx, p, upd),
 
@@ -1037,7 +1041,7 @@ export function renderDetail(ctx) {
     np ? h('div', { class: 'next-project bottom', key: 'np-' + p.id },
       h('span', null, '✓ Green for today'),
       h('button', { class: 'btn primary small', onClick: () => ctx.openNextOpen(np.id) },
-        h('span', { class: `dot ${dotColour(np, today)}` }), ` Next project: ${np.name} →`)) : null);
+        h('span', { class: `dot ${dotColour(np, today)}` }), ` Next task: ${np.name} →`)) : null);
 }
 
 

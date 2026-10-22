@@ -1017,11 +1017,11 @@ a.team-line.msg { background: #eef4ff; border-color: #93b4f8; color: #1e40af; fo
 .reply-round .round-actions .round-btn.primary { grid-column: 1 / -1; justify-content: center; } /* "Open in Outlook to send" never cut off */
 .reply-round .round-btn { white-space: normal; }
 
-/* 📂 Main projects: nested list, the "Put under" box, the sub-projects table, the Main projects page */
-.prow.child { margin-left: 26px; border-left: 2px solid var(--line); border-radius: 0 var(--radius) var(--radius) 0; }
-.fold { border: 0; background: none; width: 24px; flex: none; padding: 0; cursor: pointer; color: #475569; font-size: 18px; line-height: 1; }
-.fold:hover { color: var(--text); }
+/* 📂 Projects: project chips under a task's row, the "Add to a project" box, the TASKS table, the Projects page */
+.prow-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; }
+.prow-chips .tag { margin-left: 0; font-size: 11.5px; }
 .tag.main-tag { background: var(--panel); color: #475569; }
+.main-chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .main-chip { display: inline-block; margin: 6px 0 2px; border: 1px solid var(--line); background: var(--brand-soft); color: var(--brand); border-radius: 99px; padding: 2px 12px; font-size: 13px; cursor: pointer; }
 .main-box { border: 1px solid var(--line); border-radius: 10px; background: #fff; padding: 8px; margin: 4px 0 10px auto; width: 340px; max-width: 100%; display: flex; flex-direction: column; gap: 6px; }
 .main-box-head { display: flex; justify-content: space-between; align-items: center; }
@@ -1030,6 +1030,14 @@ a.team-line.msg { background: #eef4ff; border-color: #93b4f8; color: #1e40af; fo
 .main-box-item { width: 100%; text-align: left; border: 0; background: none; padding: 7px 9px; border-radius: 7px; cursor: pointer; font-size: 14px; }
 .main-box-item.on, .main-box-item:hover { background: var(--brand-soft); }
 .main-box-item.create { color: var(--brand); font-weight: 600; }
+.main-box-item.in { font-weight: 600; }
+/* EMAIL THREAD on a task made from an email: 📧 them / ↩ you, newest last */
+.email-thread h3 { font-size: 12px; letter-spacing: .04em; color: var(--muted); }
+.thread-list { display: flex; flex-direction: column; gap: 6px; margin: 6px 0; }
+.thread-row { border-left: 3px solid var(--line); padding: 4px 10px; }
+.thread-row.me { border-left-color: var(--brand); background: var(--brand-soft); border-radius: 0 8px 8px 0; }
+.thread-head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.thread-preview { margin-top: 2px; overflow-wrap: anywhere; }
 .main-box-remove { text-align: left; border: 0; background: none; color: var(--red); padding: 4px 9px; cursor: pointer; font-size: 14px; }
 .sub-projects h3 { font-size: 12px; letter-spacing: .04em; color: var(--muted); }
 .sub-table { width: 100%; border-collapse: collapse; font-size: 14px; margin: 6px 0; }

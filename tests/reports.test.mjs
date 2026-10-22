@@ -36,13 +36,13 @@ test('search finds names, steps, waiting names and work notes (case does not mat
   assert.ok(!projectMatches(p, 'glaze'));
 });
 
-test('Diary: ticks, notes with their step, and deleted projects marked', () => {
+test('Diary: ticks, notes with their step, and deleted tasks marked', () => {
   const { data, history } = sample();
   const day = diaryEntries(data, history).get('2026-10-09');
   const texts = day.map((l) => `${l.name}: ${l.text}`);
   assert.ok(texts.includes('Kiln trial: ✓ Call supplier'));
   assert.ok(texts.some((t) => t.startsWith('Kiln trial: 📝 Spoke to Ravi') && t.includes('(on: Call supplier)')));
-  assert.ok(texts.some((t) => t === 'Old test (deleted project): 📝 Gone note'));
+  assert.ok(texts.some((t) => t === 'Old test (deleted task): 📝 Gone note'));
   assert.ok(day.every((l, i) => i === 0 || day[i - 1].at >= l.at), 'newest first');
 });
 
@@ -50,7 +50,7 @@ test('Today\'s summary: done steps, notes, next step and who you wait on', () =>
   const { data, history } = sample();
   const text = summaryText(data, history, '2026-10-09', 'Fri, 9 Oct 2026');
   assert.match(text, /^Daily update — Fri, 9 Oct 2026/);
-  assert.match(text, /1 step done across 1 project\./);
+  assert.match(text, /1 step done across 1 task\./);
   assert.match(text, /✅ Call supplier/);
   assert.match(text, /📝 Spoke to Ravi \(on: Call supplier\)/, 'each note says which step it is about');
   assert.match(text, /→ Next: Order frit/);

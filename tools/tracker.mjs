@@ -11,24 +11,27 @@
 //   node tools/tracker.mjs add-steps <project> "<step>" ["<step>" ...]
 //   node tools/tracker.mjs tick <project> "<step text or id>"
 //   node tools/tracker.mjs set-about <project> "<short description>"
-//   node tools/tracker.mjs set-main <project> <main project | none> [--create]   (📂 put it under a main project)
+//   node tools/tracker.mjs add-to <task> <project> [--create]   (📂 a task can be in several projects)
+//   node tools/tracker.mjs remove-from <task> <project>        (takes it out of that project)
+//   node tools/tracker.mjs set-main <task> <project | none> [--create]   (older name of add-to; "none" = out of every project)
 //   node tools/tracker.mjs only-on <project> <Mon,Thu|every> [--remind HH:MM|off]
 //   node tools/tracker.mjs edit-step <project> "<step text or id>" "<new text>"
 //   node tools/tracker.mjs add-note <project> "<text>"
-//   node tools/tracker.mjs new-project "<name>" [--group "<group>"] [--priority high|medium|low] [--steps "<a>" "<b>" ...]
+//   node tools/tracker.mjs new-task "<name>" [--group "<group>"] [--priority high|medium|low] [--steps "<a>" "<b>" ...] [--project "<project>"]
+//                         (new-project: the older name, the same)
 //   node tools/tracker.mjs restore <YYYY-MM-DD>          (shows that version; add --yes to restore it)
 //   node tools/tracker.mjs replies                       (emails waiting for your reply, for /replies)
 //   node tools/tracker.mjs mail-body <email>             (the newest email's words; worktask.in only)
 //   node tools/tracker.mjs set-reply <email> "<text>"    (a reply draft by Claude; it is NEVER sent from here)
 //
-// <project> is a project id, or part of its name. <email> is the id shown by `replies`, or a unique part of the subject or name.
+// <task> / <project> is its id, or part of its name (a "task" is what the app once called a project; a 📂 "project" holds tasks). <email> is the id shown by `replies`, or a unique part of the subject or name.
 
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync, readdirSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { applyOps, makeOp, newId, emptyData } from '../docs/ops.js';
-import { dotColour, nextStep, todayIndia, isOverdue, colourCounts, isSnoozed, restUntil, onlyDaysOf, onlyDaysLabel, awakeProjects, repliesOf, mailThreads, findMailThread, indiaDate, parentOf, childrenOf, isMainProject, canPutUnder, mainColour, mainSummary } from '../docs/rules.js';
+import { dotColour, nextStep, todayIndia, isOverdue, colourCounts, isSnoozed, restUntil, onlyDaysOf, onlyDaysLabel, awakeProjects, repliesOf, mailThreads, findMailThread, indiaDate, parentOf, parentsOf, parentIdsOf, childrenOf, isMainProject, canPutUnder, mainColour, mainSummary, normalizeParents, mailThreadOf } from '../docs/rules.js';
 import { DATA_OWNER, DATA_REPO, MOVED_TO } from '../docs/config.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -97,9 +100,9 @@ function pull() {
 }
 
 function readState() {
-  if (SERVER) return JSON.parse(JSON.stringify({ data: server.data, history: server.history }));
+  if (SERVER) { const st = JSON.parse(JSON.stringify({ data: server.data, history: server.history })); normalizeParents(st.data); return st; }
   const dataFile = join(DATA, 'data.json');
-  const data = existsSync(dataFile) ? JSON.parse(readFileSync(dataFile, 'utf8')) : emptyData();
+  const data = normalizeParents(existsSync(dataFile) ? JSON.parse(readFileSync(dataFile, 'utf8')) : emptyData()); // older data: parentId → parentIds
   const history = {};
   const hdir = join(DATA, 'history');
   if (existsSync(hdir)) {
@@ -197,14 +200,14 @@ function serverRestore(date, yes) {
 }
 
 function findProject(data, query) {
-  if (!query) throw new Error('Say which project (id or part of its name).');
+  if (!query) throw new Error('Say which task or project (id or part of its name).');
   const q = query.toLowerCase();
   const exact = data.projects.find((p) => p.id === query || p.name.toLowerCase() === q);
   if (exact) return exact;
   const hits = data.projects.filter((p) => p.name.toLowerCase().includes(q));
   if (hits.length === 1) return hits[0];
-  if (!hits.length) throw new Error(`No project matches "${query}".`);
-  throw new Error(`Several projects match "${query}": ${hits.map((p) => `${p.name} [${p.id}]`).join(', ')}`);
+  if (!hits.length) throw new Error(`No task or project matches "${query}".`);
+  throw new Error(`Several match "${query}": ${hits.map((p) => `${p.name} [${p.id}]`).join(', ')}`);
 }
 
 const ORDER = { red: 0, yellow: 1, green: 2, grey: 3 };
@@ -212,12 +215,12 @@ const ORDER = { red: 0, yellow: 1, green: 2, grey: 3 };
 function line(p, today, data = null) {
   const ns = nextStep(p);
   const c = dotColour(p, today);
-  const main = data && parentOf(data, p);
+  const mains = data ? parentsOf(data, p) : [];
   const kids = data && isMainProject(data, p) ? childrenOf(data, p.id) : null;
   const bits = [
-    `${(isSnoozed(p, today) ? 'SNOOZE' : c.toUpperCase()).padEnd(6)} ${p.name} [${p.id}]`,
-    main ? `main: ${main.name}` : null,
-    kids ? `sub-projects: ${kids.length ? kids.map((k) => k.name).join(', ') : 'none yet'} (${mainSummary(kids, today)}; worst ${mainColour(p, kids, today)})` : null,
+    `${(isSnoozed(p, today) ? 'SNOOZE' : c.toUpperCase()).padEnd(6)} ${kids ? '📂 ' : ''}${p.name} [${p.id}]`,
+    mains.length ? `in: ${mains.map((m) => m.name).join(', ')}` : null,
+    kids ? `PROJECT — tasks: ${kids.length ? kids.map((k) => k.name).join(', ') : 'none yet'} (${mainSummary(kids, today)}; worst ${mainColour(p, kids, today)})` : null,
     isSnoozed(p, today) ? `snoozed until ${restUntil(p, today)}` : null,
     onlyDaysOf(p).length ? `only on: ${onlyDaysLabel(p.onlyDays)}` : null,
     p.status ? `status: ${p.status}` : null,
@@ -262,7 +265,7 @@ try {
       const active = data.projects.filter((p) => p.state === 'active');
       const awake = awakeProjects(data, today);
       const snoozed = active.length - awake.length;
-      console.log(`Today ${today}: ${awake.length} active projects — ${c.red} red (not looked at), ${c.yellow} yellow (opened), ${c.green} green (done for today).${snoozed ? ` ${snoozed} snoozed.` : ''}`);
+      console.log(`Today ${today}: ${awake.length} active tasks — ${c.red} red (not looked at), ${c.yellow} yellow (opened), ${c.green} green (done for today).${snoozed ? ` ${snoozed} snoozed.` : ''}`);
       console.log(`Paused: ${data.projects.filter((p) => p.state === 'paused').length}. Finished: ${data.projects.filter((p) => p.state === 'finished').length}.`);
       if ((data.inbox || []).length) console.log(`Inbox: ${data.inbox.length} item(s) to sort — ${data.inbox.map((x) => x.text).join(' · ')}`);
       for (const p of sorted(active, today)) console.log('  ' + line(p, today, data));
@@ -274,14 +277,16 @@ try {
       withGroups(data);
       let list = data.projects.filter((p) => p.state === 'active');
       if (args.includes('--today')) list = list.filter((p) => ['red', 'yellow'].includes(dotColour(p, today))); // not green, not snoozed
-      if (!list.length) console.log(args.includes('--today') ? 'All active projects are green today.' : 'No active projects.');
-      // 📂 a project whose main project is also listed is shown indented under it
-      const ids = new Set(list.map((p) => p.id));
+      if (!list.length) console.log(args.includes('--today') ? 'All active tasks are green today.' : 'No active tasks.');
+      // tasks first (each once, with the 📂 projects it is in), then the 📂 projects with their tasks
       const order = sorted(list, today);
-      for (const p of order) {
-        if (p.parentId && ids.has(p.parentId)) continue;
+      const isProj = (p) => isMainProject(data, p);
+      for (const p of order.filter((x) => !isProj(x))) console.log(line(p, today, data));
+      const projs = order.filter(isProj);
+      if (projs.length) console.log('📂 Projects:');
+      for (const p of projs) {
         console.log(line(p, today, data));
-        for (const c of order.filter((x) => x.parentId === p.id)) console.log('    ↳ ' + line(c, today, data));
+        for (const c of sorted(childrenOf(data, p.id).filter((x) => x.state === 'active'), today)) console.log('    ↳ ' + c.name + ` [${c.id}]`);
       }
       break;
     }
@@ -335,38 +340,50 @@ try {
       }, 'Description');
       break;
     }
+    case 'add-to':
+    case 'remove-from':
     case 'set-main': {
-      // set-main <project> <main project | none> [--create]  (--create: makes the main project when no project matches)
+      // add-to <task> <project> [--create]   (📂 a task can be in several projects; --create makes the project when none matches)
+      // remove-from <task> <project>          (takes it out of that one project)
+      // set-main <task> <project | none> [--create]   (the older name: the same as add-to; "none" takes it out of every project)
       const create = args.includes('--create');
       const [query, ...rest] = args.filter((x) => x !== '--create');
       const mainQuery = rest.join(' ').trim();
-      if (!mainQuery) throw new Error('Say which main project (id or part of its name), or "none".');
+      if (!mainQuery) throw new Error(cmd === 'set-main' ? 'Say which project (id or part of its name), or "none".' : 'Say which project (id or part of its name).');
       let made = '';
       commitOps((state) => {
         const p = findProject(state.data, query);
-        if (mainQuery.toLowerCase() === 'none') {
-          if (!p.parentId) throw new Error(`${p.name} is not under a main project.`);
-          made = `${p.name} is no longer under a main project`;
+        const inIds = parentIdsOf(p);
+        if (cmd === 'set-main' && mainQuery.toLowerCase() === 'none') {
+          if (!inIds.length) throw new Error(`${p.name} is not in any project.`);
+          made = `${p.name} is no longer in any project`;
           return [makeOp('setParent', { projectId: p.id, parentId: null })];
+        }
+        if (cmd === 'remove-from') {
+          const main = findProject(state.data, mainQuery);
+          if (!inIds.includes(main.id)) throw new Error(`${p.name} is not in ${main.name}.`);
+          made = `${p.name} is no longer in ${main.name}`;
+          return [makeOp('removeFromProject', { projectId: p.id, parentId: main.id })];
         }
         let main = null;
         try { main = findProject(state.data, mainQuery); } catch (e) {
-          if (!create || !/No project matches/.test(e.message)) throw e;
+          if (!create || !/No task or project matches/.test(e.message)) throw e;
         }
         if (!main) {
-          made = `New main project ${mainQuery}; ${p.name} is under it`;
+          if (isMainProject(state.data, p)) throw new Error(`${p.name} is a project, so it cannot go into another project.`);
+          made = `New project ${mainQuery}; ${p.name} is in it`;
           return [makeOp('createMainProject', { projectId: newId(), name: mainQuery, groupId: p.groupId, childId: p.id })];
         }
-        if (p.parentId === main.id) throw new Error(`${p.name} is already under ${main.name}.`);
+        if (inIds.includes(main.id)) throw new Error(`${p.name} is already in ${main.name}.`);
         if (!canPutUnder(state.data, p, main)) {
-          throw new Error(main.parentId ? `${main.name} is itself under a main project (only one level).`
-            : main.id === p.id ? 'A project cannot be under itself.'
+          throw new Error(main.id === p.id ? 'A task cannot be in itself.'
+            : parentIdsOf(main).length ? `${main.name} is a task in a project, so it cannot hold tasks (a project is never inside another).`
               : main.state === 'finished' ? `${main.name} is finished.`
-                : `${p.name} holds other projects, so it cannot go under another one (only one level).`);
+                : `${p.name} is a project, so it cannot go into another project.`);
         }
-        made = `${p.name} is now under ${main.name}`;
-        return [makeOp('setParent', { projectId: p.id, parentId: main.id })];
-      }, 'Main project');
+        made = `${p.name} is now in ${main.name}${inIds.length ? ` (and still in ${parentsOf(state.data, p).map((x) => x.name).join(', ')})` : ''}`;
+        return [makeOp('addToProject', { projectId: p.id, parentId: main.id })];
+      }, cmd === 'remove-from' ? 'Taken out of a project' : 'Added to a project');
       if (made) console.log(made);
       break;
     }
@@ -411,9 +428,11 @@ try {
       }, 'Work note');
       break;
     }
-    case 'new-project': {
+    case 'new-task':
+    case 'new-project': { // (new-project: the older name of new-task)
       const name = args[0];
-      if (!name || name.startsWith('--')) throw new Error('Give the project name first.');
+      if (!name || name.startsWith('--')) throw new Error('Give the task name first.');
+      const inProject = argValue(args, '--project');
       const groupName = argValue(args, '--group');
       const priority = argValue(args, '--priority');
       const si = args.indexOf('--steps');
@@ -425,11 +444,13 @@ try {
           ? state.data.groups.find((x) => x.name.toLowerCase() === groupName.toLowerCase())
           : state.data.groups[0];
         if (!g) throw new Error(`No group called "${groupName}". Groups: ${state.data.groups.map((x) => x.name).join(', ')}`);
+        const main = inProject ? findProject(state.data, inProject) : null;
+        if (main && !isMainProject(state.data, main)) throw new Error(`${main.name} is a task, not a 📂 project.`);
         const projectId = newId();
-        const ops = [makeOp('createProject', { projectId, name, groupId: g.id, priority })];
+        const ops = [makeOp('createProject', { projectId, name, groupId: main ? main.groupId : g.id, priority, ...(main ? { parentId: main.id } : {}) })];
         for (const text of steps) ops.push(makeOp('addStep', { projectId, stepId: newId(), text }));
         return ops;
-      }, `New project: ${name}`);
+      }, `New task: ${name}`);
       break;
     }
     case 'restore': {
@@ -486,6 +507,8 @@ try {
         console.log(`\n[${m.id}] ${m.subject}`);
         console.log(`  from: ${m.from}${m.mail.fromAddress ? ` <${m.mail.fromAddress}>` : ''} · waiting ${m.days} day(s) · in: ${m.name}${m.mail.messageId ? '' : ' · (no Outlook id: mail-body cannot read it)'}`);
         if (m.preview) console.log(`  newest email: ${m.preview.replace(/\s+/g, ' ').slice(0, 400)}`);
+        const th = m.project ? mailThreadOf(m.project) : [];
+        if (th.length) console.log('  email thread (oldest first):\n' + th.slice(-10).map((e) => `    ${e.fromMe ? '↩ you' : '📧 ' + (e.fromName || 'them')} ${indiaDate(e.at)}: ${String(e.preview || '').replace(/\s+/g, ' ').slice(0, 300)}`).join('\n'));
         const ns = notesOf(m);
         if (ns.length) console.log('  recent notes:\n' + ns.map((x) => `    ${x}`).join('\n'));
         if (m.reply && m.reply.state !== 'sent') console.log(`  draft (${m.reply.by}, ${m.reply.state}${m.newer ? ', a newer email came after it' : ''}): ${m.reply.text.replace(/\s+/g, ' ').slice(0, 300)}`);

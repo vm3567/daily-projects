@@ -265,32 +265,76 @@ export function colourCounts(data, today = todayIndia()) {
   return counts;
 }
 
-// ---------- Main projects (📂 one project holds a few others; only one level) ----------
+// ---------- Projects (📂 a project holds a few tasks; a task can be in several projects, or none) ----------
+// In the data every one of them is in data.projects: a "project" is one with isMain (or with tasks in it), a "task" is any
+// other one. A task lists the projects it is in as parentIds (older data: one parentId, read the same way).
 
-/** The projects put under this main project (any state; a deleted one is gone from the list). */
+/** The ids of the projects this task is in (parentIds; older data: parentId). */
+export function parentIdsOf(p) {
+  if (!p) return [];
+  const out = Array.isArray(p.parentIds) ? p.parentIds.filter((x) => typeof x === 'string' && x && x !== p.id) : [];
+  if (typeof p.parentId === 'string' && p.parentId && p.parentId !== p.id) out.push(p.parentId);
+  return [...new Set(out)];
+}
+
+/**
+ * Older saved data, read the new way (in place; done when data loads and before changes): parentId → parentIds,
+ * and every object that holds tasks is marked isMain (so it stays a project when it is emptied).
+ */
+export function normalizeParents(data) {
+  if (!data || !Array.isArray(data.projects)) return data;
+  for (const p of data.projects) {
+    if (!p || typeof p !== 'object') continue;
+    if ('parentId' in p || ('parentIds' in p && !Array.isArray(p.parentIds))) {
+      const list = parentIdsOf(p);
+      delete p.parentId;
+      if (list.length) p.parentIds = list; else delete p.parentIds;
+    }
+  }
+  const holders = new Set(data.projects.flatMap((p) => parentIdsOf(p)));
+  for (const p of data.projects) if (p && holders.has(p.id) && !p.isMain) p.isMain = true;
+  return data;
+}
+
+/** The tasks in this project (any state; a deleted one is gone from the list). */
 export function childrenOf(data, id) {
-  return id ? data.projects.filter((p) => p.parentId === id) : [];
+  return id ? data.projects.filter((p) => p.id !== id && parentIdsOf(p).includes(id)) : [];
 }
 
-/** The main project this one is under, or null (also when its main no longer exists). */
+/** The projects this task is in (the ones that still exist), in the order it was added to them. */
+export function parentsOf(data, p) {
+  return parentIdsOf(p).map((id) => data.projects.find((x) => x.id === id)).filter(Boolean);
+}
+
+/** The first project this task is in, or null. */
 export function parentOf(data, p) {
-  return (p && p.parentId && data.projects.find((x) => x.id === p.parentId && !x.parentId)) || null;
+  return parentsOf(data, p)[0] || null;
 }
 
-/** A main project: it holds at least one project, or was made as one (isMain, so a new empty one still shows). */
+/** A project: made as one (isMain, so a new empty one still shows) or it holds at least one task. */
 export function isMainProject(data, p) {
-  return !!p && !p.parentId && (!!p.isMain || data.projects.some((x) => x.parentId === p.id));
+  return !!p && (!!p.isMain || data.projects.some((x) => x.id !== p.id && parentIdsOf(x).includes(p.id)));
 }
 
 export function mainProjects(data) {
   return data.projects.filter((p) => p.state !== 'finished' && isMainProject(data, p));
 }
 
+/** The tasks: every object that is not a project. */
+export function tasksOf(data) {
+  return data.projects.filter((p) => !isMainProject(data, p));
+}
+
+/** The "✅ Tasks" list: the active tasks, each once (a task in two projects too); 📂 projects are left out. */
+export function activeTasks(data) {
+  return data.projects.filter((p) => p.state === 'active' && !isMainProject(data, p));
+}
+
 const WORST = ['red', 'yellow', 'green', 'grey'];
-/** The main project's dot: the worst of its own dot and its active children (resting / snoozed ones count as grey). */
+/** The project's dot: the worst of its own dot and its active tasks (resting / snoozed ones count as grey). */
 export function mainColour(main, children, today = todayIndia()) {
   const live = (children || []).filter((c) => c.state === 'active');
-  // a main with no step of its own is just a holder: only its projects decide its colour
+  // a project with no step of its own is just a holder: only its tasks decide its colour
   let best = live.length && !nextStep(main, today) ? 'grey' : dotColour(main, today);
   for (const c of children || []) {
     if (c.state !== 'active') continue;
@@ -300,76 +344,52 @@ export function mainColour(main, children, today = todayIndia()) {
   return best;
 }
 
-/** "3 projects · 1 red · 2 yellow" / "3 projects · all green" (its active projects). */
+/** "3 tasks · 1 red · 2 yellow" / "3 tasks · all green" (its active tasks). */
 export function mainSummary(children, today = todayIndia()) {
   const active = (children || []).filter((c) => c.state === 'active');
-  if (!active.length) return (children || []).length ? `${children.length} project${children.length === 1 ? '' : 's'} · none active` : 'No projects inside yet';
+  if (!active.length) return (children || []).length ? `${children.length} task${children.length === 1 ? '' : 's'} · none active` : 'No tasks in it yet';
   const n = { red: 0, yellow: 0, green: 0, grey: 0 };
   for (const c of active) n[dotColour(c, today)]++;
-  const head = `${active.length} project${active.length === 1 ? '' : 's'}`;
+  const head = `${active.length} task${active.length === 1 ? '' : 's'}`;
   const bits = [n.red ? `${n.red} red` : null, n.yellow ? `${n.yellow} yellow` : null].filter(Boolean);
   if (bits.length) return [head, ...bits].join(' · ');
   if (n.green === active.length) return `${head} · all green`;
   return [head, n.green ? `${n.green} green` : null, n.grey ? `${n.grey} resting` : null].filter(Boolean).join(' · ');
 }
 
-/** Can `child` go under `main`? (one level only, never itself, the main must be active or paused). */
+/** Can the task `child` go into the project `main`? (never itself; a project is never inside another; the project is active or paused). */
 export function canPutUnder(data, child, main) {
   if (!child || !main || child.id === main.id) return false;
-  if (main.parentId || main.state === 'finished') return false; // a main cannot itself be under another
-  if (child.isMain || data.projects.some((x) => x.parentId === child.id)) return false; // a main cannot go under another
+  if (parentIdsOf(main).length || main.state === 'finished') return false; // something inside a project cannot hold tasks
+  if (isMainProject(data, child)) return false; // a project is never inside another project
   return true;
 }
 
 /**
- * The "📂 Put under a main project…" box: what to offer for `query` (any case, anywhere in the name).
- * Main projects first, then other active projects that could become one. `create` = the typed name when
- * nothing matches it exactly (offered as "+ Create '<typed>' as a new main project").
+ * The "📂 Add to a project…" box: the projects to offer for `query` (any case, anywhere in the name); `in` = this task is
+ * already in it (shown with ✓; picking it again takes the task out). `create` = the typed name when no project has
+ * exactly that name (offered as "+ Create '<typed>' as a new project").
  */
 export function mainChoices(data, p, query = '') {
   const q = String(query || '').trim().toLowerCase();
-  const fits = (x) => x.id !== p.parentId && canPutUnder(data, p, x) && (!q || x.name.toLowerCase().includes(q));
+  const inIds = parentIdsOf(p);
+  const fits = (x) => (inIds.includes(x.id) || canPutUnder(data, p, x)) && x.id !== p.id && (!q || x.name.toLowerCase().includes(q));
   const mains = data.projects.filter((x) => isMainProject(data, x) && x.state !== 'finished' && fits(x));
-  const others = data.projects.filter((x) => x.state === 'active' && !isMainProject(data, x) && fits(x));
   const exact = q && data.projects.some((x) => isMainProject(data, x) && x.name.trim().toLowerCase() === q);
-  return { items: [...mains.map((x) => ({ p: x, main: true })), ...others.map((x) => ({ p: x, main: false }))], create: q && !exact ? String(query).trim() : null };
+  return { items: mains.map((x) => ({ p: x, main: true, in: inIds.includes(x.id) })), create: q && !exact && !isMainProject(data, p) ? String(query).trim() : null };
 }
 
-/** "+ Add a project here" on a main project's page: the projects that can go under it, for `query`. */
+/** "+ Add a task here" on a project's page: the tasks that can go into it, for `query`. */
 export function addHereChoices(data, main, query = '') {
   const q = String(query || '').trim().toLowerCase();
-  return data.projects.filter((x) => x.state !== 'finished' && x.parentId !== main.id && canPutUnder(data, x, main)
+  return data.projects.filter((x) => x.state !== 'finished' && !parentIdsOf(x).includes(main.id) && canPutUnder(data, x, main)
     && (!q || x.name.toLowerCase().includes(q)));
 }
 
-/**
- * A project list with main projects and their projects under them: [{ p, depth, kids }].
- * `list` is already in order (red first or my order): a project whose main is also in the list goes under it
- * (in the same order); a folded main (`folded[id]`) hides its rows. Others stay at the top level.
- */
-export function nestList(list, folded = {}) {
-  const ids = new Set(list.map((p) => p.id));
-  const under = new Map();
-  for (const p of list) {
-    if (p.parentId && ids.has(p.parentId) && p.parentId !== p.id) {
-      if (!under.has(p.parentId)) under.set(p.parentId, []);
-      under.get(p.parentId).push(p);
-    }
-  }
-  const out = [];
-  for (const p of list) {
-    if (p.parentId && ids.has(p.parentId) && p.parentId !== p.id) continue;
-    const kids = under.get(p.id) || [];
-    out.push({ p, depth: 0, kids: kids.length });
-    if (!folded[p.id]) for (const c of kids) out.push({ p: c, depth: 1, kids: 0 });
-  }
-  return out;
-}
-
-/** Today: a main project with no own next step only holds its projects; they show as normal rows (the main is left out). */
+/** Today: a project with no own next step only holds its tasks; they show as normal rows (the project is left out). */
 export function todayWithoutEmptyMains(list, today = todayIndia()) {
-  const parents = new Set(list.filter((p) => p.parentId).map((p) => p.parentId));
-  return list.filter((p) => !(parents.has(p.id) && !nextStep(p, today)));
+  const parents = new Set(list.flatMap((p) => parentIdsOf(p)));
+  return list.filter((p) => !((p.isMain || parents.has(p.id)) && !nextStep(p, today)));
 }
 
 // ---------- People (@mentions) ----------
@@ -483,7 +503,7 @@ export function personStatus(data, person, today = todayIndia()) {
  */
 /** Real work in the history, the same as the dot's rule: your notes, ticks and time (the team's counts through teamDays). */
 const WORK = new Set(['note_added', 'step_ticked', 'time_logged', 'time_added', 'reply_sent']);
-const NOT_WORK = new Set(['created', 'snoozed', 'woke', 'step_remind', 'team_ticked', 'team_note', 'team_step_added', 'team_step_unticked', 'team_note_deleted', 'team_moved', 'mail_note', 'reply_prepared', 'mail_replied']); // (the team's work counts through teamDays)
+const NOT_WORK = new Set(['created', 'snoozed', 'woke', 'step_remind', 'team_ticked', 'team_note', 'team_step_added', 'team_step_unticked', 'team_note_deleted', 'team_moved', 'mail_note', 'mail_task', 'reply_prepared', 'mail_replied']); // (the team's work counts through teamDays)
 
 /** On that day, was every open step of the project waiting for a "remind me" date? */
 function restingByReminders(p, day) {
@@ -774,6 +794,14 @@ export function mailKey(m) {
   return m.kind === 'inbox' ? `inbox:${m.item.id}` : m.kind === 'step' ? `step:${m.project.id}:${m.step.id}` : `project:${m.project.id}`;
 }
 
+export const THREAD_MAX = 50; // a task made from an email keeps its newest 50 emails
+export const THREAD_PREVIEW_MAX = 300;
+
+/** A task made from an email: its emails [{ at, fromName, fromMe, preview, link, messageId }], oldest first (only good entries). */
+export function mailThreadOf(p) {
+  return (p && Array.isArray(p.thread) ? p.thread : []).filter((e) => e && typeof e === 'object' && typeof e.at === 'string');
+}
+
 /** The newest email note (from Outlook) on this step / project, or null. */
 function newestMailNote(p, stepId) {
   return (p.workNotes || []).find((n) => n.mail && (n.stepId || null) === (stepId || null)) || null;
@@ -797,9 +825,13 @@ export function mailThreads(data) {
     const mails = (p.workNotes || []).filter((n) => n.mail);
     if (p.mail) {
       const n = newestMailNote(p, null);
+      const th = mailThreadOf(p); // a task made from an email: its emails, newest last
+      const last = th.length ? th[th.length - 1] : null;
       out.push({ kind: 'project', ref: { projectId: p.id }, id: p.id, mail: p.mail, reply: p.reply || null, item: null, project: p, step: null,
-        name: p.name, at: p.mail.at || (n && n.createdAt) || p.createdAt, preview: n ? n.text : String(p.notes || '').slice(-300),
-        link: (n && n.link) || (p.links || []).find((l) => l.id === p.id + '-link') || null, count: 1 + mails.filter((x) => !x.stepId).length });
+        name: p.name, at: p.mail.at || (last && last.at) || (n && n.createdAt) || p.createdAt,
+        preview: last ? last.preview : n ? n.text : String(p.notes || '').slice(-300),
+        link: last && last.link ? { url: last.link, title: p.mail.subject || p.name } : (n && n.link) || (p.links || []).find((l) => l.id === p.id + '-link') || null,
+        count: th.length || 1 + mails.filter((x) => !x.stepId).length, lastFromMe: last ? !!last.fromMe : false });
     }
     for (const s of p.steps) {
       if (!s.mail || s.done) continue;
@@ -823,7 +855,7 @@ export function replyState(m, today = todayIndia()) {
   const r = m.reply;
   if (r && r.state === 'ready') return 'ready';
   if (r && r.state === 'later') return r.laterUntil && r.laterUntil > today ? 'later' : 'ready';
-  if (m.mail.fromMe) return 'done';
+  if (m.mail.fromMe || m.lastFromMe) return 'done'; // the newest email is your own: nothing to answer
   if (!r || waitingAgain(m)) return 'waiting';
   return 'done';
 }

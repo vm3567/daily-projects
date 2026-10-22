@@ -25,7 +25,7 @@ export function diaryEntries(data, history) {
   const exists = new Set(data.projects.map((p) => p.id));
   const nameOf = (e) => {
     const p = data.projects.find((x) => x.id === e.projectId);
-    return p ? p.name : `${e.projectName || ''} (deleted project)`;
+    return p ? p.name : `${e.projectName || ''} (deleted task)`;
   };
   const events = Object.values(history).flat();
   for (const e of events) {
@@ -87,7 +87,7 @@ export function summaryText(data, history, today, dateText) {
     blocks.push(b.join('\n'));
   }
   if (!blocks.length) return `${title}\n\nNothing recorded yet today.`;
-  const lines = [title, `${doneCount} step${doneCount === 1 ? '' : 's'} done across ${blocks.length} project${blocks.length === 1 ? '' : 's'}.`, '', ...blocks];
+  const lines = [title, `${doneCount} step${doneCount === 1 ? '' : 's'} done across ${blocks.length} task${blocks.length === 1 ? '' : 's'}.`, '', ...blocks];
   const waiting = (data.people || []).filter((person) => personStatus(data, person, today).waiting > 0);
   if (waiting.length) lines.push('', `⏳ Waiting on: ${waiting.map((x) => x.name).join(', ')}`);
   return lines.join('\n');

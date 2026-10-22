@@ -14,7 +14,7 @@ The user is not a programmer. Use short, plain English.
    node tools/tracker.mjs restore <YYYY-MM-DD>
    ```
 
-3. Tell the user in 2–3 lines what that version has (how many projects, their names) and that:
+3. Tell the user in 2–3 lines what that version has (how many tasks and projects, their names) and that:
    - everything after that day will be replaced by this version,
    - nothing is lost for good — the current version stays in the history and can be brought back the same way,
    - the AI keys are not changed.

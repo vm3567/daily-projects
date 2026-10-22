@@ -145,12 +145,12 @@ export function renderDashboard(ctx) {
   // One screen: a strip of numbers on top, then three columns.
   return h('div', { class: 'dashboard compact' },
     h('div', { class: 'dash-tiles' },
-      tile('Today', `${greenNow} of ${active.length}`, allGreen ? 'all green 🎉' : 'projects green', allGreen ? 'good' : ''),
+      tile('Today', `${greenNow} of ${active.length}`, allGreen ? 'all green 🎉' : 'tasks green', allGreen ? 'good' : ''),
       tile('Streak', `🔥 ${st.current}`, st.current === 1 ? 'day all green' : 'days in a row', st.current ? 'warm' : ''),
       tile('Best streak', String(st.best), st.best === 1 ? 'day' : 'days'),
       tile('Green days', String(allGreenDays), `in ${monthName}`),
       tile('Steps done', String(totalSteps), 'all time'),
-      tile('Finished', String(finishedIds.size), finishedIds.size === 1 ? 'project' : 'projects')),
+      tile('Finished', String(finishedIds.size), finishedIds.size === 1 ? 'task' : 'tasks')),
 
     h('div', { class: 'dash-cols' },
       h('div', { class: 'dash-col' },
@@ -174,7 +174,7 @@ export function renderDashboard(ctx) {
           h('ul', { class: 'dash-bars' }, timeRows.slice(0, 5).map(({ p, m }) => h('li', { key: 'tm-' + p.id },
             h('button', { class: 'link', onClick: () => ctx.openProject(p.id) }, p.name),
             h('div', { class: 'dash-bar' }, bar(m, maxTime, 6)), h('span', { class: 'muted small' }, fmtMinutes(m))))))
-          : h('p', { class: 'muted small' }, 'No time logged this week. Press ▶ Start in a project.'),
+          : h('p', { class: 'muted small' }, 'No time logged this week. Press ▶ Start in a task.'),
         h('div', { class: 'dash-card-head' }, h('h3', null, 'Time this week'), h('button', { class: 'link small', onClick: () => ctx.goTime() }, 'Time report →'))),
         card('Most worked this month', top.length ? h('ul', { class: 'dash-bars' }, top.map(({ p, n }) => h('li', { key: 'top-' + p.id },
           h('button', { class: 'link', onClick: () => ctx.openProject(p.id) }, p.name),
@@ -193,7 +193,7 @@ export function renderDashboard(ctx) {
           h('button', { class: 'link', onClick: () => ctx.openPerson(person.id) }, person.name),
           h('span', { class: 'muted small' }, s.waiting ? `waiting ${s.maxWait} day${s.maxWait === 1 ? '' : 's'}` : 'date passed'))))
           : h('p', { class: 'muted small' }, 'Nobody to chase right now.')),
-        card('Finished projects', shelf.length ? h('div', { class: 'shelf' }, shelf.slice(0, 6).map((p) => h('button', {
+        card('Finished tasks', shelf.length ? h('div', { class: 'shelf' }, shelf.slice(0, 6).map((p) => h('button', {
           class: 'trophy', key: 'tr-' + p.id, title: `Finished ${fmtDay(indiaDate(p.stateChangedAt))}`, onClick: () => ctx.openProject(p.id),
-        }, `🏆 ${p.name}`))) : h('p', { class: 'muted small' }, 'Finish a project and its trophy shows here.')))));
+        }, `🏆 ${p.name}`))) : h('p', { class: 'muted small' }, 'Finish a task and its trophy shows here.')))));
 }

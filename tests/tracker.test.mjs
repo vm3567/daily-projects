@@ -76,8 +76,8 @@ test('set-about saves the project\'s short description (cut to 1000 letters)', (
 });
 
 test('summary, today list and show are readable', () => {
-  assert.match(tracker('summary'), /1 active projects/);
-  assert.match(tracker('list', '--today'), /All active projects are green today/, 'worked on today = green, so nothing left');
+  assert.match(tracker('summary'), /1 active tasks/);
+  assert.match(tracker('list', '--today'), /All active tasks are green today/, 'worked on today = green, so nothing left');
   const show = tracker('show', 'kiln');
   assert.match(show, /Open steps:/);
   assert.match(show, /Element 3 is broken/);
@@ -85,7 +85,7 @@ test('summary, today list and show are readable', () => {
 
 test('unknown group or project gives a clear error', () => {
   assert.throws(() => tracker('new-project', 'X', '--group', 'Nope'), /No group called "Nope"/);
-  assert.throws(() => tracker('add-steps', 'nothing-like-this', 'a'), /No project matches/);
+  assert.throws(() => tracker('add-steps', 'nothing-like-this', 'a'), /No task or project matches/);
 });
 
 test('restore: shows first, changes only with --yes, keeps today\'s AI keys', () => {
@@ -122,27 +122,48 @@ test('"📅 Only on": on a rest day the project is left out of list --today and 
   assert.match(show, /only on: \w+days/);
 });
 
-test('📂 set-main puts a project under a main project (by name), --create makes the main, "none" takes it out; summary / show / list say it', () => {
-  tracker('new-project', 'Dryer 1', '--group', 'Acton', '--steps', 'Check fan');
-  tracker('new-project', 'Dryer 2', '--group', 'Personal', '--steps', 'Check belt');
-  assert.throws(() => tracker('set-main', 'Dryer 1', 'Dryers'), /No project matches "Dryers"/, 'no --create: never made by guess');
-  assert.match(tracker('set-main', 'Dryer 1', 'Dryers', '--create'), /New main project Dryers; Dryer 1 is under it/);
+test('📂 add-to puts a task into a project (by name; a task can be in several), --create makes the project, remove-from takes it out of one; set-main is the older name ("none" = out of all); summary / show / list say it', () => {
+  tracker('new-task', 'Dryer 1', '--group', 'Acton', '--steps', 'Check fan');
+  tracker('new-project', 'Dryer 2', '--group', 'Personal', '--steps', 'Check belt'); // the older name still works
+  assert.throws(() => tracker('add-to', 'Dryer 1', 'Dryers'), /No task or project matches "Dryers"/, 'no --create: never made by guess');
+  assert.match(tracker('add-to', 'Dryer 1', 'Dryers', '--create'), /New project Dryers; Dryer 1 is in it/);
   const P = (name) => data().projects.find((p) => p.name === name);
   const main = P('Dryers');
-  assert.ok(main && main.isMain, 'made as a main project');
-  assert.equal(main.groupId, P('Dryer 1').groupId, 'in the same group as the project');
-  assert.equal(P('Dryer 1').parentId, main.id);
-  tracker('set-main', 'Dryer 2', 'dryers');
-  assert.equal(P('Dryer 2').parentId, main.id, 'an existing main, by a part of its name');
-  assert.throws(() => tracker('set-main', 'Dryers', 'Electric kiln'), /only one level/, 'a main cannot go under another');
-  assert.throws(() => tracker('set-main', 'Electric kiln', 'Dryer 1'), /only one level/, 'nor under a sub-project');
-  assert.match(tracker('show', 'Dryer 1'), /main: Dryers/);
-  assert.match(tracker('summary'), /Dryers \[[^\]]+\] \| sub-projects: Dryer 2, Dryer 1|Dryers \[[^\]]+\] \| sub-projects: Dryer 1, Dryer 2/);
+  assert.ok(main && main.isMain, 'made as a project');
+  assert.equal(main.groupId, P('Dryer 1').groupId, 'in the same group as the task');
+  assert.deepEqual(P('Dryer 1').parentIds, [main.id]);
+  tracker('set-main', 'Dryer 2', 'dryers'); // the older name = add-to
+  assert.deepEqual(P('Dryer 2').parentIds, [main.id], 'an existing project, by a part of its name');
+  assert.match(tracker('add-to', 'Dryer 2', 'Heat', '--create'), /New project Heat; Dryer 2 is in it/);
+  const heat = P('Heat');
+  assert.deepEqual(P('Dryer 2').parentIds, [main.id, heat.id], 'in two projects');
+  assert.throws(() => tracker('add-to', 'Dryer 2', 'Heat'), /already in Heat/);
+  assert.throws(() => tracker('add-to', 'Dryers', 'Heat'), /Dryers is a project, so it cannot go into another project/, 'a project is never inside another');
+  assert.throws(() => tracker('add-to', 'Electric kiln', 'Dryer 1'), /a task in a project, so it cannot hold tasks/);
+  assert.match(tracker('show', 'Dryer 2'), /in: Dryers, Heat/);
+  assert.match(tracker('summary'), /📂 Dryers \[[^\]]+\] \| PROJECT — tasks: (Dryer 2, Dryer 1|Dryer 1, Dryer 2)/);
   const list = tracker('list').split('\n');
-  const at = list.findIndex((l) => /\bDryers \[/.test(l));
-  assert.ok(at >= 0);
-  assert.deepEqual(list.slice(at + 1, at + 3).map((l) => /^ {4}↳ .*Dryer [12]/.test(l)), [true, true], 'its projects indented under it');
+  assert.equal(list.filter((l) => /^\S+\s+Dryer 2 \[/.test(l)).length, 1, 'a task in two projects is listed once');
+  const at = list.indexOf('📂 Projects:');
+  assert.ok(at >= 0, 'then the projects');
+  assert.ok(list.slice(at).some((l) => /^ {4}↳ Dryer 2 \[/.test(l)), 'with their tasks');
+  assert.match(tracker('remove-from', 'Dryer 2', 'Dryers'), /Dryer 2 is no longer in Dryers/);
+  assert.deepEqual(P('Dryer 2').parentIds, [heat.id], 'still in Heat');
+  assert.throws(() => tracker('remove-from', 'Dryer 2', 'Dryers'), /Dryer 2 is not in Dryers/);
   tracker('set-main', 'Dryer 2', 'none');
-  assert.equal(P('Dryer 2').parentId, undefined);
-  assert.throws(() => tracker('set-main', 'Dryer 2', 'none'), /not under a main project/);
+  assert.equal(P('Dryer 2').parentIds, undefined, 'out of every project');
+  assert.throws(() => tracker('set-main', 'Dryer 2', 'none'), /not in any project/);
+  tracker('new-task', 'Dryer 3', '--project', 'Dryers', '--steps', 'Check door');
+  assert.deepEqual(P('Dryer 3').parentIds, [main.id], 'new-task --project: made in it');
+});
+
+test('skills text: /add uses new-task and add-to (a task can be in several 📂 projects); /today reads the new list; no "main project" words left', async () => {
+  const { readFileSync } = await import('node:fs');
+  const skill = (n) => readFileSync(new URL(`../.claude/skills/${n}/SKILL.md`, import.meta.url), 'utf8');
+  assert.match(skill('add'), /tracker\.mjs new-task "<name>"/);
+  assert.match(skill('add'), /tracker\.mjs add-to "<task>" "<📂 project>"/);
+  assert.match(skill('today'), /📂 Projects:/);
+  for (const n of ['add', 'today', 'review-projects', 'replies', 'restore']) assert.doesNotMatch(skill(n), /main project|sub-project/i, n);
+  const usage = readFileSync(new URL('../tools/tracker.mjs', import.meta.url), 'utf8').split('\n').filter((l) => l.startsWith('//   node tools/tracker.mjs'));
+  for (const cmd of ['add-to', 'remove-from', 'set-main', 'new-task']) assert.ok(usage.some((l) => l.includes(` ${cmd} `)), cmd);
 });

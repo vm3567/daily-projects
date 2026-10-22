@@ -15,7 +15,7 @@ The user is not a programmer. Use short, plain English.
    node tools/tracker.mjs replies
    ```
 
-   Each email has an id in [brackets], the subject, who wrote, how many days it waits, where it is (project → step, or Inbox), recent notes and the newest lines.
+   Each email has an id in [brackets], the subject, who wrote, how many days it waits, where it is (task → step, or Inbox), the email thread (📧 them / ↩ you) for a task made from an email, recent notes and the newest lines.
 
 2. For each email waiting for a reply, read the newest email in full:
 
@@ -25,7 +25,7 @@ The user is not a programmer. Use short, plain English.
 
 3. Write a short, polite reply in the owner's voice:
    - Plain English, Indian business email tone (courteous, direct, no fancy words).
-   - Use the project's notes for facts. Never invent prices, dates or promises. If a fact is missing, write `[fill in: …]`.
+   - Use the task's notes for facts. Never invent prices, dates or promises. If a fact is missing, write `[fill in: …]`.
    - Start with "Dear <first name>," and end with:
 
      ```

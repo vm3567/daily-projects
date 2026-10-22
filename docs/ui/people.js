@@ -110,9 +110,9 @@ function stepItem(ctx, { project, step }, give = null) {
     step.waiting && !step.done ? h('button', { class: 'row-act draft', title: 'AI writes a short follow-up message', onClick: () => ctx.draftFollowUp(project, step) }, '✍ Draft') : null,
     onList ? h('span', { class: 'tag team-tag', title: `A Work Task task for ${task.assignee ? task.assignee.name : 'the team'}` }, `👥 on ${task.assignee ? task.assignee.name.split(/\s+/)[0] : 'their'}'s list`)
       : give && canGiveStep(give.user, project, step, task)
-        ? h('button', { class: 'row-act give', title: `Put this step on ${give.first}'s Work Task list (daily updates show on the project)`, onClick: () => ctx.giveSteps([{ project, step }], give.user, give.person) }, `→ Give to ${give.first}`)
+        ? h('button', { class: 'row-act give', title: `Put this step on ${give.first}'s Work Task list (daily updates show on the task)`, onClick: () => ctx.giveSteps([{ project, step }], give.user, give.person) }, `→ Give to ${give.first}`)
         : null,
-    h('button', { class: 'tag link-tag', title: 'Open project', onClick: () => ctx.openProject(project.id) }, project.name));
+    h('button', { class: 'tag link-tag', title: 'Open task', onClick: () => ctx.openProject(project.id) }, project.name));
 }
 
 function list(title, items, ctx, empty, give = null) {
@@ -172,7 +172,7 @@ function taskBox(ctx, person, give = null) {
   };
   const newProject = () => {
     if (!textNow()) { ctx.toast(`Write the task with ${first} first`); input()?.focus(); return; }
-    const name = (prompt('Name of the new project:', '') || '').trim();
+    const name = (prompt('Name of the new task:', '') || '').trim();
     if (!name) return;
     const projectId = newId();
     if (store.dispatch('createProject', { projectId, name, groupId: data.groups[0] && data.groups[0].id })) add(projectId, name);
@@ -182,22 +182,22 @@ function taskBox(ctx, person, give = null) {
     class: 'person-task block', key: 'ptask-' + person.id,
     onSubmit: (e) => { e.preventDefault(); if (list[0]) add(list[0].id, list[0].name); },
   },
-  h('div', { class: 'person-task-head small' }, `Add a task with ${first}`, h('span', { class: 'muted' }, ' · Enter = add to the first project')),
+  h('div', { class: 'person-task-head small' }, `Add a task with ${first}`, h('span', { class: 'muted' }, ' · Enter = add to the first task')),
   h('input', { name: 'task', key: 'person-task-input', value: t.text || '', autocomplete: 'off', placeholder: `e.g. Send the burner quote by Thursday`, 'aria-label': `Task with ${first}`,
     onInput: (e, el) => { t.text = el.value; } }), // kept, so a redraw never wipes what you typed
   h('div', { class: 'person-task-row' },
     chip(t.mode === 'me', 'I do it', () => { t.mode = 'me'; }, `Your task; ${first} is @mentioned`),
     chip(t.mode === 'wait', `Waiting on ${first}`, () => { t.mode = 'wait'; }, `${first} has to do it: shows Waiting with a day count`),
-    give ? chip(t.mode === 'give', `${first} does it (their list)`, () => { t.mode = 'give'; }, `Added to the project AND given to ${first} on Work Task right away`) : null,
+    give ? chip(t.mode === 'give', `${first} does it (their list)`, () => { t.mode = 'give'; }, `Added to the task AND given to ${first} on Work Task right away`) : null,
     h('span', { class: 'muted small' }, '· When:'),
     [[0, 'Today'], [1, 'Tomorrow'], [7, '1 week']].map(([d, label]) => chip(t.when === d, label, () => { t.when = d; },
       d ? `Hide it until ${fmtDay(addDays(today, d))}, then it comes back first` : 'From today'))),
-  h('div', { class: 'muted small' }, `In project (${first}'s projects first):`),
+  h('div', { class: 'muted small' }, `In task (${first}'s tasks first):`),
   h('div', { class: 'person-task-row' },
     list.map((p, i) => h('button', { class: 'chip' + (i === 0 ? ' first' : ''), type: 'button', key: 'ptp-' + p.id, onClick: () => add(p.id, p.name) }, p.name)),
-    h('input', { class: 'person-task-find', key: 'ptask-find', value: t.find, autocomplete: 'off', placeholder: 'Search…', 'aria-label': 'Search projects',
+    h('input', { class: 'person-task-find', key: 'ptask-find', value: t.find, autocomplete: 'off', placeholder: 'Search…', 'aria-label': 'Search tasks',
       onInput: (e, el) => { keep(); t.find = el.value; ctx.render(); } }),
-    h('button', { class: 'chip', type: 'button', onClick: newProject }, '+ New project')));
+    h('button', { class: 'chip', type: 'button', onClick: newProject }, '+ New task')));
 }
 
 /** One Work Task row's grey / red / orange lines (the same look as the email). */

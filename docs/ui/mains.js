@@ -1,9 +1,9 @@
-// 📂 Main projects: one project holds a few others (only one level).
-// The "Put under a main project…" box, the SUB-PROJECTS table on a main project's page, the "📂 Kilns ›" chip
-// on a project that is under one, the nested project list (▾ / ▸), and the "📂 Main projects" page.
+// 📂 Projects: a project holds a few tasks; a task can be in several projects (or none). A project is never inside another.
+// The "📂 Add to a project…" box (pick several: ✓ = in it), the TASKS table on a project's page, the "📂 Kilns ›" chips
+// on a task, the small project chips under a task's row in the lists, and the "📂 Projects" page.
 
 import { h, fmtDay } from './dom.js';
-import { dotColour, nextStep, todayIndia, indiaDate, childrenOf, parentOf, isMainProject, mainProjects, mainColour, mainSummary, mainChoices, addHereChoices, nestList } from '../rules.js';
+import { dotColour, nextStep, todayIndia, indiaDate, childrenOf, parentsOf, isMainProject, mainProjects, mainColour, mainSummary, mainChoices, addHereChoices } from '../rules.js';
 import { newId } from '../ops.js';
 
 const ORDER = { red: 0, yellow: 1, green: 2, grey: 3 };
@@ -15,7 +15,7 @@ function redFirst(list, colour) {
     .sort((a, b) => a.c - b.c || a.r - b.r || a.i - b.i).map((x) => x.p);
 }
 
-/** The dot a project shows in a nested list: a main project shows the worst of itself and its projects. */
+/** The dot in a list: a 📂 project shows the worst of itself and its tasks; a task its own dot. */
 export function listColour(data, p, today = todayIndia()) {
   return isMainProject(data, p) ? mainColour(p, childrenOf(data, p.id), today) : dotColour(p, today);
 }
@@ -24,7 +24,7 @@ function focusBox(key) {
   setTimeout(() => { const n = globalThis.document && document.querySelector(`[data-key="${key}"]`); if (n && n.focus) n.focus(); }, 30);
 }
 
-/** Open the box: mode 'parent' = pick a main project for p; mode 'add' = pick a project to put under the main project p. */
+/** Open the box: mode 'parent' = pick projects for the task p; mode 'add' = pick tasks to put into the project p. */
 export function openMainBox(ctx, p, mode = 'parent') {
   ctx.ui.mainBox = { id: p.id, mode, q: '', index: 0 };
   ctx.ui.projMenu = null;
@@ -32,55 +32,55 @@ export function openMainBox(ctx, p, mode = 'parent') {
   focusBox('mainbox-' + p.id);
 }
 
-/** What the box offers now: [{ label, run, kind }] (the highlighted one is picked by Enter). */
+/** What the box offers now: [{ label, run, kind, on }] (the highlighted one is picked by Enter). */
 export function mainBoxItems(ctx, p) {
   const { store, ui } = ctx;
   const data = store.view.data;
   const box = ui.mainBox || { q: '' };
-  const done = () => { ui.mainBox = null; ctx.render(); };
+  const again = () => { if (ui.mainBox) { ui.mainBox.q = ''; ui.mainBox.index = 0; } ctx.render(); focusBox('mainbox-' + p.id); }; // stays open: pick more
   if (box.mode === 'add') {
     return addHereChoices(data, p, box.q).slice(0, 12).map((x) => ({
       kind: 'project', p: x, label: x.name,
-      run: () => { ctx.act('setParent', { projectId: x.id, parentId: p.id }, `${x.name} is now under 📂 ${p.name}`); done(); },
+      run: () => { ctx.act('addToProject', { projectId: x.id, parentId: p.id }, `${x.name} added to 📂 ${p.name}`); again(); },
     }));
   }
   const { items, create } = mainChoices(data, p, box.q);
-  const out = items.slice(0, 12).map(({ p: m, main }) => ({
-    kind: main ? 'main' : 'project', p: m, label: m.name,
-    run: () => { ctx.act('setParent', { projectId: p.id, parentId: m.id }, `Put under 📂 ${m.name}`); done(); },
+  const out = items.slice(0, 12).map(({ p: m, in: on }) => ({
+    kind: 'main', p: m, label: m.name, on,
+    run: () => {
+      if (on) ctx.act('removeFromProject', { projectId: p.id, parentId: m.id }, `Taken out of 📂 ${m.name}`);
+      else ctx.act('addToProject', { projectId: p.id, parentId: m.id }, `Added to 📂 ${m.name}`);
+      again();
+    },
   }));
   if (create) {
     out.push({
-      kind: 'create', label: `+ Create '${create}' as a new main project`,
+      kind: 'create', label: `+ Create '${create}' as a new project`,
       run: () => {
-        ctx.act('createMainProject', { projectId: newId(), name: create, groupId: p.groupId, childId: p.id }, `New main project 📂 ${create} — ${p.name} is under it`);
-        done();
+        ctx.act('createMainProject', { projectId: newId(), name: create, groupId: p.groupId, childId: p.id }, `New project 📂 ${create} — ${p.name} is in it`);
+        again();
       },
     });
   }
   return out;
 }
 
-/** The smart box: type to find, ↓ ↑ to move, Enter or tap to pick, Esc to close. */
+/** The smart box: type to find, ↓ ↑ to move, Enter or tap to pick (✓ = already in it: pick again to take it out), Esc to close. */
 export function mainBox(ctx, p, mode = 'parent') {
-  const { store, ui } = ctx;
+  const { ui } = ctx;
   const box = ui.mainBox;
   if (!box || box.id !== p.id || (box.mode || 'parent') !== mode) return null;
   const items = mainBoxItems(ctx, p);
   const index = Math.min(Math.max(0, box.index || 0), Math.max(0, items.length - 1));
   const close = () => { ui.mainBox = null; ctx.render(); };
-  const main = box.mode === 'parent' ? parentOf(store.view.data, p) : null;
-  return h('div', { class: 'main-box', key: 'mainbox-wrap-' + p.id, role: 'dialog', 'aria-label': box.mode === 'add' ? 'Add a project here' : 'Put under a main project' },
+  return h('div', { class: 'main-box', key: 'mainbox-wrap-' + p.id, role: 'dialog', 'aria-label': box.mode === 'add' ? 'Add a task here' : 'Add to a project' },
     h('div', { class: 'main-box-head' },
-      h('strong', null, box.mode === 'add' ? `Add a project to 📂 ${p.name}` : '📂 Put under a main project'),
+      h('strong', null, box.mode === 'add' ? `Add a task to 📂 ${p.name}` : '📂 Add to a project'),
       h('button', { class: 'icon', type: 'button', 'aria-label': 'Close', onClick: close }, '✕')),
-    main ? h('button', {
-      class: 'main-box-remove', type: 'button',
-      onClick: () => { ctx.act('setParent', { projectId: p.id, parentId: null }, `Taken out of 📂 ${main.name}`); close(); },
-    }, `Remove from 📂 ${main.name}`) : null,
+    box.mode === 'add' ? null : h('p', { class: 'muted small' }, 'A task can be in several projects. ✓ = in it now; tap again to take it out.'),
     h('input', {
       class: 'main-box-input', key: 'mainbox-' + p.id, value: box.q, autocomplete: 'off', 'aria-label': 'Type a name',
-      placeholder: box.mode === 'add' ? 'Type a project name…' : 'Type a main project name…',
+      placeholder: box.mode === 'add' ? 'Type a task name…' : 'Type a project name…',
       onInput: (e, el) => { box.q = el.value; box.index = 0; ctx.render(); },
       onKeydown: (e) => {
         if (e.key === 'ArrowDown') { e.preventDefault(); box.index = Math.min(items.length - 1, index + 1); ctx.render(); }
@@ -91,17 +91,28 @@ export function mainBox(ctx, p, mode = 'parent') {
     }),
     h('ul', { class: 'main-box-list', role: 'listbox' }, items.map((it, i) => h('li', { key: 'mb-' + (it.p ? it.p.id : 'create') },
       h('button', {
-        class: 'main-box-item' + (i === index ? ' on' : '') + (it.kind === 'create' ? ' create' : ''), type: 'button', role: 'option', 'aria-selected': String(i === index),
+        class: 'main-box-item' + (i === index ? ' on' : '') + (it.kind === 'create' ? ' create' : '') + (it.on ? ' in' : ''), type: 'button', role: 'option',
+        'aria-selected': String(i === index), ...(it.kind === 'main' ? { 'aria-checked': String(!!it.on) } : {}),
         onClick: () => it.run(),
-      }, it.kind === 'main' ? '📂 ' : '', it.label)))),
-    !items.length ? h('p', { class: 'muted small' }, box.mode === 'add' ? 'No project can go here.' : 'Type a name.') : null);
+      }, it.on ? '✓ ' : '', it.kind === 'main' ? '📂 ' : '', it.label)))),
+    !items.length ? h('p', { class: 'muted small' }, box.mode === 'add' ? 'No task can go here.' : 'Type a name.') : null,
+    h('div', { class: 'row' }, h('button', { class: 'btn small', type: 'button', onClick: close }, 'Done')));
 }
 
-/** On a project that is under a main project: "📂 Kilns ›" (opens the main). */
+/** On a task that is in projects: "📂 Kilns ›" for each (opens that project). */
 export function mainChip(ctx, p) {
-  const main = parentOf(ctx.store.view.data, p);
-  if (!main) return null;
-  return h('button', { class: 'main-chip', key: 'mainchip-' + p.id, title: `Open the main project ${main.name}`, onClick: () => ctx.openProject(main.id) }, `📂 ${main.name} ›`);
+  const mains = parentsOf(ctx.store.view.data, p);
+  if (!mains.length) return null;
+  return h('div', { class: 'main-chips', key: 'mainchips-' + p.id }, mains.map((m) => h('button', {
+    class: 'main-chip', key: 'mainchip-' + p.id + '-' + m.id, title: `Open the project ${m.name}`, onClick: () => ctx.openProject(m.id),
+  }, `📂 ${m.name} ›`)));
+}
+
+/** Small chips under a task's row in a list: "📂 Kilns" "📂 Supplier approval" (the projects it is in). */
+export function projectChips(data, p) {
+  const mains = parentsOf(data, p);
+  if (!mains.length) return null;
+  return h('span', { class: 'prow-chips' }, mains.map((m) => h('span', { class: 'tag main-tag', key: 'pc-' + m.id, title: `In the project ${m.name}` }, `📂 ${m.name}`)));
 }
 
 /** The newest work or team note: { day, text } (email lines are not updates). */
@@ -112,16 +123,16 @@ function lastUpdate(p) {
 
 const short = (t, n = 60) => (t.length > n ? t.slice(0, n - 1) + '…' : t);
 
-/** On a main project's page: SUB-PROJECTS (N) — dot, name (+ 👥 person), Now, Last update; and the two buttons. */
+/** On a project's page: TASKS (N) — dot, name (+ 👥 person), Now, Last update; and the two buttons. */
 export function subProjectsBlock(ctx, p, today = todayIndia()) {
   const { store } = ctx;
   const data = store.view.data;
   if (!isMainProject(data, p)) return null;
   const kids = redFirst(childrenOf(data, p.id), (c) => dotColour(c, today));
   return h('section', { class: 'block sub-projects', key: 'subs-' + p.id },
-    h('h3', null, `SUB-PROJECTS (${kids.length})`),
+    h('h3', null, `TASKS (${kids.length})`),
     kids.length ? h('table', { class: 'sub-table' },
-      h('thead', null, h('tr', null, h('th', null, ''), h('th', null, 'Project'), h('th', null, 'Now'), h('th', null, 'Last update'))),
+      h('thead', null, h('tr', null, h('th', null, ''), h('th', null, 'Task'), h('th', null, 'Now'), h('th', null, 'Last update'))),
       h('tbody', null, kids.map((c) => {
         const ns = c.state === 'active' ? nextStep(c, today) : null;
         const lu = lastUpdate(c);
@@ -131,72 +142,44 @@ export function subProjectsBlock(ctx, p, today = todayIndia()) {
             c.state !== 'active' ? h('span', { class: 'tag' }, c.state) : null),
           h('td', { class: ns ? '' : 'warn' }, c.state !== 'active' ? '—' : ns ? short(ns.text) : 'No next step'),
           h('td', { class: 'muted small' }, lu ? `${fmtDay(lu.day)} · ${short(lu.text, 50)}` : '—'));
-      }))) : h('p', { class: 'muted small' }, 'No projects under it yet.'),
+      }))) : h('p', { class: 'muted small' }, 'No tasks in it yet.'),
     h('div', { class: 'sub-buttons' },
-      h('button', { class: 'btn small', type: 'button', onClick: () => openMainBox(ctx, p, 'add') }, '+ Add a project here'),
-      h('button', { class: 'btn small', type: 'button', onClick: () => newProjectHere(ctx, p) }, '+ New project here')),
+      h('button', { class: 'btn small', type: 'button', onClick: () => openMainBox(ctx, p, 'add') }, '+ Add a task here'),
+      h('button', { class: 'btn small', type: 'button', onClick: () => newProjectHere(ctx, p) }, '+ New task here')),
     mainBox(ctx, p, 'add'));
 }
 
-/** "+ New project here": asks the name, the new project is made already under this main project. */
+/** "+ New task here": asks the name, the new task is made already in this project. */
 export function newProjectHere(ctx, p) {
-  const name = globalThis.prompt ? prompt(`New project under 📂 ${p.name}:`) : null;
+  const name = globalThis.prompt ? prompt(`New task in 📂 ${p.name}:`) : null;
   if (!name || !name.trim()) return null;
   const projectId = newId();
   const op = ctx.store.dispatch('createProject', { projectId, name: name.trim(), groupId: p.groupId, parentId: p.id });
-  if (op) { ctx.toast(`Added under 📂 ${p.name}: ${name.trim()}`); ctx.render(); }
+  if (op) { ctx.toast(`Added to 📂 ${p.name}: ${name.trim()}`); ctx.render(); }
   return op ? projectId : null;
 }
 
-/** ▾ / ▸ in front of a main project in the list: fold its projects away (remembered). */
-export function foldButton(ctx, p, kids) {
-  const folded = !!(ctx.ui.folded || {})[p.id];
-  return h('button', {
-    class: 'fold', type: 'button', key: 'fold-' + p.id, 'aria-expanded': String(!folded),
-    title: folded ? `Show its ${kids} project${kids === 1 ? '' : 's'}` : 'Fold away its projects', 'aria-label': folded ? 'Unfold' : 'Fold',
-    onClick: () => {
-      const f = { ...(ctx.ui.folded || {}) };
-      if (folded) delete f[p.id]; else f[p.id] = true;
-      ctx.ui.folded = f;
-      if (ctx.rememberUi) ctx.rememberUi();
-      ctx.render();
-    },
-  }, folded ? '▸' : '▾');
-}
-
-/**
- * A project list with main projects (▾ / ▸) and their projects indented under them.
- * `rowFn(p, today, { depth, fold, colour })` draws one row (app.js projectRow).
- */
-export function nestedRows(ctx, list, today, rowFn) {
-  const data = ctx.store.view.data;
-  return nestList(list, ctx.ui.folded || {}).map(({ p, depth, kids }) => rowFn(p, today, {
-    depth, fold: kids ? foldButton(ctx, p, kids) : null,
-    colour: isMainProject(data, p) ? mainColour(p, childrenOf(data, p.id), today) : null,
-  }));
-}
-
-/** The "📂 Main projects" page: one card per main project, red first. */
+/** The "📂 Projects" page: one card per project (red first) with its tasks (a task in two projects shows in both). */
 export function renderMainProjects(ctx) {
   const { store } = ctx;
   const data = store.view.data;
   const today = todayIndia();
   const mains = redFirst(mainProjects(data), (m) => listColour(data, m, today));
   const kidsOf = (m) => redFirst(childrenOf(data, m.id).filter((c) => c.state !== 'finished'), (c) => dotColour(c, today));
-  const inside = mains.reduce((n, m) => n + kidsOf(m).length, 0);
+  const inside = new Set(mains.flatMap((m) => kidsOf(m).map((c) => c.id))).size; // each task once
   const newMain = () => {
-    const name = globalThis.prompt ? prompt('Name of the new main project (it holds a few projects):') : null;
+    const name = globalThis.prompt ? prompt('Name of the new project (it holds a few tasks):') : null;
     if (!name || !name.trim()) return;
     const projectId = newId();
     if (store.dispatch('createMainProject', { projectId, name: name.trim(), groupId: data.groups[0] && data.groups[0].id })) {
-      ctx.toast(`New main project: 📂 ${name.trim()}`);
+      ctx.toast(`New project: 📂 ${name.trim()}`);
       ctx.render();
     }
   };
   return h('div', { class: 'mains-page', key: 'mains-page' },
-    h('p', { class: 'muted mains-line' }, `${mains.length} main project${mains.length === 1 ? '' : 's'} · ${inside} project${inside === 1 ? '' : 's'} inside · red first`),
-    h('button', { class: 'btn primary new-main', type: 'button', onClick: newMain }, '+ New main project'),
-    mains.length ? null : h('p', { class: 'empty-list' }, 'No main projects yet. Make one here, or open a project and use ⋯ → 📂 Put under a main project.'),
+    h('p', { class: 'muted mains-line' }, `${mains.length} project${mains.length === 1 ? '' : 's'} · ${inside} task${inside === 1 ? '' : 's'} in them · red first`),
+    h('button', { class: 'btn primary new-main', type: 'button', onClick: newMain }, '+ New project'),
+    mains.length ? null : h('p', { class: 'empty-list' }, 'No projects yet. Make one here, or open a task and use ⋯ → 📂 Add to a project.'),
     mains.map((m) => {
       const kids = kidsOf(m);
       return h('div', { class: 'main-card', key: 'mc-' + m.id },

@@ -179,7 +179,7 @@ export async function fullReportPng({ title, period, rows, pcts, work, tagColour
       g.fillText(fit(g, `— ${s.status}`, W - 60 - (x + nw + 12)), x + nw + 12, sy);
       sy += 34;
     }
-    if (standMore) { g.fillStyle = '#64748b'; g.font = `22px ${FONT}`; g.fillText(`+ ${standMore} more projects (see the Time report page)`, x, sy); }
+    if (standMore) { g.fillStyle = '#64748b'; g.font = `22px ${FONT}`; g.fillText(`+ ${standMore} more tasks (see the Time report page)`, x, sy); }
   }
   g.fillStyle = '#94a3b8'; g.font = `22px ${FONT}`; g.fillText('Daily Projects', 70, H - 30);
   return new Promise((res) => c.toBlob(res, 'image/png'));
@@ -227,7 +227,7 @@ export function renderTimeReport(ctx) {
   const pcts = percents(rows);
   const total = rows.reduce((n, r) => n + r.minutes, 0);
   const period = from === to ? fmtDate(from) : `${fmtDate(from)} – ${fmtDate(to)}`;
-  const title = `${group.name} — time by ${tr.by === 'tag' ? 'tag' : 'project'}`;
+  const title = `${group.name} — time by ${tr.by === 'tag' ? 'tag' : 'task'}`;
   const set = (k, v) => {
     if (k === 'preset' && v === 'custom') tr.custom = { from, to }; // start from the dates on screen, so changing one box works
     tr[k] = v;
@@ -283,7 +283,7 @@ export function renderTimeReport(ctx) {
       tr.preset === 'custom' ? h('span', { class: 'row' },
         h('input', { type: 'date', value: tr.custom.from || from, onChange: (e, el) => { tr.custom = { from: el.value || from, to: tr.custom.to || to }; ctx.render(); } }), '→',
         h('input', { type: 'date', value: tr.custom.to || to, onChange: (e, el) => { tr.custom = { from: tr.custom.from || from, to: el.value || to }; ctx.render(); } })) : null,
-      seg('by', [['tag', 'By tag'], ['project', 'By project']]),
+      seg('by', [['tag', 'By tag'], ['project', 'By task']]),
       seg('mode', [['pct', '%'], ['hours', 'Hours']])),
     h('section', { class: 'dash-card report-card' },
       h('h3', null, title),
@@ -321,5 +321,5 @@ export function renderTimeReport(ctx) {
         h('button', { class: 'btn', onClick: copyFull }, '📋 Copy full report'),
         h('span', { class: 'muted small' }, 'Time by tag + work done + status, PowerPoint size'))),
     (group.tags || []).length ? null
-      : h('p', { class: 'muted small' }, `Tip: give ${group.name} some tags in Settings (or inside a project) to see time by tag.`));
+      : h('p', { class: 'muted small' }, `Tip: give ${group.name} some tags in Settings (or inside a task) to see time by tag.`));
 }

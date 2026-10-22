@@ -8,7 +8,7 @@ import { installAutocorrect, setAutocorrect, autocorrectOn } from './ui/autocorr
 import { renderDashboard } from './ui/dashboard.js';
 import { renderTimeReport } from './ui/timereport.js';
 import { renderReplies, renderReplyRound, replyArea, readyCount } from './ui/replies.js';
-import { nestedRows, renderMainProjects, openMainBox, listColour } from './ui/mains.js';
+import { projectChips, renderMainProjects, openMainBox, listColour } from './ui/mains.js';
 import { projectMatches, diaryEntries, backupPayload, summaryText, personMessageText, personMessageHtml, sentMarkOf, copyNotice } from './reports.js';
 import { closeViewer, uploadBlob } from './ui/files.js';
 import { Store } from './store.js';
@@ -18,7 +18,7 @@ import { MockRepo } from './mockrepo.js';
 import { device } from './device.js';
 import { DATA_OWNER, DATA_REPO, DATA_BRANCH, MOVED_TO, REFRESH_MS, AI_DAILY_LIMIT, BRIEF_CLAIM_MINUTES, WAIT_RED_DAYS, NO_WORK_NOTE_DAYS } from './config.js';
 import { dotColour, greenByTeamOnly, isSnoozed, restUntil, restReason, onlyDaysLabel, openIdFromHash, awakeProjects, activeProjects, nextStep, todayIndia, isSundayIndia, colourCounts, isOverdue, indiaDate, waitingDays, daysWithoutWork, dayScore, greenStreak, addDays, monthOf, fmtMinutes, takeBackWaits, staffStepAction, pasteGoesToProject, singleStepClose, versionRequest, askDiaryAgain, diaryLoadedAt, photoNeedsFetch, teamUndoKey, teamActionUndone, teamProgressOf, projectKeyIgnored, teamMovedTo, serverHolder, keepMovedStep, teamMemberFor, repliesOf, mailThreads, replyMailto, MAILTO_BODY_MAX, emailPath, pasteReason } from './rules.js';
-import { parentOf, mainProjects, nestList, todayWithoutEmptyMains } from './rules.js';
+import { parentIdsOf, isMainProject, mainProjects, activeTasks, todayWithoutEmptyMains } from './rules.js';
 import { newId, clone, opMonth, groupHasTimer, cleanLink, carriedOps } from './ops.js';
 import * as ai from './ai.js';
 import { parseVoice } from './voice.js';
@@ -50,7 +50,7 @@ const ui = {
   ai: null,
   brief: { busy: false, error: '' },
   diaryDays: 14,
-  folded: saved.folded && typeof saved.folded === 'object' ? saved.folded : {}, // 📂 main projects folded in the list (▸)
+  folded: saved.folded && typeof saved.folded === 'object' ? saved.folded : {}, // (older: 📂 folded rows; lists are flat now)
 };
 
 let store = null;
@@ -97,16 +97,16 @@ function actMany(projectId, steps, message, undoMark = null) {
  */
 function act(type, args, message, ms = 4000) {
   const list = store.view.data.projects;
-  // a new main project with a project under it: Undo puts that project back as it was, and the new main goes
+  // a new 📂 project with a task in it: Undo puts that task back as it was, and the new project goes
   const snapId = type === 'createMainProject' ? args.childId : args.projectId;
   const index = list.findIndex((x) => x.id === snapId);
   const before = index >= 0 ? clone(list[index]) : null;
-  // deleting a main project: its projects stay (no longer under it); Undo puts them back under it
-  const parentIds = type === 'deleteProject' ? Object.fromEntries(list.filter((x) => x.parentId === args.projectId).map((x) => [x.id, args.projectId])) : null;
+  // deleting a 📂 project: its tasks stay (no longer in it); Undo puts them back into it
+  const parentIds = type === 'deleteProject' ? Object.fromEntries(list.filter((x) => parentIdsOf(x).includes(args.projectId)).map((x) => [x.id, args.projectId])) : null;
   const op = store.dispatch(type, args);
   if (!op) return null;
   const undo = before ? () => {
-    // (Make it a project / new main project: the new project goes too)
+    // (Make it a task / new 📂 project: the new one goes too)
     const made = type === 'stepToProject' ? { removeProjectId: args.newProjectId } : {};
     Object.assign(made, type === 'createMainProject' ? { removeProjectId: args.projectId } : parentIds ? { parentIds } : {});
     if (store.dispatch('restoreProject', { project: before, index, undoOpId: op.id, undoMonth: opMonth(op), ...made })) toast('Undone', 1500);
@@ -621,6 +621,11 @@ async function makeBrief(force = false) {
 
 // ---------------------------------------------------------------- lists
 
+/** 'project' for a 📂 project, 'task' for everything else (what the app once called a project). */
+function kindWord(p) {
+  return isMainProject(store.view.data, p) ? 'project' : 'task';
+}
+
 function groupName(id) {
   const g = store.view.data.groups.find((x) => x.id === id);
   return g ? g.name : '';
@@ -631,8 +636,8 @@ function visibleProjects() {
   const all = store.view.data.projects;
   const q = ui.search.trim().toLowerCase();
   if (q) return all.filter((p) => projectMatches(p, q));
-  if (ui.view === 'today') return todayWithoutEmptyMains(awakeProjects(store.view.data, todayIndia()), todayIndia()); // a main with no own step: its projects show instead
-  if (ui.view === 'all') return all.filter((p) => p.state === 'active');
+  if (ui.view === 'today') return todayWithoutEmptyMains(awakeProjects(store.view.data, todayIndia()), todayIndia()); // a 📂 project with no own step: its tasks show instead
+  if (ui.view === 'all') return activeTasks(store.view.data); // ✅ Tasks: tasks only, each once (projects are on 📂 Projects)
   if (ui.view === 'paused') return all.filter((p) => p.state === 'paused');
   if (ui.view === 'finished') return all.filter((p) => p.state === 'finished');
   if (ui.view.startsWith('group:')) {
@@ -645,7 +650,7 @@ function visibleProjects() {
 function viewTitle() {
   if (ui.search.trim()) return `Search: "${ui.search.trim()}"`;
   if (ui.view.startsWith('group:')) return groupName(ui.view.slice(6));
-  return { today: 'Today', inbox: 'Inbox', all: 'All projects', paused: 'Paused', finished: 'Finished', diary: 'Diary', settings: 'Settings', people: 'People', dashboard: 'Dashboard', time: 'Time report', replies: '✉ Replies', mains: '📂 Main projects' }[ui.view];
+  return { today: 'Today', inbox: 'Inbox', all: '✅ Tasks', paused: 'Paused', finished: 'Finished', diary: 'Diary', settings: 'Settings', people: 'People', dashboard: 'Dashboard', time: 'Time report', replies: '✉ Replies', mains: '📂 Projects' }[ui.view];
 }
 
 function go(view) {
@@ -772,7 +777,7 @@ function renderMenu() {
       onKeydown: searchEnter,
     }),
     h('ul', { class: 'menu-list' },
-      item('today', 'Today', active.filter((p) => !isSnoozed(p, today)).length),
+      item('today', 'Today', todayWithoutEmptyMains(active.filter((p) => !isSnoozed(p, today)), today).length), // what Today shows (each task once)
       h('li', { class: 'menu-dots', key: 'dots' },
         h('span', { class: 'dot red' }), String(counts.red), ' ',
         h('span', { class: 'dot yellow' }), String(counts.yellow), ' ',
@@ -781,8 +786,8 @@ function renderMenu() {
       item('replies', '✉ Replies', readyCount(data, today)), // replies ready to send
       item('dashboard', 'Dashboard'),
       item('time', 'Time report'),
-      item('all', 'All projects', active.length),
-      item('mains', '📂 Main projects', mainProjects(data).length),
+      item('all', '✅ Tasks', activeTasks(data).length),
+      item('mains', '📂 Projects', mainProjects(data).length),
       h('li', { class: 'menu-head', key: 'groups-head' }, 'Groups'),
       data.groups.map((g) => item('group:' + g.id, g.name, count((p) => p.groupId === g.id && p.state === 'active'),
         h('button', {
@@ -820,7 +825,7 @@ function editGroup(g) {
     if (ui.view === 'group:' + g.id) go('today');
     return;
   }
-  if (name.trim() === 'DELETE') { toast('Only an empty group can be deleted. Move its projects first.'); return; }
+  if (name.trim() === 'DELETE') { toast('Only an empty group can be deleted. Move its tasks first.'); return; }
   store.dispatch('renameGroup', { groupId: g.id, name: name.trim() });
 }
 
@@ -866,13 +871,12 @@ function renderBrief() {
 // ---------------------------------------------------------------- project list
 
 function projectRow(p, today, opts = {}) {
-  const colour = opts.colour || dotColour(p, today); // a main project in a nested list: the worst of it and its projects
-  const main = !opts.depth ? parentOf(store.view.data, p) : null; // flat list (Today, search): say which main it is under
+  const colour = opts.colour || rowColour(p, today); // a 📂 project in the lists (not Today): the worst of it and its tasks
   const ns = nextStep(p, today); // shown as "Next:"
   const due = nextStep(p, today, { dueOnly: true }); // what the tick box ticks
   const canTick = due && p.state === 'active';
   return h('li', {
-    key: 'p-' + p.id, 'data-id': p.id, class: 'prow' + (ui.selected === p.id ? ' current' : '') + (opts.depth ? ' child' : '') + (opts.fold ? ' main-row' : ''),
+    key: 'p-' + p.id, 'data-id': p.id, class: 'prow' + (ui.selected === p.id ? ' current' : '') + (isMainProject(store.view.data, p) ? ' main-row' : ''),
     onContextmenu: (e) => { e.preventDefault(); ui.rowMenu = { id: p.id, x: e.clientX, y: e.clientY }; render(); },
   },
     canTick
@@ -887,22 +891,21 @@ function projectRow(p, today, opts = {}) {
           onClick: () => { ui.quickAdd = ui.quickAdd === p.id ? null : p.id; render(); focusKey('qa-' + p.id); },
         }, '+')
         : h('span', { class: 'quick-tick-space', 'aria-hidden': 'true' }),
-    opts.fold || null,
     h('button', { class: 'prow-btn', onClick: () => select(p.id) },
       h('span', { class: `dot ${colour}`, 'aria-label': colour }),
       colour === 'green' && greenByTeamOnly(p, today) ? h('span', { class: 'team-green', title: 'Green today because the team sent an update' }, '👥') : null,
       h('span', { class: 'prow-text' },
-        h('span', { class: 'prow-name' }, p.name,
+        h('span', { class: 'prow-name' }, isMainProject(store.view.data, p) ? '📂 ' : '', p.name,
           p.state !== 'active' ? h('span', { class: 'tag' }, p.state) : null,
-          p.priority === 'high' ? h('span', { class: 'tag high' }, 'High') : null,
-          main ? h('span', { class: 'tag main-tag', title: `Under the main project ${main.name}` }, `📂 ${main.name}`) : null),
+          p.priority === 'high' ? h('span', { class: 'tag high' }, 'High') : null),
         h('span', { class: 'prow-next' + (ns ? '' : ' warn') }, ns ? `Next: ${ns.text}` : 'No next step — add one',
           ns && ns.waiting ? waitingTag(ns) : null,
           ns && ns.snoozedUntil && ns.snoozedUntil > today ? h('span', { class: 'tag repeat' }, `↻ from ${fmtDay(ns.snoozedUntil)}`) : null,
           isOverdue(p, today) ? h('span', { class: 'tag late' }, `Overdue · ${fmtDay(p.deadline)}`) : null,
           restReason(p, today) === 'onlyDays' ? h('span', { class: 'tag snoozed', title: `Comes up only on these days — back ${fmtDay(restUntil(p, today))}` }, `📅 ${onlyDaysLabel(p.onlyDays)}`)
             : isSnoozed(p, today) ? h('span', { class: 'tag snoozed' }, `${p.snoozedUntil > today ? '💤' : '⏰'} back ${fmtDay(restUntil(p, today))}`) : noWorkTag(p, today)),
-        p.status ? h('span', { class: 'prow-status' }, p.status) : null)),
+        p.status ? h('span', { class: 'prow-status' }, p.status) : null,
+        projectChips(store.view.data, p))), // "📂 Kilns" "📂 Supplier approval": the projects this task is in
     rowAction(p, due, colour),
     canDrag() ? h('span', { class: 'grip', 'aria-hidden': 'true', title: 'Drag to reorder' }, '⋮⋮') : null,
     ui.quickAdd === p.id ? quickAddForm(p) : null);
@@ -1163,7 +1166,7 @@ function clipBox() {
     const ok = store.dispatch('createProject', { projectId, name: text, groupId });
     if (ok) ensurePeople(clip.people);
     if (ok && clip.link) store.dispatch('addLink', { projectId, linkId: newId(), title: clip.link.title, url: clip.link.url });
-    if (ok) { ui.capture = false; toast(`New project: ${text}`, 3000); select(projectId); }
+    if (ok) { ui.capture = false; toast(`New task: ${text}`, 3000); select(projectId); }
   };
   const toInbox = () => {
     const text = textNow();
@@ -1176,12 +1179,12 @@ function clipBox() {
       onSubmit: (e) => { e.preventDefault(); if (list[0]) addTo(list[0]); else toInbox(); },
     },
     h('div', { class: 'capture-head' }, h('strong', null, isMailLink(clip.link) ? '✉ Add from mail' : '↗ Add from page'),
-      h('span', { class: 'muted small' }, 'Enter = add to the first project · Esc = close'),
+      h('span', { class: 'muted small' }, 'Enter = add to the first task · Esc = close'),
       h('button', { class: 'icon', type: 'button', 'aria-label': 'Close', onClick: close }, '✕')),
     h('input', { name: 'text', key: 'capture-input', value: clip.text, autocomplete: 'off', 'aria-label': 'Step', placeholder: 'What is the next step?', 'data-mention': '1', onInput: (e, el) => { clip.text = el.value; } }),
     clip.link ? h('div', { class: 'clip-link muted small', title: clip.link.url }, '🔗 ', clip.link.title) : null,
     ...alreadyAdded(clip.link).slice(0, 3).map((x, i) => h('div', { class: 'clip-already', key: 'al' + i },
-      x.inbox ? `⚠︎ Already in your Inbox: ${x.inbox.text}` : `⚠︎ Already in ${x.project.name}${x.step ? `: ${x.step.text}${x.step.done ? ' (done)' : ''}` : ' (project link)'}`,
+      x.inbox ? `⚠︎ Already in your Inbox: ${x.inbox.text}` : `⚠︎ Already in ${x.project.name}${x.step ? `: ${x.step.text}${x.step.done ? ' (done)' : ''}` : ' (task link)'}`,
       x.project ? h('button', { class: 'chip', type: 'button', onClick: () => { ui.capture = false; select(x.project.id); } }, 'Open') : h('button', { class: 'chip', type: 'button', onClick: () => { ui.capture = false; go('inbox'); } }, 'Open'))),
     clip.people.length ? h('div', { class: 'clip-people' },
       h('span', { class: 'muted small' }, 'People (✕ to remove):'),
@@ -1205,13 +1208,13 @@ function clipBox() {
         onClick: () => { clip.text = textNow() || clip.text; clip.when = d; render(); },
       }, label))),
     h('div', { class: 'clip-label muted small' }, 'Add as a step to:'),
-    h('input', { class: 'clip-find', key: 'clip-find', value: clip.find, autocomplete: 'off', placeholder: 'Search projects…', 'aria-label': 'Search projects',
+    h('input', { class: 'clip-find', key: 'clip-find', value: clip.find, autocomplete: 'off', placeholder: 'Search tasks…', 'aria-label': 'Search tasks',
       onInput: (e, el) => { clip.text = textNow() || clip.text; clip.find = el.value; render(); } }),
     h('div', { class: 'clip-projects' },
       list.length ? list.map((p, i) => h('button', { class: 'chip' + (i === 0 ? ' first' : ''), type: 'button', key: 'cp-' + p.id, onClick: () => addTo(p) }, p.name))
-        : h('span', { class: 'muted small' }, find ? 'No project with that name.' : 'No projects yet — use + New project.')),
+        : h('span', { class: 'muted small' }, find ? 'No task with that name.' : 'No tasks yet — use + New task.')),
     h('div', { class: 'row clip-other' },
-      h('button', { class: 'btn', type: 'button', onClick: newProject }, '+ New project'),
+      h('button', { class: 'btn', type: 'button', onClick: newProject }, '+ New task'),
       h('button', { class: 'btn', type: 'button', onClick: toInbox }, '📥 To Inbox'))));
 }
 
@@ -1337,7 +1340,7 @@ function renderInbox() {
   return h('div', { class: 'inbox' },
     h('div', { class: 'row inbox-top' },
       h('button', { class: 'btn primary', onClick: openCapture }, '📥 Capture', keyHint('Q')),
-      h('span', { class: 'muted small' }, items.length ? 'Send each item to a project. Tap a name, or pick from the list.' : '')),
+      h('span', { class: 'muted small' }, items.length ? 'Send each item to a task. Tap a name, or pick from the list.' : '')),
     items.length ? h('ul', { class: 'inbox-list' }, items.map((item) => {
       const sugg = inboxSuggestions(item.text);
       return h('li', { key: 'ib-' + item.id },
@@ -1347,23 +1350,23 @@ function renderInbox() {
         h('div', { class: 'inbox-actions' },
           sugg.map((p) => h('button', { class: 'chip sugg', key: 'sg-' + p.id, title: `Add as a step in ${p.name}`, onClick: () => toStep(item, p) }, `→ ${p.name}`)),
           h('select', {
-            class: 'inbox-pick', 'aria-label': 'Send to project', key: 'pick-' + item.id, value: '',
+            class: 'inbox-pick', 'aria-label': 'Send to task', key: 'pick-' + item.id, value: '',
             onChange: (e, el) => {
               const v = el.value;
               el.value = '';
               if (v.startsWith('new:')) {
                 const groupId = v.slice(4);
                 const projectId = newId();
-                if (inboxAct('inboxToProject', { itemId: item.id, projectId, groupId }, item, `New project: ${item.text}`)) render();
+                if (inboxAct('inboxToProject', { itemId: item.id, projectId, groupId }, item, `New task: ${item.text}`)) render();
               } else {
                 const p = data.projects.find((x) => x.id === v);
                 if (p) toStep(item, p);
               }
             },
           },
-          h('option', { value: '' }, 'Send to project…'),
+          h('option', { value: '' }, 'Send to task…'),
           projects.map((p) => h('option', { value: p.id }, p.name)),
-          data.groups.map((g) => h('option', { value: 'new:' + g.id }, `+ New project in ${g.name}`))),
+          data.groups.map((g) => h('option', { value: 'new:' + g.id }, `+ New task in ${g.name}`))),
           h('button', { class: 'icon', title: 'Delete', 'aria-label': 'Delete', onClick: () => inboxAct('removeInbox', { itemId: item.id }, item, 'Removed from Inbox') }, '🗑')));
     })) : h('p', { class: 'empty-list' }, 'Inbox is empty. Press Q anywhere (or 📥 at the top) to write something down fast.'));
 }
@@ -1399,14 +1402,14 @@ function rowMenu() {
       ? item('⏰', 'Wake up now', () => act('wake', { projectId: p.id }, `Back on Today: ${p.name}`))
       : item('💤', 'Snooze…', () => { select(p.id); ui.snoozeOpen = p.id; focusKey('snooze-' + p.id); })) : null,
     p.state === 'active' && groupHasTimer(g || {}) ? item(timing ? '⏹' : '▶', timing ? 'Stop timer' : 'Start timer', () => (timing ? stopTimer() : startTimer(p))) : null,
-    p.state === 'active' ? item('⏸', 'Pause project', () => act('pause', { projectId: p.id }, `Paused: ${p.name}`))
-      : p.state === 'paused' ? item('▶', 'Unpause project', () => act('unpause', { projectId: p.id }, `Back on Today: ${p.name}`)) : null,
+    p.state === 'active' ? item('⏸', `Pause ${kindWord(p)}`, () => act('pause', { projectId: p.id }, `Paused: ${p.name}`))
+      : p.state === 'paused' ? item('▶', `Unpause ${kindWord(p)}`, () => act('unpause', { projectId: p.id }, `Back on Today: ${p.name}`)) : null,
     onServer && p.state === 'active' ? (p.team
       ? item('👥', `Take back from ${p.team.name}`, () => { if (confirm(`Take "${p.name}" back from ${p.team.name}? Their open steps are removed from their list.`)) giveProject(p, null); })
-      : item('👥', 'Give project to…', () => { select(p.id); ui.giveOpen = p.id; ui.givePhoto = false; })) : null,
+      : item('👥', `Give ${kindWord(p)} to…`, () => { select(p.id); ui.giveOpen = p.id; ui.givePhoto = false; })) : null,
     item('↗', 'Open', () => select(p.id)),
-    !p.isMain && !store.view.data.projects.some((x) => x.parentId === p.id) ? item('📂', 'Put under a main project…', () => { select(p.id); openMainBox(ctx, p, 'parent'); }) : null,
-    item('🗑', 'Delete project…', () => {
+    !isMainProject(store.view.data, p) ? item('📂', 'Add to a project…', () => { select(p.id); openMainBox(ctx, p, 'parent'); }) : null,
+    item('🗑', `Delete ${kindWord(p)}…`, () => {
       if (!confirm(`Delete "${p.name}"?\n\nYou can press Undo for a few seconds after.`)) return;
       act('deleteProject', { projectId: p.id }, `Deleted: ${p.name}`, 10000);
       if (ui.selected === p.id) { ui.selected = null; ui.mobile = 'list'; }
@@ -1417,14 +1420,18 @@ function rowMenu() {
   return el;
 }
 
-/** Lists where main projects show their projects under them (▾ / ▸). Today and search stay flat. */
-function nestsHere() {
-  return !ui.search && (ui.view === 'all' || ui.view.startsWith('group:') || ui.view === 'paused' || ui.view === 'finished');
+/** Lists where a 📂 project shows (and sorts by) the worst of it and its tasks. Today and search: its own dot. */
+function rollsUpHere() {
+  return !ui.search && (ui.view.startsWith('group:') || ui.view === 'paused' || ui.view === 'finished');
 }
 
-/** The rows in the order they are on screen (folded projects left out). */
+function rowColour(p, today) {
+  return rollsUpHere() ? listColour(store.view.data, p, today) : dotColour(p, today);
+}
+
+/** The rows in the order they are on screen. */
 function shownOrder(list) {
-  return nestsHere() ? nestList(list, ui.folded || {}).map((x) => x.p) : list;
+  return list;
 }
 
 function canDrag() {
@@ -1559,9 +1566,8 @@ function sortForView(list, today) {
 }
 
 function computeRedFirst(list, today) {
-  const nested = nestsHere(); // a main project sorts by its worst project (mainColour) where the list nests
-  return list
-    .map((p, i) => ({ p, i, c: COLOUR_ORDER[nested ? listColour(store.view.data, p, today) : dotColour(p, today)], r: PRIORITY_ORDER[p.priority] ?? 1 }))
+  return list // a 📂 project sorts by its worst task (mainColour) where the list rolls up
+    .map((p, i) => ({ p, i, c: COLOUR_ORDER[rowColour(p, today)], r: PRIORITY_ORDER[p.priority] ?? 1 }))
     .sort((a, b) => a.c - b.c || a.r - b.r || a.i - b.i)
     .map((x) => x.p);
 }
@@ -1580,14 +1586,14 @@ function celebration() {
   if (!sc.total || sc.green < sc.total) return null;
   const n = greenStreak(store.view.data.dayScores || {}, sc);
   return h('div', { class: 'celebrate', key: 'celebrate' },
-    h('div', { class: 'celebrate-big' }, `🎉 All ${sc.total} projects green!`),
-    h('div', null, n > 1 ? `${n} days in a row. Keep it going!` : 'Every project got your attention today.'),
+    h('div', { class: 'celebrate-big' }, `🎉 All ${sc.total} tasks green!`),
+    h('div', null, n > 1 ? `${n} days in a row. Keep it going!` : 'Every task got your attention today.'),
     h('button', { class: 'link small', onClick: () => go('dashboard') }, 'See your dashboard →'));
 }
 
 function streakBadge() {
   const n = greenStreak(store.view.data.dayScores || {}, todayScore());
-  return n >= 1 ? h('span', { class: 'streak', title: 'Days in a row with every project green' }, ` · 🔥 ${n} day${n > 1 ? 's' : ''} all green`) : null;
+  return n >= 1 ? h('span', { class: 'streak', title: 'Days in a row with every task green' }, ` · 🔥 ${n} day${n > 1 ? 's' : ''} all green`) : null;
 }
 
 /** Last 7 days: how many projects were green each day (today is live). */
@@ -1598,7 +1604,7 @@ function weekBars() {
   for (let i = 6; i >= 0; i--) days.push(addDays(today, -i));
   const wd = new Intl.DateTimeFormat('en-IN', { weekday: 'short', timeZone: 'UTC' });
   return h('div', { class: 'week', key: 'week' },
-    h('div', { class: 'week-title' }, 'Last 7 days — projects green each day'),
+    h('div', { class: 'week-title' }, 'Last 7 days — tasks green each day'),
     h('div', { class: 'week-bars' }, days.map((d) => {
       const sc = d === today ? todayScore() : saved[d];
       const pct = sc && sc.total ? Math.round((sc.green / sc.total) * 100) : 0;
@@ -1627,7 +1633,7 @@ function progressLine(today) {
       h('div', { class: 'progress-btns' },
         h('button', { class: 'btn small', title: "Everything you did today, ready to send", onClick: openSummary }, '📋 Summary'),
         done < active.length && !ui.round
-          ? h('button', { class: 'btn primary small round-start', title: 'One project at a time (key: g)', onClick: startRound }, '▶ Daily round', keyHint('G'))
+          ? h('button', { class: 'btn primary small round-start', title: 'One task at a time (key: g)', onClick: startRound }, '▶ Daily round', keyHint('G'))
           : null)),
     bar);
 }
@@ -1639,7 +1645,7 @@ function eveningCheck(today) {
   const left = awakeProjects(store.view.data, today).filter((p) => dotColour(p, today) !== 'green');
   if (!left.length) return null;
   return h('div', { class: 'evening-check', key: 'evening' },
-    `🕕 Nothing today on ${left.length} project${left.length > 1 ? 's' : ''}: `,
+    `🕕 Nothing today on ${left.length} task${left.length > 1 ? 's' : ''}: `,
     left.slice(0, 8).map((p, i) => [i ? ', ' : '', h('button', { class: 'link', type: 'button', key: 'ev-' + p.id, onClick: () => select(p.id) }, p.name)]),
     left.length > 8 ? ` and ${left.length - 8} more` : '');
 }
@@ -1671,7 +1677,7 @@ function teamLine() {
 
 function newProjectForm() {
   if (!ui.adding) {
-    return h('button', { class: 'btn primary new-project', onClick: () => { ui.adding = true; render(); focusKey('new-name'); } }, '+ New project', keyHint('N'));
+    return h('button', { class: 'btn primary new-project', onClick: () => { ui.adding = true; render(); focusKey('new-name'); } }, '+ New task', keyHint('N'));
   }
   const defaultGroup = ui.view.startsWith('group:') ? ui.view.slice(6) : store.view.data.groups[0]?.id;
   return h('form', {
@@ -1690,7 +1696,7 @@ function newProjectForm() {
       }
     },
   },
-  h('input', { name: 'name', placeholder: 'Project name', key: 'new-name', autocomplete: 'off' }),
+  h('input', { name: 'name', placeholder: 'Task name', key: 'new-name', autocomplete: 'off' }),
   h('select', { name: 'group', value: defaultGroup }, store.view.data.groups.map((g) => h('option', { value: g.id }, g.name))),
   h('button', { class: 'btn primary', type: 'submit' }, 'Add'),
   h('button', { class: 'btn', type: 'button', onClick: () => { ui.adding = false; render(); } }, 'Cancel'));
@@ -1720,7 +1726,7 @@ function renderListColumn() {
     h('h2', null, viewTitle()),
     statusText(),
     h('button', { class: 'icon', title: 'Quick capture: write down an idea or task (key: q)', 'aria-label': 'Quick capture', onClick: openCapture }, '📥'),
-    h('button', { class: 'icon', title: 'Jump to a project, person or page (Ctrl+K)', 'aria-label': 'Jump', onClick: openJump }, '🔍'),
+    h('button', { class: 'icon', title: 'Jump to a task, project, person or page (Ctrl+K)', 'aria-label': 'Jump', onClick: openJump }, '🔍'),
     onServer ? teamButton() : null,
     h('button', { class: 'icon', title: 'Get latest', 'aria-label': 'Refresh', onClick: () => doRefresh(true) }, '↻'));
   const mobileSearch = h('input', {
@@ -1741,8 +1747,8 @@ function renderListColumn() {
   const list = sortForView(visibleProjects(), today);
   const showSort = !ui.search && ui.view !== 'paused' && ui.view !== 'finished' && list.length > 1;
   const empty = !list.length ? h('p', { class: 'empty-list' },
-    ui.search ? 'Nothing found.' : ui.view === 'paused' ? 'No paused projects.' : ui.view === 'finished' ? 'No finished projects yet.'
-      : 'No projects yet. Add your first one with "+ New project".') : null;
+    ui.search ? 'Nothing found.' : ui.view === 'paused' ? 'No paused tasks.' : ui.view === 'finished' ? 'No finished tasks yet.'
+      : 'No tasks yet. Add your first one with "+ New task".') : null;
   return h('div', { class: 'col-inner' },
     head,
     timerStrip(),
@@ -1770,7 +1776,7 @@ function splitToday(list, today) {
 
 function listParts(list, today) {
   const { open, done } = splitToday(list, today);
-  const rows = nestsHere() ? nestedRows(ctx, open, today, projectRow) : open.map((p) => projectRow(p, today));
+  const rows = open.map((p) => projectRow(p, today)); // flat: a task in two projects is listed once, with both chips
   const parts = [h('ul', { class: 'plist', key: 'plist-' + (ui.search ? 'search' : ui.view) }, rows)];
   // Today: snoozed projects wait in their own folded list, with the day they come back
   const snoozed = ui.view === 'today' && !ui.search ? store.view.data.projects.filter((p) => isSnoozed(p, today)) : [];
@@ -1914,7 +1920,7 @@ function renderSettings() {
       keyForm('claude', 'Claude', 'From console.anthropic.com → API keys. Saved in your private data, so all your devices use it.'),
       keyForm('gemini', 'Gemini', 'Optional backup. From aistudio.google.com → Get API key. Shared with all your devices. On the free plan Google may read the text.')),
     h('section', { class: 'block' }, h('h3', null, 'Groups and tags'),
-      h('p', { class: 'muted small' }, 'Tags belong to a group; each project picks one. The timer and the Time report use the groups that have the timer on.'),
+      h('p', { class: 'muted small' }, 'Tags belong to a group; each task picks one. The timer and the Time report use the groups that have the timer on.'),
       data.groups.map((g) => h('div', { class: 'group-set', key: 'gs-' + g.id },
         h('div', { class: 'row' },
           h('strong', null, g.name),
@@ -2335,7 +2341,7 @@ function renderRound() {
     return h('div', { class: 'detail-inner round', key: 'round-done' }, top,
       h('div', { class: 'round-card round-finish', key: 'round-card', tabindex: '-1' },
         h('div', { class: 'round-big' }, left ? 'Round finished' : 'All green for today 🎉'),
-        h('p', { class: 'muted' }, left ? `${left} project${left > 1 ? 's' : ''} still not green (you skipped them).` : 'Every project got your attention today.'),
+        h('p', { class: 'muted' }, left ? `${left} task${left > 1 ? 's' : ''} still not green (you skipped them).` : 'Every task got your attention today.'),
         h('div', { class: 'row' },
           left ? h('button', { class: 'btn', onClick: () => { ui.round = null; startRound(); } }, 'Go through skipped ones') : null,
           h('button', { class: 'btn primary', onClick: endRound }, 'Done'))));
@@ -2355,7 +2361,7 @@ function renderRound() {
     h('div', { class: 'round-card', key: 'round-card', tabindex: '-1' },
       h('div', { class: 'round-name' },
         h('span', { class: `dot ${colour}` }),
-        h('button', { class: 'link round-title', title: 'Open the full project', onClick: () => { const id = p.id; ui.round = null; select(id); } }, p.name)),
+        h('button', { class: 'link round-title', title: 'Open the full task', onClick: () => { const id = p.id; ui.round = null; select(id); } }, p.name)),
       h('p', { class: 'muted small round-meta' }, [g ? g.name : '', p.priority === 'high' ? 'High' : '', p.deadline ? `${isOverdue(p, today) ? 'Overdue' : 'Target'} ${fmtDay(p.deadline)}` : '']
         .filter(Boolean).join(' · ')),
       h('div', { class: 'round-next' + (ns ? '' : ' warn') },
@@ -2466,7 +2472,7 @@ function neighbourProject(step) {
 
 function goProject(step) {
   const p = neighbourProject(step);
-  if (!p) { toast(step > 0 ? 'This is the last project in this list' : 'This is the first project in this list', 1500); return; }
+  if (!p) { toast(step > 0 ? 'This is the last task in this list' : 'This is the first task in this list', 1500); return; }
   select(p.id);
   const row = root.querySelector(`.prow[data-id="${CSS.escape(p.id)}"]`);
   if (row) row.scrollIntoView({ block: 'nearest' });
@@ -2533,10 +2539,10 @@ function jumpItems() {
   const { data } = store.view;
   const today = todayIndia();
   const pages = [
-    ['Today', () => go('today')], ['All projects', () => go('all')], ['Dashboard', () => go('dashboard')],
+    ['Today', () => go('today')], ['✅ Tasks', () => go('all')], ['Dashboard', () => go('dashboard')],
     ['People', () => go('people')], ['Diary', () => go('diary')], ['Paused', () => go('paused')],
-    ['Finished', () => go('finished')], ['Settings', () => go('settings')], ['Time report', () => go('time')], ['✉ Replies', () => go('replies')], ['📂 Main projects', () => go('mains')], ['Daily round', () => { go('today'); startRound(); }],
-    ["Today's summary", () => openSummary()], ['New project', () => { go('today'); ui.adding = true; render(); focusKey('new-name'); }],
+    ['Finished', () => go('finished')], ['Settings', () => go('settings')], ['Time report', () => go('time')], ['✉ Replies', () => go('replies')], ['📂 Projects', () => go('mains')], ['Daily round', () => { go('today'); startRound(); }],
+    ["Today's summary", () => openSummary()], ['New task', () => { go('today'); ui.adding = true; render(); focusKey('new-name'); }],
     ...data.groups.map((g) => [`Group: ${g.name}`, () => go('group:' + g.id)]),
   ].map(([label, run]) => ({ kind: 'page', label, run }));
   const projects = data.projects.map((p) => ({
@@ -2559,7 +2565,7 @@ function openJump() {
   let shown = [];
   let index = 0;
   const list = h('ul', { class: 'jump-list', role: 'listbox' });
-  const input = h('input', { class: 'jump-input', placeholder: 'Type a project, person or page…', autocomplete: 'off', 'aria-label': 'Jump to' });
+  const input = h('input', { class: 'jump-input', placeholder: 'Type a task, project, person or page…', autocomplete: 'off', 'aria-label': 'Jump to' });
   const run = (it) => { closeSheet(); it.run(); };
   const draw = () => {
     const q = input.value.trim().toLowerCase();
@@ -2593,25 +2599,25 @@ function openJump() {
 // ---------------------------------------------------------------- keyboard
 
 const KEYS = [
-  ['↓  ↑', 'Next / previous project'],
-  ['←  →', 'Previous / next project (or person on People)'],
+  ['↓  ↑', 'Next / previous task'],
+  ['←  →', 'Previous / next task (or person on People)'],
   ['⌫', 'Back to where you came from'],
-  ['Ctrl K', 'Jump to any project, person or page'],
-  ['x', 'Tick the next step of the open project'],
+  ['Ctrl K', 'Jump to any task, project, person or page'],
+  ['x', 'Tick the next step of the open task'],
   ['g', 'Start the daily round (then x s w o c n)'],
   ['s', 'Type a new step'],
   ['w', 'Type in "What did you do today?"'],
-  ['n', 'New project'],
+  ['n', 'New task'],
   ['/', 'Search'],
   ['q', 'Quick capture: write an idea or task into the Inbox'],
   ['r', 'Switch "My order" / "Red first"'],
   ['t  b  d  p', 'Go to Today / Dashboard / Diary / People'],
   ['e', 'Go to ✉ Replies (emails waiting for your reply)'],
-  ['m', 'Go to 📂 Main projects'],
+  ['m', 'Go to 📂 Projects'],
   ['@', 'In a step or note: pick a person'],
   ['Ctrl/⌘ Enter', 'In Today\'s update: save and tick the step'],
-  ['Enter', 'In search: open the first project found'],
-  ['Right-click', 'On a project in the list: quick menu'],
+  ['Enter', 'In search: open the first task found'],
+  ['Right-click', 'On a task in the list: quick menu'],
   ['Esc', 'Leave a box, or close what is open'],
   ['?', 'Show or hide this list'],
 ];
@@ -2749,12 +2755,12 @@ function onKey(e) {
         if (nn) toast(`✓ ${ns.text}. Next: ${nn.text}`, 4500, done.undo);
         else afterTick(p.id, 'detail', done.undo);
       }
-    } else toast(p ? 'No step to tick. Press "s" to add one.' : 'Pick a project first (↓ ↑).');
+    } else toast(p ? 'No step to tick. Press "s" to add one.' : 'Pick a task first (↓ ↑).');
   } else if (k === 's') {
-    if (!p) { toast('Pick a project first (↓ ↑).'); return; }
+    if (!p) { toast('Pick a task first (↓ ↑).'); return; }
     ui.mobile = 'detail'; render(); focusKey('add-step-' + p.id);
   } else if (k === 'w') {
-    if (!p) { toast('Pick a project first (↓ ↑).'); return; }
+    if (!p) { toast('Pick a task first (↓ ↑).'); return; }
     ui.mobile = 'detail'; render(); focusKey('wn-' + p.id);
   } else if (k === 'n' && ui.view === 'people' && ui.person && !ui.search) {
     focusKey('person-task-input'); // on a person's page: the "Add a task with …" box
@@ -3091,7 +3097,7 @@ function tickFinishedTeamTasks(tasks) {
       seen.add(t.id);
       if (!(p.workNotes || []).some((n) => n.id === 'tn' + t.id) && !teamActionUndone(p, t)) {
         const words = (t.today || t.last) ? (t.today || t.last).note : '';
-        actMany(p.id, [['addWorkNote', { projectId: p.id, noteId: 'tn' + t.id, team: true, at: serverTime(t.doneAt), text: `👥 ${t.assignee.name} finished the project${words ? ': ' + words : '.'}` }]], `✓ ${t.assignee.name} finished: ${p.name}`, teamUndoKey(t));
+        actMany(p.id, [['addWorkNote', { projectId: p.id, noteId: 'tn' + t.id, team: true, at: serverTime(t.doneAt), text: `👥 ${t.assignee.name} finished the task${words ? ': ' + words : '.'}` }]], `✓ ${t.assignee.name} finished: ${p.name}`, teamUndoKey(t));
       }
       continue;
     }

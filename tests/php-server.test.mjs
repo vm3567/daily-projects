@@ -1203,73 +1203,96 @@ test('outlook: Connect — the sign-in comes back only with the right state, onc
   assert.ok(!stored.includes('RT-1'), 'kept locked');
 });
 
-test('outlook: each new email → one Daily Projects Inbox item; a thread stays one item; replies to a step / project become notes there (not work); seen emails are skipped; next pages are followed; a new sign-in from Microsoft is kept', { skip }, async () => {
+test('outlook: each new email thread → one task "📧 subject" (mail + email thread, not work); later emails join that thread (no new task, no note, no Inbox item, state kept, at most 50); an older Inbox item / step / project thread joins as before; a deleted task → a new task; seen emails skipped; next pages followed; a new sign-in kept', { skip }, async () => {
   await fakeMicrosoft();
   const at = new Date(Date.now() - 3 * 86400e3).toISOString();
-  await saveProjects([
-    { id: 'olp1', name: 'Kiln quote', state: 'active', groupId: 'g1', createdAt: at, activeSince: istDay(3), steps: [{ id: 'ols1', text: 'Reply to Ravi', done: false, mail: { conversationId: 'C-STEP' } }], workNotes: [] },
-    { id: 'olp2', name: 'Glaze trial', state: 'paused', groupId: 'g1', createdAt: at, stateChangedAt: at, steps: [], workNotes: [], mail: { conversationId: 'C-PROJ' } },
-  ]);
+  let head = (await call('dp.head', {}, tok.boss)).head;
+  assert.ok((await call('dp.commit', { parent: head, message: 'before', changes: [{ path: 'data.json', content: JSON.stringify({
+    groups: [{ id: 'g1', name: 'Acton' }],
+    inbox: [{ id: 'oi1', text: '📧 Old topic — from Kavi', createdAt: at, mail: { conversationId: 'C-OLD', count: 1 } }], // from before emails became tasks
+    projects: [
+      { id: 'olp1', name: 'Kiln quote', state: 'active', groupId: 'g1', createdAt: at, activeSince: istDay(3), steps: [{ id: 'ols1', text: 'Reply to Ravi', done: false, mail: { conversationId: 'C-STEP' } }], workNotes: [] },
+      { id: 'olp2', name: 'Glaze trial', state: 'paused', groupId: 'g1', createdAt: at, stateChangedAt: at, steps: [], workNotes: [], mail: { conversationId: 'C-PROJ' } },
+    ] }) }] }, tok.boss)).ok);
   ms.reqs = [];
   ms.token = (f) => (f.grant_type === 'refresh_token' && f.refresh_token === 'RT-1' ? [200, { access_token: 'AT-1', refresh_token: 'RT-2' }] : [400, { error: 'invalid_grant' }]);
+  const long = 'Samples sent today. ' + 'More words about the glaze. '.repeat(20);
   ms.pages = [
-    [mail('m1', 'C1', 'Kiln quote for November', 'Ravi', 50, 'Please find the price for the new kiln.'), mail('m2', 'C2', 'Glaze samples', 'Anil', 40, 'Samples sent today.'),
+    [mail('m1', 'C1', 'Kiln quote for November', 'Ravi', 50, 'Please find the price for the new kiln.'), mail('m2', 'C2', 'Glaze samples', 'Anil', 40, long),
      mail('m3', 'C1', 'RE: Kiln quote for November', 'Sandeep', 30, 'OK, go ahead with the order.')],
-    [mail('m4', 'C-STEP', 'RE: Reply', 'Ravi', 20, 'Here is the answer you asked for.'), mail('m5', 'C-PROJ', 'RE: Glaze', 'Meena', 10, 'New glaze recipe attached.')],
+    [mail('m4', 'C-STEP', 'RE: Reply', 'Ravi', 20, 'Here is the answer you asked for.'), mail('m5', 'C-PROJ', 'RE: Glaze', 'Meena', 10, 'New glaze recipe attached.'),
+     mail('m6', 'C-OLD', 'RE: Old topic', 'Kavi', 8, 'Any news?')],
   ];
   const r = await call('outlook.check', {}, tok.boss);
   assert.ok(r.ok, r.error);
-  assert.deepEqual([r.outlook.error, r.outlook.addedToday], ['', 5]);
+  assert.deepEqual([r.outlook.error, r.outlook.addedToday], ['', 6]);
   const list = ms.reqs.find((x) => x.path === '/v1.0/me/mailFolders/inbox/messages');
   assert.match(decodeURIComponent(list.url), /\$select=id,subject,from,receivedDateTime,bodyPreview,webLink,conversationId/);
   assert.match(decodeURIComponent(list.url), /\$filter=receivedDateTime gt \d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ/);
-  assert.match(decodeURIComponent(list.url), /\$orderby=receivedDateTime asc/);
   assert.equal(list.auth, 'Bearer AT-1');
   assert.ok(ms.reqs.some((x) => x.path === '/v1.0/next' && x.auth === 'Bearer AT-1'), 'the next page was read');
   let { data, history } = await dpNow();
-  const inbox = data.inbox;
-  assert.equal(inbox.length, 2, 'two threads, two items (the step and project replies are notes)');
-  const [i1, i2] = inbox;
-  assert.equal(i1.text, '📧 Kiln quote for November — from Ravi', 'the first email names the item');
-  assert.match(i1.note, /^💬 2 emails · latest from Sandeep \d{1,2} [A-Z][a-z]{2} \d\d:\d\d\nOK, go ahead with the order\.$/);
-  const noAt = ({ at: when, ...rest }) => { assert.match(when, /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.000Z$/, 'the newest email\'s time is kept (for the ✉ Replies days)'); return rest; };
-  assert.deepEqual([i1.link.url, noAt(i1.mail)], ['https://outlook.office365.com/owa/?ItemID=m3&exvsurl=1',
-    { conversationId: 'C1', count: 2, messageId: 'm3', fromName: 'Sandeep', fromAddress: 'sandeep@x.test', subject: 'RE: Kiln quote for November' }], 'the newest email opens (and is kept for a later reply draft)');
-  assert.equal(i2.text, '📧 Glaze samples — from Anil');
-  assert.match(i2.note, /^\d{1,2} [A-Z][a-z]{2} \d\d:\d\d · Samples sent today\.$/);
-  assert.deepEqual(noAt(i2.mail), { conversationId: 'C2', count: 1, messageId: 'm2', fromName: 'Anil', fromAddress: 'anil@x.test', subject: 'Glaze samples' });
+  assert.deepEqual(data.inbox.map((x) => x.id), ['oi1'], 'no new Inbox item: new threads are tasks');
+  assert.equal(data.inbox[0].mail.count, 2, 'an older Inbox item with an email still joins its thread');
+  assert.match(data.inbox[0].note, /^💬 2 emails · latest from Kavi/);
+  const tasks = data.projects.filter((p) => Array.isArray(p.thread));
+  assert.deepEqual(tasks.map((p) => p.name).sort(), ['📧 Glaze samples', '📧 Kiln quote for November'], 'one task per thread, named "📧 subject"');
+  const t1 = tasks.find((p) => p.mail.conversationId === 'C1');
+  const t2 = tasks.find((p) => p.mail.conversationId === 'C2');
+  assert.equal(data.projects[0].id, t2.id, 'new tasks go to the top');
+  assert.deepEqual([t1.state, t1.groupId, t1.steps, t1.workNotes, t1.isMain, t1.parentIds], ['active', 'g1', [], [], undefined, undefined], 'a plain active task');
+  const noAt = ({ at: when, ...rest }) => { assert.match(when, /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.000Z$/); return rest; };
+  assert.deepEqual(t1.thread.map(noAt), [
+    { fromName: 'Ravi', fromMe: false, preview: 'Please find the price for the new kiln.', link: 'https://outlook.office365.com/owa/?ItemID=m1&exvsurl=1', messageId: 'm1' },
+    { fromName: 'Sandeep', fromMe: false, preview: 'OK, go ahead with the order.', link: 'https://outlook.office365.com/owa/?ItemID=m3&exvsurl=1', messageId: 'm3' },
+  ], 'the later email joined the thread (newest last)');
+  assert.ok(t1.thread[0].at < t1.thread[1].at);
+  assert.deepEqual(noAt(t1.mail), { conversationId: 'C1', messageId: 'm3', fromName: 'Sandeep', fromAddress: 'sandeep@x.test', subject: 'RE: Kiln quote for November' }, 'mail = the newest email (for a reply draft)');
+  assert.equal(t2.thread[0].preview.length, 300, 'each email\'s first lines: at most 300 letters');
+  const month = istDay(0).slice(0, 7);
+  assert.deepEqual(history[month].filter((e) => e.kind === 'mail_task').map((e) => e.projectId).sort(), [t1.id, t2.id].sort(), 'a history line when a task is made');
+  assert.ok(!history[month].some((e) => e.kind === 'mail_note' && (e.projectId === t1.id || e.projectId === t2.id)), 'no note for an email that joins a thread');
+  // a step's / an older project's thread: a note there, as before
   const p1 = data.projects.find((p) => p.id === 'olp1'); const p2 = data.projects.find((p) => p.id === 'olp2');
   assert.match(p1.workNotes[0].text, /^📧 New reply from Ravi .* \(step: Reply to Ravi\): Here is the answer you asked for\.$/);
-  assert.deepEqual([p1.workNotes[0].stepId, p1.workNotes[0].mail, p1.workNotes[0].link.url], ['ols1', true, 'https://outlook.office365.com/owa/?ItemID=m4&exvsurl=1']);
   assert.match(p2.workNotes[0].text, /^📧 New reply from Meena .*: New glaze recipe attached\.$/);
-  assert.equal(p2.state, 'paused', 'the project\'s state is not changed');
-  assert.deepEqual(noAt(p1.steps[0].mail), { conversationId: 'C-STEP', messageId: 'm4', fromName: 'Ravi', fromAddress: 'ravi@x.test', subject: 'RE: Reply' }, 'the step keeps the newest email of its thread');
-  assert.deepEqual([p2.mail.messageId, p2.mail.fromAddress], ['m5', 'meena@x.test'], 'so does the project');
-  assert.deepEqual(history[istDay(0).slice(0, 7)].filter((e) => e.kind === 'mail_note').map((e) => e.projectId).sort(), ['olp1', 'olp2']);
-  const { dayScore, lastWorkDate } = await import('../docs/rules.js');
-  assert.equal(dayScore(data, history, istDay(0)).green, 0, 'a reply is not your work: the day score is not raised');
-  assert.equal(lastWorkDate(p1), null);
+  assert.equal(p2.state, 'paused');
+  const { dayScore, lastWorkDate, repliesOf, dotColour } = await import('../docs/rules.js');
+  assert.equal(dayScore(data, history, istDay(0)).green, 0, 'emails are not your work');
+  assert.equal(lastWorkDate(t1), null);
+  assert.notEqual(dotColour(t1, istDay(0)), 'green');
+  const waiting = repliesOf(data, istDay(0)).waiting;
+  const w1 = waiting.find((m) => m.id === t1.id);
+  assert.ok(w1 && waiting.some((m) => m.id === t2.id), 'the ✉ Replies page lists the tasks waiting for your reply');
+  assert.deepEqual([w1.count, w1.preview, w1.from, w1.link.url], [2, 'OK, go ahead with the order.', 'Sandeep', 'https://outlook.office365.com/owa/?ItemID=m3&exvsurl=1']);
   // again: the same emails are not added twice, and Microsoft's new sign-in (RT-2) is the one used now
-  const head = (await dpNow()).head;
+  head = (await dpNow()).head;
   ms.reqs = [];
   ms.token = (f) => (f.grant_type === 'refresh_token' && f.refresh_token === 'RT-2' ? [200, { access_token: 'AT-2' }] : [400, { error: 'invalid_grant' }]);
   const r2 = await call('outlook.check', {}, tok.boss);
-  assert.deepEqual([r2.outlook.error, r2.outlook.addedToday], ['', 5]);
+  assert.deepEqual([r2.outlook.error, r2.outlook.addedToday], ['', 6]);
   assert.equal(ms.reqs[0].form.refresh_token, 'RT-2', 'the rotated sign-in was stored');
   assert.equal((await dpNow()).head, head, 'nothing new: no new version');
-  // the owner sorts: the Kiln item is deleted; the Glaze item becomes a project (it keeps its thread)
+  // the owner deletes the Kiln task and pauses the Glaze one (with a full thread of 50 older emails)
   ({ data } = await dpNow());
-  data.inbox = [];
-  data.projects.push({ id: 'olp3', name: 'Glaze samples', state: 'active', groupId: 'g1', createdAt: at, steps: [], workNotes: [], mail: { conversationId: 'C2' } });
+  data.projects = data.projects.filter((p) => p.id !== t1.id);
+  const g = data.projects.find((p) => p.id === t2.id);
+  g.state = 'paused';
+  g.thread = Array.from({ length: 50 }, (_, i) => ({ at: new Date(Date.now() - (2000 - i) * 60000).toISOString(), fromName: 'Anil', fromMe: false, preview: 'old ' + i, messageId: 'old' + i }));
   assert.ok((await call('dp.commit', { parent: head, changes: [{ path: 'data.json', content: JSON.stringify(data) }], message: 'sorted' }, tok.boss)).ok);
-  ms.pages = [[...ms.pages[0], mail('m6', 'C1', 'RE: Kiln quote for November', 'Ravi', 5, 'One more thing.'), mail('m7', 'C2', 'RE: Glaze samples', 'Anil', 4, 'Did they arrive?'),
-    mail('m8', 'C9', 'Fresh topic', 'Kavi', 3, 'Hello.')]];
+  ms.pages = [[...ms.pages[0], mail('m7', 'C1', 'RE: Kiln quote for November', 'Ravi', 5, 'One more thing.'), mail('m8', 'C2', 'RE: Glaze samples', 'Anil', 4, 'Did they arrive?')]];
   const r3 = await call('outlook.check', {}, tok.boss);
   assert.equal(r3.outlook.addedToday, 8);
   ({ data } = await dpNow());
-  assert.deepEqual(data.inbox.map((x) => x.text), ['↩ New reply: RE: Kiln quote for November — from Ravi', '📧 Fresh topic — from Kavi'], 'a removed thread comes back once as a new reply; another thread is its own item');
-  assert.deepEqual([data.inbox[0].mail.conversationId, data.inbox[0].mail.count, data.inbox[0].mail.messageId], ['C1', 1, 'm6']);
-  assert.match(data.projects.find((p) => p.id === 'olp3').workNotes[0].text, /^📧 New reply from Anil .*: Did they arrive\?$/, 'made into a project: the reply is a note there, not a new item');
+  const kiln = data.projects.filter((p) => p.mail && p.mail.conversationId === 'C1');
+  assert.deepEqual(kiln.map((p) => [p.name, p.thread.length, p.thread[0].messageId]), [['📧 RE: Kiln quote for November', 1, 'm7']], 'its task was deleted: a new email starts a new task');
+  assert.notEqual(kiln[0].id, t1.id);
+  const glaze = data.projects.find((p) => p.id === t2.id);
+  assert.equal(glaze.state, 'paused', 'a new email does not change the task\'s state');
+  assert.equal(glaze.thread.length, 50, 'at most 50 emails kept');
+  assert.deepEqual([glaze.thread[0].messageId, glaze.thread[49].messageId, glaze.mail.messageId], ['old1', 'm8', 'm8'], 'the oldest one goes; the newest is last');
+  assert.equal(data.projects.filter((p) => p.mail && p.mail.conversationId === 'C2').length, 1, 'no second task for the thread');
+  assert.deepEqual(data.inbox.map((x) => x.id), ['oi1']);
   sql('UPDATE wt.settings SET v = 0 WHERE k = \'jobs_at\'');
 });
 
@@ -1406,7 +1429,7 @@ test('replies: the Outlook check reads Sent Items and marks replied (not work): 
   assert.equal(r.outlook.error, '', r.outlook.error);
   const sr = ms.reqs.find((x) => x.path === '/v1.0/me/mailFolders/sentitems/messages');
   assert.ok(sr, 'Sent Items was read');
-  assert.match(decodeURIComponent(sr.url), /\$select=conversationId,sentDateTime/);
+  assert.match(decodeURIComponent(sr.url), /\$select=id,conversationId,sentDateTime,bodyPreview,webLink/);
   assert.match(decodeURIComponent(sr.url), /\$filter=sentDateTime gt \d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ/);
   const { data, history } = await dpNow();
   const steps = Object.fromEntries(data.projects.find((p) => p.id === 'rp1').steps.map((s) => [s.id, s]));
@@ -1426,6 +1449,53 @@ test('replies: the Outlook check reads Sent Items and marks replied (not work): 
   await call('outlook.check', {}, tok.boss);
   assert.equal((await dpNow()).head, head);
   ms.sent = [];
+});
+
+test('replies: your reply in Outlook (Sent Items) joins the task\'s email thread as "↩ You" (once, not work); the task then waits for nobody; their next email makes it wait again', { skip }, async () => {
+  await fakeMicrosoft();
+  sql('UPDATE wt.settings SET v = UNIX_TIMESTAMP() + 86400 WHERE k = \'jobs_at\'');
+  const head = (await call('dp.head', {}, tok.boss)).head;
+  const at = new Date(Date.now() - 86400e3).toISOString();
+  const tt = { id: 'tt1', name: '📧 Price list', state: 'active', groupId: 'g1', createdAt: at, steps: [], workNotes: [], links: [], files: [], notes: '',
+    mail: { conversationId: 'C-T1', messageId: 'T1-1', fromName: 'Ravi', fromAddress: 'ravi@x.test', subject: 'Price list', at: isoAgo(60) },
+    thread: [{ at: isoAgo(60), fromName: 'Ravi', fromMe: false, preview: 'Can you send the price?', messageId: 'T1-1' }] };
+  assert.ok((await call('dp.commit', { parent: head, changes: [{ path: 'data.json', content: JSON.stringify({ groups: [{ id: 'g1', name: 'Acton' }], projects: [tt] }) }], message: 'thread task' }, tok.boss)).ok);
+  const { repliesOf, lastWorkDate, dayScore } = await import('../docs/rules.js');
+  assert.ok(repliesOf((await dpNow()).data, istDay(0)).waiting.some((m) => m.id === 'tt1'), 'before: waiting for your reply');
+  ms.pages = [[]];
+  ms.sent = [
+    { id: 'S1', conversationId: 'C-T1', sentDateTime: isoAgo(30).replace('.000Z', 'Z'), bodyPreview: 'Dear Ravi, the price list is attached.', webLink: 'https://outlook.office365.com/owa/?ItemID=S1&exvsurl=1' },
+    { id: 'S2', conversationId: 'C-ELSE', sentDateTime: isoAgo(20).replace('.000Z', 'Z'), bodyPreview: 'Another thread.' },
+  ];
+  const r = await call('outlook.check', {}, tok.boss);
+  assert.equal(r.outlook.error, '', r.outlook.error);
+  let { data, history } = await dpNow();
+  let t = data.projects.find((p) => p.id === 'tt1');
+  assert.equal(t.thread.length, 2);
+  const { at: sentAt, ...you } = t.thread[1];
+  assert.deepEqual(you, { fromName: 'You', fromMe: true, preview: 'Dear Ravi, the price list is attached.', link: 'https://outlook.office365.com/owa/?ItemID=S1&exvsurl=1', messageId: 'S1' }, '↩ You, newest last');
+  assert.match(sentAt, /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.000Z$/, 'when it was sent');
+  assert.ok(Math.abs(Date.parse(sentAt) - Date.parse(isoAgo(30))) < 120000);
+  assert.deepEqual([t.mail.fromMe, t.mail.at, t.mail.messageId, t.mail.fromAddress], [true, sentAt, 'T1-1', 'ravi@x.test'], 'the newest is yours; their email is kept for a later reply');
+  assert.equal(t.reply.state, 'sent', 'replied');
+  assert.equal(data.projects.length, 1, 'no task for a thread you only wrote in');
+  assert.ok(!repliesOf(data, istDay(0)).waiting.some((m) => m.id === 'tt1'), 'nothing waits now');
+  assert.equal(lastWorkDate(t), null, 'not your work');
+  assert.equal(dayScore(data, history, istDay(0)).green, 0);
+  assert.ok(!(history[istDay(0).slice(0, 7)] || []).some((e) => e.kind === 'mail_note' && e.projectId === 'tt1'), 'no note');
+  // again: the same sent email is not added twice
+  const h2 = (await dpNow()).head;
+  await call('outlook.check', {}, tok.boss);
+  assert.equal((await dpNow()).head, h2, 'nothing new: no new version');
+  // their answer: joins the thread and waits for your reply again
+  ms.sent = [];
+  ms.pages = [[mail('T1-2', 'C-T1', 'RE: Price list', 'Ravi', 2, 'Thanks. One more question.')]];
+  await call('outlook.check', {}, tok.boss);
+  ({ data } = await dpNow());
+  t = data.projects.find((p) => p.id === 'tt1');
+  assert.deepEqual(t.thread.map((e) => (e.fromMe ? '↩' : '📧') + e.messageId), ['📧T1-1', '↩S1', '📧T1-2']);
+  assert.deepEqual([t.mail.fromMe, t.mail.messageId], [undefined, 'T1-2']);
+  assert.ok(repliesOf(data, istDay(0)).waiting.some((m) => m.id === 'tt1'), 'waiting for your reply again');
 });
 
 test('replies: dp-cli mail-body, and Claude\'s tracker replies / set-reply / mail-body on the local server copy (ambiguous refused)', { skip }, async () => {
