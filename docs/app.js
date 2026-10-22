@@ -654,7 +654,7 @@ function visibleProjects() {
   if (ui.view === 'finished') return all.filter((p) => p.state === 'finished');
   if (ui.view.startsWith('group:')) {
     const id = ui.view.slice(6);
-    return all.filter((p) => p.groupId === id && p.state === 'active' && !isMainProject(store.view.data, p)); // a group shows its tasks only (📂 projects are on Projects)
+    return all.filter((p) => p.groupId === id && p.state === 'active' && !isMainProject(store.view.data, p) && (ui.taskFilter !== 'loose' || !parentIdsOf(p).length)); // a group shows its tasks only (📂 projects are on Projects); 'No project' = loose tasks
   }
   return [];
 }
@@ -1511,7 +1511,12 @@ function shownOrder(list) {
 }
 
 function canDrag() {
-  return !ui.search && ui.sort === 'mine' && ui.view !== 'all';
+  return !ui.search && ui.sort === 'mine' && !taskListView();
+}
+
+/** ✅ Tasks and the groups: the 'All tasks | No project' switch, always red first. */
+function taskListView() {
+  return ui.view === 'all' || ui.view.startsWith('group:');
 }
 
 /** Right-click on a person (People list or the side menu): the things you can do with them. */
@@ -1631,7 +1636,7 @@ let redOrder = null; // fixed "Red first" order, so rows do not jump while you o
 function resetRedOrder() { redOrder = null; }
 
 function sortForView(list, today) {
-  if ((ui.sort !== 'red' && ui.view !== 'all') || ui.search) return list; // (✅ Tasks is always red first)
+  if ((ui.sort !== 'red' && !taskListView()) || ui.search) return list; // (✅ Tasks and groups are always red first)
   const ids = list.map((p) => p.id);
   if (redOrder && redOrder.view === ui.view && ids.length === redOrder.ids.length && ids.every((id) => redOrder.pos.has(id))) {
     return [...list].sort((a, b) => redOrder.pos.get(a.id) - redOrder.pos.get(b.id));
@@ -1650,7 +1655,8 @@ function computeRedFirst(list, today) {
 
 /** ✅ Tasks: "All tasks 19" | "No project 7" (both red first). */
 function taskFilterSwitch() {
-  const all = activeTasks(store.view.data);
+  const gid = ui.view.startsWith('group:') ? ui.view.slice(6) : null; // in a group: count that group's tasks
+  const all = activeTasks(store.view.data).filter((p) => !gid || p.groupId === gid);
   const loose = all.filter((p) => !parentIdsOf(p).length).length;
   const opt = (value, label) => h('button', {
     class: 'seg' + (ui.taskFilter === value ? ' on' : ''), 'aria-pressed': String(ui.taskFilter === value),
@@ -1848,7 +1854,7 @@ function renderListColumn() {
     ui.view === 'today' && !ui.search ? renderBrief() : null,
     h('div', { class: 'list-tools' },
       ui.view === 'mains' && !ui.search ? renderProjectsHead(ctx) : ui.view === 'finished' || ui.view === 'paused' || ui.search ? null : newProjectForm(),
-      ui.view === 'all' && !ui.search && !ui.adding ? taskFilterSwitch() : showSort && !ui.adding ? sortSwitch() : null,
+      taskListView() && !ui.search && !ui.adding ? taskFilterSwitch() : showSort && !ui.adding ? sortSwitch() : null,
       !ui.search && list.length && ui.view !== 'mains' ? h('button', { class: 'btn small copy-list', type: 'button', title: 'Copy these as a numbered list (for an AI chat or an email)', onClick: () => copyList(currentList(), { title: viewTitle() }) }, '📋 Copy list') : null),
     pickBar(list),
     ...listParts(list, today),
