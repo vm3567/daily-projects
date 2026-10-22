@@ -981,7 +981,7 @@ test('📂 Projects page: a click on a project row selects it and stays on the p
   assert.match(mainsSrc, /ctx\.ui\.view === 'mains' && ctx\.showHere \? ctx\.showHere\(c\.id\)/, 'a task in the TASKS table while on the Projects page');
   const here = app.slice(app.indexOf('  showHere: (id) => {'), app.indexOf('  openProject: (id) => {'));
   assert.match(here, /select\(id\);/);
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-12'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-13'/, 'phones get the new copy');
 });
 
 test('📂 project page: "✕ Remove" on a task row takes it out of this project only — the task is kept (and stays in its other projects)', () => {
@@ -1060,4 +1060,16 @@ test('groups (Acton, Personal…) list tasks only — 📂 projects are not show
   const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
   assert.match(app, /return all\.filter\(\(p\) => p\.groupId === id && p\.state === 'active' && !isMainProject\(store\.view\.data, p\)\);/);
   assert.match(app, /count\(\(p\) => p\.groupId === g\.id && p\.state === 'active' && !isMainProject\(data, p\)\)/);
+});
+
+test('menu order (owner, 22 Oct): Today, Tasks, Projects, Replies, Inbox, Groups, Paused, Finished, People, Settings, More ▸ (Diary, Dashboard, Time report); no people listed under People', async () => {
+  const { readFileSync } = await import('node:fs');
+  const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
+  const menu = app.slice(app.indexOf("h('ul', { class: 'menu-list' },"), app.indexOf('function addGroup('));
+  const order = ["item('today'", "item('all'", "item('mains'", "item('replies'", "item('inbox'", "'groups-head'", "item('paused'", "item('finished'", "item('people'", "item('settings'", "'more-menu'", "item('diary'", "item('dashboard'", "item('time'"];
+  let at = -1;
+  for (const bit of order) { const i = menu.indexOf(bit); assert.ok(i > at, `${bit} in its place`); at = i; }
+  assert.ok(!menu.includes('menu-person'), 'People shows just its count');
+  assert.match(menu, /moreOpen \? 'More ▾' : 'More ▸'/);
+  assert.match(app, /const moreOpen = !!ui\.moreMenu \|\| \['diary', 'dashboard', 'time'\]\.includes\(ui\.view\);/, 'open while one of them is on screen');
 });

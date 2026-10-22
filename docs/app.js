@@ -42,6 +42,7 @@ const ui = {
   mobile: 'list', // list | detail (phone only)
   menuOpen: false,
   briefFolded: !!saved.briefFolded,
+  moreMenu: !!saved.moreMenu, // the menu's More ▸ (Diary, Dashboard, Time report) is open
   taskFilter: saved.taskFilter === 'loose' ? 'loose' : 'all', // ✅ Tasks: 'all' tasks, or 'loose' = only tasks not in any 📂 project
   sort: saved.sortV === 2 && saved.sort === 'mine' ? 'mine' : 'red', // 'red' = red first (red, yellow, green, grey: the default); 'mine' = my drag order, kept only when picked after this became the default
   adding: false,
@@ -148,7 +149,7 @@ function restoreScrollOnce() {
 
 function rememberUi() {
   device.setUi({
-    scroll: device.ui().scroll, view: ui.view, selected: ui.selected, briefFolded: ui.briefFolded, sort: ui.sort, sortV: 2, taskFilter: ui.taskFilter, showDone: ui.showDone, showMore: ui.showMore, folded: ui.folded });
+    scroll: device.ui().scroll, view: ui.view, selected: ui.selected, briefFolded: ui.briefFolded, sort: ui.sort, sortV: 2, taskFilter: ui.taskFilter, moreMenu: !!ui.moreMenu, showDone: ui.showDone, showMore: ui.showMore, folded: ui.folded });
 }
 
 const ctx = {
@@ -792,6 +793,7 @@ function renderMenu() {
   const today = todayIndia();
   const counts = colourCounts(data, today);
 
+  const moreOpen = !!ui.moreMenu || ['diary', 'dashboard', 'time'].includes(ui.view);
   return h('nav', { class: 'menu-inner' },
     h('div', { class: 'brand' }, h('img', { src: 'icons/icon-192.png', alt: '', width: 28, height: 28 }), h('span', null, 'Daily Projects')),
     h('input', {
@@ -805,12 +807,11 @@ function renderMenu() {
         h('span', { class: 'dot red' }), String(counts.red), ' ',
         h('span', { class: 'dot yellow' }), String(counts.yellow), ' ',
         h('span', { class: 'dot green' }), String(counts.green)),
-      item('inbox', '📥 Inbox', (data.inbox || []).length),
-      item('replies', '✉ Replies', readyCount(data, today)), // replies ready to send
-      item('dashboard', 'Dashboard'),
-      item('time', 'Time report'),
+      // order the owner chose (22 Oct): Today, Tasks, Projects, Replies, Inbox, Groups, Paused, Finished, People, Settings, More
       item('all', '✅ Tasks', activeTasks(data).length),
       item('mains', '📂 Projects', mainProjects(data).length),
+      item('replies', '✉ Replies', readyCount(data, today)), // replies ready to send
+      item('inbox', '📥 Inbox', (data.inbox || []).length),
       h('li', { class: 'menu-head', key: 'groups-head' }, 'Groups'),
       data.groups.map((g) => item('group:' + g.id, g.name, count((p) => p.groupId === g.id && p.state === 'active' && !isMainProject(data, p)),
         h('button', {
@@ -821,15 +822,14 @@ function renderMenu() {
       h('li', { class: 'menu-sep', key: 'sep' }),
       item('paused', 'Paused', count((p) => p.state === 'paused')),
       item('finished', 'Finished', count((p) => p.state === 'finished')),
-      item('people', 'People', (data.people || []).length),
-      peopleByFollowUp(data).filter((x) => x.st.colour !== 'green').slice(0, 6).map(({ person, st }) => h('li', { key: 'mp-' + person.id },
-        h('button', {
-          class: 'menu-item menu-person' + (ui.view === 'people' && ui.person === person.id ? ' current' : ''),
-          title: st.waiting ? `Waiting ${st.maxWait} day${st.maxWait === 1 ? '' : 's'}` : `${st.open} to discuss`,
-          onClick: () => { ui.menuOpen = false; ctx.openPerson(person.id); },
-        }, h('span', null, h('span', { class: `dot ${st.colour}` }), ` ${person.name}`), h('span', { class: 'count' }, String(st.open))))),
-      item('diary', 'Diary'),
-      item('settings', 'Settings')),
+      item('people', 'People', (data.people || []).length), // (open People to see each person)
+      item('settings', 'Settings'),
+      // More ▸: Diary, Dashboard and Time report, folded away (open while one of them is on screen)
+      h('li', { key: 'more-menu' }, h('button', {
+        class: 'menu-item more-toggle', 'aria-expanded': String(moreOpen),
+        onClick: () => { ui.moreMenu = !moreOpen; rememberUi(); render(); },
+      }, moreOpen ? 'More ▾' : 'More ▸')),
+      moreOpen ? [item('diary', 'Diary'), item('dashboard', 'Dashboard'), item('time', 'Time report')] : null),
     h('button', { class: 'keys-hint', onClick: () => { ui.showKeys = true; ui.menuOpen = false; render(); } }, 'Keyboard shortcuts: press ?'));
 }
 
