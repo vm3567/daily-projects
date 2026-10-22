@@ -942,6 +942,16 @@ export function isMailLink(link) {
   return !!url && /(^|\.)(outlook\.office\.com|outlook\.office365\.com|outlook\.live\.com|mail\.google\.com)$/.test(new URL(url).hostname);
 }
 
+/** Links and files as small chips near the top of the page (🔗 title / 📎 file name); the full lists stay under More. */
+function quickLinks(ctx, p) {
+  const links = (p.links || []).filter((l) => cleanUrl(l.url));
+  const files = p.files || [];
+  if (!links.length && !files.length) return null;
+  return h('div', { class: 'quick-links', key: 'ql-' + p.id },
+    links.map((l) => h('a', { class: 'tag quick-link', key: 'ql-l-' + l.id, href: cleanUrl(l.url), target: '_blank', rel: 'noopener noreferrer', title: l.url }, `🔗 ${l.title || l.url}`)),
+    files.map((f) => h('button', { class: 'tag quick-link', key: 'ql-f-' + f.id, type: 'button', title: `Open ${f.name}`, onClick: () => openFile(ctx, f) }, `📎 ${f.name}`)));
+}
+
 export function linkChip(link, label = null) {
   const url = link && cleanUrl(link.url);
   if (!url) return null;
@@ -1013,6 +1023,7 @@ export function renderDetail(ctx) {
     remindOnceBar(ctx, p),
     teamBar(ctx, p),
     infoChips(ctx, p, today),
+    quickLinks(ctx, p), // its links and files near the top: one click opens (owner asked, 22 Oct)
     projectEmailCards(ctx, p, today), // from an email: who wrote, the newest lines, and the reply (✉ Reply ready)
     ui.editMeta ? metaLine(ctx, p, today) : null,
     ui.showTime === p.id ? timeLine(ctx, p, today) : null,

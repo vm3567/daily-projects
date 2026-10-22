@@ -168,7 +168,7 @@ test('project page: notes, links, files and history wait under "More" until open
   const text = renderDetail(fakeCtx(s, { selected: 'p1', update: {} })).textContent;
   assert.ok(text.includes('More'));
   assert.ok(text.includes('1 work note') && text.includes('1 link'), 'the fold says what is inside');
-  assert.ok(!text.includes('Spec'), 'links are folded away');
+  assert.ok(text.includes('🔗 Spec'), 'the link shows as a chip near the top (owner asked, 22 Oct); adding and editing links waits under More');
 });
 
 test('project page: ⏰ remind me options, and the step shows its return day', () => {
@@ -981,7 +981,7 @@ test('📂 Projects page: a click on a project row selects it and stays on the p
   assert.match(mainsSrc, /ctx\.ui\.view === 'mains' && ctx\.showHere \? ctx\.showHere\(c\.id\)/, 'a task in the TASKS table while on the Projects page');
   const here = app.slice(app.indexOf('  showHere: (id) => {'), app.indexOf('  openProject: (id) => {'));
   assert.match(here, /select\(id\);/);
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-14'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-15'/, 'phones get the new copy');
 });
 
 test('📂 project page: "✕ Remove" on a task row takes it out of this project only — the task is kept (and stays in its other projects)', () => {
@@ -1083,4 +1083,21 @@ test('✅ Tasks and groups: a select box on each row (instead of +), a bar "N se
   assert.match(app, /store\.dispatch\('createMainProject', \{ projectId, name, groupId: data\.groups\[0\] && data\.groups\[0\]\.id, childId: ids\[0\] \}\)/, 'or a new project made with them');
   assert.match(app, /`\$\{picked\.size\} selected`/);
   assert.match(app, /pickBar\(list\),\n    \.\.\.listParts\(list, today\),/);
+});
+
+test('a task or project page shows its links and files as chips near the top (🔗 title / 📎 name), one click to open', () => {
+  const s = mainsState();
+  applyOps(s, [makeOp('addLink', { projectId: 'm', linkId: 'l1', title: 'PPT', url: 'https://example.com/ppt' })]);
+  const ui = { selected: 'm', update: {} };
+  const ctx = liveCtx(s, ui);
+  const page = renderDetail(ctx);
+  const chips = rAll(page, (n) => n.className === 'tag quick-link' && n.textContent === '🔗 PPT');
+  assert.equal(chips.length, 1);
+  assert.equal(chips[0].getAttribute('href'), 'https://example.com/ppt');
+  const quick = rAll(page, (n) => n.className === 'quick-links')[0];
+  const tasksAt = page.textContent.indexOf('TASKS');
+  assert.ok(page.textContent.indexOf('🔗 PPT') < tasksAt, 'above the tasks, near the top');
+  ui.selected = 'o';
+  assert.ok(!rAll(renderDetail(ctx), (n) => n.className === 'quick-links').length, 'nothing when there are no links or files');
+  assert.ok(quick);
 });
