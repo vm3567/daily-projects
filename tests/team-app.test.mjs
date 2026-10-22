@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { addDay, weekdayOf, dueOn, itemKey, diaryRows, fieldChanged, lateValue, afterFlush, boxStillThere, updateSaveBody, redrawHow, projectRowState, giveBackShow, keptNotice, noticeHow, pasteWaits, msgBoxSent, redrawAfterSend, taskSaveBody, aboutShort, projectAboutOf } from '../team/public_html/logic.js';
+import { addDay, weekdayOf, dueOn, itemKey, diaryRows, fieldChanged, lateValue, afterFlush, boxStillThere, updateSaveBody, redrawHow, projectRowState, giveBackShow, keptNotice, noticeHow, pasteWaits, msgBoxSent, redrawAfterSend, taskSaveBody, aboutShort, projectAboutOf, morningMail, escHtml } from '../team/public_html/logic.js';
 const APP = readFileSync(new URL('../team/public_html/app.js', import.meta.url), 'utf8');
 
 // Wed 21 Oct 2026 is "today" in these checks; 18 Oct is a Sunday.
@@ -274,5 +274,99 @@ test('project description: taken from the project\'s tasks (the first one that h
   assert.equal(projectAboutOf([{ title: 'old server, no field' }]), '');
   assert.match(APP, /class: 'prow-about' }, aboutShort\(p\.projectAbout\)\)/, 'manager\'s Projects list row');
   assert.match(APP, /class: 'project-about' }/, 'under the title of the project and task pages');
-  assert.match(readFileSync(new URL('../team/public_html/sw.js', import.meta.url), 'utf8'), /const CACHE = 'worktask-v14'/, 'new files reach the phones');
+  assert.match(readFileSync(new URL('../team/public_html/sw.js', import.meta.url), 'utf8'), /const CACHE = 'worktask-v15'/, 'new files reach the phones');
+});
+
+// ---------------------------------------------------------------- 📧 morning email (one person's pending work as a table to fill in)
+const MM = (items, extra = {}) => morningMail({ person: { name: 'Suresh' }, manager: 'Boss', items, today: '2026-10-22', ...extra });
+const mmItems = [
+  { kind: 'task', title: 'Zebra daily check', repeat: 'Daily', lateSince: null, stuck: false, lastUpdate: null },
+  { kind: 'task', title: 'Clean moulds', repeat: 'Weekly (Mon)', lateSince: null, stuck: true, lastUpdate: { day: '2026-10-21', note: 'No spare brush' } },
+  { kind: 'project', title: 'Basin glaze', about: 'New glaze for line 2', now: 'Test 3 samples', lateSince: null, stuck: false, lastUpdate: { day: '2026-10-21', note: 'Mixed 20 kg' } },
+  { kind: 'task', title: 'Fix pump', repeat: '', lateSince: '2026-10-20', stuck: false, lastUpdate: null },
+  { kind: 'task', title: 'Apple order', repeat: '', lateSince: null, stuck: false, lastUpdate: null },
+];
+const rowTitles = (html) => [...html.matchAll(/<tr><td[^>]*>\d+<\/td><td[^>]*><b>([^<]*)<\/b>/g)].map((m) => m[1]);
+
+test('morning email: late first, then stuck, then the rest (projects before tasks, then by title)', () => {
+  assert.deepEqual(rowTitles(MM(mmItems).html), ['Fix pump', 'Clean moulds', '📁 Basin glaze', 'Apple order', 'Zebra daily check']);
+  assert.match(MM(mmItems).text, /1\. Fix pump[\s\S]*2\. Clean moulds[\s\S]*3\. 📁 Basin glaze[\s\S]*4\. Apple order[\s\S]*5\. Zebra daily check/, 'the plain words in the same order');
+});
+
+test('morning email: subject has the day name and date', () => {
+  assert.equal(MM(mmItems).subject, 'Your work for Thu 22 Oct – please reply by evening');
+  assert.equal(MM([], { today: '2026-11-01' }).subject, 'Your work for Sun 1 Nov – please reply by evening');
+});
+
+test('morning email: the summary line leaves out zero parts; 1 item is singular', () => {
+  assert.match(MM(mmItems).html, /5 items · 1 late · 1 stuck/);
+  assert.match(MM([mmItems[4]]).html, />1 item</, 'one item, nothing late or stuck');
+  assert.ok(!/late|stuck/i.test(MM([mmItems[4]]).html.match(/>1 item[^<]*</)[0]), 'no "0 late"');
+  assert.match(MM([mmItems[1], mmItems[4]]).html, />2 items · 1 stuck</);
+  assert.match(MM(mmItems).text, /5 items · 1 late · 1 stuck/);
+});
+
+test('morning email: the table — columns, greeting, inline styles only, the end lines', () => {
+  const { html } = MM(mmItems);
+  for (const h of ['#', 'Work', 'Last update', 'What I did today', 'Status']) assert.match(html, new RegExp(`<th[^>]*>${h}</th>`), h);
+  assert.match(html, /Hi Suresh, good morning\. Here is your pending work\. Please fill the last two columns and reply by evening\./);
+  assert.match(html, /border-collapse:collapse/); assert.match(html, /1px solid #bbb/); assert.match(html, /background:#f2f2f2/); assert.match(html, /Arial/);
+  assert.ok(!/<style|var\(--/.test(html), 'Outlook drops <style> and CSS variables');
+  assert.match(html, /Status: keep one of Done \/ Going on \/ Stuck\./);
+  assert.match(html, /Any problem or help needed: write below\./);
+  assert.match(html, /Thanks,<br>Boss/);
+  assert.equal((html.match(/Done \/ Going on \/ Stuck<\/td>/g) || []).length, 5, 'each row has the three choices to keep one of');
+  assert.match(html, /min-width:\d+px;height:\d+px;">&nbsp;<\/td>/, 'an empty, roomy "What I did today" box');
+});
+
+test('morning email: red Late, orange Stuck, Now, about and repeat lines; "—" when no update yet', () => {
+  const { html } = MM(mmItems);
+  assert.match(html, /color:#c62828[^>]*>Late since 20 Oct</);
+  assert.match(html, /color:#e65100[^>]*>Stuck</);
+  assert.match(html, /color:#666[^>]*>Now: Test 3 samples</);
+  assert.match(html, /color:#666[^>]*>New glaze for line 2</, 'the project\'s about under its name');
+  assert.match(html, />Daily</); assert.match(html, />Weekly \(Mon\)</);
+  assert.match(html, />21 Oct: Mixed 20 kg</);
+  assert.match(html, /<b>Fix pump<\/b>[\s\S]*?<td[^>]*>—<\/td>/, 'no update yet: a dash');
+  assert.ok(!/Late since|Stuck</.test(MM([mmItems[4]]).html.replace('Done / Going on / Stuck', '')), 'a plain task has no Late or Stuck line');
+});
+
+test('morning email: names, titles and notes are made safe for HTML', () => {
+  const bad = [{ kind: 'task', title: '<script>alert(1)</script>', lateSince: null, stuck: false, lastUpdate: { day: '2026-10-21', note: 'a & b <i>' } }];
+  const { html, text } = morningMail({ person: { name: 'Raj <b>' }, manager: 'Boss & Co', items: bad, today: '2026-10-22' });
+  assert.ok(!html.includes('<script>') && html.includes('&lt;script&gt;alert(1)&lt;/script&gt;'));
+  assert.ok(html.includes('a &amp; b &lt;i&gt;') && html.includes('Raj &lt;b&gt;') && html.includes('Boss &amp; Co'));
+  assert.ok(text.includes('<script>alert(1)</script>'), 'the plain words stay as typed');
+  assert.equal(escHtml(`"'`), '&quot;&#39;');
+});
+
+test('morning email: nothing pending — a short friendly line, no table', () => {
+  const { html, text } = MM([]);
+  assert.ok(!/<table/.test(html));
+  assert.match(html, /No pending work today\./);
+  assert.match(text, /No pending work today\./);
+  assert.match(text, /Thanks,\nBoss$/);
+});
+
+test('morning email: the plain-words version (for when a table cannot be copied)', () => {
+  const { text } = MM(mmItems);
+  assert.ok(!/<[a-z]/i.test(text), 'no HTML');
+  assert.match(text, /^Hi Suresh, good morning\./);
+  assert.match(text, /3\. 📁 Basin glaze\n   New glaze for line 2\n   Now: Test 3 samples\n   Last update: 21 Oct: Mixed 20 kg\n   What I did today: \n   Status: Done \/ Going on \/ Stuck/);
+  assert.match(text, /1\. Fix pump\n   Late since 20 Oct\n   Last update: —/);
+  assert.match(text, /Status: keep one of Done \/ Going on \/ Stuck\.\nAny problem or help needed: write below\.\n\nThanks,\nBoss$/);
+});
+
+test('morning email: the Team today page has the button, copies the table (HTML + plain words) and opens the email', () => {
+  const fn = APP.slice(APP.indexOf('async function morningEmail('), APP.indexOf('/** Top of Team today'));
+  assert.match(APP.slice(APP.indexOf('function teamToday('), APP.indexOf('async function morningEmail(')), /onClick: \(\) => morningEmail\(p\) \}, '📧 Morning email'/, 'a button on each person');
+  // the Team today list the app really shows (teamList), not only the older full-page view
+  assert.match(APP.slice(APP.indexOf('function teamList('), APP.indexOf('function tasksList(')), /onClick: \(\) => morningEmail\(p\) \}, '📧 Morning email'/, 'a button under each person on the Team today list');
+  assert.match(fn, /api\('morning\.mail', \{ userId: p\.id \}\)/);
+  assert.match(fn, /new ClipboardItem\(\{ 'text\/html': [^}]*'text\/plain'/, 'the table and the plain words');
+  assert.match(fn, /navigator\.clipboard\.writeText\(mail\.text\)/, 'plain words when a table cannot be copied');
+  assert.match(fn, /'mailto:' \+ [^]*'\?subject=' \+ encodeURIComponent\(mail\.subject\)/);
+  assert.match(fn, /Table copied — press Ctrl\+V in the email, then Send\./);
+  assert.match(fn, /add it on the People page/);
+  assert.match(APP, /'Email \(optional, for the morning email\)', email/, 'People: an Email box');
 });

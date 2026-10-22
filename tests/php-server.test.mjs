@@ -889,3 +889,73 @@ test('project description: the server-side sync from saved projects carries abou
   assert.equal((await openOf('suresh', 'ab2'))[0].projectAbout, '', 'saved data without about: none');
   await saveProjects([]);
 });
+
+// ---------------------------------------------------------------- 📧 morning email
+test('morning email: user.save keeps a valid email and refuses a bad one; only the manager can read it', { skip }, async () => {
+  const r = await call('user.save', { name: 'Mira', username: 'mira', password: 'first-pass-123', email: 'mira@example.com' }, tok.boss);
+  assert.ok(r.ok, r.error); id.mira = r.user.id;
+  assert.equal(r.user.email, 'mira@example.com');
+  const l = await call('login', { username: 'mira', password: 'first-pass-123' });
+  assert.ok((await call('password', { old: 'first-pass-123', new: 'mira-own-pass' }, l.token)).ok);
+  tok.mira = l.token;
+  const listed = async () => (await call('users.list', {}, tok.boss)).users.find((u) => u.id === id.mira);
+  assert.equal((await listed()).email, 'mira@example.com', 'the manager sees it');
+  assert.match((await call('user.save', { id: id.mira, name: 'Mira', email: 'not an email' }, tok.boss)).error || '', /email address is not right/);
+  assert.match((await call('user.save', { name: 'Bad', username: 'bademail', password: 'first-pass-123', email: 'a@b' }, tok.boss)).error || '', /email address is not right/, 'a new person too');
+  assert.ok(!(await call('users.list', {}, tok.boss)).users.some((u) => u.username === 'bademail'), 'not added');
+  assert.ok(!(await call('user.save', { id: id.mira, name: 'Mira', email: 'x'.repeat(115) + '@example.com' }, tok.boss)).ok, 'more than 120 letters is cut, and then not right');
+  assert.equal((await listed()).email, 'mira@example.com', 'a refused email changes nothing');
+  assert.ok((await call('user.save', { id: id.mira, name: 'Mira K' }, tok.boss)).ok);
+  assert.equal((await listed()).email, 'mira@example.com', 'a rename (no email sent) keeps it');
+  assert.ok((await call('user.save', { id: id.mira, name: 'Mira', email: ' mira.k@example.com ' }, tok.boss)).ok);
+  assert.equal((await listed()).email, 'mira.k@example.com', 'changed (spaces trimmed)');
+  assert.equal((await call('users.list', {}, tok.mira)).s, 403, 'staff cannot list people or their emails');
+  const me = await call('me', {}, tok.mira);
+  assert.ok(me.ok && !('email' in me.user), 'not in what staff get back');
+  assert.ok(!(await call('team.today', {}, tok.boss)).people.some((p) => 'email' in p), 'not in the team list either');
+});
+
+test('morning email: morning.mail is manager-only and lists late, stuck, a given project as one row, never done/cancelled or someone else\'s', { skip }, async () => {
+  assert.equal((await call('morning.mail', { userId: id.mira }, tok.mira)).s, 403, 'staff refused');
+  assert.equal((await call('morning.mail', { userId: id.mira }, tok.anita)).s, 403, 'other staff refused');
+  assert.equal((await call('morning.mail', { userId: 999999 }, tok.boss)).s, 404);
+  const give = async (title, extra = {}) => (await call('task.save', { assigneeId: id.mira, title, ...extra }, tok.boss)).task;
+  const late = await give('MM late job', { repeat: 'once', dueDate: istDay(2) });
+  const stuck = await give('MM stuck job', { repeat: 'daily', skipSunday: false });
+  await call('update.save', { taskId: stuck.id, note: 'No spare brush', state: 'stuck' }, tok.mira);
+  const daily = await give('MM daily check', { repeat: 'daily', skipSunday: false });
+  const long = 'Checked all ten kilns and wrote the numbers in the book, top zone 1180, bottom zone 1150, all fine today';
+  await call('update.save', { taskId: daily.id, note: long, state: 'progress' }, tok.mira);
+  const notToday = (new Date(istDay(0) + 'T00:00:00Z').getUTCDay() + 1) % 7;
+  await give('MM weekly not today', { repeat: 'weekly', weekday: notToday });
+  const done = await give('MM done job', { repeat: 'once' });
+  await call('task.status', { id: done.id, status: 'done' }, tok.boss);
+  const gone = await give('MM cancelled job', { repeat: 'once' });
+  await call('task.status', { id: gone.id, status: 'cancelled' }, tok.boss);
+  await call('task.save', { assigneeId: id.anita, title: 'MM anita job', repeat: 'daily', skipSunday: false }, tok.boss);
+  await saveProjects([{ id: 'mm1', name: 'MM Basin glaze', state: 'active', about: 'New glaze for line 2', team: { userId: id.mira, name: 'Mira' },
+    steps: [{ id: 'mm1a', text: 'Mix glaze', done: false }, { id: 'mm1b', text: 'Fire test', done: false }] }]);
+  const steps = await openOf('mira', 'mm1');
+  assert.equal(steps.length, 2);
+  await call('update.save', { taskId: steps[0].id, note: 'Mixed 20 kg', state: 'progress' }, tok.mira);
+
+  const r = await call('morning.mail', { userId: id.mira }, tok.boss);
+  assert.ok(r.ok, r.error);
+  assert.deepEqual(r.person, { id: id.mira, name: 'Mira', email: 'mira.k@example.com' });
+  assert.equal(r.manager, 'Boss'); assert.equal(r.today, istDay(0));
+  const by = Object.fromEntries(r.items.map((x) => [x.title, x]));
+  assert.deepEqual(Object.keys(by).sort(), ['MM Basin glaze', 'MM daily check', 'MM late job', 'MM stuck job'], 'no done, cancelled, weekly-not-today or other person\'s work');
+  assert.equal(by['MM late job'].lateSince, istDay(2)); assert.equal(by['MM late job'].lastUpdate, null);
+  assert.equal(by['MM late job'].kind, 'task'); assert.equal(by['MM late job'].repeat, '');
+  assert.equal(by['MM stuck job'].stuck, true); assert.equal(by['MM stuck job'].lateSince, null); assert.equal(by['MM stuck job'].repeat, 'Daily');
+  assert.deepEqual(by['MM stuck job'].lastUpdate, { day: istDay(0), note: 'No spare brush' });
+  assert.equal(by['MM daily check'].stuck, false);
+  assert.ok(by['MM daily check'].lastUpdate.note.length <= 80 && by['MM daily check'].lastUpdate.note.endsWith('…'), 'a long note is cut');
+  const p = by['MM Basin glaze'];
+  assert.deepEqual([p.kind, p.about, p.now, p.stuck, p.lateSince], ['project', 'New glaze for line 2', 'Mix glaze', false, null], 'the project as one row, with its current step');
+  assert.deepEqual(p.lastUpdate, { day: istDay(0), note: 'Mixed 20 kg' });
+  assert.equal(r.items.filter((x) => x.kind === 'project').length, 1, 'one row for the project, not one per step');
+  const anita = await call('morning.mail', { userId: id.anita }, tok.boss);
+  assert.ok(anita.items.some((x) => x.title === 'MM anita job') && !anita.items.some((x) => x.title.startsWith('MM ') && x.title !== 'MM anita job'), 'each person only their own');
+  await saveProjects([]);
+});

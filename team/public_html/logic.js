@@ -176,3 +176,77 @@ export function taskSaveBody(fields, clientId) {
   if (!b.id && clientId) b.clientId = clientId;
   return b;
 }
+
+/** Words safe to put inside HTML (names, titles and notes are typed by people). */
+export const escHtml = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+
+const MAIL_DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const MAIL_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const mailDate = (day) => `${Number(day.slice(8, 10))} ${MAIL_MONTHS[Number(day.slice(5, 7)) - 1]}`; // '20 Oct'
+
+/**
+ * The manager's morning email to one person: all their pending work in a table they fill in and send back.
+ * items: from the server's morning.mail. Returns { subject, html, text }. Inline styles only (Outlook drops <style>).
+ * Order: late first, then stuck, then the rest (projects before tasks, then by title).
+ */
+export function morningMail({ person, manager, items, today }) {
+  const rank = (x) => (x.lateSince ? 0 : x.stuck ? 1 : 2);
+  const list = [...(items || [])].sort((a, b) => rank(a) - rank(b) || (a.kind === 'project' ? 0 : 1) - (b.kind === 'project' ? 0 : 1)
+    || String(a.title || '').localeCompare(String(b.title || '')));
+  const name = (person && person.name) || '';
+  const subject = `Your work for ${MAIL_DAYS[weekdayOf(today)]} ${mailDate(today)} – please reply by evening`;
+  const late = list.filter((x) => x.lateSince).length;
+  const stuck = list.filter((x) => x.stuck).length;
+  const summary = [`${list.length} item${list.length === 1 ? '' : 's'}`, late ? `${late} late` : '', stuck ? `${stuck} stuck` : ''].filter(Boolean).join(' · ');
+  const title = (x) => (x.kind === 'project' ? '📁 ' : '') + (x.title || '');
+  const lastText = (x) => (x.lastUpdate ? `${mailDate(x.lastUpdate.day)}: ${x.lastUpdate.note || ''}` : '—');
+  const STATUS = 'Done / Going on / Stuck';
+  const end = ['Status: keep one of Done / Going on / Stuck.', 'Any problem or help needed: write below.'];
+
+  // the HTML (pasted into Outlook)
+  const font = 'font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#222;';
+  const cell = 'border:1px solid #bbb;padding:6px 8px;vertical-align:top;text-align:left;';
+  const small = (colour, words) => `<div style="color:${colour};font-size:12px;margin-top:2px;">${escHtml(words)}</div>`;
+  const rows = list.map((x, i) => '<tr>'
+    + `<td style="${cell}">${i + 1}</td>`
+    + `<td style="${cell}"><b>${escHtml(title(x))}</b>`
+    + (x.kind === 'project' && x.about ? `<div style="color:#666;font-size:13px;margin-top:2px;">${escHtml(x.about)}</div>` : '')
+    + (x.lateSince ? small('#c62828', `Late since ${mailDate(x.lateSince)}`) : '')
+    + (x.stuck ? small('#e65100', 'Stuck') : '')
+    + (x.now ? small('#666', `Now: ${x.now}`) : '')
+    + (x.repeat ? small('#666', x.repeat) : '')
+    + '</td>'
+    + `<td style="${cell}color:#666;">${escHtml(lastText(x))}</td>`
+    + `<td style="${cell}min-width:220px;height:40px;">&nbsp;</td>`
+    + `<td style="${cell}color:#888;white-space:nowrap;">${STATUS}</td>`
+    + '</tr>').join('');
+  const head = ['#', 'Work', 'Last update', 'What I did today', 'Status'].map((h) => `<th style="${cell}background:#f2f2f2;font-weight:bold;">${h}</th>`).join('');
+  const p = (words, extra = '') => `<p style="margin:0 0 10px 0;${extra}">${words}</p>`;
+  const html = `<div style="${font}">`
+    + p(`Hi ${escHtml(name)}, good morning.${list.length ? ' Here is your pending work. Please fill the last two columns and reply by evening.' : ''}`)
+    + (list.length
+      ? p(escHtml(summary), 'color:#666;')
+        + `<table style="border-collapse:collapse;${font}" cellpadding="0" cellspacing="0"><thead><tr>${head}</tr></thead><tbody>${rows}</tbody></table>`
+        + `<p style="margin:10px 0 4px 0;">${end[0]}</p>` + p(end[1])
+      : p('No pending work today.'))
+    + p(`Thanks,<br>${escHtml(manager || '')}`)
+    + '</div>';
+
+  // the plain words (when the phone or browser cannot copy a table)
+  const text = [`Hi ${name}, good morning.${list.length ? ' Here is your pending work. Under each item, write what you did today and keep one status, then reply by evening.' : ''}`, ''];
+  if (list.length) {
+    text.push(summary, '');
+    list.forEach((x, i) => {
+      text.push(`${i + 1}. ${title(x)}`);
+      if (x.kind === 'project' && x.about) text.push(`   ${x.about}`);
+      if (x.lateSince) text.push(`   Late since ${mailDate(x.lateSince)}`);
+      if (x.stuck) text.push('   Stuck');
+      if (x.now) text.push(`   Now: ${x.now}`);
+      if (x.repeat) text.push(`   ${x.repeat}`);
+      text.push(`   Last update: ${lastText(x)}`, '   What I did today: ', `   Status: ${STATUS}`, '');
+    });
+    text.push(...end, '');
+  } else text.push('No pending work today.', '');
+  text.push('Thanks,', manager || '');
+  return { subject, html, text: text.join('\n') };
+}

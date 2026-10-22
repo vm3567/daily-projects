@@ -226,6 +226,8 @@ function migrate(PDO $pdo): void {
     // v12: when a reopened task had been closed (its closed days are not 'missed'); a re-give is not a move away from someone
     "ALTER TABLE tasks ADD COLUMN closed_from DATETIME NULL",
     "ALTER TABLE task_moves ADD COLUMN regive TINYINT(1) NOT NULL DEFAULT 0",
+    // v13: each person's email address (optional), for the manager's morning email
+    "ALTER TABLE users ADD COLUMN email VARCHAR(120) NULL",
   ];
   $pdo->exec($steps[0]);
   $done = (int)($pdo->query("SELECT v FROM settings WHERE k = 'schema'")->fetchColumn() ?: 0);

@@ -499,6 +499,12 @@ function handle(string $a, array $in): array {
       return ['today' => $day, 'fillBy' => $fillBy, 'late' => date('H:i') >= $fillBy, 'people' => array_map(fn($p) => public_user($p) + ['lastUpdate' => $lastDay[(int)$p['id']] ?? null], $people),
         'tasks' => $out, 'stuckSince' => (object)$since] + $att;
     }
+    case 'morning.mail': { // one person's pending work (projects given to them and tasks), for the manager's morning email
+      $u = one('SELECT * FROM users WHERE id = ?', [(int)($in['userId'] ?? 0)]);
+      if (!$u) throw new ApiError('Person not found.', 404);
+      return ['today' => $day, 'person' => ['id' => (int)$u['id'], 'name' => $u['name'], 'email' => (string)($u['email'] ?? '')],
+        'manager' => $me['name'], 'items' => morning_items((int)$u['id'], $day)];
+    }
     case 'project.sync': {
       // Daily Projects: "this whole project is given to <person>". steps = the project's open steps, in order.
       // Makes a task for each new step, keeps titles and order up to date, moves them to a new person,
@@ -753,16 +759,20 @@ function handle(string $a, array $in): array {
       audit($me['id'], 'task_' . $st, "#{$t['id']} {$t['title']}");
       return ['task' => tasks_out([own_task($me, (int)$t['id'])], $day)[0]];
     }
-    case 'users.list':
-      return ['users' => array_map('public_user', all('SELECT * FROM users ORDER BY active DESC, role, name'))];
+    case 'users.list': // (the email only here, for the manager: never in what staff can read)
+      return ['users' => array_map(fn($u) => public_user($u) + ['email' => (string)($u['email'] ?? '')], all('SELECT * FROM users ORDER BY active DESC, role, name'))];
     case 'user.save': {
       $id = (int)($in['id'] ?? 0);
       $name = txt($in['name'] ?? '', 80, true, 'The name');
       $role = ($in['role'] ?? 'staff') === 'admin' ? 'admin' : 'staff';
+      $hasEmail = array_key_exists('email', $in); // (a save without it, like a rename, keeps the email)
+      $email = txt($in['email'] ?? '', 120);
+      if ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) throw new ApiError('That email address is not right.');
       if ($id) {
         guard_owner($id, $me);
         if ($id === $me['id'] && $role !== 'admin') throw new ApiError('You cannot remove your own manager rights.');
         q('UPDATE users SET name = ?, role = ? WHERE id = ?', [$name, $role, $id]);
+        if ($hasEmail) q('UPDATE users SET email = ? WHERE id = ?', [$email === '' ? null : $email, $id]);
         audit($me['id'], 'user_edit', "#$id $name");
       } else {
         $username = clean_username((string)($in['username'] ?? ''));
@@ -770,12 +780,13 @@ function handle(string $a, array $in): array {
         if (one('SELECT id FROM users WHERE username = ?', [$username])) throw new ApiError('That username is taken. Try another.');
         $pass = (string)($in['password'] ?? '');
         check_password_rules($pass);
-        q('INSERT INTO users (username, name, role, pass_hash, must_change, active, created_at) VALUES (?, ?, ?, ?, 1, 1, ?)',
-          [$username, $name, $role, password_hash($pass, PASSWORD_DEFAULT), now()]);
+        q('INSERT INTO users (username, name, role, pass_hash, must_change, active, created_at, email) VALUES (?, ?, ?, ?, 1, 1, ?, ?)',
+          [$username, $name, $role, password_hash($pass, PASSWORD_DEFAULT), now(), $email === '' ? null : $email]);
         $id = (int)db()->lastInsertId();
         audit($me['id'], 'user_new', "#$id $username");
       }
-      return ['user' => public_user(one('SELECT * FROM users WHERE id = ?', [$id]))];
+      $u = one('SELECT * FROM users WHERE id = ?', [$id]);
+      return ['user' => public_user($u) + ['email' => (string)($u['email'] ?? '')]];
     }
     case 'user.reset': {
       $u = one('SELECT * FROM users WHERE id = ?', [(int)($in['id'] ?? 0)]);
@@ -817,6 +828,51 @@ function handle(string $a, array $in): array {
     }
   }
   throw new ApiError('Unknown request.', 404);
+}
+
+/**
+ * One person's pending work for the morning email: each given project as one row (its current step = now),
+ * and each other open task that is due today, late (past its by-date) or stuck. With the newest update on each.
+ */
+function morning_items(int $who, string $day): array {
+  $tasks = tasks_out(all(TASK_SELECT . " WHERE t.assignee_id = ? AND t.status = 'open' ORDER BY t.seq, t.id", [$who]), $day);
+  $late = fn($t) => $t['dueDate'] && $t['dueDate'] < $day ? $t['dueDate'] : null; // the same "late" as the screens: past its by-date
+  $projects = []; $plain = [];
+  foreach ($tasks as $t) {
+    if ($t['seq'] !== null && $t['projectRef']) $projects[$t['projectRef']][] = $t;
+    elseif ($t['dueToday'] || $late($t) || $t['stuck']) $plain[] = $t;
+  }
+  // the newest update: on the task, or on any task of the project (earlier steps too)
+  $newest = [];
+  $refs = array_keys($projects);
+  $byRef = [];
+  if ($refs) foreach (all('SELECT id, project_ref FROM tasks WHERE project_ref IN (' . implode(',', array_fill(0, count($refs), '?')) . ')', array_map('strval', $refs)) as $r) $byRef[(int)$r['id']] = $r['project_ref'];
+  $ids = array_values(array_unique([...array_map(fn($t) => $t['id'], $plain), ...array_keys($byRef)]));
+  if ($ids) foreach (all('SELECT task_id, day, note, updated_at FROM updates WHERE task_id IN (' . implode(',', array_fill(0, count($ids), '?')) . ') ORDER BY day, updated_at', $ids) as $u) {
+    $key = isset($byRef[(int)$u['task_id']]) ? 'p:' . $byRef[(int)$u['task_id']] : 't:' . $u['task_id'];
+    $newest[$key] = $u; // (in day order: the last one is the newest)
+  }
+  $last = function (string $key) use ($newest): ?array {
+    if (!isset($newest[$key])) return null;
+    $note = trim(preg_replace('/\s+/u', ' ', $newest[$key]['note']) ?? '');
+    return ['day' => $newest[$key]['day'], 'note' => mb_strlen($note) > 80 ? rtrim(mb_substr($note, 0, 79)) . '…' : $note];
+  };
+  $repeat = fn($t) => $t['repeat'] === 'daily' ? 'Daily' : ($t['repeat'] === 'weekly' ? 'Weekly (' . substr(WEEKDAYS[$t['weekday'] ?? 1], 0, 3) . ')' : '');
+  $out = [];
+  foreach ($projects as $ref => $list) {
+    $cur = null;
+    foreach ($list as $t) if (!$t['queued']) { $cur = $t; break; }
+    $cur = $cur ?? $list[0];
+    $lates = array_filter(array_map($late, $list));
+    $out[] = ['kind' => 'project', 'title' => $cur['project'] ?: $cur['title'], 'about' => $cur['projectAbout'],
+      'now' => str_ends_with((string)$cur['stepRef'], ':whole') ? '' : $cur['title'], // (given as one task: no step to name)
+      'repeat' => '', 'lateSince' => $lates ? min($lates) : null, 'stuck' => (bool)array_filter($list, fn($t) => $t['stuck']), 'lastUpdate' => $last('p:' . $ref)];
+  }
+  foreach ($plain as $t) {
+    $out[] = ['kind' => 'task', 'title' => $t['title'], 'about' => '', 'now' => '', 'repeat' => $repeat($t),
+      'lateSince' => $late($t), 'stuck' => $t['stuck'], 'lastUpdate' => $last('t:' . $t['id'])];
+  }
+  return $out;
 }
 
 /** What the owner's app changed in the project's steps and has not saved yet (against the saved projects now):

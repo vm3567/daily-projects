@@ -1,7 +1,7 @@
 // Work Task: the team app. Staff see and fill their own tasks; the manager gives tasks and sees everything.
 // No outside libraries. All text from the server is put on screen as text (never as HTML).
 
-import { addDay, weekdayOf, dueOn, itemKey, diaryRows, fieldChanged, lateValue, afterFlush, boxStillThere, updateSaveBody, redrawHow, projectRowState, aboutShort, projectAboutOf, giveBackShow, keptNotice, noticeHow, pasteWaits, msgBoxSent, redrawAfterSend, taskSaveBody } from './logic.js'; // the rules (checked in tests/team-app.test.mjs)
+import { addDay, weekdayOf, dueOn, itemKey, diaryRows, fieldChanged, lateValue, afterFlush, boxStillThere, updateSaveBody, redrawHow, projectRowState, aboutShort, projectAboutOf, giveBackShow, keptNotice, noticeHow, pasteWaits, msgBoxSent, redrawAfterSend, taskSaveBody, morningMail } from './logic.js'; // the rules (checked in tests/team-app.test.mjs)
 
 const TOKEN_KEY = 'wt.token';
 const state = {
@@ -976,7 +976,8 @@ function teamList() {
       const sent = tasks.filter((t) => t.today).length;
       const tag = !tasks.length ? el('span', { class: 'tag grey' }, 'No tasks today')
         : el('span', { class: 'tag ' + (sent === tasks.length ? 'green' : d.late ? 'red' : 'amber') }, `${sent} of ${tasks.length} sent`);
-      return [sec(p.name, tag), el('ul', { class: 'list-body' }, tasks.map(row))];
+      return [sec(p.name, tag), el('ul', { class: 'list-body' }, tasks.map(row)),
+        el('p', { class: 'list-note' }, el('button', { class: 'chip', onClick: () => morningEmail(p) }, '📧 Morning email'))];
     }),
     filt ? el('p', { class: 'list-note' }, el('button', { class: 'link', onClick: () => { state.personFilter = 0; softRender(); } }, '← Show everyone')) : null,
   ];
@@ -1580,9 +1581,34 @@ function teamToday() {
           : el('span', { class: 'tag ' + (d.late ? 'red' : 'amber') }, `${sent} of ${tasks.length} sent`);
       return el('div', { class: 'card person' + (tasks.length && sent < tasks.length && d.late ? ' late' : '') },
         el('div', { class: 'person-head' }, el('h3', null, p.name), tag),
-        tasks.map((t) => teamRow(t, d)));
+        tasks.map((t) => teamRow(t, d)),
+        el('div', { class: 'row' }, el('button', { class: 'chip', onClick: () => morningEmail(p) }, '📧 Morning email')));
     }),
   ];
+}
+
+/**
+ * 📧 Morning email: copy the person's pending work as a table (Ctrl+V in the email), then open the email with To and Subject filled.
+ * The copy is started at once, in the tap itself (browsers only allow copying straight after a tap); the table follows from the server.
+ */
+async function morningEmail(p) {
+  const ready = api('morning.mail', { userId: p.id }).then((out) => ({ out, mail: morningMail({ person: out.person, manager: out.manager, items: out.items, today: out.today }) }));
+  let copied = false;
+  try {
+    if (!window.ClipboardItem || !navigator.clipboard || !navigator.clipboard.write) throw new Error('no table copy');
+    const blob = (type, key) => ready.then(({ mail }) => new Blob([mail[key]], { type }));
+    await navigator.clipboard.write([new ClipboardItem({ 'text/html': blob('text/html', 'html'), 'text/plain': blob('text/plain', 'text') })]);
+    copied = true;
+  } catch { /* table copy not allowed here: plain words below */ }
+  let got;
+  try { got = await ready; } catch (ex) { toast(ex.message, 5000); return; }
+  const { out, mail } = got;
+  if (!copied) try { await navigator.clipboard.writeText(mail.text); copied = true; } catch { /* not allowed either */ }
+  const email = out.person.email || '';
+  el('a', { href: 'mailto:' + encodeURIComponent(email).replace(/%40/g, '@') + '?subject=' + encodeURIComponent(mail.subject) }).click(); // Outlook opens
+  const noEmail = email ? '' : ` No email saved for ${out.person.name}: add it on the People page.`;
+  if (copied) notice('msg', 'Table copied — press Ctrl+V in the email, then Send.', noEmail.trim() || null, null, { stay: !email });
+  else notice('msg', 'Could not copy. Select these words, copy them into the email, then Send.' + noEmail, mail.text, null, { copy: true, stay: true });
 }
 
 /** Top of Team today: what is waiting for the manager. */
@@ -1775,6 +1801,7 @@ function peopleScreen() {
   const username = el('input', { required: true, autocapitalize: 'none', spellcheck: 'false', placeholder: 'suresh' });
   const pass = el('input', { required: true, value: tempPassword() });
   const role = el('select', null, el('option', { value: 'staff' }, 'Staff (sees only own tasks)'), el('option', { value: 'admin' }, 'Manager (sees everything)'));
+  const email = el('input', { type: 'email', maxlength: 120, autocapitalize: 'none', spellcheck: 'false', placeholder: 'suresh@company.com' });
   name.addEventListener('input', () => { if (!username.dataset.touched) username.value = name.value.trim().split(/\s+/)[0].toLowerCase().replace(/[^a-z0-9._-]/g, ''); });
   username.addEventListener('input', () => { username.dataset.touched = '1'; });
   const reset = async (u) => {
@@ -1791,15 +1818,21 @@ function peopleScreen() {
     if (!n || n === u.name) return;
     try { await api('user.save', { id: u.id, name: n, role: u.role }); loadView(); } catch (ex) { toast(ex.message, 5000); }
   };
+  const setEmail = async (u) => {
+    const v = prompt(`${u.name}'s email (for the morning email). Leave empty for none.`, u.email || '');
+    if (v === null || v.trim() === (u.email || '')) return;
+    try { await api('user.save', { id: u.id, name: u.name, role: u.role, email: v.trim() }); toast('Email saved ✓'); loadView(); } catch (ex) { toast(ex.message, 5000); }
+  };
   return [
     el('h1', null, 'People'),
     state.newPerson ? shareBox(state.newPerson) : null,
     users.map((u) => el('div', { class: 'card' },
       el('div', { class: 'row spread' }, el('div', null, el('strong', null, u.name), ' ', el('span', { class: 'muted small' }, '@' + u.username)),
         el('span', { class: 'tag ' + (!u.active ? 'grey' : u.role === 'admin' ? '' : 'green') }, !u.active ? 'Switched off' : u.role === 'admin' ? 'Manager' : 'Staff')),
-      el('div', { class: 'meta' }, u.lastLogin ? `Last signed in ${fmtDay(u.lastLogin)} ${fmtTime(u.lastLogin)}` : 'Not signed in yet'),
+      el('div', { class: 'meta' }, u.lastLogin ? `Last signed in ${fmtDay(u.lastLogin)} ${fmtTime(u.lastLogin)}` : 'Not signed in yet', u.email ? ` · 📧 ${u.email}` : ''),
       u.id === state.user.id ? null : el('div', { class: 'row' },
         el('button', { onClick: () => rename(u) }, '✎ Name'),
+        el('button', { onClick: () => setEmail(u) }, '📧 Email'),
         el('button', { onClick: () => reset(u) }, '🔑 New password'),
         el('button', { onClick: () => toggle(u) }, u.active ? 'Switch off' : 'Switch on'),
         u.active ? el('button', { onClick: () => { state.movingAll = state.movingAll === u.id ? 0 : u.id; render(); } }, '↔ Move all tasks to…') : null),
@@ -1815,14 +1848,15 @@ function peopleScreen() {
       e.preventDefault();
       err.hidden = true;
       try {
-        const out = await api('user.save', { name: name.value, username: username.value, password: pass.value, role: role.value });
+        const out = await api('user.save', { name: name.value, username: username.value, password: pass.value, role: role.value, email: email.value.trim() });
         state.newPerson = { name: out.user.name, username: out.user.username, password: pass.value };
         toast('Added ✓');
         loadView();
       } catch (ex) { err.textContent = ex.message; err.hidden = false; }
     } },
     el('label', null, 'Name', name), el('label', null, 'Username (small letters, no spaces)', username),
-    el('label', null, 'First password (they change it when they sign in)', pass), el('label', null, 'Role', role), err,
+    el('label', null, 'First password (they change it when they sign in)', pass), el('label', null, 'Role', role),
+    el('label', null, 'Email (optional, for the morning email)', email), err,
     el('button', { class: 'primary', type: 'submit' }, 'Add person')),
   ];
 }
