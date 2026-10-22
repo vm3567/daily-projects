@@ -973,7 +973,7 @@ a.team-line.msg { background: #eef4ff; border-color: #93b4f8; color: #1e40af; fo
 
 /* The project's short description: grey text under the name, a box only while it is being changed */
 .about-input { display: block; width: 100%; box-sizing: border-box; field-sizing: content; min-height: 0; resize: none; overflow-y: auto;
-  margin: -4px 0 6px; padding: 2px 6px; border: 1px solid transparent; border-radius: 6px; background: transparent;
+  margin: 10px 0 10px -7px; width: calc(100% + 7px); padding: 3px 6px; border: 1px solid transparent; border-radius: 6px; background: transparent;
   font: inherit; font-size: 14px; line-height: 1.45; color: var(--muted); cursor: text; text-align: left; }
 .about-input:focus { outline: none; border-color: var(--line); color: var(--text); }
 .about-input::placeholder { color: var(--grey); opacity: .75; }

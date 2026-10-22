@@ -744,3 +744,11 @@ test('📅 Only on wiring (app.js): the list row hint says the days on a rest da
   const sync = APP.slice(APP.indexOf('const projectSteps = (p) =>'), APP.indexOf('const wholeRef ='));
   assert.doesNotMatch(sync, /onlyDays|isSnoozed|restUntil|restReason|remind/);
 });
+
+test('project page: the description has room above and below (never touching the title line or the chips) and lines up with the chips', async () => {
+  const { readFileSync } = await import('node:fs');
+  const css = readFileSync(new URL('../docs/styles.css', import.meta.url), 'utf8');
+  const rule = css.slice(css.indexOf('.about-input {'), css.indexOf('}', css.indexOf('.about-input {')));
+  assert.match(rule, /margin: 10px 0 10px -7px;/, 'space above and below; the text starts where the chips start');
+  assert.match(rule, /width: calc\(100% \+ 7px\);/);
+});
