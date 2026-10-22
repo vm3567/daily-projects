@@ -981,7 +981,7 @@ test('📂 Projects page: a click on a project row selects it and stays on the p
   assert.match(mainsSrc, /ctx\.ui\.view === 'mains' && ctx\.showHere \? ctx\.showHere\(c\.id\)/, 'a task in the TASKS table while on the Projects page');
   const here = app.slice(app.indexOf('  showHere: (id) => {'), app.indexOf('  openProject: (id) => {'));
   assert.match(here, /select\(id\);/);
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-11'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-12'/, 'phones get the new copy');
 });
 
 test('📂 project page: "✕ Remove" on a task row takes it out of this project only — the task is kept (and stays in its other projects)', () => {
@@ -1053,4 +1053,11 @@ test('task lists: a task with no next step shows no red "No next step — add on
   const row = app.slice(app.indexOf('function projectRow('), app.indexOf('function rowAction('));
   assert.ok(!row.includes('No next step — add one'), 'the red line is gone from list rows (owner asked, 22 Oct)');
   assert.match(row, /class: 'quick-add', title: 'Add the first step'/, 'the + to add a step stays');
+});
+
+test('groups (Acton, Personal…) list tasks only — 📂 projects are not shown there, and the menu count counts tasks only', async () => {
+  const { readFileSync } = await import('node:fs');
+  const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
+  assert.match(app, /return all\.filter\(\(p\) => p\.groupId === id && p\.state === 'active' && !isMainProject\(store\.view\.data, p\)\);/);
+  assert.match(app, /count\(\(p\) => p\.groupId === g\.id && p\.state === 'active' && !isMainProject\(data, p\)\)/);
 });

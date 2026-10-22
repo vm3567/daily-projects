@@ -653,7 +653,7 @@ function visibleProjects() {
   if (ui.view === 'finished') return all.filter((p) => p.state === 'finished');
   if (ui.view.startsWith('group:')) {
     const id = ui.view.slice(6);
-    return all.filter((p) => p.groupId === id && p.state === 'active');
+    return all.filter((p) => p.groupId === id && p.state === 'active' && !isMainProject(store.view.data, p)); // a group shows its tasks only (📂 projects are on Projects)
   }
   return [];
 }
@@ -812,7 +812,7 @@ function renderMenu() {
       item('all', '✅ Tasks', activeTasks(data).length),
       item('mains', '📂 Projects', mainProjects(data).length),
       h('li', { class: 'menu-head', key: 'groups-head' }, 'Groups'),
-      data.groups.map((g) => item('group:' + g.id, g.name, count((p) => p.groupId === g.id && p.state === 'active'),
+      data.groups.map((g) => item('group:' + g.id, g.name, count((p) => p.groupId === g.id && p.state === 'active' && !isMainProject(data, p)),
         h('button', {
           class: 'icon tiny', title: `Rename or delete "${g.name}"`,
           onClick: () => editGroup(g),
