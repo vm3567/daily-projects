@@ -981,5 +981,27 @@ test('📂 Projects page: a click on a project row selects it and stays on the p
   assert.match(mainsSrc, /ctx\.ui\.view === 'mains' && ctx\.showHere \? ctx\.showHere\(c\.id\)/, 'a task in the TASKS table while on the Projects page');
   const here = app.slice(app.indexOf('  showHere: (id) => {'), app.indexOf('  openProject: (id) => {'));
   assert.match(here, /select\(id\);/);
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-6'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-7'/, 'phones get the new copy');
+});
+
+test('📂 project page: "✕ Remove" on a task row takes it out of this project only — the task is kept (and stays in its other projects)', () => {
+  const s = mainsState();
+  const ui = { selected: 'm', update: {} };
+  const ctx = liveCtx(s, ui);
+  const page = renderDetail(ctx);
+  const rows = rAll(page, (n) => n.className === 'sub-row');
+  assert.ok(rows.length >= 2);
+  const before = s.data.projects.length;
+  const removeBtn = rAll(rows[0], (n) => n.nodeName === 'BUTTON' && /sub-remove/.test(n.className))[0];
+  assert.ok(removeBtn, 'each row has a Remove button');
+  const name = rows[0].textContent;
+  removeBtn.__on.click({ stopPropagation() {} });
+  const call = ctx.calls.find((c) => c[0] === 'act:removeFromProject');
+  assert.ok(call && call[1].parentId === 'm', 'removeFromProject for this project');
+  assert.equal(s.data.projects.length, before, 'nothing deleted');
+  const task = s.data.projects.find((p) => p.id === call[1].projectId);
+  assert.ok(task && !(task.parentIds || []).includes('m'), 'out of this project');
+  assert.ok(name.includes(task.name));
+  assert.ok(!ctx.calls.some((c) => c[0] === 'open'), 'the click does not open the task');
+  assert.ok(renderDetail(ctx).textContent.includes(`TASKS (${rows.length - 1})`));
 });

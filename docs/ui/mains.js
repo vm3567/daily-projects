@@ -174,7 +174,7 @@ export function subProjectsBlock(ctx, p, today = todayIndia()) {
   return h('section', { class: 'block sub-projects', key: 'subs-' + p.id },
     h('h3', null, `TASKS (${kids.length})`),
     kids.length ? h('table', { class: 'sub-table' },
-      h('thead', null, h('tr', null, h('th', null, ''), h('th', null, 'Task'), h('th', null, 'Now'), h('th', null, 'Last update'))),
+      h('thead', null, h('tr', null, h('th', null, ''), h('th', null, 'Task'), h('th', null, 'Now'), h('th', null, 'Last update'), h('th', null, ''))),
       h('tbody', null, kids.map((c) => {
         const ns = c.state === 'active' ? nextStep(c, today) : null;
         const lu = lastUpdate(c);
@@ -183,7 +183,12 @@ export function subProjectsBlock(ctx, p, today = todayIndia()) {
           h('td', null, h('button', { class: 'link sub-name', type: 'button' }, c.name), c.team ? h('span', { class: 'muted small' }, ` 👥 ${c.team.name}`) : null,
             c.state !== 'active' ? h('span', { class: 'tag' }, c.state) : null),
           h('td', { class: ns ? '' : 'warn' }, c.state !== 'active' ? '—' : ns ? short(ns.text) : 'No next step'),
-          h('td', { class: 'muted small' }, lu ? `${fmtDay(lu.day)} · ${short(lu.text, 50)}` : '—'));
+          h('td', { class: 'muted small' }, lu ? `${fmtDay(lu.day)} · ${short(lu.text, 50)}` : '—'),
+          // takes the task out of this project only (the task itself stays, with Undo)
+          h('td', null, h('button', {
+            class: 'link small sub-remove', type: 'button', title: `Take ${c.name} out of this project (the task is kept)`,
+            onClick: (e) => { if (e && e.stopPropagation) e.stopPropagation(); ctx.act('removeFromProject', { projectId: c.id, parentId: p.id }, `${c.name} taken out of 📂 ${p.name} (the task is kept)`); },
+          }, '✕ Remove')));
       }))) : h('p', { class: 'muted small' }, 'No tasks in it yet.'),
     h('div', { class: 'sub-buttons' },
       h('button', { class: 'btn small', type: 'button', onClick: () => openAddTasks(ctx, p) }, '+ Add tasks'),
