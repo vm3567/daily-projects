@@ -7,7 +7,7 @@ import { spawn, execFileSync, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createServer } from 'node:http';
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync, existsSync, readFileSync } from 'node:fs';
-import { randomBytes, createHash } from 'node:crypto';
+import { randomBytes, createHash, createHmac } from 'node:crypto';
 const md5 = (x) => createHash('md5').update(x).digest('hex');
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -1598,4 +1598,282 @@ test('cron.php: runs the jobs from the command line, skips while another run hol
     assert.equal(await r.text(), '');
   } finally { webApp.kill(); }
   await saveProjects([]);
+});
+
+// ---------------------------------------------------------------- 🔌 Connections: outside apps send tasks and approvals (connect.php)
+const CB_PORT = DB_PORT + 12000; // a tiny fake app that receives the decisions
+const CB = `http://127.0.0.1:${CB_PORT}/hook`;
+const cb = { reqs: [], code: 200, server: null };
+async function fakeApp() {
+  if (cb.server) return;
+  cb.server = createServer((req, res) => {
+    let body = '';
+    req.on('data', (c) => { body += c; });
+    req.on('end', () => {
+      cb.reqs.push({ method: req.method, path: req.url, headers: req.headers, body });
+      res.writeHead(cb.code, cb.code >= 300 && cb.code < 400 ? { Location: 'http://127.0.0.1:1/elsewhere' } : { 'Content-Type': 'application/json' });
+      res.end('{}');
+    });
+  });
+  await new Promise((r) => cb.server.listen(CB_PORT, '127.0.0.1', r));
+}
+after(() => { try { cb.server?.close(); } catch { /* gone */ } });
+const cn = {}; // the connections made below: { purchase: {id, key, secret}, poller: {…} }
+async function appCall(a, body, key, method = 'POST') {
+  const h = { 'Content-Type': 'application/json' };
+  if (key !== undefined) h.Authorization = 'Bearer ' + key;
+  const r = await fetch(B + a, method === 'GET' ? { headers: h } : { method, headers: h, body: JSON.stringify(body || {}) });
+  let j = {};
+  try { j = await r.json(); } catch { /* not JSON */ }
+  return { s: r.status, ...j };
+}
+const hmac = (secret, text) => createHmac('sha256', secret).update(text).digest('hex');
+const sqlOut = (q) => execFileSync('mysql', ['-u', 'root', `--socket=${SOCK}`, '-N', '-e', q], { encoding: 'utf8' });
+const connList = async () => (await call('conn.list', {}, tok.boss)).connections;
+const appItems = async () => (await call('conn.items', {}, tok.boss)).items;
+// (not execFileSync: the fake app lives in this same process and must answer while cron runs)
+const cronIn = (minutes) => promisify(execFile)('php', [join(ROOT, 'team', 'app', 'cron.php')], { env: { ...env(), WT_TEST_NOW: String(Math.floor(Date.now() / 1000) + minutes * 60) }, encoding: 'utf8' });
+
+test('connections: only the owner manages them; create shows the key and secret once (never in the list, the database or the log); the decision address must be https', { skip }, async () => {
+  await fakeApp();
+  const m = (await call('login', { username: 'mgr2', password: 'mgr2-pass-456' })).token;
+  assert.equal((await call('conn.list', {}, m)).s, 403, 'another manager cannot');
+  assert.equal((await call('conn.create', { name: 'X' }, m)).s, 403);
+  assert.equal((await call('conn.list', {}, tok.suresh)).s, 403, 'staff cannot');
+  assert.match((await call('conn.create', { name: '  ' }, tok.boss)).error, /name is empty/);
+  assert.match((await call('conn.create', { name: 'Purchase', callback_url: 'http://example.com/hook' }, tok.boss)).error, /https/, 'http is refused');
+  assert.match((await call('conn.create', { name: 'Purchase', callback_url: 'https://user:pw@example.com/hook' }, tok.boss)).error, /user name or password/);
+  assert.match((await call('conn.create', { name: 'Purchase', callback_url: 'ftp://example.com/x' }, tok.boss)).error, /https/);
+  const r = await call('conn.create', { name: 'Purchase', callback_url: CB }, tok.boss);
+  assert.ok(r.ok, r.error);
+  assert.match(r.key, /^wtc_[0-9a-f]{48}$/, 'the key: wtc_ + 48 random letters');
+  assert.match(r.secret, /^wts_[0-9a-f]{48}$/);
+  assert.equal(r.connection.keyEnd, r.key.slice(-4));
+  cn.purchase = { id: r.connection.id, key: r.key, secret: r.secret };
+  const p = await call('conn.create', { name: 'Poller' }, tok.boss);
+  cn.poller = { id: p.connection.id, key: p.key, secret: p.secret };
+  assert.equal(p.connection.callbackUrl, '', 'no decision address: the app asks');
+  const list = await call('conn.list', {}, tok.boss);
+  assert.deepEqual(list.connections.map((c) => [c.name, c.active, c.pending, c.lastSeenAt]), [['Poller', true, 0, null], ['Purchase', true, 0, null]]);
+  const shown = JSON.stringify(list);
+  for (const x of [cn.purchase.key, cn.purchase.secret, cn.poller.key, cn.poller.secret]) assert.ok(!shown.includes(x), 'the list never shows a key or secret');
+  const stored = sqlOut('SELECT key_hash, key_end, secret_enc FROM wt.connections; SELECT GROUP_CONCAT(detail) FROM wt.audit');
+  assert.ok(stored.includes(createHash('sha256').update(cn.purchase.key).digest('hex')), 'only the key\'s fingerprint is kept');
+  for (const x of [cn.purchase.key, cn.purchase.secret, cn.poller.secret]) assert.ok(!stored.includes(x), 'never kept as it is (database, audit)');
+});
+
+test('connect.push: a good key works, a bad / missing / switched-off key gets 401 with no detail; the same external_id updates (one item); plain errors; the owner gets a phone alert', { skip }, async () => {
+  assert.deepEqual([(await appCall('connect.push', { external_id: 'x' })).s, (await appCall('connect.push', { external_id: 'x' })).error], [401, 'Not allowed.']);
+  assert.equal((await appCall('connect.push', {}, 'wtc_' + 'a'.repeat(48))).s, 401, 'unknown key');
+  assert.equal((await appCall('connect.push', {}, tok.boss)).s, 401, 'a person\'s sign-in is not an app key');
+  const n = pushLen();
+  const po = { external_id: 'PO-1001', kind: 'approval', title: 'Approve PO 1001', details: 'Clay for March', link: 'https://erp.example/po/1001', fields: { Amount: '12,500', Vendor: 'ABC Minerals' } };
+  const a = await appCall('connect.push', po, cn.purchase.key);
+  assert.ok(a.ok, a.error);
+  assert.equal(a.status, 'pending');
+  const alerts = pushSince(n).trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)).filter((x) => /^conn/.test(x.msg.tag || ''));
+  assert.deepEqual(alerts.map((x) => [x.user, x.msg.title, x.msg.body, x.msg.url]), [[id.boss, '🔌 Purchase: Approve PO 1001', 'Clay for March', '/projects/#apps']], 'one alert to the owner');
+  assert.ok((await connList()).find((c) => c.name === 'Purchase').lastSeenAt, 'last seen is kept');
+  // plain errors
+  assert.match((await appCall('connect.push', { ...po, kind: 'memo' }, cn.purchase.key)).error, /kind must be "task" or "approval"/);
+  assert.match((await appCall('connect.push', { ...po, title: '' }, cn.purchase.key)).error, /title is empty/);
+  assert.match((await appCall('connect.push', { ...po, external_id: '' }, cn.purchase.key)).error, /external_id is empty/);
+  assert.match((await appCall('connect.push', { ...po, link: 'javascript:alert(1)' }, cn.purchase.key)).error, /http/);
+  assert.match((await appCall('connect.push', { ...po, fields: Object.fromEntries(Array.from({ length: 21 }, (_, i) => ['f' + i, 'v'])) }, cn.purchase.key)).error, /20 at most/);
+  assert.match((await appCall('connect.push', { ...po, kind: 'task' }, cn.purchase.key)).error, /cannot change/, 'one external_id stays one kind');
+  // the same external_id again = an update of the same item (no second alert)
+  const n2 = pushLen();
+  const b = await appCall('connect.push', { ...po, title: 'Approve PO 1001 (new price)', fields: [{ key: 'Amount', value: '11,900' }] }, cn.purchase.key);
+  assert.equal(b.id, a.id, 'the same item');
+  assert.equal(pushSince(n2).includes('🔌'), false, 'an update sends no new alert');
+  const items = (await appItems()).filter((i) => i.externalId === 'PO-1001');
+  assert.equal(items.length, 1);
+  assert.deepEqual([items[0].title, items[0].fields, items[0].app, items[0].status, items[0].delivery], ['Approve PO 1001 (new price)', [['Amount', '11,900']], 'Purchase', 'pending', null]);
+  // switched off: refused; on again: works
+  assert.ok((await call('conn.update', { id: cn.purchase.id, active: false }, tok.boss)).ok);
+  assert.equal((await appCall('connect.push', po, cn.purchase.key)).s, 401, 'switched off');
+  assert.ok((await call('conn.update', { id: cn.purchase.id, active: true }, tok.boss)).ok);
+  assert.ok((await appCall('connect.push', { ...po, title: 'Approve PO 1001 (new price)', fields: [{ key: 'Amount', value: '11,900' }] }, cn.purchase.key)).ok);
+  assert.equal((await connList()).find((c) => c.name === 'Purchase').pending, 1, 'one waiting');
+});
+
+test('connect.push kind task: one Daily Projects task (name, description, link chip, a first note with the fields, "From <app>" — not your work); a later push adds a note with what changed, never a second task; withdraw', { skip }, async () => {
+  const t = { external_id: 'T-1', kind: 'task', title: 'Check kiln 3', details: 'The top zone runs hot.', link: 'https://erp.example/t/1', fields: { Line: '3', Shift: 'B' } };
+  const r = await appCall('connect.push', t, cn.purchase.key);
+  assert.ok(r.ok, r.error);
+  assert.equal(r.status, 'done', 'made at once');
+  let dp = await dpNow();
+  let made = dp.data.projects.filter((p) => p.fromApp === 'Purchase');
+  assert.equal(made.length, 1);
+  const task = made[0];
+  assert.deepEqual([task.name, task.about, task.state, task.steps, task.deadline], ['Check kiln 3', 'The top zone runs hot.', 'active', [], null]);
+  assert.deepEqual(task.links, [{ id: task.id + '-link', title: 'Open in Purchase', url: 'https://erp.example/t/1' }], 'the link chip');
+  assert.deepEqual([task.workNotes.length, task.workNotes[0].text, task.workNotes[0].app], [1, 'Line: 3\nShift: B', true], 'the fields as the first note (not your work)');
+  assert.ok(dp.history[istDay(0).slice(0, 7)].some((e) => e.kind === 'app_task' && e.projectId === task.id && e.detail === 'From Purchase: Check kiln 3'), 'a history line "From Purchase"');
+  // the same external_id again: a note with what changed, on the same task
+  const r2 = await appCall('connect.push', { ...t, title: 'Check kiln 3 today', fields: { Line: '3', Shift: 'C', Owner: 'Ravi' } }, cn.purchase.key);
+  assert.equal(r2.id, r.id);
+  dp = await dpNow();
+  made = dp.data.projects.filter((p) => p.fromApp === 'Purchase');
+  assert.equal(made.length, 1, 'never a second task');
+  assert.equal(made[0].name, 'Check kiln 3', 'the name you see stays (you may have changed it)');
+  assert.equal(made[0].workNotes.length, 2);
+  assert.equal(made[0].workNotes[0].text, '🔌 Purchase updated this:\nTitle: Check kiln 3 → Check kiln 3 today\nShift: C (was B)\nOwner: Ravi');
+  assert.ok(made[0].workNotes[0].app);
+  assert.ok(dp.history[istDay(0).slice(0, 7)].some((e) => e.kind === 'app_note' && e.projectId === task.id));
+  // nothing changed: no note
+  await appCall('connect.push', { ...t, title: 'Check kiln 3 today', fields: { Line: '3', Shift: 'C', Owner: 'Ravi' } }, cn.purchase.key);
+  assert.equal((await dpNow()).data.projects.find((p) => p.id === task.id).workNotes.length, 2, 'the same words again: no note');
+  // long details: the description keeps 1000 letters, the note the whole text
+  await appCall('connect.push', { external_id: 'T-2', kind: 'task', title: 'Long one', details: 'x'.repeat(1500) }, cn.purchase.key);
+  const long = (await dpNow()).data.projects.find((p) => p.name === 'Long one');
+  assert.deepEqual([long.about.length, long.workNotes[0].text.length, long.links], [1000, 1500, []]);
+  // tasks are not approvals
+  assert.ok(!(await appItems()).some((i) => i.externalId === 'T-1'), 'a task is not in From apps');
+  // withdraw
+  const w = await appCall('connect.withdraw', { external_id: 'T-1' }, cn.purchase.key);
+  assert.deepEqual([w.id, w.status], [r.id, 'withdrawn']);
+  assert.match((await dpNow()).data.projects.find((p) => p.id === task.id).workNotes[0].text, /Purchase took this back/);
+  assert.equal((await appCall('connect.withdraw', { external_id: 'nope' }, cn.purchase.key)).s, 404);
+});
+
+test('approvals: conn.items lists them; ✓ Approve sends a signed decision (HMAC checked, also by the PHP connector); ✕ Reject with a reason; only a waiting one can be decided; owner only', { skip }, async () => {
+  cb.code = 200; cb.reqs = [];
+  const m = (await call('login', { username: 'mgr2', password: 'mgr2-pass-456' })).token;
+  const it = (await appItems()).find((i) => i.externalId === 'PO-1001');
+  assert.equal((await call('conn.decide', { id: it.id, decision: 'approved' }, m)).s, 403, 'another manager cannot decide');
+  assert.match((await call('conn.decide', { id: it.id, decision: 'maybe' }, tok.boss)).error, /Approve or Reject/);
+  const before = Math.floor(Date.now() / 1000);
+  const d = await call('conn.decide', { id: it.id, decision: 'approved' }, tok.boss);
+  assert.ok(d.ok, d.error);
+  assert.deepEqual([d.item.status, d.item.delivery], ['approved', 'sent']);
+  assert.equal(cb.reqs.length, 1, 'sent at once');
+  const q = cb.reqs[0];
+  const ts = q.headers['x-worktask-timestamp'];
+  assert.ok(Math.abs(Number(ts) - before) < 60, 'the time it was sent');
+  assert.equal(q.headers['x-worktask-signature'], 'sha256=' + hmac(cn.purchase.secret, ts + '.' + q.body), 'signed with the secret: HMAC-SHA256(secret, timestamp + "." + body)');
+  const body = JSON.parse(q.body);
+  assert.deepEqual([body.event, body.external_id, body.status, body.reason, body.item_id], ['decision', 'PO-1001', 'approved', '', it.id]);
+  assert.match(body.decided_at, /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\+05:30$/);
+  assert.equal((await call('conn.decide', { id: it.id, decision: 'rejected' }, tok.boss)).s, 409, 'decided once');
+  assert.equal((await appCall('connect.push', { external_id: 'PO-1001', kind: 'approval', title: 'Again' }, cn.purchase.key)).status, 'approved', 'a decided item is not opened again');
+  // the downloaded PHP connector checks the signature the same way
+  const { buildConnector } = await import('../docs/ui/connections.js');
+  const file = join(dir, 'worktask-connector.php');
+  writeFileSync(file, buildConnector({ address: B.replace(/\?a=$/, ''), key: cn.purchase.key, secret: cn.purchase.secret }));
+  const check = (b, t, s) => execFileSync('php', ['-r', 'require $argv[1]; echo wt_signature_ok($argv[2], $argv[3], $argv[4]) ? "yes" : "no";', file, b, t, s], { encoding: 'utf8' });
+  assert.equal(check(q.body, ts, q.headers['x-worktask-signature']), 'yes');
+  assert.equal(check(q.body.replace('approved', 'rejected'), ts, q.headers['x-worktask-signature']), 'no', 'a changed body fails');
+  const old = String(Number(ts) - 600);
+  assert.equal(check(q.body, old, 'sha256=' + hmac(cn.purchase.secret, old + '.' + q.body)), 'no', 'older than 5 minutes fails');
+  // the connector can push too (wt_push against this server)
+  const pushed = execFileSync('php', ['-r', 'require $argv[1]; $r = wt_push(["external_id" => "PO-1002", "kind" => "approval", "title" => "Approve PO 1002", "fields" => ["Amount" => "3,000"]]); echo $r["status"];', file], { encoding: 'utf8' });
+  assert.equal(pushed, 'pending');
+  // reject with a reason
+  const it2 = (await appItems()).find((i) => i.externalId === 'PO-1002');
+  const d2 = await call('conn.decide', { id: it2.id, decision: 'rejected', reason: 'Too costly' }, tok.boss);
+  assert.deepEqual([d2.item.status, d2.item.reason], ['rejected', 'Too costly']);
+  assert.deepEqual([JSON.parse(cb.reqs[1].body).status, JSON.parse(cb.reqs[1].body).reason], ['rejected', 'Too costly']);
+  // taken back by the app: nothing to decide
+  await appCall('connect.push', { external_id: 'PO-1003', kind: 'approval', title: 'Approve PO 1003' }, cn.purchase.key);
+  assert.equal((await appCall('connect.withdraw', { external_id: 'PO-1003' }, cn.purchase.key)).status, 'withdrawn');
+  const it3 = (await appItems()).find((i) => i.externalId === 'PO-1003');
+  assert.equal(it3.status, 'withdrawn');
+  assert.match((await call('conn.decide', { id: it3.id, decision: 'approved' }, tok.boss)).error, /took this back/);
+});
+
+test('approvals: a decision the app did not take (error / redirect) is tried again by the 5-minute job (cron) with backoff, then given up after 24 hours with the error in plain words; never follows a redirect', { skip }, async () => {
+  cb.code = 500; cb.reqs = [];
+  sql("USE wt; INSERT INTO wt.settings (k, v) VALUES ('fill_by', '23:59:59') ON DUPLICATE KEY UPDATE v = '23:59:59'");
+  await appCall('connect.push', { external_id: 'PO-2001', kind: 'approval', title: 'Approve PO 2001' }, cn.purchase.key);
+  const it = (await appItems()).find((i) => i.externalId === 'PO-2001');
+  const d = await call('conn.decide', { id: it.id, decision: 'approved' }, tok.boss);
+  assert.deepEqual([d.item.status, d.item.delivery, cb.reqs.length], ['approved', 'waiting', 1]);
+  assert.match((await connList()).find((c) => c.name === 'Purchase').lastError, /said error 500\. Trying again by itself/);
+  await cronIn(1);
+  assert.equal(cb.reqs.length, 1, 'not again before 5 minutes');
+  await cronIn(6);
+  assert.equal(cb.reqs.length, 2, 'tried again after 5 minutes');
+  await cronIn(8);
+  assert.equal(cb.reqs.length, 2, 'then waits longer (10 minutes)');
+  await cronIn(17);
+  assert.equal(cb.reqs.length, 3);
+  await cronIn(25 * 60);
+  assert.equal(cb.reqs.length, 4, 'one last try');
+  const gone = (await appItems()).find((i) => i.externalId === 'PO-2001');
+  assert.equal(gone.delivery, 'failed');
+  assert.match((await connList()).find((c) => c.name === 'Purchase').lastError, /for 24 hours.*Stopped trying — the app can still ask for its decisions/);
+  await cronIn(27 * 60);
+  assert.equal(cb.reqs.length, 4, 'given up: no more tries');
+  // a redirect is not followed (counts as not taken); the next try that gets 200 clears the error
+  cb.code = 302; cb.reqs = [];
+  await appCall('connect.push', { external_id: 'PO-2002', kind: 'approval', title: 'Approve PO 2002' }, cn.purchase.key);
+  const it2 = (await appItems()).find((i) => i.externalId === 'PO-2002');
+  assert.equal((await call('conn.decide', { id: it2.id, decision: 'approved' }, tok.boss)).item.delivery, 'waiting');
+  assert.deepEqual(cb.reqs.map((r) => r.path), ['/hook'], 'the redirect was not followed');
+  assert.match((await connList()).find((c) => c.name === 'Purchase').lastError, /sent us somewhere else/);
+  cb.code = 200;
+  await cronIn(6);
+  assert.equal((await appItems()).find((i) => i.externalId === 'PO-2002').delivery, 'sent');
+  assert.equal((await connList()).find((c) => c.name === 'Purchase').lastError, '', 'the error is cleared');
+});
+
+test('connect.decisions: an app with no decision address asks for its decisions (POST or GET, since a time); only its own; asked = shown as sent', { skip }, async () => {
+  await appCall('connect.push', { external_id: 'P-1', kind: 'approval', title: 'Leave for Ravi' }, cn.poller.key);
+  const it = (await appItems()).find((i) => i.externalId === 'P-1' && i.app === 'Poller');
+  const d = await call('conn.decide', { id: it.id, decision: 'rejected', reason: 'Busy week' }, tok.boss);
+  assert.equal(d.item.delivery, 'ask', 'no address: the app picks it up');
+  const all = await appCall('connect.decisions', {}, cn.poller.key);
+  assert.ok(all.ok, all.error);
+  assert.deepEqual(all.decisions.map((x) => [x.external_id, x.status, x.reason, x.item_id]), [['P-1', 'rejected', 'Busy week', it.id]], 'only this app\'s decisions');
+  assert.match(all.decisions[0].decided_at, /\+05:30$/);
+  assert.match(all.until, /\+05:30$/);
+  assert.equal((await appItems()).find((i) => i.id === it.id).delivery, 'sent', 'asked for = the app knows');
+  const later = await appCall('connect.decisions', { since: new Date(Date.now() + 3600e3).toISOString() }, cn.poller.key);
+  assert.deepEqual(later.decisions, [], 'nothing after that time');
+  assert.match((await appCall('connect.decisions', { since: 'yesterday-ish' }, cn.poller.key)).error, /since is not a time/);
+  const g = await appCall(`connect.decisions&since=${encodeURIComponent(new Date(Date.now() - 3600e3).toISOString())}`, null, cn.poller.key, 'GET');
+  assert.deepEqual(g.decisions.map((x) => x.external_id), ['P-1'], 'GET works too');
+  assert.equal((await appCall('connect.decisions', {}, 'wtc_' + 'b'.repeat(48), 'GET')).s, 401);
+  const purchase = await appCall('connect.decisions', {}, cn.purchase.key);
+  assert.ok(purchase.decisions.every((x) => x.external_id.startsWith('PO-')), 'the other app sees only its own');
+});
+
+test('connect.*: more than 120 calls a minute from one app → 429 (other apps are not slowed)', { skip }, async () => {
+  const burst = await call('conn.create', { name: 'Burst' }, tok.boss); // a fresh app: no calls yet this minute
+  while (new Date().getSeconds() > 40) await wait(1000); // all calls inside one minute
+  const results = [];
+  for (let i = 0; i < 121; i++) results.push((await appCall('connect.decisions', {}, burst.key)).s);
+  assert.deepEqual([results.slice(0, 120).every((s) => s === 200), results[120]], [true, 429]);
+  assert.match((await appCall('connect.decisions', {}, burst.key)).error, /Too many calls/);
+  assert.equal((await appCall('connect.decisions', {}, cn.purchase.key)).s, 200, 'another app is fine');
+  assert.ok((await call('conn.delete', { id: burst.connection.id }, tok.boss)).ok);
+});
+
+test('connections: Rotate key — the old key stops at once, the new key and a new secret are shown once; Delete removes the app and its items; the log never holds a key or secret', { skip }, async () => {
+  const r = await call('conn.rotate', { id: cn.purchase.id }, tok.boss);
+  assert.ok(r.ok, r.error);
+  assert.match(r.key, /^wtc_[0-9a-f]{48}$/);
+  assert.notEqual(r.key, cn.purchase.key);
+  assert.notEqual(r.secret, cn.purchase.secret);
+  assert.equal((await appCall('connect.push', { external_id: 'PO-3001', kind: 'approval', title: 'x' }, cn.purchase.key)).s, 401, 'the old key is refused');
+  assert.ok((await appCall('connect.push', { external_id: 'PO-3001', kind: 'approval', title: 'Approve PO 3001' }, r.key)).ok, 'the new key works');
+  assert.ok(!JSON.stringify(await connList()).includes(r.key), 'not shown again');
+  cb.code = 200; cb.reqs = [];
+  const it = (await appItems()).find((i) => i.externalId === 'PO-3001');
+  await call('conn.decide', { id: it.id, decision: 'approved' }, tok.boss);
+  const q = cb.reqs[0];
+  assert.equal(q.headers['x-worktask-signature'], 'sha256=' + hmac(r.secret, q.headers['x-worktask-timestamp'] + '.' + q.body), 'signed with the new secret');
+  cn.purchase = { id: cn.purchase.id, key: r.key, secret: r.secret };
+  // delete
+  const m = (await call('login', { username: 'mgr2', password: 'mgr2-pass-456' })).token;
+  assert.equal((await call('conn.delete', { id: cn.poller.id }, m)).s, 403);
+  assert.ok((await call('conn.delete', { id: cn.poller.id }, tok.boss)).ok);
+  assert.deepEqual((await connList()).map((c) => c.name), ['Purchase']);
+  assert.ok(!(await appItems()).some((i) => i.app === 'Poller'), 'its items are deleted too');
+  assert.equal((await appCall('connect.decisions', {}, cn.poller.key)).s, 401, 'its key is refused');
+  const log = sqlOut("SELECT GROUP_CONCAT(action, ' ', detail SEPARATOR '\\n') FROM wt.audit WHERE action LIKE 'conn\\_%'");
+  for (const a of ['conn_create #', 'conn_rotate #', 'conn_delete #', 'conn_update #', 'conn_decide #']) assert.ok(log.includes(a), a);
+  assert.ok(!/wt[cs]_[0-9a-f]{20}/.test(log), 'no key or secret in the log');
+  assert.equal(sqlOut("SELECT v FROM wt.settings WHERE k = 'schema'").trim(), '33', 'the tables step (v15) ran');
 });

@@ -985,7 +985,7 @@ test('📂 Projects page: a click on a project row selects it and stays on the p
   assert.match(mainsSrc, /ctx\.ui\.view === 'mains' && ctx\.showHere \? ctx\.showHere\(c\.id\)/, 'a task in the TASKS table while on the Projects page');
   const here = app.slice(app.indexOf('  showHere: (id) => {'), app.indexOf('  openProject: (id) => {'));
   assert.match(here, /select\(id\);/);
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-19'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-20'/, 'phones get the new copy');
 });
 
 test('📂 project page: "✕ Remove" on a task row takes it out of this project only — the task is kept (and stays in its other projects)', () => {
@@ -1384,4 +1384,245 @@ test('new task box: Enter in the name creates the task when the notes are empty 
   assert.equal(p.name, 'Glaze check');
   assert.equal(p.workNotes.length, 0, 'nothing written: no note');
   assert.deepEqual(p.parentIds || [], []);
+});
+
+// ---------------------------------------------------------------- 🔌 Connections (Settings) and 🔌 From apps
+const cnx = await import('../docs/ui/connections.js');
+const walk = (node, f, out = []) => { if (f(node)) out.push(node); for (const c of node.childNodes || []) walk(c, f, out); return out; };
+const byText = (node, text, tag) => walk(node, (n) => n.nodeType === 1 && (!tag || n.nodeName === tag.toUpperCase()) && n.textContent.trim() === text)[0];
+const flush = () => new Promise((r) => setTimeout(r, 0));
+const KEY = 'wtc_' + '1a2b'.repeat(12);
+const SECRET = 'wts_' + '9f8e'.repeat(12);
+function appsCtx(answers) {
+  const calls = []; const copied = []; const downloads = []; const toasts = []; const asked = [];
+  return {
+    calls, copied, downloads, toasts, asked,
+    api: async (a, body) => { calls.push([a, body]); const r = answers[a]; if (r instanceof Error) throw r; return typeof r === 'function' ? r(body) : r; },
+    toast: (m) => toasts.push(m), render: () => {}, base: 'https://worktask.in/api/',
+    copy: (text, what) => copied.push([what, text]), download: (name, text) => downloads.push([name, text]), confirm: (q) => { asked.push(q); return true; },
+  };
+}
+const conn = (more = {}) => ({ id: 1, name: 'Purchase', keyEnd: 'ab12', active: true, callbackUrl: 'https://erp.example/hook', createdAt: '2026-10-20 09:00:00', lastSeenAt: null, lastError: '', pending: 2, ...more });
+
+test('🔌 Settings → Connections: the list (name, On, last seen, waiting, the error in plain words, Rotate key / Delete) and + New connection', async () => {
+  cnx.resetConnections();
+  const seen = new Date(Date.now() - 5 * 60000);
+  const c = appsCtx({ 'conn.list': { connections: [conn({ lastSeenAt: seen.toISOString(), lastError: 'Could not tell the app about “PO 1”: its decision address said error 500. Trying again by itself.' }), conn({ id: 2, name: 'Forms', active: false, callbackUrl: '', pending: 0 })] } });
+  assert.match(cnx.renderConnectionsSettings(c).textContent, /🔌 Connections[^]*Loading…/);
+  await flush();
+  const el = cnx.renderConnectionsSettings(c);
+  const text = el.textContent;
+  assert.deepEqual(c.calls.map((x) => x[0]), ['conn.list'], 'asked once');
+  for (const bit of ['Purchase', ' · key …ab12', ' On', `last seen ${cnx.whenText(seen.toISOString())}`, '2 waiting for you', 'decisions go to https://erp.example/hook',
+    '⚠ Could not tell the app about “PO 1”: its decision address said error 500. Trying again by itself.', 'Forms', 'Off (the app is refused)', 'nothing waiting',
+    'no decision address (the app asks for decisions)', 'Rotate key', 'Delete', '+ New connection']) assert.ok(text.includes(bit), bit);
+  assert.match(cnx.whenText('2026-10-21 10:42:00', '2026-10-22'), /^21 Oct 10:42/i, 'another day: the date and time (India time)');
+  // the On box switches the app off
+  const box = walk(el, (n) => n.nodeName === 'INPUT' && n.getAttribute('aria-label') === 'Purchase on')[0];
+  c.api = async (a, body) => { c.calls.push([a, body]); return { connection: conn({ active: body.active }) }; };
+  await box.__on.change(null, { checked: false });
+  assert.deepEqual(c.calls.at(-1), ['conn.update', { id: 1, active: false }]);
+  // Delete asks first
+  const row = walk(cnx.renderConnectionsSettings(c), (n) => n.nodeName === 'LI' && n.textContent.startsWith('Purchase'))[0];
+  await byText(row, 'Delete', 'button').__on.click();
+  assert.match(c.asked[0], /Delete the connection "Purchase"\?[^]*approvals here are deleted too/);
+  assert.deepEqual(c.calls.at(-1), ['conn.delete', { id: 1 }]);
+  assert.ok(!cnx.renderConnectionsSettings(c).textContent.includes('Purchase'), 'gone from the list');
+});
+
+test('🔌 New connection → the one-time box "Give these to … — shown only now": Address / Key / Signing secret each with 📋 Copy, ⬇ Download PHP connector (filled in), the guide, the warning; closing it forgets the key', async () => {
+  cnx.resetConnections();
+  installStorage();
+  const c = appsCtx({ 'conn.list': { connections: [] }, 'conn.create': (b) => ({ connection: conn({ id: 7, name: b.name, callbackUrl: b.callback_url, pending: 0 }), key: KEY, secret: SECRET }) });
+  cnx.renderConnectionsSettings(c);
+  await flush();
+  let el = cnx.renderConnectionsSettings(c);
+  assert.ok(el.textContent.includes('No connections yet.'));
+  byText(el, '+ New connection', 'button').__on.click();
+  el = cnx.renderConnectionsSettings(c);
+  assert.ok(el.textContent.includes('Decision address (callback URL) — optional'));
+  const [name, url] = walk(el, (n) => n.nodeName === 'INPUT');
+  name.__on.input(null, { value: 'Purchase app' });
+  url.__on.input(null, { value: ' https://erp.example/hook ' });
+  await walk(el, (n) => n.nodeName === 'FORM')[0].__on.submit({ preventDefault() {} });
+  assert.deepEqual(c.calls.at(-1), ['conn.create', { name: 'Purchase app', callback_url: 'https://erp.example/hook' }]);
+  el = cnx.renderConnectionsSettings(c);
+  const text = el.textContent;
+  assert.ok(text.includes('Give these to Purchase app — shown only now'));
+  for (const v of ['https://worktask.in/api/?a=connect.push', KEY, SECRET, 'Keep the key secret. Rotate it if it leaks.', '⬇ Download PHP connector', 'How to connect']) assert.ok(text.includes(v), v);
+  const copies = walk(el, (n) => n.nodeName === 'BUTTON' && n.textContent === '📋 Copy');
+  assert.equal(copies.length, 3, 'a Copy button for each value');
+  copies.forEach((b) => b.__on.click());
+  assert.deepEqual(c.copied, [['Address', 'https://worktask.in/api/?a=connect.push'], ['Key', KEY], ['Signing secret', SECRET]]);
+  byText(el, '📋 Copy guide', 'button').__on.click();
+  const guide = c.copied.at(-1)[1];
+  for (const v of ['"external_id"', '"kind"', 'Authorization: Bearer ' + KEY, "curl -X POST 'https://worktask.in/api/?a=connect.push'", 'X-WorkTask-Signature: sha256=', 'HMAC-SHA256(signing secret, timestamp + "." + body)', 'within 5 minutes', '?a=connect.decisions', '?a=connect.withdraw']) assert.ok(guide.includes(v), v);
+  assert.ok(!guide.includes(SECRET), 'the guide never holds the secret');
+  byText(el, '⬇ Download PHP connector', 'button').__on.click();
+  const [[file, php]] = c.downloads;
+  assert.equal(file, 'worktask-connector.php');
+  assert.ok(php.includes("const WT_ADDRESS = 'https://worktask.in/api/';") && php.includes(`const WT_KEY = '${KEY}';`) && php.includes(`const WT_SECRET = '${SECRET}';`), 'the address, key and secret filled in');
+  assert.ok(!php.includes('PASTE-YOUR-KEY-HERE'));
+  // closed: the key and secret are gone (page, memory, this device's storage)
+  byText(el, 'Done — I gave them to the app', 'button').__on.click();
+  el = cnx.renderConnectionsSettings(c);
+  assert.ok(!el.textContent.includes(KEY) && !el.textContent.includes(SECRET), 'not on the page');
+  assert.equal(cnx.cx.once, null);
+  assert.ok(!JSON.stringify({ ...cnx.cx, open: [], busy: [] }).includes(KEY), 'not kept in memory');
+  assert.ok(!Object.values(localStorage).some((v) => String(v).includes(KEY) || String(v).includes(SECRET)), 'never saved on this device');
+  assert.ok(el.textContent.includes('Purchase app'), 'the new connection is listed');
+});
+
+test('🔌 Rotate key asks first, then shows the new key once; a failed call says why', async () => {
+  cnx.resetConnections();
+  const c = appsCtx({ 'conn.list': { connections: [conn()] }, 'conn.rotate': { connection: conn({ keyEnd: 'cd34' }), key: KEY, secret: SECRET } });
+  cnx.renderConnectionsSettings(c);
+  await flush();
+  await byText(cnx.renderConnectionsSettings(c), 'Rotate key', 'button').__on.click();
+  assert.match(c.asked[0], /Make a new key for "Purchase"\?[^]*old key stops working at once/);
+  assert.deepEqual(c.calls.at(-1), ['conn.rotate', { id: 1 }]);
+  assert.ok(cnx.renderConnectionsSettings(c).textContent.includes('Give these to Purchase — shown only now'));
+  cnx.forgetOnce();
+  const bad = appsCtx({ 'conn.list': { connections: [] }, 'conn.create': new Error('The decision address must start with https:// (a safe address).') });
+  cnx.resetConnections();
+  cnx.renderConnectionsSettings(bad);
+  await flush();
+  cnx.cx.form = { name: 'X', url: 'http://x' };
+  await walk(cnx.renderConnectionsSettings(bad), (n) => n.nodeName === 'FORM')[0].__on.submit({ preventDefault() {} });
+  await flush();
+  assert.deepEqual(bad.toasts, ['The decision address must start with https:// (a safe address).']);
+  assert.equal(cnx.cx.once, null);
+});
+
+const appItem = (more = {}) => ({ id: 1, connId: 1, app: 'Purchase', externalId: 'PO-1', kind: 'approval', title: 'Approve PO 1', details: '', link: '', fields: [], status: 'pending', reason: '', decidedAt: null, createdAt: '2026-10-22 10:00:00', updatedAt: '2026-10-22 10:00:00', delivery: null, ...more });
+
+test('🔌 From apps: waiting approvals grouped by app (newest first) with the fields table, short details (More ▾), Open ↗, ✓ Approve / ✕ Reject (an in-page reason box, never prompt()); Decided (N) folded with the status and whether the app was told', async () => {
+  cnx.resetConnections();
+  const items = [
+    appItem({ id: 5, app: 'Forms', title: 'Leave for Ravi', createdAt: '2026-10-22 11:00:00', updatedAt: '2026-10-22 11:00:00' }),
+    appItem({ id: 4, title: 'Approve PO 1002', fields: [['Amount', '12,500'], ['Vendor', 'ABC Minerals']], details: 'x'.repeat(250), link: 'https://erp.example/po/1002' }),
+    appItem({ id: 3, title: 'Approve PO 1001' }),
+    appItem({ id: 2, title: 'Approve PO 900', status: 'approved', decidedAt: '2026-10-21 09:00:00', delivery: 'sent' }),
+    appItem({ id: 1, title: 'Approve PO 800', status: 'rejected', reason: 'Too costly', decidedAt: '2026-10-21 08:00:00', delivery: 'waiting' }),
+    appItem({ id: 9, title: 'Approve PO 700', status: 'withdrawn' }),
+  ];
+  const c = appsCtx({ 'conn.items': { items }, 'conn.decide': (b) => ({ item: { ...items.find((i) => i.id === b.id), status: b.decision, reason: b.reason, delivery: 'sent' } }) });
+  assert.match(cnx.renderFromApps(c).textContent, /Loading…/);
+  await flush();
+  assert.equal(cnx.appsPending(), 3, 'the menu count: waiting ones');
+  let el = cnx.renderFromApps(c);
+  const groups = walk(el, (n) => n.nodeName === 'SECTION');
+  assert.deepEqual(groups.map((g) => g.childNodes[0].textContent), ['Forms (1)', 'Purchase (2)'], 'grouped by app, the newest first');
+  assert.deepEqual(walk(groups[1], (n) => n.nodeName === 'STRONG').map((s) => s.textContent), ['Approve PO 1002', 'Approve PO 1001'], 'newest first in a group');
+  const card = walk(el, (n) => n.nodeName === 'ARTICLE' && n.textContent.includes('PO 1002'))[0];
+  assert.deepEqual(walk(card, (n) => n.nodeName === 'TR').map((r) => [r.childNodes[0].textContent, r.childNodes[1].textContent]), [['Amount', '12,500'], ['Vendor', 'ABC Minerals']], 'the fields as a small table');
+  assert.ok(card.textContent.includes('x'.repeat(200) + '…') && !card.textContent.includes('x'.repeat(201)), 'details cut short');
+  byText(card, 'More ▾', 'button').__on.click();
+  assert.ok(cnx.renderFromApps(c).textContent.includes('x'.repeat(250)), 'More ▾ shows all');
+  const open = walk(card, (n) => n.nodeName === 'A')[0];
+  assert.deepEqual([open.textContent, open.getAttribute('href'), open.getAttribute('target'), open.getAttribute('rel')], ['Open ↗', 'https://erp.example/po/1002', '_blank', 'noopener noreferrer']);
+  // ✓ Approve
+  await byText(walk(cnx.renderFromApps(c), (n) => n.nodeName === 'ARTICLE' && n.textContent.includes('PO 1001'))[0], '✓ Approve', 'button').__on.click();
+  assert.deepEqual(c.calls.at(-1), ['conn.decide', { id: 3, decision: 'approved', reason: '' }]);
+  assert.match(c.toasts.at(-1), /✓ Approved: Approve PO 1001 — the app was told ✓/);
+  assert.equal(cnx.appsPending(), 2);
+  // ✕ Reject: a reason box on the page
+  el = cnx.renderFromApps(c);
+  byText(walk(el, (n) => n.nodeName === 'ARTICLE' && n.textContent.includes('PO 1002'))[0], '✕ Reject', 'button').__on.click();
+  el = cnx.renderFromApps(c);
+  const rej = walk(el, (n) => n.nodeName === 'DIV' && n.className === 'reject-box')[0];
+  assert.ok(rej.textContent.includes('Why? (optional — the app is told)'));
+  walk(rej, (n) => n.nodeName === 'TEXTAREA')[0].__on.input(null, { value: 'Price too high' });
+  await byText(rej, '✕ Reject', 'button').__on.click();
+  assert.deepEqual(c.calls.at(-1), ['conn.decide', { id: 4, decision: 'rejected', reason: 'Price too high' }]);
+  assert.equal(cnx.cx.rejecting, null, 'the box closes');
+  // Decided (N), folded
+  el = cnx.renderFromApps(c);
+  const fold = walk(el, (n) => n.nodeName === 'BUTTON' && /Decided \(\d+\)/.test(n.textContent))[0];
+  assert.equal(fold.textContent, '▸ Decided (5)');
+  assert.ok(!el.textContent.includes('Approve PO 800'), 'folded away');
+  fold.__on.click();
+  const dtext = cnx.renderFromApps(c).textContent;
+  for (const bit of ['✓ Approved', 'Approve PO 900', '✓ sent to app', '✕ Rejected', 'Approve PO 800', 'waiting to send', '“Too costly”', 'Withdrawn by the app']) assert.ok(dtext.includes(bit), bit);
+  const src = (await import('node:fs')).readFileSync(new URL('../docs/ui/connections.js', import.meta.url), 'utf8');
+  assert.ok(!/\bprompt\(/.test(src), 'no prompt() boxes');
+  cnx.resetConnections();
+  const empty = appsCtx({ 'conn.items': { items: [] } });
+  cnx.renderFromApps(empty);
+  await flush();
+  assert.ok(cnx.renderFromApps(empty).textContent.includes('Nothing waiting for you ✓'));
+});
+
+test('🔌 app wiring (app.js): "🔌 From apps" after ✉ Replies with the waiting count (worktask.in only), its page, the Settings section, #apps from a phone alert, the key forgotten when leaving Settings; offline copy daily-projects-app-20', async () => {
+  const { readFileSync } = await import('node:fs');
+  const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
+  assert.match(app, /item\('replies', '✉ Replies', readyCount\(data, today\)\),[^\n]*\n\s*onServer \? item\('apps', '🔌 From apps', appsPending\(\)\) : null,/, 'right after ✉ Replies, with the count');
+  assert.match(app, /if \(ui\.view === 'apps' && !ui\.search\) return h\('div', \{ class: 'col-inner' \}, head, timerStrip\(\), onServer \? renderFromApps\(appsCtx\)/);
+  assert.match(app, /onServer \? renderConnectionsSettings\(appsCtx\) : null,/);
+  assert.match(app, /base: \(\) => new URL\('\.\.\/api\/', location\.href\)\.href/, 'the address apps use: this host\'s /api/');
+  assert.match(app, /api: \(a, body\) => teamApi\(a, body\)/);
+  assert.match(app, /if \(location\.hash === '#apps' && onServer\) \{ ui\.view = 'apps';/);
+  assert.match(app, /function go\(view\) \{\n\s*if \(view !== 'settings'\) forgetOnce\(\);/);
+  assert.match(app, /if \(onServer\) loadApps\(appsCtx, force \|\| ui\.view === 'apps'\);/);
+  assert.match(app, /replies: '✉ Replies', apps: '🔌 From apps', mains: '📂 Projects' \}\[ui\.view\]/, 'its page title');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-20'/, 'phones get the new copy');
+});
+
+test('🔌 the PHP connector (team/connector/worktask-connector.php): the same text the app downloads, placeholders only (no real key), valid PHP 7.4+ (php -l), with wt_push / wt_withdraw / wt_decisions / wt_receive_decision', async () => {
+  const { readFileSync, writeFileSync, mkdtempSync, rmSync } = await import('node:fs');
+  const { execFileSync } = await import('node:child_process');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { fileURLToPath } = await import('node:url');
+  const path = new URL('../team/connector/worktask-connector.php', import.meta.url);
+  const tpl = readFileSync(path, 'utf8');
+  assert.equal(cnx.CONNECTOR_TEMPLATE, tpl, 'docs/ui/connections.js carries the same text');
+  assert.ok(!/wt[cs]_[0-9a-f]{20,}/.test(tpl), 'no real key or secret in the template');
+  for (const p of ["const WT_ADDRESS = 'https://YOUR-WORK-TASK-ADDRESS/api/';", "const WT_KEY = 'PASTE-YOUR-KEY-HERE';", "const WT_SECRET = 'PASTE-YOUR-SIGNING-SECRET-HERE';"]) assert.ok(tpl.includes(p), p);
+  for (const f of ['function wt_push(array $item)', 'function wt_withdraw(string $externalId)', 'function wt_decisions(string $since', 'function wt_receive_decision(callable $onDecision)', 'hash_equals(', 'CURLOPT_FOLLOWLOCATION => false']) assert.ok(tpl.includes(f), f);
+  assert.match(tpl, /How to use it - 3 steps/);
+  assert.ok(!/str_starts_with|str_contains|\bmatch\s*\(/.test(tpl), 'PHP 7.4: no PHP 8 functions');
+  const built = cnx.buildConnector({ address: "https://worktask.in/api/", key: KEY, secret: "it's$1\\" });
+  assert.ok(built.includes("const WT_SECRET = 'it\\'s$1\\\\';"), 'quotes, $ and \\ are kept safe');
+  let php = false;
+  try { execFileSync('which', ['php'], { stdio: 'ignore' }); php = true; } catch { /* no php here */ }
+  if (!php) return;
+  const tmp = mkdtempSync(join(tmpdir(), 'wt-conn-'));
+  try {
+    assert.match(execFileSync('php', ['-l', fileURLToPath(path)], { encoding: 'utf8' }), /No syntax errors/);
+    writeFileSync(join(tmp, 'c.php'), built);
+    assert.match(execFileSync('php', ['-l', join(tmp, 'c.php')], { encoding: 'utf8' }), /No syntax errors/);
+    assert.equal(execFileSync('php', ['-r', 'require $argv[1]; echo WT_SECRET;', join(tmp, 'c.php')], { encoding: 'utf8' }), "it's$1\\");
+  } finally { rmSync(tmp, { recursive: true, force: true }); }
+});
+
+test('🔌 a task an app sent shows like any task: the "🔗 Open in <app>" chip, the description, and its note marked with the app\'s name (not "You")', () => {
+  const s = sampleState();
+  const at = new Date().toISOString();
+  s.data.projects.unshift({
+    id: 'ct1', groupId: s.data.groups[0].id, name: 'Check kiln 3', priority: 'medium', deadline: null, notes: '', about: 'The top zone runs hot.',
+    links: [{ id: 'ct1-link', title: 'Open in Purchase', url: 'https://erp.example/t/1' }], state: 'active', lastTickDate: null,
+    lastActivityDate: at.slice(0, 10), activeSince: at.slice(0, 10), stateChangedAt: at, createdAt: at, updatedAt: at, steps: [], files: [], fromApp: 'Purchase',
+    workNotes: [{ id: 'an1', text: 'Line: 3\nShift: B', stepId: null, createdAt: at, updatedAt: at, app: true }],
+  });
+  const el = renderDetail(fakeCtx(s, { selected: 'ct1', update: {} }));
+  const text = el.textContent;
+  assert.ok(text.includes('Open in Purchase'), 'the link chip');
+  assert.equal(walk(el, (n) => String(n.className || '').includes('about-input'))[0].value, 'The top zone runs hot.', 'the description');
+  assert.ok(text.includes('Purchase Line: 3'), 'the note says who wrote it: the app');
+  assert.ok(!text.includes('You Line: 3'));
+});
+
+test('🔌 From apps: opening the page always loads the waiting approvals fresh (a new job never waits for the 1-minute refresh)', async () => {
+  const { readFileSync } = await import('node:fs');
+  const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
+  const go = app.slice(app.indexOf('function go(view) {'), app.indexOf('function go(view) {') + 400);
+  assert.match(go, /if \(view === 'apps' && onServer\) loadApps\(appsCtx, true\);/);
+});
+
+test('🔌 From apps: ✕ Reject puts the cursor straight into the reason box', async () => {
+  const { readFileSync } = await import('node:fs');
+  const src = readFileSync(new URL('../docs/ui/connections.js', import.meta.url), 'utf8');
+  assert.match(src, /cx\.rejecting = it\.id; cx\.reason = ''; ctx\.render\(\); focusReason\(it\.id\);/);
+  assert.match(src, /key: 'rej-reason-' \+ it\.id/);
 });

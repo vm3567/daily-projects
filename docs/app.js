@@ -8,6 +8,7 @@ import { installAutocorrect, setAutocorrect, autocorrectOn } from './ui/autocorr
 import { renderDashboard } from './ui/dashboard.js';
 import { renderTimeReport } from './ui/timereport.js';
 import { renderReplies, renderReplyRound, replyArea, readyCount } from './ui/replies.js';
+import { renderConnectionsSettings, renderFromApps, loadApps, appsPending, forgetOnce } from './ui/connections.js';
 import { projectChips, renderProjectsHead, openMainBox, listColour } from './ui/mains.js';
 import { projectMatches, diaryEntries, backupPayload, summaryText, personMessageText, personMessageHtml, sentMarkOf, copyNotice, tasksListText } from './reports.js';
 import { closeViewer, uploadBlob, photoThumb } from './ui/files.js';
@@ -233,6 +234,14 @@ const ctx = {
     rememberUi();
     select(id);
   },
+};
+
+/** 🔌 Connections (Settings) and the 🔌 From apps page: the server calls, and the address apps use (this host's /api/). */
+const appsCtx = {
+  api: (a, body) => teamApi(a, body),
+  toast: (...args) => toast(...args),
+  render: () => render(),
+  base: () => new URL('../api/', location.href).href,
 };
 
 // ---------------------------------------------------------------- AI
@@ -663,10 +672,12 @@ function visibleProjects() {
 function viewTitle() {
   if (ui.search.trim()) return `Search: "${ui.search.trim()}"`;
   if (ui.view.startsWith('group:')) return groupName(ui.view.slice(6));
-  return { today: 'Today', inbox: 'Inbox', all: '✅ Tasks', paused: 'Paused', finished: 'Finished', diary: 'Diary', settings: 'Settings', people: 'People', dashboard: 'Dashboard', time: 'Time report', replies: '✉ Replies', mains: '📂 Projects' }[ui.view];
+  return { today: 'Today', inbox: 'Inbox', all: '✅ Tasks', paused: 'Paused', finished: 'Finished', diary: 'Diary', settings: 'Settings', people: 'People', dashboard: 'Dashboard', time: 'Time report', replies: '✉ Replies', apps: '🔌 From apps', mains: '📂 Projects' }[ui.view];
 }
 
 function go(view) {
+  if (view !== 'settings') forgetOnce(); // a new key shown once: gone when you leave Settings
+  if (view === 'apps' && onServer) loadApps(appsCtx, true); // 🔌 From apps: always fresh when you open it (a new job shows at once)
   ui.view = view;
   ui.rowMenu = null;
   ui.round = null;
@@ -812,6 +823,7 @@ function renderMenu() {
       item('all', '✅ Tasks', activeTasks(data).length),
       item('mains', '📂 Projects', mainProjects(data).length),
       item('replies', '✉ Replies', readyCount(data, today)), // replies ready to send
+      onServer ? item('apps', '🔌 From apps', appsPending()) : null, // approvals your apps sent, waiting for ✓ / ✕
       item('inbox', '📥 Inbox', (data.inbox || []).length),
       h('li', { class: 'menu-head', key: 'groups-head' }, 'Groups'),
       data.groups.map((g) => item('group:' + g.id, g.name, count((p) => p.groupId === g.id && p.state === 'active' && !isMainProject(data, p)),
@@ -1830,6 +1842,7 @@ function renderListColumn() {
   if (ui.view === 'diary' && !ui.search) return h('div', { class: 'col-inner' }, head, timerStrip(), renderDiary());
   if (ui.view === 'inbox' && !ui.search) return h('div', { class: 'col-inner' }, head, timerStrip(), renderInbox());
   if (ui.view === 'replies' && !ui.search) return h('div', { class: 'col-inner' }, head, timerStrip(), ui.replyRound ? renderReplyRound(ctx) : renderReplies(ctx));
+  if (ui.view === 'apps' && !ui.search) return h('div', { class: 'col-inner' }, head, timerStrip(), onServer ? renderFromApps(appsCtx) : h('p', { class: 'muted' }, 'Connections work on worktask.in.'));
   if (ui.view === 'settings' && !ui.search) return h('div', { class: 'col-inner' }, head, timerStrip(), renderSettings());
   if (ui.view === 'dashboard' && !ui.search) return h('div', { class: 'col-inner' }, head, timerStrip(), renderDashboard(ctx));
   if (ui.view === 'time' && !ui.search) return h('div', { class: 'col-inner' }, head, timerStrip(), renderTimeReport(ctx));
@@ -2047,6 +2060,7 @@ function renderSettings() {
               if (n && n.trim() && !store.dispatch('addTag', { groupId: g.id, tagId: newId(), name: n.trim() })) toast(`"${n.trim()}" already exists in ${g.name}`);
             },
           }, '+ Tag'))))),
+    onServer ? renderConnectionsSettings(appsCtx) : null, // 🔌 other apps send tasks and approvals (worktask.in only)
     h('section', { class: 'block' }, h('h3', null, 'Backup'),
       h('p', { class: 'muted' }, 'Every save is kept as a version, so nothing is lost. You can also download a copy.'),
       h('button', { class: 'btn', onClick: downloadBackup }, 'Download backup')),
@@ -2582,7 +2596,7 @@ function goProject(step) {
 /** The next project after this one (in the tab you are in) that is not green yet — red first. */
 function nextOpenProject(id) {
   const today = todayIndia();
-  let list = ['diary', 'settings', 'dashboard', 'time', 'people', 'inbox', 'replies'].includes(ui.view) || ui.search
+  let list = ['diary', 'settings', 'dashboard', 'time', 'people', 'inbox', 'replies', 'apps'].includes(ui.view) || ui.search
     ? store.view.data.projects.filter((p) => p.state === 'active') : sortForView(visibleProjects(), today);
   list = list.filter((p) => p.state === 'active' && (p.id === id || !isSnoozed(p, today)));
   const i = Math.max(0, list.findIndex((p) => p.id === id));
@@ -2819,7 +2833,7 @@ function onKey(e) {
   if (e.repeat && !isArrow && e.key !== 'j' && e.key !== 'k') return; // holding x / o / r must not repeat
   const focused = document.activeElement;
   if (isArrow && focused && (focused.type === 'radio' || focused.nodeName === 'SUMMARY')) return;
-  if (isArrow && ['diary', 'settings', 'dashboard', 'time', 'inbox', 'replies'].includes(ui.view) && !ui.search) return; // let the page scroll
+  if (isArrow && ['diary', 'settings', 'dashboard', 'time', 'inbox', 'replies', 'apps'].includes(ui.view) && !ui.search) return; // let the page scroll
   const k = e.key;
   if (ui.round) {
     const map = { x: 'done', s: 'add', w: 'note', o: 'ok', c: 'chase', n: 'skip', ArrowRight: 'skip' };
@@ -2838,7 +2852,7 @@ function onKey(e) {
   if (k === 'ArrowRight' || k === 'ArrowLeft') {
     const step = k === 'ArrowRight' ? 1 : -1;
     if (ui.view === 'people' && !ui.search) goPerson(step);
-    else if (ui.selected && !['diary', 'settings', 'dashboard', 'time', 'inbox', 'replies'].includes(ui.view)) goProject(step);
+    else if (ui.selected && !['diary', 'settings', 'dashboard', 'time', 'inbox', 'replies', 'apps'].includes(ui.view)) goProject(step);
     else handled = false;
   } else if (k === 'Backspace') {
     if (ui.navStack && ui.navStack.length) goBack(); else handled = false;
@@ -3269,6 +3283,7 @@ async function doRefresh(force) {
   await store.refresh(force);
   if (store.status === 'saved') dataFreshAt = Date.now();
   loadTeam(force); // after the newest data is in: given projects are sent from it, never from an old copy
+  if (onServer) loadApps(appsCtx, force || ui.view === 'apps'); // 🔌 approvals from apps (at most once a minute)
   if (force && store.status === 'saved') toast('Up to date ✓');
   makeBrief();
 }
@@ -3291,6 +3306,7 @@ function start() {
   takeVoiceFromHash();
   takeOpenFromHash(); // "#open=<id>": a phone reminder opens that project
   if (location.hash === '#people') { ui.view = 'people'; ui.search = ''; history.replaceState(null, '', location.pathname + location.search); } // from Work Task's "People ↗"
+  if (location.hash === '#apps' && onServer) { ui.view = 'apps'; ui.search = ''; history.replaceState(null, '', location.pathname + location.search); } // a phone alert "🔌 App: title"
   if (onServer) takeOpsFromHash(); // before the store starts: it reads the waiting changes once
   if (onServer && !serverToken()) { toSignIn(); return; }
   const key = device.githubKey();
@@ -3312,7 +3328,7 @@ function start() {
     render(); // put ticked boxes and menus back to the real data
   });
   render();
-  store.init().then(() => { if (store.status === 'saved') dataFreshAt = Date.now(); render(); if (ui.capture) focusKey('capture-input'); voiceReady = true; runVoice(); loadTeam(true); shareLocalKeys(); markShownOpened(); makeBrief(); recordPastScores(); });
+  store.init().then(() => { if (store.status === 'saved') dataFreshAt = Date.now(); render(); if (ui.capture) focusKey('capture-input'); voiceReady = true; runVoice(); loadTeam(true); if (onServer) loadApps(appsCtx, true); shareLocalKeys(); markShownOpened(); makeBrief(); recordPastScores(); });
   if (started) return;
   started = true;
   // redraw now and then: the running timer, and the "not sent yet" bar appearing after a minute

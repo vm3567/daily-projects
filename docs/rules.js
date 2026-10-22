@@ -187,7 +187,8 @@ export function dotColour(project, today = todayIndia()) {
  * or a team member's update (teamWorkDate). Renaming, moving steps or other edits do not count.
  */
 /** The newest note you wrote yourself (a 👥 note about the team's work is their work, counted by teamWorkDate). */
-const ownNote = (project) => (project.workNotes || []).find((n) => !n.team && !n.mail && !String(n.text || '').startsWith('👥 '));
+// (a 🔌 note from an outside app — n.app, connect.php — is not your work either)
+const ownNote = (project) => (project.workNotes || []).find((n) => !n.team && !n.mail && !n.app && !String(n.text || '').startsWith('👥 '));
 export function lastWorkDate(project) {
   const n = ownNote(project);
   const note = n ? indiaDate(n.createdAt) : null; // newest first
@@ -505,7 +506,7 @@ export function personStatus(data, person, today = todayIndia()) {
  */
 /** Real work in the history, the same as the dot's rule: your notes, ticks and time (the team's counts through teamDays). */
 const WORK = new Set(['note_added', 'step_ticked', 'time_logged', 'time_added', 'reply_sent']);
-const NOT_WORK = new Set(['created', 'snoozed', 'woke', 'step_remind', 'team_ticked', 'team_note', 'team_step_added', 'team_step_unticked', 'team_note_deleted', 'team_moved', 'mail_note', 'mail_task', 'reply_prepared', 'mail_replied']); // (the team's work counts through teamDays)
+const NOT_WORK = new Set(['created', 'snoozed', 'woke', 'step_remind', 'team_ticked', 'team_note', 'team_step_added', 'team_step_unticked', 'team_note_deleted', 'team_moved', 'mail_note', 'mail_task', 'reply_prepared', 'mail_replied', 'app_task', 'app_note']); // (the team's work counts through teamDays)
 
 /** On that day, was every open step of the project waiting for a "remind me" date? */
 function restingByReminders(p, day) {

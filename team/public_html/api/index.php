@@ -30,8 +30,10 @@ try {
   if ($a === 'task.file' && ($_SERVER['REQUEST_METHOD'] ?? '') === 'GET') { send_task_file((int)($_GET['id'] ?? 0)); exit; }
   if ($a === 'comment.photo' && ($_SERVER['REQUEST_METHOD'] ?? '') === 'GET') { send_comment_photo((int)($_GET['id'] ?? 0)); exit; }
   if ($a === 'dp.blob' && ($_SERVER['REQUEST_METHOD'] ?? '') === 'GET') { send_dp_blob_safe((string)($_GET['sha'] ?? '')); exit; }
-  if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST') throw new ApiError('Use POST.', 405);
-  if (str_starts_with($_SERVER['CONTENT_TYPE'] ?? '', 'multipart/form-data')) $in = $_POST;
+  $get = ($_SERVER['REQUEST_METHOD'] ?? '') === 'GET';
+  if ($get && $a === 'connect.decisions') $in = ['since' => (string)($_GET['since'] ?? '')]; // 🔌 an app may also ask with GET
+  elseif (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST') throw new ApiError('Use POST.', 405);
+  elseif (str_starts_with($_SERVER['CONTENT_TYPE'] ?? '', 'multipart/form-data')) $in = $_POST;
   else {
     $raw = (string)file_get_contents('php://input');
     $in = trim($raw) === '' ? [] : json_decode($raw, true);

@@ -6,6 +6,7 @@ declare(strict_types=1);
 require_once __DIR__ . '/push.php';
 require_once __DIR__ . '/jobs.php';
 require_once __DIR__ . '/outlook.php';
+require_once __DIR__ . '/connect.php';
 
 const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
@@ -201,6 +202,8 @@ function guard_owner(int $id, array $me): void {
 function handle(string $a, array $in): array {
   if ($a === 'ping') return ['setUp' => (bool)config(), 'time' => now()];
   if ($a === 'login') return login((string)($in['username'] ?? ''), (string)($in['password'] ?? ''), (string)($_SERVER['HTTP_USER_AGENT'] ?? ''));
+  $fromApp = conn_app_handle($a, $in); // 🔌 an outside app, with its own key (no sign-in)
+  if ($fromApp !== null) return $fromApp;
 
   $me = current_user();
   $GLOBALS['me'] = $me;
@@ -213,6 +216,8 @@ function handle(string $a, array $in): array {
   if ($push !== null) return $push;
   $ol = ol_handle($a, $in, $me); // the owner's Outlook → Daily Projects Inbox
   if ($ol !== null) return $ol;
+  $conn = conn_handle($a, $in, $me); // 🔌 Connections (the owner of the projects only)
+  if ($conn !== null) return $conn;
   switch ($a) {
     case 'me':
       return ['user' => public_user($me), 'today' => $day];

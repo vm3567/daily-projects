@@ -2040,3 +2040,21 @@ test('renaming a person also changes "@Name" inside a rich update (still clean)'
   assert.equal(n.text, '@Ravi <K> | ok');
   assert.equal(n.html, '<table><tr><td>@Ravi &lt;K&gt;</td><td>ok</td></tr></table>');
 });
+
+test('🔌 a task an app sent (server-made, with an "app" note and an app_task history line) is not your work: the dot and the day score do not turn green; your own note does', async () => {
+  const { lastWorkDate, dayScore } = await import('../docs/rules.js');
+  const at = T('2026-10-05');
+  const task = {
+    id: 'ct1', groupId: 'g1', name: 'Check kiln 3', priority: 'medium', deadline: null, notes: '', about: 'Top zone runs hot.',
+    links: [{ id: 'ct1-link', title: 'Open in Purchase', url: 'https://erp.example/t/1' }], state: 'active', lastTickDate: null,
+    lastActivityDate: '2026-10-05', activeSince: '2026-10-05', stateChangedAt: at, createdAt: at, updatedAt: at, steps: [], files: [], fromApp: 'Purchase',
+    workNotes: [{ id: 'an1', text: 'Line: 3\nShift: B', stepId: null, createdAt: at, updatedAt: at, app: true }],
+  };
+  const s = { data: { ...emptyData(), projects: [task] }, history: { '2026-10': [{ id: 'ak1', projectId: 'ct1', projectName: 'Check kiln 3', kind: 'app_task', detail: 'From Purchase: Check kiln 3', at }] } };
+  assert.equal(lastWorkDate(task), null, 'the app\'s note is not your work');
+  assert.notEqual(dotColour(task, '2026-10-05'), 'green');
+  assert.deepEqual(dayScore(s.data, s.history, '2026-10-05'), { green: 0, total: 1 });
+  applyOp(s, op('addWorkNote', { projectId: 'ct1', noteId: 'n2', text: 'Spoke to the shift lead' }, '2026-10-05', '11:00:00'));
+  assert.equal(lastWorkDate(task), '2026-10-05', 'your own note on it is');
+  assert.equal(dotColour(task, '2026-10-05'), 'green');
+});

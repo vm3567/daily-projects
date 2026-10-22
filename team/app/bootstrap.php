@@ -237,6 +237,43 @@ function migrate(PDO $pdo): void {
       added_at DATETIME NOT NULL,
       INDEX (conv_hash), INDEX (added_at)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+    // v15: 🔌 Connections — outside apps (with their own key: only its fingerprint is kept) and what they sent
+    "CREATE TABLE IF NOT EXISTS connections (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      name VARCHAR(80) NOT NULL,
+      key_hash CHAR(64) NOT NULL UNIQUE,
+      key_end VARCHAR(4) NOT NULL,
+      secret_enc VARCHAR(255) NOT NULL,
+      callback_url VARCHAR(500) NULL,
+      active TINYINT(1) NOT NULL DEFAULT 1,
+      created_at DATETIME NOT NULL,
+      last_seen_at DATETIME NULL,
+      last_error VARCHAR(300) NULL,
+      rate_min INT NOT NULL DEFAULT 0,
+      rate_n INT NOT NULL DEFAULT 0
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+    "CREATE TABLE IF NOT EXISTS conn_items (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      conn_id INT NOT NULL,
+      external_id VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
+      kind VARCHAR(10) NOT NULL,
+      title VARCHAR(200) NOT NULL,
+      details TEXT NULL,
+      link VARCHAR(1000) NULL,
+      fields TEXT NULL,
+      status VARCHAR(10) NOT NULL DEFAULT 'pending',
+      reason VARCHAR(500) NULL,
+      decided_at DATETIME NULL,
+      callback_tries INT NOT NULL DEFAULT 0,
+      callback_next_at DATETIME NULL,
+      callback_ok_at DATETIME NULL,
+      callback_failed TINYINT(1) NOT NULL DEFAULT 0,
+      created_at DATETIME NOT NULL,
+      updated_at DATETIME NOT NULL,
+      dp_task_id VARCHAR(40) NULL,
+      UNIQUE KEY conn_ext (conn_id, external_id),
+      INDEX (status), INDEX (callback_next_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
   ];
   $pdo->exec($steps[0]);
   $done = (int)($pdo->query("SELECT v FROM settings WHERE k = 'schema'")->fetchColumn() ?: 0);

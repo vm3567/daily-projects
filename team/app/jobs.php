@@ -4,7 +4,8 @@
 // - a second alert when someone has been Stuck for a day with no answer,
 // - the evening summary for the managers,
 // - new emails in the owner's Outlook Inbox go to the Daily Projects Inbox (outlook.php),
-// - the owner's project reminders on the phone ("📅 Only on" + "🔔 Remind me at", and "🔔 Remind me once").
+// - the owner's project reminders on the phone ("📅 Only on" + "🔔 Remind me at", and "🔔 Remind me once"),
+// - 🔌 Connections: decisions an app has not received yet are sent again (connect.php).
 // They run after an answer has been sent (any request), at most every 10 minutes (a save runs the project part at once),
 // and from cron.php every 5 minutes (one lock: never two at the same time).
 declare(strict_types=1);
@@ -252,6 +253,9 @@ function team_jobs(bool $all = false): bool {
     }
     if ($due) { // new emails in the owner's Outlook → the Daily Projects Inbox (when connected)
       try { dp_migrate(); ol_check(); } catch (Throwable $e) { error_log('team jobs outlook: ' . get_class($e)); }
+    }
+    if ($due) { // 🔌 decisions not yet sent to an app, and app tasks not yet in the projects
+      try { dp_migrate(); conn_jobs(); } catch (Throwable $e) { error_log('team jobs connections: ' . get_class($e)); }
     }
   } catch (Throwable $e) {
     error_log('team jobs: ' . $e->getMessage());
