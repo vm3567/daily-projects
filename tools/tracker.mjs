@@ -10,6 +10,7 @@
 //   node tools/tracker.mjs show <project>
 //   node tools/tracker.mjs add-steps <project> "<step>" ["<step>" ...]
 //   node tools/tracker.mjs tick <project> "<step text or id>"
+//   node tools/tracker.mjs set-about <project> "<short description>"
 //   node tools/tracker.mjs only-on <project> <Mon,Thu|every> [--remind HH:MM|off]
 //   node tools/tracker.mjs edit-step <project> "<step text or id>" "<new text>"
 //   node tools/tracker.mjs add-note <project> "<text>"
@@ -310,6 +311,16 @@ try {
         const s = findOpenStep(p, stepQuery);
         return [makeOp('tickStep', { projectId: p.id, stepId: s.id })];
       }, 'Tick step');
+      break;
+    }
+    case 'set-about': {
+      // set-about <project> "<short description>"  (empty text clears it)
+      const [query, ...words] = args;
+      const text = words.join(' ').trim();
+      commitOps((state) => {
+        const p = findProject(state.data, query);
+        return [makeOp('setProjectField', { projectId: p.id, field: 'about', value: text })];
+      }, 'Description');
       break;
     }
     case 'only-on': {
