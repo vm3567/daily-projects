@@ -1457,3 +1457,75 @@ test('replies: dp-cli mail-body, and Claude\'s tracker replies / set-reply / mai
   assert.deepEqual([r.text, r.by, r.state, r.forMessageId], ['Dear Anil,\nNoted.\nRegards, Venkat', 'claude', 'ready', 'MSG-R2']);
   assert.ok(!ms.reqs.some((x) => x.path.endsWith('/createReply') || /send/i.test(x.path)), 'set-reply sends nothing');
 });
+
+// ---------------------------------------------------------------- project reminders on the phone + cron.php
+const cronAt = (iso) => execFileSync('php', [join(ROOT, 'team', 'app', 'cron.php')], {
+  env: { ...env(), WT_TEST_NOW: String(Math.floor(Date.parse(iso) / 1000)) }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+});
+const remindersSince = (n) => pushSince(n).trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)).filter((x) => /^prm/.test(x.msg.tag || ''));
+const remindersAt = (iso) => { const n = pushLen(); cronAt(iso); return remindersSince(n); };
+
+test('project reminders: "🔔 Remind me at" on the "📅 Only on" days — once a day, from the time for 3 hours, never snoozed / paused / finished, only to the owner (cron.php)', { skip }, async () => {
+  const keys = { p256dh: Buffer.concat([Buffer.from([4]), randomBytes(64)]).toString('base64url'), auth: randomBytes(16).toString('base64url') };
+  assert.ok((await call('push.subscribe', { endpoint: 'https://fcm.googleapis.com/fcm/send/boss-phone', keys }, tok.boss)).ok);
+  assert.ok((await call('push.subscribe', { endpoint: 'https://fcm.googleapis.com/fcm/send/suresh-phone-2', keys }, tok.suresh)).ok);
+  sql("USE wt; INSERT INTO wt.settings (k, v) VALUES ('fill_by', '23:59:59') ON DUPLICATE KEY UPDATE v = '23:59:59'"); // no evening summary in these runs
+  const kiln = (more = {}) => ({ id: 'rm1', name: 'Kiln check', state: 'active', onlyDays: [1], remindAt: '09:30', steps: [{ id: 'k1', text: 'Check heaters', done: false }], ...more });
+  await saveProjects([kiln()]);
+  // October 2026: Mon 26, Tue 27; November: Mon 2, 9, 16, 23; Wed 25
+  assert.deepEqual(remindersAt('2026-10-26T09:29:00+05:30'), [], 'not before the time');
+  const m = remindersAt('2026-10-26T09:30:00+05:30');
+  assert.deepEqual(m.map((x) => [x.user, x.msg.title, x.msg.body, x.msg.url, x.msg.tag]), [[id.boss, '📅 Kiln check', 'Today: Check heaters', '/projects/#open=rm1', 'prmrm1']], 'at the time, to the owner only');
+  assert.deepEqual(remindersAt('2026-10-26T10:00:00+05:30'), [], 'never twice a day');
+  assert.deepEqual(remindersAt('2026-10-27T09:45:00+05:30'), [], 'Tuesday is not a chosen day');
+  assert.deepEqual(remindersAt('2026-11-02T12:31:00+05:30'), [], 'more than 3 hours late: skipped');
+  assert.equal(remindersAt('2026-11-09T12:29:00+05:30').length, 1, 'within 3 hours: sent');
+  await saveProjects([kiln({ snoozedUntil: '2026-11-20' })]);
+  assert.deepEqual(remindersAt('2026-11-16T09:31:00+05:30'), [], 'not while snoozed');
+  await saveProjects([kiln({ state: 'paused' })]);
+  assert.deepEqual(remindersAt('2026-11-23T09:31:00+05:30'), [], 'not for a paused project');
+  await saveProjects([kiln({ state: 'finished' })]);
+  assert.deepEqual(remindersAt('2026-11-23T09:32:00+05:30'), [], 'not for a finished project');
+  await saveProjects([kiln({ onlyDays: undefined, steps: [] })]);
+  assert.deepEqual(remindersAt('2026-11-25T09:31:00+05:30').map((x) => [x.user, x.msg.body]), [[id.boss, 'No next step — add one']], 'no chosen days = every day');
+  await saveProjects([]);
+});
+
+test('project reminders: "🔔 Remind me once" — sent once at or after its time (within 3 hours), never before or twice, not for finished projects, marked sent', { skip }, async () => {
+  const once = (at, more = {}) => ({ id: 'rm2', name: 'Call Ravi', state: 'active', remindOnce: at, steps: [{ id: 'c1', text: 'Ask for the price', done: false }], ...more });
+  await saveProjects([once('2026-12-01 16:00')]);
+  assert.deepEqual(remindersAt('2026-12-01T15:59:00+05:30'), [], 'never before');
+  assert.deepEqual(remindersAt('2026-12-01T16:05:00+05:30').map((x) => [x.user, x.msg.title, x.msg.body, x.msg.url]), [[id.boss, '📅 Call Ravi', 'Today: Ask for the price', '/projects/#open=rm2']]);
+  assert.match(sql(`USE wt; SELECT v FROM wt.settings WHERE k = '${'pro:' + md5('rm2')}'`).toString(), /2026-12-01 16:00/, 'marked sent');
+  assert.deepEqual(remindersAt('2026-12-01T16:30:00+05:30'), [], 'never twice');
+  assert.deepEqual(remindersAt('2026-12-02T16:30:00+05:30'), [], 'not the next day either');
+  await saveProjects([once('2026-12-03 08:00')]);
+  assert.deepEqual(remindersAt('2026-12-03T11:30:00+05:30'), [], 'more than 3 hours late: skipped');
+  await saveProjects([once('2026-12-04 08:00', { state: 'finished' })]);
+  assert.deepEqual(remindersAt('2026-12-04T08:10:00+05:30'), [], 'not for a finished project');
+  await saveProjects([]);
+});
+
+test('cron.php: runs the jobs from the command line, skips while another run holds the jobs lock, and refuses the web', { skip }, async () => {
+  await saveProjects([{ id: 'rm3', name: 'Cron check', state: 'active', remindAt: '07:00', steps: [] }]);
+  // another run holds the lock: cron skips (nothing sent)
+  const holder = spawn('mysql', ['-u', 'root', `--socket=${SOCK}`, '-e', "SELECT GET_LOCK('wt_jobs', 0); SELECT SLEEP(4);"], { stdio: 'ignore' });
+  await wait(800);
+  let n = pushLen();
+  assert.match(cronAt('2026-12-07T07:05:00+05:30'), /already running/);
+  assert.deepEqual(remindersSince(n), [], 'never two runs at the same time');
+  await new Promise((r) => holder.on('exit', r));
+  n = pushLen();
+  assert.match(cronAt('2026-12-07T07:06:00+05:30'), /Jobs done/);
+  assert.equal(remindersSince(n).length, 1, 'the jobs ran (the reminder went)');
+  // through a web server it does nothing
+  const port = WEB_PORT + 1;
+  const webApp = spawn('php', ['-S', `127.0.0.1:${port}`, '-t', join(ROOT, 'team', 'app')], { env: env(), stdio: 'ignore' });
+  try {
+    await until(async () => { await fetch(`http://127.0.0.1:${port}/cron.php`); return true; }, 'PHP server for cron');
+    const r = await fetch(`http://127.0.0.1:${port}/cron.php`);
+    assert.equal(r.status, 404);
+    assert.equal(await r.text(), '');
+  } finally { webApp.kill(); }
+  await saveProjects([]);
+});

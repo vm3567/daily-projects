@@ -3,7 +3,7 @@
 import { h, fmtDay, fmtTime, fmtSize, HAS_KEYBOARD } from './dom.js';
 
 const MOD = /Mac|iPhone|iPad/.test(globalThis.navigator ? navigator.platform || navigator.userAgent || '' : '') ? '⌘' : 'Ctrl';
-import { dotColour, isSnoozed, restUntil, stepWaitsForReminder, daysBetween, addDays, todayIndia, isOverdue, indiaDate, waitingDays, lastWorkDate, nextStep, stepLinkedTo, personStatus, minutesBetween, fmtMinutes, weekStart, seenUpTo } from '../rules.js';
+import { dotColour, isSnoozed, restUntil, restReason, onlyDaysOf, onlyDaysLabel, onlyDaysChip, remindOnceChip, indiaDateTime, WEEKDAYS, weekdayOf, stepWaitsForReminder, daysBetween, addDays, todayIndia, isOverdue, indiaDate, waitingDays, lastWorkDate, nextStep, stepLinkedTo, personStatus, minutesBetween, fmtMinutes, weekStart, seenUpTo } from '../rules.js';
 import { WAIT_RED_DAYS } from '../config.js';
 import { newId, PRIORITIES, cleanUrl, groupHasTimer, MAX_SNOOZE_DAYS, ABOUT_MAX } from '../ops.js';
 
@@ -509,13 +509,18 @@ function snoozeBar(ctx, p) {
   const { ui } = ctx;
   const today = todayIndia();
   if (p.state !== 'active') return null;
-  if (isSnoozed(p, today)) {
-    if (!(p.snoozedUntil && p.snoozedUntil > today)) { // resting because every step is set to "remind me"
+  const reason = restReason(p, today);
+  if (reason === 'onlyDays' && ui.snoozeOpen !== p.id) { // a "📅 Only on" rest day: rests like a snooze (a real snooze can still go on top)
+    return h('div', { class: 'banner snoozed-banner', key: 'snz-' + p.id },
+      `📅 Resting — comes back ${WEEKDAYS[weekdayOf(restUntil(p, today))]} ${fmtDay(restUntil(p, today))} (${onlyDaysLabel(p.onlyDays)} only)`);
+  }
+  if (reason && reason !== 'onlyDays') {
+    if (reason === 'remind') { // resting because every step is set to "remind me"
       return h('div', { class: 'banner snoozed-banner', key: 'snz-' + p.id },
         `⏰ All steps are set to remind you — back on Today on ${fmtDay(restUntil(p, today))}.`);
     }
     return h('div', { class: 'banner snoozed-banner', key: 'snz-' + p.id },
-      `💤 Snoozed — comes back to Today on ${fmtDay(p.snoozedUntil)}.`,
+      `💤 Snoozed — comes back to Today on ${fmtDay(restUntil(p, today))}${onlyDaysOf(p).length ? ` (${onlyDaysLabel(p.onlyDays)} only)` : ''}.`,
       h('button', { class: 'btn small', onClick: () => ctx.act('wake', { projectId: p.id }, `Back on Today: ${p.name}`) }, '⏰ Wake up now'));
   }
   if (ui.snoozeOpen !== p.id) return null;
@@ -536,6 +541,60 @@ function snoozeBar(ctx, p) {
   h('button', { class: 'link small', type: 'button', onClick: () => { ui.snoozeOpen = null; ctx.render(); } }, 'Cancel'));
 }
 
+
+/** "📅 Only on": a row of day chips (Mon … Sun, tap to turn on/off), "Every day" to clear, and "🔔 Remind me at" (a phone reminder on those days). */
+export const CHIP_DAYS = [1, 2, 3, 4, 5, 6, 0]; // Monday first
+function onlyDaysBar(ctx, p) {
+  const { ui } = ctx;
+  if (ui.onlyDaysOpen !== p.id) return null;
+  const days = onlyDaysOf(p);
+  const set = (next) => ctx.act('setOnlyDays', { projectId: p.id, days: next },
+    next.length && next.length < 7 ? `📅 ${p.name}: only on ${onlyDaysLabel(next)}` : `📅 ${p.name}: every day`);
+  const toggle = (n) => { set(days.includes(n) ? days.filter((x) => x !== n) : [...days, n]); ctx.render(); };
+  return h('div', { class: 'only-days', key: 'od-' + p.id, role: 'group', 'aria-label': 'Comes up only on these days' },
+    h('span', null, '📅 Only on'),
+    CHIP_DAYS.map((n) => h('button', {
+      class: 'chip day-chip' + (days.includes(n) ? ' on' : ''), type: 'button', key: 'od' + n,
+      'aria-pressed': String(days.includes(n)), onClick: () => toggle(n),
+    }, WEEKDAYS[n])),
+    h('button', { class: 'chip' + (days.length ? '' : ' on'), type: 'button', key: 'od-all', onClick: () => { if (days.length) set([]); ctx.render(); } }, 'Every day'),
+    h('label', { class: 'remind-at' }, '🔔 Remind me at',
+      h('input', {
+        type: 'time', value: p.remindAt || '', key: 'remind-at-' + p.id, 'aria-label': 'Phone reminder time (empty = no reminder)',
+        onChange: (e, el) => {
+          const time = el.value || null;
+          ctx.act('setRemindAt', { projectId: p.id, time }, time ? `🔔 ${p.name}: reminder at ${time}` : `🔔 ${p.name}: no reminder`);
+          ctx.render();
+        },
+      })),
+    h('button', { class: 'link small', type: 'button', onClick: () => { ui.onlyDaysOpen = null; ctx.render(); } }, 'Done'));
+}
+
+/** "🔔 Remind me once": Today at [16:00], Tomorrow at [09:30], or a date + time; Clear when one is set. */
+function remindOnceBar(ctx, p) {
+  const { ui } = ctx;
+  if (ui.remindOnceOpen !== p.id) return null;
+  const now = indiaDateTime();
+  const today = now.slice(0, 10);
+  const pick = ui.remindPick || (ui.remindPick = { date: today, time: '16:00' });
+  const set = (at) => {
+    if (at && at < now) { ctx.toast('That time has already passed today'); return; }
+    if (ctx.act('setRemindOnce', { projectId: p.id, at }, at ? `🔔 ${p.name}: reminder ${at.slice(0, 10) === today ? 'today' : at.slice(0, 10)} at ${at.slice(11)}` : `🔔 ${p.name}: reminder removed`)) { ui.remindOnceOpen = null; }
+    ctx.render();
+  };
+  const timeBox = (k, v) => h('input', { type: 'time', value: v, key: `ro-${k}-${p.id}`, 'aria-label': 'Time', onInput: (e, el) => { ui.remindTimes = { ...(ui.remindTimes || {}), [k]: el.value }; } });
+  const tt = ui.remindTimes || {};
+  return h('div', { class: 'only-days remind-once', key: 'ro-' + p.id, role: 'group', 'aria-label': 'Remind me once' },
+    h('span', null, '🔔 Remind me once'),
+    h('span', { class: 'remind-at' }, h('button', { class: 'chip', type: 'button', onClick: () => set(`${today} ${tt.today || '16:00'}`) }, 'Today at'), timeBox('today', tt.today || '16:00')),
+    h('span', { class: 'remind-at' }, h('button', { class: 'chip', type: 'button', onClick: () => set(`${addDays(today, 1)} ${tt.tomorrow || '09:30'}`) }, 'Tomorrow at'), timeBox('tomorrow', tt.tomorrow || '09:30')),
+    h('span', { class: 'remind-at' },
+      h('input', { type: 'date', min: today, value: pick.date, key: 'ro-date-' + p.id, 'aria-label': 'Date', onInput: (e, el) => { pick.date = el.value; } }),
+      h('input', { type: 'time', value: pick.time, key: 'ro-time-' + p.id, 'aria-label': 'Time', onInput: (e, el) => { pick.time = el.value; } }),
+      h('button', { class: 'btn primary small', type: 'button', onClick: () => { if (pick.date && pick.time) set(`${pick.date} ${pick.time}`); } }, 'Set')),
+    p.remindOnce ? h('button', { class: 'link small', type: 'button', onClick: () => set(null) }, 'Clear') : null,
+    h('button', { class: 'link small', type: 'button', onClick: () => { ui.remindOnceOpen = null; ctx.render(); } }, 'Cancel'));
+}
 
 /** worktask.in: "Given to Valar" (with Change / Take back), or the people to choose from after "👥 Give project". */
 function teamBar(ctx, p) {
@@ -676,6 +735,11 @@ function stateButtons(ctx, p) {
       running
         ? h('button', { class: 'btn timer-on', title: 'Stop the timer', onClick: () => ctx.stopTimer() }, `⏸ ${ctx.clockText(t.start)}`)
         : timed ? h('button', { class: 'btn', title: 'Start timing your work on this project', onClick: () => ctx.startTimer(p) }, '▶ Start') : null,
+      // 💤 Snooze on the page itself (the owner uses it daily; also in the ⋯ menu)
+      !isSnoozed(p, todayIndia()) || restReason(p, todayIndia()) === 'onlyDays' ? h('button', {
+        class: 'btn', title: 'Hide it from Today for some days',
+        onClick: () => { ui.snoozeOpen = p.id; ctx.render(); setTimeout(() => { const n = document.querySelector(`[data-key="snooze-${p.id}"]`); if (n) { n.focus(); n.select(); } }, 30); },
+      }, '💤 Snooze') : null,
       h('button', { class: 'btn', onClick: () => ctx.act('finish', { projectId: p.id }, `Finished: ${p.name} (moved to Finished)`) }, 'Finish'),
       menuButton(ctx, p),
       navButtons(ctx),
@@ -727,9 +791,11 @@ function projectMenu(ctx, p) {
   const timed = groupHasTimer(store.view.data.groups.find((g) => g.id === p.groupId)) || (p.timeLogs || []).length;
   const item = (label, fn, cls = '') => h('button', { class: 'menu-row' + cls, onClick: go(fn) }, label);
   return h('div', { class: 'proj-menu', key: 'pm-' + p.id, role: 'menu' },
-    p.state === 'active' && !isSnoozed(p, today) ? item('💤 Snooze…', () => { ui.snoozeOpen = p.id; setTimeout(() => { const n = document.querySelector(`[data-key="snooze-${p.id}"]`); if (n) { n.focus(); n.select(); } }, 30); }) : null,
+    p.state === 'active' && (!isSnoozed(p, today) || restReason(p, today) === 'onlyDays') ? item('💤 Snooze…', () => { ui.snoozeOpen = p.id; setTimeout(() => { const n = document.querySelector(`[data-key="snooze-${p.id}"]`); if (n) { n.focus(); n.select(); } }, 30); }) : null,
     p.state === 'active' && ctx.onServer ? item(p.team ? `👥 Change person (now ${p.team.name})` : '👥 Give project to…', () => { ui.giveOpen = p.id; ui.givePhoto = p.team ? !!p.team.needsPhoto : false; }) : null,
     p.state === 'active' && ctx.onServer && p.team ? item('↩ Take back from ' + p.team.name, () => { if (confirm(`Take "${p.name}" back from ${p.team.name}? Their open steps are removed from their list.`)) ctx.takeBackProject(p); }) : null,
+    p.state === 'active' ? item('📅 Only on…', () => { ui.onlyDaysOpen = p.id; }) : null,
+    p.state === 'active' ? item('🔔 Remind me once…', () => { ui.remindOnceOpen = p.id; }) : null,
     p.state === 'active' ? item('⏸ Pause', () => ctx.act('pause', { projectId: p.id }, `Paused: ${p.name}`)) : null,
     timed ? item('⏱ Add time', () => addTimePrompt(ctx, p)) : null,
     item('✎ Group, priority, target date', () => { ui.editMeta = true; }),
@@ -758,6 +824,11 @@ function infoChips(ctx, p, today) {
       const when = !tp.lastUpdate ? 'no update yet' : tp.lastUpdate === today ? 'updated today' : `last update ${fmtDay(tp.lastUpdate)}`;
       out.push(chip(tp.stuck ? `⚠️ stuck · ${when}` : when, 'Their last daily update', null, tp.stuck ? ' bad' : tp.lastUpdate === today ? ' good' : ''));
     }
+  }
+  if (remindOnceChip(p)) out.push(chip(remindOnceChip(p), 'A one-time phone reminder — tap to change', () => { ui.remindOnceOpen = ui.remindOnceOpen === p.id ? null : p.id; ctx.render(); }));
+  if (onlyDaysChip(p)) {
+    out.push(chip(onlyDaysChip(p), 'Comes up only on these days / phone reminder — tap to change',
+      () => { ui.onlyDaysOpen = ui.onlyDaysOpen === p.id ? null : p.id; ctx.render(); }));
   }
   out.push(chip(g ? g.name : 'No group', 'Group — tap to change', editMeta));
   if (tagName(g, p)) out.push(chip(`🏷 ${tagName(g, p)}`, 'Tag — tap to change', editMeta));
@@ -912,6 +983,8 @@ export function renderDetail(ctx) {
     aboutLine(ctx, p),
     projectMenu(ctx, p),
     snoozeBar(ctx, p),
+    onlyDaysBar(ctx, p),
+    remindOnceBar(ctx, p),
     teamBar(ctx, p),
     infoChips(ctx, p, today),
     projectEmailCards(ctx, p, today), // from an email: who wrote, the newest lines, and the reply (✉ Reply ready)

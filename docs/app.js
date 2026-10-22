@@ -16,7 +16,7 @@ import { ServerRepo, SERVER_TOKEN_KEY } from './serverrepo.js';
 import { MockRepo } from './mockrepo.js';
 import { device } from './device.js';
 import { DATA_OWNER, DATA_REPO, DATA_BRANCH, MOVED_TO, REFRESH_MS, AI_DAILY_LIMIT, BRIEF_CLAIM_MINUTES, WAIT_RED_DAYS, NO_WORK_NOTE_DAYS } from './config.js';
-import { dotColour, greenByTeamOnly, isSnoozed, restUntil, awakeProjects, activeProjects, nextStep, todayIndia, isSundayIndia, colourCounts, isOverdue, indiaDate, waitingDays, daysWithoutWork, dayScore, greenStreak, addDays, monthOf, fmtMinutes, takeBackWaits, staffStepAction, pasteGoesToProject, singleStepClose, versionRequest, askDiaryAgain, diaryLoadedAt, photoNeedsFetch, teamUndoKey, teamActionUndone, teamProgressOf, projectKeyIgnored, teamMovedTo, serverHolder, keepMovedStep, teamMemberFor, repliesOf, mailThreads, replyMailto, MAILTO_BODY_MAX, emailPath, pasteReason } from './rules.js';
+import { dotColour, greenByTeamOnly, isSnoozed, restUntil, restReason, onlyDaysLabel, openIdFromHash, awakeProjects, activeProjects, nextStep, todayIndia, isSundayIndia, colourCounts, isOverdue, indiaDate, waitingDays, daysWithoutWork, dayScore, greenStreak, addDays, monthOf, fmtMinutes, takeBackWaits, staffStepAction, pasteGoesToProject, singleStepClose, versionRequest, askDiaryAgain, diaryLoadedAt, photoNeedsFetch, teamUndoKey, teamActionUndone, teamProgressOf, projectKeyIgnored, teamMovedTo, serverHolder, keepMovedStep, teamMemberFor, repliesOf, mailThreads, replyMailto, MAILTO_BODY_MAX, emailPath, pasteReason } from './rules.js';
 import { newId, clone, opMonth, groupHasTimer, cleanLink, carriedOps } from './ops.js';
 import * as ai from './ai.js';
 import { parseVoice } from './voice.js';
@@ -40,7 +40,7 @@ const ui = {
   mobile: 'list', // list | detail (phone only)
   menuOpen: false,
   briefFolded: !!saved.briefFolded,
-  sort: saved.sort === 'red' ? 'red' : 'mine', // 'mine' = my drag order, 'red' = red first
+  sort: saved.sortV === 2 && saved.sort === 'mine' ? 'mine' : 'red', // 'red' = red first (red, yellow, green, grey: the default); 'mine' = my drag order, kept only when picked after this became the default
   adding: false,
   openStep: null,
   showMore: saved.showMore === true, // project page "More" fold (notes, links, files, history)
@@ -139,7 +139,7 @@ function restoreScrollOnce() {
 
 function rememberUi() {
   device.setUi({
-    scroll: device.ui().scroll, view: ui.view, selected: ui.selected, briefFolded: ui.briefFolded, sort: ui.sort, showDone: ui.showDone, showMore: ui.showMore });
+    scroll: device.ui().scroll, view: ui.view, selected: ui.selected, briefFolded: ui.briefFolded, sort: ui.sort, sortV: 2, showDone: ui.showDone, showMore: ui.showMore });
 }
 
 const ctx = {
@@ -888,7 +888,8 @@ function projectRow(p, today) {
           ns && ns.waiting ? waitingTag(ns) : null,
           ns && ns.snoozedUntil && ns.snoozedUntil > today ? h('span', { class: 'tag repeat' }, `↻ from ${fmtDay(ns.snoozedUntil)}`) : null,
           isOverdue(p, today) ? h('span', { class: 'tag late' }, `Overdue · ${fmtDay(p.deadline)}`) : null,
-          isSnoozed(p, today) ? h('span', { class: 'tag snoozed' }, `${p.snoozedUntil > today ? '💤' : '⏰'} back ${fmtDay(restUntil(p, today))}`) : noWorkTag(p, today)),
+          restReason(p, today) === 'onlyDays' ? h('span', { class: 'tag snoozed', title: `Comes up only on these days — back ${fmtDay(restUntil(p, today))}` }, `📅 ${onlyDaysLabel(p.onlyDays)}`)
+            : isSnoozed(p, today) ? h('span', { class: 'tag snoozed' }, `${p.snoozedUntil > today ? '💤' : '⏰'} back ${fmtDay(restUntil(p, today))}`) : noWorkTag(p, today)),
         p.status ? h('span', { class: 'prow-status' }, p.status) : null)),
     rowAction(p, due, colour),
     canDrag() ? h('span', { class: 'grip', 'aria-hidden': 'true', title: 'Drag to reorder' }, '⋮⋮') : null,
@@ -3137,12 +3138,23 @@ async function doRefresh(force) {
   makeBrief();
 }
 
+/** "#open=<id>" (the link in a phone reminder): open that project, then tidy the address. */
+function takeOpenFromHash() {
+  const id = openIdFromHash(location.hash);
+  if (!id) return false;
+  history.replaceState(null, '', location.pathname + location.search);
+  if (store) select(id);
+  else { ui.selected = id; ui.mobile = 'detail'; }
+  return true;
+}
+
 let started = false;
 
 function start() {
   if (!isMock && !onServer && MOVED_TO) { showMoved(); return; } // first: it passes #say= / #add= on to the new address
   takeClipFromHash();
   takeVoiceFromHash();
+  takeOpenFromHash(); // "#open=<id>": a phone reminder opens that project
   if (location.hash === '#people') { ui.view = 'people'; ui.search = ''; history.replaceState(null, '', location.pathname + location.search); } // from Work Task's "People ↗"
   if (onServer) takeOpsFromHash(); // before the store starts: it reads the waiting changes once
   if (onServer && !serverToken()) { toSignIn(); return; }
@@ -3183,7 +3195,7 @@ function start() {
     else { saveTypedText(); rememberScroll(); sendNow(); } // leaving the app: send waiting changes at once, not after the usual pause
   });
   window.addEventListener('focus', () => doRefresh(false));
-  window.addEventListener('hashchange', () => { takeClipFromHash(); takeVoiceFromHash(); }); // the Chrome button, when the app is already open // back to this window from another app
+  window.addEventListener('hashchange', () => { takeClipFromHash(); takeVoiceFromHash(); if (takeOpenFromHash()) render(); }); // the Chrome button, when the app is already open // back to this window from another app
   window.addEventListener('pagehide', () => { saveTypedText(); rememberScroll(); sendNow(); });
   // Closing the app while changes are still being sent: ask first, so nothing stays only on this computer.
   window.addEventListener('beforeunload', (e) => {

@@ -25,7 +25,7 @@ import { existsSync, readFileSync, writeFileSync, readdirSync, mkdirSync } from 
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { applyOps, makeOp, newId, emptyData } from '../docs/ops.js';
-import { dotColour, nextStep, todayIndia, isOverdue, colourCounts, isSnoozed, restUntil, awakeProjects, repliesOf, mailThreads, findMailThread, indiaDate } from '../docs/rules.js';
+import { dotColour, nextStep, todayIndia, isOverdue, colourCounts, isSnoozed, restUntil, onlyDaysOf, onlyDaysLabel, awakeProjects, repliesOf, mailThreads, findMailThread, indiaDate } from '../docs/rules.js';
 import { DATA_OWNER, DATA_REPO, MOVED_TO } from '../docs/config.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -212,6 +212,7 @@ function line(p, today) {
   const bits = [
     `${(isSnoozed(p, today) ? 'SNOOZE' : c.toUpperCase()).padEnd(6)} ${p.name} [${p.id}]`,
     isSnoozed(p, today) ? `snoozed until ${restUntil(p, today)}` : null,
+    onlyDaysOf(p).length ? `only on: ${onlyDaysLabel(p.onlyDays)}` : null,
     p.status ? `status: ${p.status}` : null,
     `group: ${p.groupName}`,
     `priority: ${p.priority}`,

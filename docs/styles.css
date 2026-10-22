@@ -723,6 +723,9 @@ kbd.hint {
 .tag.snoozed { background: #eef2ff; color: #4338ca; }
 .snooze-form { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 6px 0; padding: 8px 10px; background: #eef2ff; border-radius: 8px; font-size: 14px; }
 .snooze-form input[type="number"] { width: 64px; text-align: center; }
+.only-days { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 6px 0; padding: 8px 10px; background: #eef2ff; border-radius: 8px; font-size: 14px; }
+.only-days .remind-at { display: inline-flex; align-items: center; gap: 6px; margin-left: 6px; }
+.only-days .chip.on { background: var(--brand); border-color: var(--brand); color: #fff; }
 .snoozed-banner { display: flex; align-items: center; gap: 10px; justify-content: space-between; background: #eef2ff; color: #3730a3; }
 .btn.on { background: var(--brand-soft); }
 .capture-wrap { position: fixed; inset: 0; z-index: 70; background: rgba(15, 23, 42, .25); display: flex; align-items: flex-start; justify-content: center; padding-top: 14vh; }

@@ -57,19 +57,120 @@ export function stepWaitsForReminder(step, today = todayIndia()) {
   return !step.done && !!step.remindUntil && !!step.snoozedUntil && step.snoozedUntil > today;
 }
 
+// ---------- "📅 Only on": a project that comes up only on chosen weekdays ----------
+
+export const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const WEEKDAYS_LONG = ['Sundays', 'Mondays', 'Tuesdays', 'Wednesdays', 'Thursdays', 'Fridays', 'Saturdays'];
+
+/** Weekday of an India date "YYYY-MM-DD": 0 = Sunday … 6 = Saturday. */
+export function weekdayOf(date) {
+  const [y, m, d] = date.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d)).getUTCDay();
+}
+
+/** The project's chosen weekdays (sorted, unique, 0–6); [] = every day. All seven days = every day. */
+export function onlyDaysOf(project) {
+  const days = [...new Set((project && Array.isArray(project.onlyDays) ? project.onlyDays : [])
+    .map(Number).filter((n) => Number.isInteger(n) && n >= 0 && n <= 6))].sort((a, b) => a - b);
+  return days.length === 7 ? [] : days;
+}
+
+/** "Mondays" for one day, "Mon, Thu" for several, "every day" for none. */
+export function onlyDaysLabel(days) {
+  const d = onlyDaysOf({ onlyDays: days });
+  if (!d.length) return 'every day';
+  return d.length === 1 ? WEEKDAYS_LONG[d[0]] : d.map((n) => WEEKDAYS[n]).join(', ');
+}
+
+/** "09:30" → "9:30" (for the chips). */
+export function shortTime(hhmm) {
+  return hhmm ? hhmm.replace(/^0(\d)/, '$1') : '';
+}
+
+/** The project page chip: "📅 Mondays · 🔔 9:30", "📅 Mon, Thu", "🔔 9:30" (every day), or '' (nothing set). */
+export function onlyDaysChip(project) {
+  const parts = [];
+  if (onlyDaysOf(project).length) parts.push(`📅 ${onlyDaysLabel(project.onlyDays)}`);
+  if (project.remindAt) parts.push(`🔔 ${shortTime(project.remindAt)}`);
+  return parts.join(' · ');
+}
+
+/** The project id in a "#open=<id>" link (from a reminder on the phone), or null. */
+export function openIdFromHash(hash) {
+  const m = /^#open=([\w-]{1,64})$/.exec(hash || '');
+  return m ? m[1] : null;
+}
+
+const timeFmt = new Intl.DateTimeFormat('en-GB', { timeZone: TIME_ZONE, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+/** India date and time "YYYY-MM-DD HH:MM" for an ISO time, a Date, or now. */
+export function indiaDateTime(when = new Date()) {
+  const d = when instanceof Date ? when : new Date(when);
+  return `${indiaDate(d)} ${timeFmt.format(d)}`;
+}
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+/** A one-time reminder "YYYY-MM-DD HH:MM" is a real date and time. */
+export function validRemindOnce(v) {
+  const m = /^(\d{4})-(\d{2})-(\d{2}) ([01]\d|2[0-3]):[0-5]\d$/.exec(typeof v === 'string' ? v : '');
+  if (!m) return false;
+  const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
+  return d.getUTCFullYear() === +m[1] && d.getUTCMonth() === +m[2] - 1 && d.getUTCDate() === +m[3];
+}
+/** "2026-10-22 16:00" → "22 Oct 16:00" (history lines). */
+export function remindOnceText(v) {
+  return `${Number(v.slice(8, 10))} ${MONTHS[Number(v.slice(5, 7)) - 1]} ${v.slice(11)}`;
+}
+/** The chip for a one-time reminder still to come: "🔔 Today 16:00", "🔔 Tomorrow 09:30", "🔔 30 Oct 16:00"; '' once it has passed. */
+export function remindOnceChip(project, now = new Date()) {
+  const v = project.remindOnce;
+  const at = indiaDateTime(now);
+  if (!validRemindOnce(v) || v < at) return '';
+  const day = v.slice(0, 10);
+  const today = at.slice(0, 10);
+  const when = day === today ? 'Today' : day === addDays(today, 1) ? 'Tomorrow' : remindOnceText(v).replace(/ \d\d:\d\d$/, '');
+  return `🔔 ${when} ${v.slice(11)}`;
+}
+
+/** First chosen day on or after a date (the date itself when no days are chosen). */
+function chosenDayFrom(days, date) {
+  let d = date;
+  for (let i = 0; i < 7 && days.length && !days.includes(weekdayOf(d)); i++) d = addDays(d, 1);
+  return d;
+}
+
+/** Today is not one of the project's chosen days (it rests today, like a snooze). */
+export function restDayToday(project, today = todayIndia()) {
+  const days = onlyDaysOf(project);
+  return days.length > 0 && !days.includes(weekdayOf(today));
+}
+
 /**
  * The day an active project comes back to Today, or null if it needs you now:
- * the project is snoozed, OR every open step is set to "remind me" later (then: the earliest reminder).
+ * the project is snoozed, OR every open step is set to "remind me" later (then: the earliest reminder),
+ * OR today is not one of its "📅 Only on" days. With chosen days it always comes back on a chosen day
+ * (a snooze or reminder that ends on a rest day waits for the next chosen day).
  */
 export function restUntil(project, today = todayIndia()) {
   if (project.state !== 'active') return null;
-  if (project.snoozedUntil && project.snoozedUntil > today) return project.snoozedUntil;
-  const open = (project.steps || []).filter((s) => !s.done);
-  if (!open.length || !open.every((s) => stepWaitsForReminder(s, today))) return null;
-  return open.map((s) => s.snoozedUntil).sort()[0];
+  let base = null;
+  if (project.snoozedUntil && project.snoozedUntil > today) base = project.snoozedUntil;
+  else {
+    const open = (project.steps || []).filter((s) => !s.done);
+    if (open.length && open.every((s) => stepWaitsForReminder(s, today))) base = open.map((s) => s.snoozedUntil).sort()[0];
+  }
+  const restDay = restDayToday(project, today);
+  if (!base && !restDay) return null;
+  return chosenDayFrom(onlyDaysOf(project), base || addDays(today, 1));
 }
 
-/** Snoozed (or all steps waiting for their reminder): hidden from Today until a date; comes back by itself. */
+/** Why an active project is resting today: 'snooze', 'onlyDays', 'remind', or null. */
+export function restReason(project, today = todayIndia()) {
+  if (!restUntil(project, today)) return null;
+  if (project.snoozedUntil && project.snoozedUntil > today) return 'snooze';
+  return restDayToday(project, today) ? 'onlyDays' : 'remind';
+}
+
+/** Snoozed (or all steps waiting for their reminder, or a rest day): hidden from Today until a date; comes back by itself. */
 export function isSnoozed(project, today = todayIndia()) {
   return !!restUntil(project, today);
 }
@@ -297,6 +398,7 @@ export function dayScore(data, history, day) {
     if (!activeThen) continue;
     if (p.snoozedFrom && p.snoozedUntil && p.snoozedFrom <= day && day < p.snoozedUntil) continue; // snoozed that day: not counted
     if (restingByReminders(p, day)) continue; // every open step was waiting for its "remind me" day
+    if (p.onlyDaysSince && p.onlyDaysSince <= day && restDayToday(p, day)) continue; // a "📅 Only on" rest day: not counted
     total++;
     if (busy.has(p.id) || lastWorkDate(p) === day || (p.teamDays || []).includes(day)) green++;
   }
@@ -709,6 +811,6 @@ export function pasteReason({ connected = false, email = '', name = '', error = 
  *  and also while the team list has not loaded yet (unknown = keep it, so the person's task is never cancelled by mistake). */
 export function keepMovedStep(step, task, teamLoaded) {
   if (!step || !step.movedTo) return false;
-  if (!teamLoaded) return true;
-  return !!task && task.status === 'open';
+  if (!teamLoaded || !task) return true; // not known yet (list not loaded, or older than the task): keep it
+  return task.status === 'open'; // let it go only once the person's task is known to be finished or closed
 }

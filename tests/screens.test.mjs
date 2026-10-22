@@ -76,7 +76,7 @@ test('project page draws (steps, update box, people, time, links)', () => {
   const el = renderDetail(fakeCtx(s, { selected: 'p1', openParts: { history: true }, update: {}, showMore: true }));
   const text = el.textContent;
   for (const bit of ['Kiln', 'Fire samples', 'Save + done', 'Work notes', 'Status', 'Finish', 'Ravi', 'Today', 'Spec']) assert.ok(text.includes(bit), bit);
-  assert.ok(!text.includes('Snooze'), 'Snooze waits in the ⋯ menu');
+  assert.ok(text.includes('💤 Snooze'), 'Snooze is on the page next to Finish (the owner asked for it back, 22 Oct)');
   const menu = renderDetail(fakeCtx(s, { selected: 'p1', update: {}, projMenu: 'p1' })).textContent;
   for (const bit of ['Snooze', 'Pause', 'Delete project']) assert.ok(menu.includes(bit), 'menu: ' + bit);
 });
@@ -660,4 +660,87 @@ test('make it a project wiring (app.js): Undo also takes the new project away; a
   assert.match(steps, /\(!x\.done \|\| movedButGiven\(x\)\)/, 'the person\'s task is not cancelled by the move');
   const DETAIL = readFileSync(new URL('../docs/ui/detail.js', import.meta.url), 'utf8');
   assert.match(DETAIL, /setTimeout\(\(\) => \{ const f = document\.querySelector\('\.title-input'\); if \(f\) \{ f\.focus\(\); f\.select\(\); \} \}, 30\);/, 'the new project\'s name is ready to change');
+});
+
+test('project lists: "Red first" (red, yellow, green, grey) is the default order; "My order" is kept only when picked after that', async () => {
+  const { readFileSync } = await import('node:fs');
+  const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
+  assert.match(app, /sort: saved\.sortV === 2 && saved\.sort === 'mine' \? 'mine' : 'red',/, 'red first unless My order was picked since the change');
+  assert.match(app, /sort: ui\.sort, sortV: 2,/, 'the choice is remembered with the new version');
+  assert.match(app, /const COLOUR_ORDER = \{ red: 0, yellow: 1, green: 2, grey: 3 \};/, 'grey (resting) goes last');
+});
+
+test('project page: a 💤 Snooze button sits next to Finish (not only in the ⋯ menu)', async () => {
+  const { readFileSync } = await import('node:fs');
+  const src = readFileSync(new URL('../docs/ui/detail.js', import.meta.url), 'utf8');
+  const top = src.slice(src.indexOf('function stateButtons('), src.indexOf("if (p.state === 'paused')", src.indexOf('function stateButtons(')));
+  assert.match(top, /'💤 Snooze'\) : null,\s*h\('button', \{ class: 'btn', onClick: \(\) => ctx\.act\('finish'/, 'Snooze right before Finish');
+  assert.match(top, /ui\.snoozeOpen = p\.id; ctx\.render\(\);/, 'it opens the snooze box');
+});
+
+const { readFileSync } = await import('node:fs');
+
+test('📅 Only on: the ⋯ menu item opens the day chips (Mon … Sun, Every day, 🔔 Remind me at); the info chip; the resting bar on a rest day', async () => {
+  const { todayIndia, addDays, weekdayOf, WEEKDAYS } = await import('../docs/rules.js');
+  const { fmtDay } = await import('../docs/ui/dom.js');
+  const s = sampleState();
+  const menu = renderDetail(fakeCtx(s, { selected: 'p1', update: {}, projMenu: 'p1' })).textContent;
+  assert.ok(menu.includes('📅 Only on…'), 'menu item');
+  assert.ok(menu.includes('🔔 Remind me once…'), 'menu item for a one-time reminder');
+  assert.ok(!renderDetail(fakeCtx(s, { selected: 'p1', update: {} })).textContent.includes('Every day'), 'chips closed until asked');
+  const acts = [];
+  const ctx = fakeCtx(s, { selected: 'p1', update: {}, onlyDaysOpen: 'p1' });
+  ctx.act = (type, args) => { acts.push([type, args]); return true; };
+  const el = renderDetail(ctx);
+  const row = el.textContent;
+  assert.ok(row.includes('Mon') && row.includes('Tue') && row.includes('Sun') && row.includes('Every day') && row.includes('🔔 Remind me at'), row);
+  const find = (n, pred) => { if (pred(n)) return n; for (const c of n.childNodes || []) { const f = c.nodeType === 1 && find(c, pred); if (f) return f; } return null; };
+  const thu = find(el, (n) => n.nodeName === 'BUTTON' && n.textContent === 'Thu');
+  assert.ok(thu, 'a Thu chip');
+  // the day chips are buttons whose click sends setOnlyDays
+  const DETAIL = readFileSync(new URL('../docs/ui/detail.js', import.meta.url), 'utf8');
+  assert.match(DETAIL, /ctx\.act\('setOnlyDays', \{ projectId: p\.id, days: next \}/);
+  assert.match(DETAIL, /ctx\.act\('setRemindAt', \{ projectId: p\.id, time \}/);
+  assert.match(DETAIL, /item\('📅 Only on…', \(\) => \{ ui\.onlyDaysOpen = p\.id; \}\)/);
+  // rests today: chosen only tomorrow's weekday
+  const today = todayIndia();
+  const tomorrow = addDays(today, 1);
+  const wd = weekdayOf(tomorrow);
+  applyOps(s, [makeOp('setOnlyDays', { projectId: 'p1', days: [wd] }), makeOp('setRemindAt', { projectId: 'p1', time: '09:30' })]);
+  const page = renderDetail(fakeCtx(s, { selected: 'p1', update: {} })).textContent;
+  const long = ['Sundays', 'Mondays', 'Tuesdays', 'Wednesdays', 'Thursdays', 'Fridays', 'Saturdays'][wd];
+  assert.ok(page.includes(`📅 ${long} · 🔔 9:30`), 'info chip');
+  assert.ok(page.includes(`📅 Resting — comes back ${WEEKDAYS[wd]} ${fmtDay(tomorrow)} (${long} only)`), 'resting bar');
+  // on a chosen day: no resting bar
+  applyOps(s, [makeOp('setOnlyDays', { projectId: 'p1', days: [weekdayOf(today)] })]);
+  assert.ok(!renderDetail(fakeCtx(s, { selected: 'p1', update: {} })).textContent.includes('Resting'), 'a chosen day is a normal day');
+});
+
+test('🔔 Remind me once: the bar (Today at, Tomorrow at, a date + time, Set, Clear) and the chip "🔔 Today 16:00"', async () => {
+  const { indiaDateTime, addDays, todayIndia } = await import('../docs/rules.js');
+  const s = sampleState();
+  const bar = renderDetail(fakeCtx(s, { selected: 'p1', update: {}, remindOnceOpen: 'p1' })).textContent;
+  for (const bit of ['🔔 Remind me once', 'Today at', 'Tomorrow at', 'Set', 'Cancel']) assert.ok(bar.includes(bit), bit);
+  assert.ok(!bar.includes('Clear'), 'Clear only when one is set');
+  const at = `${addDays(todayIndia(), 2)} 16:00`;
+  applyOps(s, [makeOp('setRemindOnce', { projectId: 'p1', at })]);
+  assert.ok(indiaDateTime() < at);
+  const page = renderDetail(fakeCtx(s, { selected: 'p1', update: {}, remindOnceOpen: 'p1' })).textContent;
+  assert.ok(page.includes('Clear'));
+  assert.match(page, /🔔 \d+ \w{3} 16:00/, 'the chip');
+  const DETAIL = readFileSync(new URL('../docs/ui/detail.js', import.meta.url), 'utf8');
+  assert.match(DETAIL, /ctx\.act\('setRemindOnce', \{ projectId: p\.id, at \}/);
+});
+
+test('📅 Only on wiring (app.js): the list row hint says the days on a rest day; "#open=<id>" opens that project; the team sync never asks about rest days', () => {
+  const APP = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
+  const row = APP.slice(APP.indexOf('function projectRow('), APP.indexOf('function projectRow(') + 4000);
+  assert.match(row, /restReason\(p, today\) === 'onlyDays' \? h\('span', \{ class: 'tag snoozed'.*`📅 \$\{onlyDaysLabel\(p\.onlyDays\)\}`\)/);
+  const open = APP.slice(APP.indexOf('function takeOpenFromHash('), APP.indexOf('let started = false;'));
+  assert.match(open, /openIdFromHash\(location\.hash\)/);
+  assert.match(open, /if \(store\) select\(id\);\s+else \{ ui\.selected = id; ui\.mobile = 'detail'; \}/);
+  assert.match(APP, /takeOpenFromHash\(\); \/\/ "#open=<id>"/, 'on start');
+  assert.match(APP, /if \(takeOpenFromHash\(\)\) render\(\);/, 'when the app is already open');
+  const sync = APP.slice(APP.indexOf('const projectSteps = (p) =>'), APP.indexOf('const wholeRef ='));
+  assert.doesNotMatch(sync, /onlyDays|isSnoozed|restUntil|restReason|remind/);
 });

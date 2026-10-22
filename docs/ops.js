@@ -9,7 +9,7 @@
 // applyOp(state, op) changes the state in place and returns true, or returns false
 // when the operation must be skipped (for example, its item no longer exists).
 
-import { indiaDate, monthOf, laterDate, addDays, REPEATS, nextRepeatDate, waitingAgain } from './rules.js';
+import { indiaDate, monthOf, laterDate, addDays, REPEATS, nextRepeatDate, waitingAgain, WEEKDAYS, indiaDateTime, validRemindOnce, remindOnceText } from './rules.js';
 import { AI_DAILY_LIMIT, BRIEF_CLAIM_MINUTES } from './config.js';
 
 export const START_GROUPS = ['Acton', 'Personal', 'Ceramic Ninja'];
@@ -327,6 +327,51 @@ const handlers = {
     p.snoozedUntil = addDays(today, days);
     p.updatedAt = op.at;
     addEvent(state, op, p, 'snoozed', `for ${days} day${days === 1 ? '' : 's'} (back ${p.snoozedUntil})`);
+    return true;
+  },
+
+  /**
+   * "📅 Only on": the project comes up only on these weekdays (India time, 0 = Sunday … 6 = Saturday);
+   * on other days it rests like a snooze. [] (or all seven) = every day. Not "work", so the dot is not made green.
+   */
+  setOnlyDays(state, op, a) {
+    const p = findProject(state.data, a.projectId);
+    if (!p || !Array.isArray(a.days)) return false;
+    if (!a.days.every((n) => Number.isInteger(n) && n >= 0 && n <= 6)) return false;
+    let days = [...new Set(a.days)].sort((x, y) => x - y);
+    if (days.length === 7) days = []; // every day
+    const old = Array.isArray(p.onlyDays) ? p.onlyDays : [];
+    if (old.length === days.length && old.every((n, i) => n === days[i])) return false; // no change
+    if (days.length) { p.onlyDays = days; p.onlyDaysSince = indiaDate(op.at); } else { delete p.onlyDays; delete p.onlyDaysSince; }
+    p.updatedAt = op.at;
+    addEvent(state, op, p, 'edited', `Only on: ${days.length ? days.map((n) => WEEKDAYS[n]).join(', ') : 'every day'}`);
+    return true;
+  },
+
+  /**
+   * "🔔 Remind me at": a phone notification at this time (India time, "HH:MM") on the project's chosen days
+   * (every day when none are chosen). null / '' = no reminder. Not "work".
+   */
+  setRemindAt(state, op, a) {
+    const p = findProject(state.data, a.projectId);
+    const time = a.time == null || a.time === '' ? null : a.time;
+    if (!p || (time !== null && !(typeof time === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(time)))) return false;
+    if ((p.remindAt || null) === time) return false; // no change
+    if (time) p.remindAt = time; else delete p.remindAt;
+    p.updatedAt = op.at;
+    addEvent(state, op, p, 'edited', time ? `Reminder at ${time}` : 'Reminder off');
+    return true;
+  },
+
+  /** "🔔 Remind me once": one phone notification at "YYYY-MM-DD HH:MM" (India time, not in the past). null = clear. Not "work". */
+  setRemindOnce(state, op, a) {
+    const p = findProject(state.data, a.projectId);
+    const at = a.at == null || a.at === '' ? null : a.at;
+    if (!p || (at !== null && (!validRemindOnce(at) || at < indiaDateTime(op.at)))) return false;
+    if ((p.remindOnce || null) === at) return false;
+    if (at) p.remindOnce = at; else delete p.remindOnce;
+    p.updatedAt = op.at;
+    addEvent(state, op, p, 'edited', at ? `Reminder: ${remindOnceText(at)}` : 'Reminder removed');
     return true;
   },
 

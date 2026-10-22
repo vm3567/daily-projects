@@ -1,6 +1,6 @@
 // Work Task app shell: keeps the screens on the phone so the app opens fast and shows something
 // without internet. Data (api/) and the projects app (projects/, it has its own) are never kept here.
-const CACHE = 'worktask-v19';
+const CACHE = 'worktask-v20';
 const SHELL = ['./', 'index.html', 'app.js', 'logic.js', 'styles.css', 'projects/styles.css', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png'];
 
 self.addEventListener('install', (e) => {
@@ -54,7 +54,7 @@ self.addEventListener('notificationclick', (e) => {
   let url = new URL((e.notification.data && e.notification.data.url) || '/', self.location.origin);
   if (url.origin !== self.location.origin) url = new URL('/', self.location.origin); // only ever our own pages
   e.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
-    const c = list.find((x) => new URL(x.url).pathname === '/');
+    const c = url.pathname === '/' ? list.find((x) => new URL(x.url).pathname === '/') : null; // a projects reminder (/projects/#open=…) is for the projects page
     if (c) { c.postMessage({ type: 'open', hash: url.hash }); return c.focus(); }
     // another page of this site is open (the owner's projects): use that window, or a new one if it cannot be moved
     const other = list.find((x) => new URL(x.url).origin === self.location.origin && 'navigate' in x);

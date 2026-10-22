@@ -3,8 +3,10 @@
 // - given projects are kept in step with the saved projects (after every save, and once a day for steps that come back),
 // - a second alert when someone has been Stuck for a day with no answer,
 // - the evening summary for the managers,
-// - new emails in the owner's Outlook Inbox go to the Daily Projects Inbox (outlook.php).
-// They run after an answer has been sent (any request), at most every 10 minutes (a save runs the project part at once).
+// - new emails in the owner's Outlook Inbox go to the Daily Projects Inbox (outlook.php),
+// - the owner's project reminders on the phone ("📅 Only on" + "🔔 Remind me at", and "🔔 Remind me once").
+// They run after an answer has been sent (any request), at most every 10 minutes (a save runs the project part at once),
+// and from cron.php every 5 minutes (one lock: never two at the same time).
 declare(strict_types=1);
 
 /** The owner's saved projects (data.json of the newest version), or null if there are none / it cannot be read. */
@@ -167,15 +169,74 @@ function day_summary(string $day): array {
   return ['due' => count($tasks), 'sent' => count(array_filter($tasks, fn($t) => (bool)$t['today'])), 'missing' => array_keys($missing), 'stuck' => array_keys($stuck)];
 }
 
-/** Called after each answer. The project part runs at once after a save; the rest at most every 10 minutes. */
-function team_jobs(): void {
+/** Now (a fixed time only in the automatic tests, through WT_TEST_NOW; never on the live server). */
+function jobs_now(): int {
+  $t = getenv('WT_TEST_NOW');
+  return TEST_DIR !== '' && $t !== false && $t !== '' ? (int)$t : time();
+}
+
+/** The project's next open step as the phone shows it (a step that comes back later waits, like nextStep() in Daily Projects). */
+function reminder_next_step(array $p, string $day): string {
+  $open = array_values(array_filter((array)($p['steps'] ?? []), fn($s) => is_array($s) && empty($s['done'])));
+  foreach ($open as $s) if (empty($s['snoozedUntil']) || $s['snoozedUntil'] <= $day) return (string)($s['text'] ?? '');
+  return $open ? (string)($open[0]['text'] ?? '') : '';
+}
+
+/**
+ * The owner's project reminders, each at most once:
+ * - "🔔 Remind me at HH:MM" on the project's "📅 Only on" days (every day when none): from that time, for 3 hours,
+ *   once a day, not while the project is snoozed;
+ * - "🔔 Remind me once" at "YYYY-MM-DD HH:MM": from that time, for 3 hours, once (marked sent; the app hides the chip once it is past).
+ * Only active projects; only to the Daily Projects owner.
+ */
+function project_reminders(): void {
+  $ownerId = (int)setting('dp_owner', '0');
+  $data = $ownerId ? dp_data() : null;
+  if (!$data) return;
+  $now = jobs_now();
+  $day = date('Y-m-d', $now);
+  $mins = (int)date('G', $now) * 60 + (int)date('i', $now);
+  $wd = (int)date('w', $now);
+  foreach ($data['projects'] as $p) {
+    if (!is_array($p) || ($p['state'] ?? '') !== 'active' || empty($p['id']) || !is_string($p['id'])) continue;
+    $id = $p['id'];
+    $send = false;
+    if (is_string($p['remindAt'] ?? null) && preg_match('/^([01]\d|2[0-3]):([0-5]\d)$/', $p['remindAt'], $m)) {
+      $days = array_values(array_filter(is_array($p['onlyDays'] ?? null) ? $p['onlyDays'] : [], fn($n) => is_int($n) && $n >= 0 && $n <= 6));
+      $from = (int)$m[1] * 60 + (int)$m[2];
+      $snoozed = !empty($p['snoozedUntil']) && (string)$p['snoozedUntil'] > $day;
+      $key = 'prm:' . md5($id);
+      if ((!$days || in_array($wd, $days, true)) && !$snoozed && $mins >= $from && $mins < $from + 180 && setting($key) !== $day) {
+        set_setting($key, $day);
+        $send = true;
+      }
+    }
+    if (is_string($p['remindOnce'] ?? null) && preg_match('/^\d{4}-\d{2}-\d{2} ([01]\d|2[0-3]):[0-5]\d$/', $p['remindOnce']) && ($t = strtotime($p['remindOnce']))) {
+      $key = 'pro:' . md5($id);
+      if ($now >= $t && $now < $t + 3 * 3600 && setting($key) !== $p['remindOnce']) {
+        set_setting($key, $p['remindOnce']); // this reminder is sent: never again
+        $send = true;
+      }
+    }
+    if (!$send) continue;
+    $next = reminder_next_step($p, $day);
+    notify([$ownerId], 'remind', '📅 ' . (string)($p['name'] ?? 'Project'), $next !== '' ? 'Today: ' . $next : 'No next step — add one',
+      '/projects/#open=' . rawurlencode($id), 'prm' . $id);
+  }
+}
+
+/**
+ * Called after each answer. The project part runs at once after a save; the rest at most every 10 minutes.
+ * cron.php calls it with $all = true: everything now. Returns false when another run holds the lock (or nothing was due).
+ */
+function team_jobs(bool $all = false): bool {
   $syncNow = !empty($GLOBALS['sync_projects']);
-  $due = (int)setting('jobs_at', '0') <= time() - 600;
+  $due = $all || (int)setting('jobs_at', '0') <= time() - 600;
   $retryDue = ($r = (int)setting('sync_retry', '0')) && $r <= time();
-  if (!$syncNow && !$due && !$retryDue) return;
-  if (!(int)(one("SELECT GET_LOCK('wt_jobs', 0) AS l")['l'] ?? 0)) { // another request is doing it
+  if (!$syncNow && !$due && !$retryDue) return false;
+  if (!(int)(one("SELECT GET_LOCK('wt_jobs', 0) AS l")['l'] ?? 0)) { // another request (or cron) is doing it
     if ($syncNow) set_setting('sync_retry', (string)(time() + 5)); // this save's sync is owed: the next request runs it
-    return;
+    return false;
   }
   $prev = $GLOBALS['me'] ?? null;
   try {
@@ -187,6 +248,7 @@ function team_jobs(): void {
       $GLOBALS['me'] = ['id' => 0]; // the managers are told (nobody is "the one who did it")
       stuck_second_alerts();
       evening_summary();
+      try { project_reminders(); } catch (Throwable $e) { error_log('team jobs reminders: ' . get_class($e)); }
     }
     if ($due) { // new emails in the owner's Outlook → the Daily Projects Inbox (when connected)
       try { dp_migrate(); ol_check(); } catch (Throwable $e) { error_log('team jobs outlook: ' . get_class($e)); }
@@ -197,4 +259,5 @@ function team_jobs(): void {
     $GLOBALS['me'] = $prev;
     q("SELECT RELEASE_LOCK('wt_jobs')");
   }
+  return true;
 }

@@ -2390,9 +2390,9 @@ if ('serviceWorker' in navigator) {
       return;
     }
     if (d.type === 'push') {
-      const m = d.msg || {}, id = /#open=(\d+)/.exec(m.url || '');
+      const m = d.msg || {}, proj = /^\/projects\//.test(m.url || ''), id = !proj && /#open=(\d+)/.exec(m.url || '');
       state.pushAt = Date.now();
-      if (document.visibilityState === 'visible') notice(m.kind, m.title || 'Work Task', m.body || '', id ? () => openDetail('task:' + id[1]) : () => go('today'));
+      if (document.visibilityState === 'visible') notice(m.kind, m.title || 'Work Task', m.body || '', proj ? () => { location.href = m.url; } : id ? () => openDetail('task:' + id[1]) : () => go('today')); // a projects reminder opens that project
       liveCheck(true);
       const a = document.activeElement, typing = (a && /^(TEXTAREA|INPUT|SELECT)$/.test(a.tagName)) || formHasText();
       if (id && state.sel === 'task:' + id[1] && !typing) loadDetail();

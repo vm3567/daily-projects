@@ -274,7 +274,7 @@ test('project description: taken from the project\'s tasks (the first one that h
   assert.equal(projectAboutOf([{ title: 'old server, no field' }]), '');
   assert.match(APP, /class: 'prow-about' }, aboutShort\(p\.projectAbout\)\)/, 'manager\'s Projects list row');
   assert.match(APP, /class: 'project-about' }/, 'under the title of the project and task pages');
-  assert.match(readFileSync(new URL('../team/public_html/sw.js', import.meta.url), 'utf8'), /const CACHE = 'worktask-v19'/, 'new files reach the phones');
+  assert.match(readFileSync(new URL('../team/public_html/sw.js', import.meta.url), 'utf8'), /const CACHE = 'worktask-v20'/, 'new files reach the phones');
 });
 
 // ---------------------------------------------------------------- 📧 morning email (one person's pending work as a table to fill in)
@@ -681,4 +681,11 @@ test('no-paste morning email wiring: connected → outlook.compose with the buil
   assert.match(APP, /function outlookConnected\(\) \{\n\s*if \(outlookOn === null && state\.user && state\.user\.owner\) \{\n\s*outlookOn = api\('outlook\.status'\)/, 'asked once per page load (owner only), kept in memory');
   assert.match(APP, /outlookOn = !!o\.connected;/, 'Settings → Outlook keeps it up to date');
   for (const s of ['function teamList() {', 'function teamToday() {', 'function peopleScreen() {']) assert.match(APP.slice(APP.indexOf(s), APP.indexOf(s) + 200), /outlookConnected\(\);/, `${s} asks before the button is pressed`);
+});
+
+test('project reminders: a tap on a "/projects/#open=<id>" notification opens the projects page, never a Work Task task with that number', () => {
+  const sw = readFileSync(new URL('../team/public_html/sw.js', import.meta.url), 'utf8');
+  assert.match(sw, /const c = url\.pathname === '\/' \? list\.find\(\(x\) => new URL\(x\.url\)\.pathname === '\/'\) : null;/, 'only Work Task links go to the Work Task window');
+  assert.match(APP, /proj = \/\^\\\/projects\\\/\/\.test\(m\.url \|\| ''\), id = !proj && \/#open=\(\\d\+\)\/\.exec\(m\.url \|\| ''\)/);
+  assert.match(APP, /proj \? \(\) => \{ location\.href = m\.url; \}/, 'the in-app bar opens the project');
 });

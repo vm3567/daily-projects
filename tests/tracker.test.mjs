@@ -86,3 +86,20 @@ test('restore: shows first, changes only with --yes, keeps today\'s AI keys', ()
   assert.equal(data().secrets.claude, 'today-key', 'keys are never rolled back');
   assert.ok(firstCommit);
 });
+
+test('"📅 Only on": on a rest day the project is left out of list --today and summary counts it as resting; show says the days', async () => {
+  const { todayIndia, weekdayOf } = await import('../docs/rules.js');
+  tracker('new-project', 'Weekly glaze check', '--group', 'Acton', '--steps', 'Check glaze');
+  const today = todayIndia();
+  const rest = [0, 1, 2, 3, 4, 5, 6].filter((n) => n !== weekdayOf(today)).slice(0, 1); // one day that is not today
+  const d = data();
+  d.projects.find((p) => p.name === 'Weekly glaze check').onlyDays = rest;
+  writeFileSync(join(work, 'data.json'), JSON.stringify(d, null, 2));
+  sh('git', ['commit', '-qam', 'only on'], work);
+  sh('git', ['push', '-q', 'origin', 'main'], work);
+  assert.doesNotMatch(tracker('list', '--today'), /Weekly glaze check/, 'a rest day: not on today\'s list');
+  assert.match(tracker('summary'), /1 snoozed/);
+  const show = tracker('show', 'glaze check');
+  assert.match(show, /^SNOOZE/);
+  assert.match(show, /only on: \w+days/);
+});

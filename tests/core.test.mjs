@@ -1383,6 +1383,163 @@ test('make it a project: the moved step stays on the person\'s list while their 
   assert.equal(keepMovedStep(step, undefined, false), true, 'team list not loaded: keep it (never cancel by mistake)');
   assert.equal(keepMovedStep(step, { status: 'open' }, true), true, 'task still open: keep it');
   assert.equal(keepMovedStep(step, { status: 'done' }, true), false, 'task finished: let it go');
-  assert.equal(keepMovedStep(step, undefined, true), false, 'no team task at all: nothing to keep');
+  assert.equal(keepMovedStep(step, undefined, true), true, 'task not in the loaded list (the list is older than the task): keep it — this cancelled a real task in testing');
+  assert.equal(keepMovedStep(step, { status: 'cancelled' }, true), false, 'task closed: let it go');
   assert.equal(keepMovedStep({ id: 's2', done: true }, { status: 'open' }, true), false, 'a normal done step is not kept');
+});
+
+// ---------- "📅 Only on": a project that comes up only on chosen weekdays ----------
+// October 2026: Mon 19, Tue 20, Wed 21, Thu 22, Fri 23, Sat 24, Sun 25, Mon 26, Thu 29.
+
+test('only on: setOnlyDays checks the days, sorts them, clears with [] and is not work', async () => {
+  const { lastWorkDate } = await import('../docs/rules.js');
+  const s = withProject('2026-10-01');
+  const p = s.data.projects[0];
+  assert.equal(applyOp(s, op('setOnlyDays', { projectId: 'p1', days: [7] }, '2026-10-19')), false, '7 is not a weekday');
+  assert.equal(applyOp(s, op('setOnlyDays', { projectId: 'p1', days: [-1] }, '2026-10-19')), false);
+  assert.equal(applyOp(s, op('setOnlyDays', { projectId: 'p1', days: [1.5] }, '2026-10-19')), false);
+  assert.equal(applyOp(s, op('setOnlyDays', { projectId: 'p1', days: 'Mon' }, '2026-10-19')), false, 'must be a list');
+  assert.equal(applyOp(s, op('setOnlyDays', { projectId: 'nope', days: [1] }, '2026-10-19')), false);
+  assert.equal(p.onlyDays, undefined);
+  assert.ok(applyOp(s, op('setOnlyDays', { projectId: 'p1', days: [4, 1, 4] }, '2026-10-19')));
+  assert.deepEqual(p.onlyDays, [1, 4], 'unique and sorted');
+  assert.equal(applyOp(s, op('setOnlyDays', { projectId: 'p1', days: [1, 4] }, '2026-10-19')), false, 'no change, no history line');
+  assert.equal(lastWorkDate(p), null, 'choosing days is not work');
+  assert.equal(dotColour(p, '2026-10-19'), 'red', 'Monday is a chosen day: still red');
+  const lines = s.history['2026-10'].filter((e) => e.detail && e.detail.startsWith('Only on'));
+  assert.deepEqual(lines.map((e) => e.detail), ['Only on: Mon, Thu']);
+  assert.ok(applyOp(s, op('setOnlyDays', { projectId: 'p1', days: [] }, '2026-10-20')));
+  assert.equal(p.onlyDays, undefined, '[] = every day');
+  assert.equal(s.history['2026-10'].at(-1).detail, 'Only on: every day');
+  assert.ok(applyOp(s, op('setOnlyDays', { projectId: 'p1', days: [0, 1, 2, 3, 4, 5, 6] }, '2026-10-20')) === false, 'all seven = every day = no change');
+  assert.equal(p.onlyDays, undefined);
+});
+
+test('only on: a day not chosen rests exactly like a snooze until the next chosen day (India time)', async () => {
+  const { isSnoozed, restUntil, restReason, awakeProjects, colourCounts, weekdayOf, onlyDaysLabel } = await import('../docs/rules.js');
+  const s = withProject('2026-10-01');
+  const p = s.data.projects[0];
+  applyOp(s, op('setOnlyDays', { projectId: 'p1', days: [1] }, '2026-10-19')); // Mondays
+  assert.equal(weekdayOf('2026-10-26'), 1);
+  assert.equal(onlyDaysLabel([1]), 'Mondays');
+  assert.equal(onlyDaysLabel([4, 1]), 'Mon, Thu');
+  assert.equal(onlyDaysLabel([]), 'every day');
+  assert.equal(isSnoozed(p, '2026-10-19'), false, 'Monday: a normal project');
+  assert.equal(dotColour(p, '2026-10-19'), 'red');
+  for (const day of ['2026-10-20', '2026-10-21', '2026-10-22', '2026-10-23', '2026-10-24', '2026-10-25']) {
+    assert.equal(isSnoozed(p, day), true, day + ' rests');
+    assert.equal(restUntil(p, day), '2026-10-26', 'back on the next Monday, across the week end');
+    assert.equal(restReason(p, day), 'onlyDays');
+    assert.equal(dotColour(p, day), 'grey');
+    assert.equal(awakeProjects(s.data, day).length, 0, 'off the Today list');
+    assert.deepEqual(colourCounts(s.data, day), { green: 0, yellow: 0, red: 0 }, 'not counted red');
+  }
+  assert.equal(isSnoozed(p, '2026-10-26'), false);
+  // several days: the nearest next one
+  applyOp(s, op('setOnlyDays', { projectId: 'p1', days: [1, 4] }, '2026-10-19'));
+  assert.equal(restUntil(p, '2026-10-20'), '2026-10-22', 'Tue → Thu');
+  assert.equal(restUntil(p, '2026-10-23'), '2026-10-26', 'Fri → Mon');
+  assert.equal(isSnoozed(p, '2026-10-22'), false);
+  // India-time day boundary: 11:30 PM Monday UTC is already Tuesday in India
+  assert.equal(indiaDate('2026-10-19T19:00:00Z'), '2026-10-20');
+  assert.equal(isSnoozed(p, indiaDate('2026-10-19T18:00:00Z')), false, '11:30 PM Monday in India: still Monday');
+  assert.equal(isSnoozed(p, indiaDate('2026-10-19T19:00:00Z')), true, '00:30 AM Tuesday in India: resting');
+});
+
+test('only on: a real snooze still works on top, and the project comes back on a chosen day', async () => {
+  const { restUntil, restReason, isSnoozed } = await import('../docs/rules.js');
+  const s = withProject('2026-10-01');
+  const p = s.data.projects[0];
+  applyOp(s, op('setOnlyDays', { projectId: 'p1', days: [1] }, '2026-10-19'));
+  assert.ok(applyOp(s, op('snooze', { projectId: 'p1', days: 9 }, '2026-10-19')), 'snooze works on a project with chosen days'); // back Wed 28
+  assert.equal(restReason(p, '2026-10-20'), 'snooze');
+  assert.equal(restUntil(p, '2026-10-20'), '2026-11-02', 'snooze ends on a Wednesday, so it waits for the next Monday');
+  assert.equal(isSnoozed(p, '2026-10-26'), true, 'the Monday inside the snooze still rests');
+  assert.equal(isSnoozed(p, '2026-11-02'), false);
+  // no chosen days: the snooze alone, as before
+  applyOp(s, op('setOnlyDays', { projectId: 'p1', days: [] }, '2026-10-20'));
+  assert.equal(restUntil(p, '2026-10-20'), '2026-10-28');
+});
+
+test('only on: work on a rest day still counts; rest days are left out of the day score', async () => {
+  const { lastWorkDate, dayScore } = await import('../docs/rules.js');
+  const s = withProject('2026-10-01');
+  const p = s.data.projects[0];
+  applyOp(s, op('setOnlyDays', { projectId: 'p1', days: [1] }, '2026-10-19'));
+  applyOp(s, op('addWorkNote', { projectId: 'p1', noteId: 'n1', text: 'Done early' }, '2026-10-21'));
+  assert.equal(lastWorkDate(p), '2026-10-21', 'work on a Wednesday is still work');
+  assert.equal(dotColour(p, '2026-10-21'), 'grey', 'but it never nags on a rest day');
+  assert.deepEqual(dayScore(s.data, s.history, '2026-10-20'), { green: 0, total: 0 }, 'a rest day is not counted');
+  assert.deepEqual(dayScore(s.data, s.history, '2026-10-19'), { green: 0, total: 1 }, 'Monday counts');
+  assert.deepEqual(dayScore(s.data, s.history, '2026-10-12'), { green: 0, total: 1 }, 'days before the setting are not changed');
+  applyOp(s, op('addWorkNote', { projectId: 'p1', noteId: 'n2', text: 'Monday work' }, '2026-10-26'));
+  assert.equal(dotColour(p, '2026-10-26'), 'green', 'on a chosen day: green once worked on');
+});
+
+test('only on: the team sync (what a given project sends to Work Task) is not changed by chosen days', async () => {
+  const { readFileSync } = await import('node:fs');
+  const s = withProject('2026-10-01');
+  const p = s.data.projects[0];
+  const before = JSON.stringify(p.steps);
+  applyOp(s, op('setOnlyDays', { projectId: 'p1', days: [1] }, '2026-10-19'));
+  assert.equal(JSON.stringify(p.steps), before, 'steps (and their dates) untouched');
+  assert.equal(p.snoozedUntil, undefined, 'no project snooze is set');
+  const APP = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
+  const sync = APP.slice(APP.indexOf('const projectSteps = (p) =>'), APP.indexOf('async function syncGivenNow'));
+  const start = APP.indexOf('async function syncGivenNow');
+  const given = APP.slice(start, APP.indexOf('\n}\n', start));
+  for (const part of [sync, given]) assert.doesNotMatch(part, /onlyDays|isSnoozed|restUntil|restReason|awakeProjects/, 'the sync never asks whether the project rests');
+});
+
+test('reminders: setRemindAt takes "HH:MM" only (empty clears), is not work, and writes a history line', async () => {
+  const { lastWorkDate } = await import('../docs/rules.js');
+  const s = withProject('2026-10-01');
+  const p = s.data.projects[0];
+  for (const bad of ['9:30', '24:00', '09:60', '0930', '09:30:00', 930, 'soon']) {
+    assert.equal(applyOp(s, op('setRemindAt', { projectId: 'p1', time: bad }, '2026-10-19')), false, String(bad));
+  }
+  assert.ok(applyOp(s, op('setRemindAt', { projectId: 'p1', time: '09:30' }, '2026-10-19')));
+  assert.equal(p.remindAt, '09:30');
+  assert.equal(applyOp(s, op('setRemindAt', { projectId: 'p1', time: '09:30' }, '2026-10-19')), false, 'no change');
+  assert.equal(s.history['2026-10'].at(-1).detail, 'Reminder at 09:30');
+  assert.equal(lastWorkDate(p), null, 'not work');
+  assert.ok(applyOp(s, op('setRemindAt', { projectId: 'p1', time: '' }, '2026-10-19')));
+  assert.equal(p.remindAt, undefined);
+  assert.equal(s.history['2026-10'].at(-1).detail, 'Reminder off');
+});
+
+test('reminders: setRemindOnce takes a real "YYYY-MM-DD HH:MM" not in the past (India time); null clears; not work', async () => {
+  const { lastWorkDate } = await import('../docs/rules.js');
+  const s = withProject('2026-10-01');
+  const p = s.data.projects[0];
+  for (const bad of ['2026-10-22', '2026-10-22 9:30', '2026-02-30 10:00', '2026-10-22T16:00', '2026-10-22 24:00', 5]) {
+    assert.equal(applyOp(s, op('setRemindOnce', { projectId: 'p1', at: bad }, '2026-10-22', '10:00:00')), false, String(bad));
+  }
+  assert.equal(applyOp(s, op('setRemindOnce', { projectId: 'p1', at: '2026-10-22 09:59' }, '2026-10-22', '10:00:00')), false, 'already past (India time)');
+  assert.ok(applyOp(s, op('setRemindOnce', { projectId: 'p1', at: '2026-10-22 16:00' }, '2026-10-22', '10:00:00')));
+  assert.equal(p.remindOnce, '2026-10-22 16:00');
+  assert.equal(s.history['2026-10'].at(-1).detail, 'Reminder: 22 Oct 16:00');
+  assert.equal(lastWorkDate(p), null, 'not work');
+  assert.ok(applyOp(s, op('setRemindOnce', { projectId: 'p1', at: null }, '2026-10-22', '10:05:00')));
+  assert.equal(p.remindOnce, undefined);
+  assert.equal(s.history['2026-10'].at(-1).detail, 'Reminder removed');
+});
+
+test('reminders: the chip texts and the "#open=<id>" link', async () => {
+  const { onlyDaysChip, remindOnceChip, openIdFromHash, indiaDateTime } = await import('../docs/rules.js');
+  assert.equal(onlyDaysChip({ onlyDays: [1], remindAt: '09:30' }), '📅 Mondays · 🔔 9:30');
+  assert.equal(onlyDaysChip({ onlyDays: [1, 4] }), '📅 Mon, Thu');
+  assert.equal(onlyDaysChip({ remindAt: '16:05' }), '🔔 16:05', 'a reminder alone = every day');
+  assert.equal(onlyDaysChip({}), '');
+  const now = new Date('2026-10-22T10:00:00+05:30');
+  assert.equal(indiaDateTime(new Date('2026-10-22T18:45:00Z')), '2026-10-23 00:15', 'India time, 24-hour');
+  assert.equal(remindOnceChip({ remindOnce: '2026-10-22 16:00' }, now), '🔔 Today 16:00');
+  assert.equal(remindOnceChip({ remindOnce: '2026-10-23 09:30' }, now), '🔔 Tomorrow 09:30');
+  assert.equal(remindOnceChip({ remindOnce: '2026-10-30 16:00' }, now), '🔔 30 Oct 16:00');
+  assert.equal(remindOnceChip({ remindOnce: '2026-10-22 09:00' }, now), '', 'gone once it has passed (the server has sent it)');
+  assert.equal(remindOnceChip({}, now), '');
+  assert.equal(openIdFromHash('#open=k9x2'), 'k9x2');
+  assert.equal(openIdFromHash('#open='), null);
+  assert.equal(openIdFromHash('#people'), null);
+  assert.equal(openIdFromHash('#open=a"><b'), null, 'only a plain id');
 });
