@@ -284,10 +284,12 @@ export function parentIdsOf(p) {
  */
 export function normalizeParents(data) {
   if (!data || !Array.isArray(data.projects)) return data;
+  const ids = new Set(data.projects.filter((p) => p && typeof p === 'object').map((p) => p.id));
   for (const p of data.projects) {
     if (!p || typeof p !== 'object') continue;
-    if ('parentId' in p || ('parentIds' in p && !Array.isArray(p.parentIds))) {
-      const list = parentIdsOf(p);
+    const dangling = Array.isArray(p.parentIds) && p.parentIds.some((x) => !ids.has(x) || x === p.id); // a link to a project that is gone
+    if ('parentId' in p || ('parentIds' in p && !Array.isArray(p.parentIds)) || dangling) {
+      const list = parentIdsOf(p).filter((x) => ids.has(x) && x !== p.id);
       delete p.parentId;
       if (list.length) p.parentIds = list; else delete p.parentIds;
     }
@@ -378,6 +380,18 @@ export function mainChoices(data, p, query = '') {
   const mains = data.projects.filter((x) => isMainProject(data, x) && x.state !== 'finished' && fits(x));
   const exact = q && data.projects.some((x) => isMainProject(data, x) && x.name.trim().toLowerCase() === q);
   return { items: mains.map((x) => ({ p: x, main: true, in: inIds.includes(x.id) })), create: q && !exact && !isMainProject(data, p) ? String(query).trim() : null };
+}
+
+/**
+ * Enter in the list's "📂 Add to project…" box (several tasks picked): the project whose name is exactly the typed one
+ * (any case), wherever it is in the list; else a new project with that name. Nothing typed: nothing (no hidden pick).
+ * Returns { add: project } | { create: name } | null.
+ */
+export function pickEnterTarget(mains, query) {
+  const q = String(query || '').trim();
+  if (!q) return null;
+  const hit = (mains || []).find((m) => String(m.name || '').trim().toLowerCase() === q.toLowerCase());
+  return hit ? { add: hit } : { create: q };
 }
 
 /** "+ Add a task here" on a project's page: the tasks that can go into it, for `query`. */
@@ -509,8 +523,12 @@ const WORK = new Set(['note_added', 'step_ticked', 'time_logged', 'time_added', 
 const NOT_WORK = new Set(['created', 'snoozed', 'woke', 'step_remind', 'team_ticked', 'team_note', 'team_step_added', 'team_step_unticked', 'team_note_deleted', 'team_moved', 'mail_note', 'mail_task', 'reply_prepared', 'mail_replied', 'app_task', 'app_note']); // (the team's work counts through teamDays)
 
 /** On that day, was every open step of the project waiting for a "remind me" date? */
+function openStepsOn(p, day) {
+  return (p.steps || []).filter((s) => (!s.createdAt || indiaDate(s.createdAt) <= day) && (!s.done || (s.doneAt && indiaDate(s.doneAt) > day)));
+}
+
 function restingByReminders(p, day) {
-  const open = (p.steps || []).filter((s) => (!s.createdAt || indiaDate(s.createdAt) <= day) && (!s.done || (s.doneAt && indiaDate(s.doneAt) > day)));
+  const open = openStepsOn(p, day);
   return open.length > 0 && open.every((s) => s.remindFrom && s.remindUntil && s.remindFrom <= day && day < s.remindUntil);
 } // these history lines are not work on the project
 
@@ -521,7 +539,9 @@ export function dayScore(data, history, day) {
   }
   let total = 0;
   let green = 0;
+  const holders = new Set(data.projects.flatMap((p) => parentIdsOf(p)));
   for (const p of data.projects) {
+    if ((p.isMain || holders.has(p.id)) && !openStepsOn(p, day).length) continue; // an empty 📂 project only holds its tasks (as colourCounts and Today)
     const created = p.createdAt ? indiaDate(p.createdAt) : null;
     if (!created || created > day) continue;
     const changed = p.stateChangedAt ? indiaDate(p.stateChangedAt) : created;
@@ -656,6 +676,12 @@ export function pasteGoesToProject(ui, { viewerOpen = false, narrow = false } = 
   const wideView = ['diary', 'settings', 'dashboard', 'time'].includes(ui.view) && !ui.search;
   if (wideView || (ui.view === 'people' && !ui.search) || ui.round || ui.capture) return false;
   return !(narrow && ui.mobile !== 'detail');
+}
+
+/** Ctrl+V inside the "+ New task" box: it belongs to the new task, never to the project open on the right. */
+export function pasteInForm(target) {
+  const el = target && target.nodeType === 3 ? target.parentNode : target; // (a text node inside a box)
+  return !!(el && typeof el.closest === 'function' && el.closest('.new-task-box'));
 }
 
 /** A step given on its own (not a whole project): what to do with the person's open task now.

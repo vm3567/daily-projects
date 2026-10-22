@@ -5,7 +5,7 @@
 // stored in the note: <img data-file="ID"> points at the update's own uploaded photo.
 
 export const RICH_MAX = 100 * 1024; // the cleaned HTML of one update
-const RAW_MAX = 2 * 1024 * 1024; // pasted HTML bigger than this is not even read
+export const RAW_MAX = 2 * 1024 * 1024; // pasted HTML bigger than this is not even read
 
 const ALLOWED = new Set(['p', 'br', 'b', 'strong', 'i', 'em', 'u', 'ul', 'ol', 'li', 'table', 'thead', 'tbody', 'tr', 'th', 'td', 'a', 'img']);
 // other block tags become a paragraph, so their lines stay apart

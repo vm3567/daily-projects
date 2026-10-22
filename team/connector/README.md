@@ -80,7 +80,8 @@ Work Task never follows a redirect, and waits 5 seconds at most.
 
 `POST https://worktask.in/api/?a=connect.decisions` with `{"since": "2026-10-22T10:00:00+05:30"}`
 (or `GET …?a=connect.decisions&since=…`). The answer lists `external_id`, `status`, `reason`, `decided_at`, `item_id`.
-Keep the newest `decided_at` for the next time. The same decision may come twice – use `external_id` to skip it.
+Keep the answer's `until` for the next time. If the answer says `"more": true` (500 at a time), ask again at once with `since` = that `until`.
+The same decision may come twice – use `external_id` to skip it.
 
 ## n8n, Make, Zapier or Power Automate
 

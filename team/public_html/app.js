@@ -324,6 +324,8 @@ function signedOut() {
   state.sel = null; state.detail = null; state.mobileDetail = false; state.menuOpen = false; state.section = 'today'; state.personFilter = 0; state.team = null;
   state.pushOn = false; hideNotice();
   state.searchQ = ''; state.searchResults = null; state.stepDrafts = {}; state.reportEnd = ''; state.backTo = null; state.taskMenu = 0;
+  // the half-typed one-line task, the follow-up round, Settings' answers and the owner's Outlook status are this person's only
+  state.quick = null; state.round = null; state.sentLocal = null; state.movingAll = 0; state.settingsAsk = null; state.photoCid = null; outlookOn = null;
   state.knownIds.clear(); state.newIds.clear();
   // signed out (also by a password reset): this phone stops getting their notifications, and the icon number goes
   if ('serviceWorker' in navigator && 'PushManager' in window) navigator.serviceWorker.getRegistration().then((r) => r && r.pushManager.getSubscription()).then((sub) => sub && sub.unsubscribe()).catch(() => {});
@@ -496,6 +498,7 @@ function go(view) {
   state.fromProjects = false; // (only the task opened from the projects page goes back there)
   state.view = view;
   state.round = null; // (the follow-up round ends when another list is opened)
+  state.settingsAsk = null; // Settings asks the server again on each visit (once, not on every redraw)
   state.data = null; state.loadFailed = false;
   state.sel = null; state.detail = null; state.mobileDetail = false; state.menuOpen = false; state.moving = 0;
   render();
@@ -1476,11 +1479,15 @@ async function sendMsgPhoto(taskId, f, text, box) {
   state.sending[key] = true;
   toast('Sending photo…');
   const fd = new FormData();
-  fd.append('taskId', String(taskId)); fd.append('text', text); fd.append('clientId', newClientId()); fd.append('file', f, 'photo.jpg');
+  // the same id when the same photo and words are sent again (after a lost answer): the server keeps it once
+  const ids = (state.photoCid ||= {}), sig = JSON.stringify([text, f.name, f.size, f.type]);
+  if (!ids[key] || ids[key].sig !== sig) ids[key] = { id: newClientId(), sig };
+  fd.append('taskId', String(taskId)); fd.append('text', text); fd.append('clientId', ids[key].id); fd.append('file', f, 'photo.jpg');
   let sent = false;
   try {
     const out = await api('comment.photo', fd, true);
     sent = true;
+    delete ids[key];
     delete state.drafts[key];
     toast('Sent ✓');
     if (state.sel === 'task:' + taskId && state.detail) state.detail.comments = out.comments;
@@ -1764,7 +1771,7 @@ function teamToday() {
 let outlookOn = null; // null: not asked; a promise while asking; then true / false
 function outlookConnected() {
   if (outlookOn === null && state.user && state.user.owner) {
-    outlookOn = api('outlook.status').then((d) => { outlookOn = !!(d.outlook && d.outlook.connected); }, () => { outlookOn = false; });
+    outlookOn = api('outlook.status').then((d) => { outlookOn = state.user && state.user.owner ? !!(d.outlook && d.outlook.connected) : null; }, () => { outlookOn = false; }); // (signed out meanwhile: asked again for the next owner)
   }
   return outlookOn === true;
 }
@@ -2127,7 +2134,8 @@ function peopleScreen() {
 function settingsScreen() {
   const fill = el('input', { type: 'time', value: state.fillBy || '18:00' });
   // the saved time, if it came after drawing: only into an untouched box, and as its "drawn" value (not typing)
-  api('team.today').then((d) => { if (!d.fillBy) return; state.fillBy = d.fillBy; if (lateValue(fill.value, fill.dataset.init, d.fillBy) === d.fillBy) { fill.value = d.fillBy; fill.dataset.init = d.fillBy; } }).catch(() => {});
+  const ask = state.settingsAsk || (state.settingsAsk = {}); // asked once per visit (go() starts again), not on every redraw
+  (ask.today ||= api('team.today')).then((d) => { if (!d.fillBy) return; state.fillBy = d.fillBy; if (lateValue(fill.value, fill.dataset.init, d.fillBy) === d.fillBy) { fill.value = d.fillBy; fill.dataset.init = d.fillBy; } }).catch(() => {});
   return [
     el('h1', null, 'Settings'),
     el('form', { class: 'card stack', onSubmit: async (e) => {
@@ -2155,8 +2163,10 @@ function outlookCard() {
   const connectBtn = el('button', { type: 'button', class: 'primary' }, 'Connect Outlook');
   const checkBtn = el('button', { type: 'button' }, 'Check now');
   const offBtn = el('button', { type: 'button' }, 'Disconnect');
+  const ask = state.settingsAsk || (state.settingsAsk = {}); // asked once per visit, not on every redraw; the newest answer is kept
   const show = (o) => {
     if (!o) return;
+    ask.latest = o;
     // only into an untouched box (never the secret: it never comes back from the server)
     if (!clientId.value) clientId.value = o.clientId || '';
     if (!tenantId.value) tenantId.value = o.tenantId || '';
@@ -2172,7 +2182,7 @@ function outlookCard() {
     b.disabled = true;
     try { const out = await api(a, body); show(out.outlook); if (after) after(out); } catch (ex) { toast(ex.message, 6000); } finally { b.disabled = false; }
   };
-  api('outlook.status').then((d) => show(d.outlook)).catch((ex) => { line.textContent = ex.message; });
+  (ask.outlook ||= api('outlook.status')).then((d) => show(ask.latest || d.outlook)).catch((ex) => { line.textContent = ex.message; });
   const saveBtn = el('button', { type: 'submit' }, 'Save');
   connectBtn.addEventListener('click', () => run(connectBtn, 'outlook.connect', {}, (out) => { if (out.url) location.href = out.url; }));
   checkBtn.addEventListener('click', () => run(checkBtn, 'outlook.check', {}, () => toast('Checked ✓')));

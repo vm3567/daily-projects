@@ -274,9 +274,28 @@ function ol_new_task(object $data, array &$hist, array $x, string $at): object {
 }
 
 /**
+ * A new email from someone else in the thread of a FINISHED task / project: it is opened again (state active, a
+ * 'reopened' history line, the same as ↺ Reopen in the app: docs/ops.js setState), so the email is seen on Today and
+ * on ✉ Replies. Your own email (Sent Items) never reopens it. Paused / active: nothing changes (as before).
+ */
+function ol_reopen_for_mail(object $p, array &$hist, array $x, string $at): void {
+  if (($p->state ?? '') !== 'finished' || ol_is_me($x['address'])) return;
+  $day = date('Y-m-d', strtotime($at));
+  $p->state = 'active';
+  $p->stateChangedAt = $at;
+  $p->activeSince = $day;
+  if (is_string($p->snoozedUntil ?? null) && $p->snoozedUntil > $day) $p->snoozedUntil = $day;
+  $p->updatedAt = $at;
+  if (!is_string($p->lastActivityDate ?? null) || $p->lastActivityDate < $day) $p->lastActivityDate = $day;
+  $hist[date('Y-m', strtotime($at))][] = (object)['id' => ol_rand_id('mr'), 'projectId' => (string)($p->id ?? ''), 'projectName' => (string)($p->name ?? ''),
+    'kind' => 'reopened', 'detail' => mb_substr('Opened again: a new email from ' . $x['from'], 0, 2000), 'at' => $at];
+}
+
+/**
  * Put one email into the saved data (objects, as read from data.json):
  *  - its thread is a task made from an email → the email joins that task's thread (no new task, no note, not your work:
- *    the task's state, dot and day score do not change); the task's `mail` keeps the newest email;
+ *    the task's state, dot and day score do not change, except a FINISHED task opens again: ol_reopen_for_mail);
+ *    the task's `mail` keeps the newest email;
  *  - its thread is still an Inbox item (from before emails became tasks) → that item: "💬 N emails · latest from …";
  *  - its thread became a step or a project → a short note there ('mail_note': not your work);
  *  - otherwise (also when its task was deleted) → a new task "📧 subject".
@@ -289,8 +308,9 @@ function ol_apply(object $data, array &$hist, array $m, bool $threadSeen, string
   if ($conv !== '') {
     $task = ol_thread_task($data, $conv);
     if ($task) {
-      ol_thread_add($task, ['at' => $x['at'] ?: $at, 'fromName' => $x['from'], 'fromMe' => ol_is_me($x['address']), 'preview' => $x['long'], 'link' => $x['link'], 'messageId' => $x['id']]);
+      $added = ol_thread_add($task, ['at' => $x['at'] ?: $at, 'fromName' => $x['from'], 'fromMe' => ol_is_me($x['address']), 'preview' => $x['long'], 'link' => $x['link'], 'messageId' => $x['id']]);
       ol_mail_info($task->mail, $x); // the newest email (for a later reply draft, and the ✉ Replies days)
+      if ($added) ol_reopen_for_mail($task, $hist, $x, $at); // a finished task gets a new email from them: open again (else nobody sees it)
       return 'thread';
     }
     foreach ($data->inbox as $it) {
@@ -323,6 +343,7 @@ function ol_apply(object $data, array &$hist, array $m, bool $threadSeen, string
       array_unshift($p->workNotes, (object)$note);
       $month = date('Y-m', strtotime($at));
       $hist[$month][] = (object)['id' => $id, 'projectId' => (string)$p->id, 'projectName' => (string)($p->name ?? ''), 'kind' => 'mail_note', 'detail' => $text, 'at' => $at];
+      ol_reopen_for_mail($p, $hist, $x, $at);
       return 'note';
     }
   }

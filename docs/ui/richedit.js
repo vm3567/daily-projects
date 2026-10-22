@@ -2,7 +2,7 @@
 // Saved HTML is cleaned again (rich.js) and drawn with h() — never innerHTML — so nothing in it can run.
 
 import { h, HAS_KEYBOARD } from './dom.js';
-import { richTree, sanitizeRich, isRich, htmlToText, richFileIds, TABLE_HTML, RICH_MAX } from '../rich.js';
+import { richTree, sanitizeRich, isRich, htmlToText, richFileIds, TABLE_HTML, RICH_MAX, RAW_MAX } from '../rich.js';
 import { uploadBlob, thumbUrl } from './files.js';
 import { newId } from '../ops.js';
 
@@ -73,7 +73,7 @@ export function insertLink(el, ask = (q) => prompt(q, 'https://')) {
   if (!LINK_OK.test(url)) { alert('Only links that start with https://, http:// or mailto: can be added.'); return false; }
   const sel = typeof getSelection === 'function' ? getSelection() : null;
   if (sel && !sel.isCollapsed && el && el.contains && el.contains(sel.anchorNode)) return editCommand(el, 'createLink', url);
-  return editCommand(el, 'insertHTML', sanitizeRich(`<a href="${url.replace(/"/g, '%22')}">${url.replace(/[<>&]/g, '')}</a>&nbsp;`));
+  return editCommand(el, 'insertHTML', sanitizeRich(`<a href="${url.replace(/&/g, '&amp;').replace(/"/g, '%22')}">${url.replace(/[<>&]/g, '')}</a>&nbsp;`));
 }
 
 /** The rich box on the page with this key (null when it is not drawn). */
@@ -146,8 +146,12 @@ export function pasteRich(ctx, d, e, el, key, changed, otherFiles = null) {
   }
   if (!html.trim() && !plain) return;
   e.preventDefault(); // (cells from Excel come with a picture of them too: the cells win)
-  if (html.trim()) insertHtml(el, sanitizeRich(html));
-  else editCommand(el, 'insertText', plain);
+  const clean = html.trim() ? sanitizeRich(html) : '';
+  if (clean.trim()) insertHtml(el, clean);
+  else if (plain) { // no HTML, too much of it (a big Excel copy) or nothing left once cleaned: the plain words, never nothing
+    if (html.length > RAW_MAX) ctx.toast('Too big to paste as a table: pasted as plain words', 4000);
+    editCommand(el, 'insertText', plain);
+  } else { ctx.toast('Nothing could be pasted from this', 2500); return; }
   if (changed) changed(el);
 }
 
@@ -155,10 +159,11 @@ const photoWord = (n) => `📷 ${n} photo${n > 1 ? 's' : ''}`;
 
 /** What a draft holds now: clean html, its plain words, rich or not, and the photos to keep (a pasted photo deleted from the box is dropped). */
 export function readDraft(d, el) {
+  const raw = el ? String(el.innerHTML || '') : String(d.html || '');
   const html = el ? editorHtml(el) : sanitizeRich(d.html || '');
   const ids = new Set(richFileIds(html));
   const photos = (d.photos || []).filter((ph) => !ph.inline || ids.has(ph.fileId));
-  return { html, text: htmlToText(html), rich: isRich(html), photos, tooBig: html.length > RICH_MAX, photoWord: photoWord(photos.length) };
+  return { html, text: htmlToText(html), rich: isRich(html), photos, tooBig: html.length > RICH_MAX || raw.length > RAW_MAX, photoWord: photoWord(photos.length) };
 }
 
 /** addFile's details of an uploaded photo (without the preview picture). */
@@ -282,6 +287,8 @@ export function newTaskBox(ctx, d, { key, heading = null, extra = null, onCreate
       h('input', {
         name: 'name', key: key + '-name', placeholder: 'Task name', 'aria-label': 'Task name', autocomplete: 'off', value: d.name || '',
         onInput: (e, el) => { d.name = el.value; },
+        // a screenshot pasted while naming the task goes into this box's notes (never into the task open on the right)
+        onPaste: (e) => { const cd = e && e.clipboardData; if (cd && (cd.files || []).length && !(cd.getData('text/plain') || '').trim()) pasteRich(ctx, d, e, ed(), richKey); },
         onKeydown: (e, el) => {
           if (esc(e) || e.key !== 'Enter') return;
           e.preventDefault();

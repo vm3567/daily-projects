@@ -1788,8 +1788,9 @@ test('📂 colour counts and the day score count each task once (never a project
   applyOp(s, op('addWorkNote', { projectId: 'm', noteId: 'n1', text: 'Plan' }, d));
   // m has no step of its own, so like on Today it is left out of the counts (and never counted as its red roll-up)
   assert.deepEqual(colourCounts(s.data, d), { green: 0, yellow: 0, red: 3 });
-  assert.deepEqual(dayScore(s.data, s.history, d), { green: 1, total: 4 });
-  assert.deepEqual(dayScore(s.data, s.history, '2026-10-01'), { green: 0, total: 4 }, 'adding to a project is not work');
+  // (rule changed: the day score now leaves out the empty project too, the same as colourCounts, so a streak can be all green)
+  assert.deepEqual(dayScore(s.data, s.history, d), { green: 0, total: 3 });
+  assert.deepEqual(dayScore(s.data, s.history, '2026-10-01'), { green: 0, total: 3 }, 'adding to a project is not work');
 });
 
 test('📂 the "Add to a project" box choices (projects only, ✓ on the ones it is in; any case, anywhere) and the create line; "Add a task here" choices', async () => {
@@ -2057,4 +2058,145 @@ test('🔌 a task an app sent (server-made, with an "app" note and an app_task h
   applyOp(s, op('addWorkNote', { projectId: 'ct1', noteId: 'n2', text: 'Spoke to the shift lead' }, '2026-10-05', '11:00:00'));
   assert.equal(lastWorkDate(task), '2026-10-05', 'your own note on it is');
   assert.equal(dotColour(task, '2026-10-05'), 'green');
+});
+
+// ---------------------------------------------------------------- review round 12 (Daily Projects)
+test('day score skips an empty 📂 project the same way colourCounts does, so one green task makes an all-green day', async () => {
+  const { colourCounts, dayScore, greenStreak } = await import('../docs/rules.js');
+  const s = fresh();
+  const d = '2026-10-02';
+  applyOp(s, op('createMainProject', { projectId: 'e', name: 'Empty holder', groupId: 'g1' }, '2026-10-01'));
+  applyOp(s, op('createProject', { projectId: 't', name: 'Task', groupId: 'g1', parentId: 'e' }, '2026-10-01'));
+  applyOp(s, op('addStep', { projectId: 't', stepId: 'ts', text: 'Do it' }, '2026-10-01'));
+  applyOp(s, op('addWorkNote', { projectId: 't', noteId: 'n1', text: 'Done some' }, d));
+  assert.deepEqual(colourCounts(s.data, d), { green: 1, yellow: 0, red: 0 });
+  assert.deepEqual(dayScore(s.data, s.history, d), { green: 1, total: 1 }, 'the empty project is not counted');
+  assert.equal(greenStreak({ [d]: dayScore(s.data, s.history, d) }, null, addDays(d, 1)), 1, 'the streak is not broken by it');
+  // a 📂 project with an open step of its own on that day is still counted
+  applyOp(s, op('addStep', { projectId: 'e', stepId: 'es', text: 'Own step' }, '2026-10-01'));
+  assert.deepEqual(dayScore(s.data, s.history, d), { green: 1, total: 2 });
+});
+
+test('📂 Enter in the list\'s "Add to project" box goes to the exact name wherever it is; nothing typed does nothing', async () => {
+  const { pickEnterTarget } = await import('../docs/rules.js');
+  const mains = [{ id: 'k2', name: 'Kiln 2 rebuild' }, { id: 'k', name: 'Kiln' }];
+  assert.equal(pickEnterTarget(mains, 'kiln').add.id, 'k', 'the exact one, not the first');
+  assert.equal(pickEnterTarget(mains, ' KILN ').add.id, 'k');
+  assert.deepEqual(pickEnterTarget(mains, 'kil'), { create: 'kil' }, 'no exact name: a new project');
+  assert.equal(pickEnterTarget(mains, ''), null, 'empty box: no hidden pick');
+  assert.equal(pickEnterTarget(mains, '   '), null);
+});
+
+test('Undo (restoreProject) drops a link to a project another device deleted meanwhile (two-device replay)', async () => {
+  const { normalizeParents, parentIdsOf } = await import('../docs/rules.js');
+  const s = withMains();
+  applyOp(s, op('addToProject', { projectId: 'k1', parentId: 'm' }, '2026-10-02'));
+  // phone: edits k1 (act() keeps a copy with parentIds [m]) …
+  const before = clone(P(s, 'k1'));
+  const edit = op('setProjectField', { projectId: 'k1', field: 'name', value: 'Kiln one' }, '2026-10-02', '10:00:00');
+  // … laptop deletes m first; the phone's edit and Undo are replayed on top of that
+  applyOp(s, op('deleteProject', { projectId: 'm' }, '2026-10-02', '10:00:01'));
+  applyOp(s, edit);
+  assert.equal(applyOp(s, op('restoreProject', { project: before, index: 0, undoOpId: edit.id }, '2026-10-02', '10:00:05')), true);
+  assert.deepEqual(parentIdsOf(P(s, 'k1')), [], 'no link to the deleted project: it shows in "No project"');
+  assert.equal(P(s, 'k1').name, 'Kiln 1', 'the undo itself still happens');
+  // normalizeParents also cleans an old dangling link
+  const d = { projects: [{ id: 'a', parentIds: ['gone', 'b'] }, { id: 'b' }] };
+  normalizeParents(d);
+  assert.deepEqual(d.projects[0].parentIds, ['b']);
+  const d2 = { projects: [{ id: 'a', parentIds: ['gone'] }] };
+  normalizeParents(d2);
+  assert.equal('parentIds' in d2.projects[0], false);
+});
+
+test('Undo (restoreProject) never puts a project inside a project (it became one on another device)', async () => {
+  const { parentIdsOf, isMainProject } = await import('../docs/rules.js');
+  const s = withMains();
+  applyOp(s, op('addToProject', { projectId: 'k1', parentId: 'm' }, '2026-10-02'));
+  const before = clone(P(s, 'k1'));
+  const edit = op('setProjectField', { projectId: 'k1', field: 'name', value: 'Kiln one' }, '2026-10-02', '10:00:00');
+  // laptop: k1 out of m, and k2 put into k1 (k1 is now a project)
+  applyOp(s, op('removeFromProject', { projectId: 'k1', parentId: 'm' }, '2026-10-02', '10:00:01'));
+  applyOp(s, op('addToProject', { projectId: 'k2', parentId: 'k1' }, '2026-10-02', '10:00:02'));
+  applyOp(s, edit);
+  applyOp(s, op('restoreProject', { project: before, index: 0, undoOpId: edit.id }, '2026-10-02', '10:00:05'));
+  assert.deepEqual(parentIdsOf(P(s, 'k1')), [], 'k1 holds k2, so it is not put back inside m');
+  assert.ok(isMainProject(s.data, P(s, 'k1')));
+  assert.deepEqual(parentIdsOf(P(s, 'k2')), ['k1'], 'k2 stays in k1');
+  // Undo of deleting a project: a task that became a project meanwhile is not put back into it
+  const t = withMains();
+  applyOp(t, op('addToProject', { projectId: 'k1', parentId: 'm' }, '2026-10-02'));
+  const snap = clone(P(t, 'm'));
+  const del = op('deleteProject', { projectId: 'm' }, '2026-10-02', '10:00:00');
+  applyOp(t, del);
+  applyOp(t, op('addToProject', { projectId: 'k2', parentId: 'k1' }, '2026-10-02', '10:00:01'));
+  applyOp(t, op('restoreProject', { project: snap, index: 2, undoOpId: del.id, parentIds: { k1: 'm' } }, '2026-10-02', '10:00:05'));
+  assert.ok(P(t, 'm'), 'the project is back');
+  assert.deepEqual(parentIdsOf(P(t, 'k1')), [], 'k1 is a project now: not inside m');
+  // and the normal case still works
+  const u = withMains();
+  applyOp(u, op('addToProject', { projectId: 'k1', parentId: 'm' }, '2026-10-02'));
+  const snap2 = clone(P(u, 'm'));
+  const del2 = op('deleteProject', { projectId: 'm' }, '2026-10-02', '10:00:00');
+  applyOp(u, del2);
+  applyOp(u, op('restoreProject', { project: snap2, index: 2, undoOpId: del2.id, parentIds: { k1: 'm' } }, '2026-10-02', '10:00:05'));
+  assert.deepEqual(parentIdsOf(P(u, 'k1')), ['m'], 'its task goes back into it');
+});
+
+/** A task made from an email, as outlook.php makes it (straight into the data, not a change). */
+function mailTask(s, id = 'mt', conv = 'conv-1') {
+  applyOp(s, op('createProject', { projectId: id, name: '📧 Invoice query', groupId: 'g1' }, '2026-10-01'));
+  const p = P(s, id);
+  p.mail = { conversationId: conv, messageId: 'e1', fromName: 'Ravi', subject: 'Invoice query', at: '2026-10-01T04:00:00.000Z' };
+  p.thread = [{ at: '2026-10-01T04:00:00.000Z', fromName: 'Ravi', fromMe: false, preview: 'Please check', messageId: 'e1' }];
+  return p;
+}
+const serverEmail = (p, id, at) => { // what ol_thread_add + ol_mail_info do on the server
+  p.thread.push({ at, fromName: 'Ravi', fromMe: false, preview: 'Any news? ' + id, messageId: id });
+  p.mail = { ...p.mail, messageId: id, at };
+};
+
+test('Undo (restoreProject) keeps the email-thread entries, newer mail, a reply seen in Outlook and 🔌 app notes the server added since the copy', () => {
+  const s = withMains();
+  mailTask(s);
+  applyOp(s, op('addToProject', { projectId: 'mt', parentId: 'm' }, '2026-10-02'));
+  const before = clone(P(s, 'mt'));
+  const rm = op('removeFromProject', { projectId: 'mt', parentId: 'm' }, '2026-10-02', '10:00:00');
+  applyOp(s, rm);
+  // meanwhile the server adds two replies, marks it replied (Sent Items) and an outside app adds a note
+  const p = P(s, 'mt');
+  serverEmail(p, 'e2', '2026-10-02T04:31:00.000Z');
+  serverEmail(p, 'e3', '2026-10-02T04:32:00.000Z');
+  p.reply = { text: '', at: '2026-10-02T04:40:00.000Z', by: 'you', forMessageId: 'e3', state: 'sent', sentAt: '2026-10-02T04:40:00.000Z' };
+  p.workNotes.unshift({ id: 'an1', text: 'Amount: 12,500\nVendor: ABC', stepId: null, createdAt: '2026-10-02T04:33:00.000Z', updatedAt: '2026-10-02T04:33:00.000Z', app: true });
+  applyOp(s, op('restoreProject', { project: before, index: 0, undoOpId: rm.id }, '2026-10-02', '10:30:00'));
+  const q = P(s, 'mt');
+  assert.deepEqual(q.parentIds, ['m'], 'the undo happened');
+  assert.deepEqual(q.thread.map((e) => e.messageId), ['e1', 'e2', 'e3'], 'the new emails stay, oldest first, once each');
+  assert.equal(q.mail.messageId, 'e3', 'a later reply draft answers the newest email');
+  assert.equal(q.reply && q.reply.state, 'sent', 'the reply seen in Outlook stays');
+  assert.ok(q.workNotes.some((n) => n.id === 'an1' && n.app), 'the 🔌 app note stays');
+  // replayed again (another device saving the same changes): the same result, nothing doubled
+  const again = clone(s);
+  applyOp(again, op('restoreProject', { project: before, index: 0, undoOpId: rm.id }, '2026-10-02', '10:30:00'));
+  assert.deepEqual(P(again, 'mt').thread.map((e) => e.messageId), ['e1', 'e2', 'e3']);
+  assert.equal(P(again, 'mt').workNotes.filter((n) => n.id === 'an1').length, 1);
+});
+
+test('Undo of deleting a task made from an email: a new task the server made for the same thread meanwhile is folded back in', () => {
+  const s = fresh();
+  mailTask(s);
+  const before = clone(P(s, 'mt'));
+  const del = op('deleteProject', { projectId: 'mt' }, '2026-10-02', '10:00:00');
+  applyOp(s, del);
+  // the server: a new email in the thread, no task for it → ol_new_task makes a second task
+  applyOp(s, op('createProject', { projectId: 'dup', name: '📧 Invoice query', groupId: 'g1' }, '2026-10-02', '10:01:00'));
+  const dup = P(s, 'dup');
+  dup.mail = { ...before.mail, messageId: 'e2', at: '2026-10-02T04:31:00.000Z' };
+  dup.thread = [{ at: '2026-10-02T04:31:00.000Z', fromName: 'Ravi', fromMe: false, preview: 'Any news?', messageId: 'e2' }];
+  applyOp(s, op('restoreProject', { project: before, index: 0, undoOpId: del.id }, '2026-10-02', '10:05:00'));
+  const withConv = s.data.projects.filter((p) => p.mail && p.mail.conversationId === 'conv-1');
+  assert.deepEqual(withConv.map((p) => p.id), ['mt'], 'one task for the thread again');
+  assert.deepEqual(P(s, 'mt').thread.map((e) => e.messageId), ['e1', 'e2'], 'with the new email in its thread');
+  assert.equal(P(s, 'mt').mail.messageId, 'e2');
 });

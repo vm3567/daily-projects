@@ -9,7 +9,7 @@
 // applyOp(state, op) changes the state in place and returns true, or returns false
 // when the operation must be skipped (for example, its item no longer exists).
 
-import { indiaDate, monthOf, laterDate, addDays, REPEATS, nextRepeatDate, waitingAgain, WEEKDAYS, indiaDateTime, validRemindOnce, remindOnceText, canPutUnder, parentIdsOf, normalizeParents } from './rules.js';
+import { indiaDate, monthOf, laterDate, addDays, REPEATS, nextRepeatDate, waitingAgain, WEEKDAYS, indiaDateTime, validRemindOnce, remindOnceText, canPutUnder, parentIdsOf, normalizeParents, isMainProject, THREAD_MAX } from './rules.js';
 import { AI_DAILY_LIMIT, BRIEF_CLAIM_MINUTES } from './config.js';
 import { sanitizeRich, htmlToText, isRich, RICH_MAX } from './rich.js';
 
@@ -195,6 +195,40 @@ function keepTeamSteps(now, back, dropIds) {
   const dropped = [...new Set([...(back.teamDropped || []), ...(now.teamDropped || [])])].filter((x) => !back.steps.some((st) => st.id === x));
   if (dropped.length) back.teamDropped = dropped.slice(-300);
   else delete back.teamDropped;
+}
+
+/**
+ * Undo puts back a saved copy, but what the server added since stays (worktask.in writes these straight into the data:
+ * outlook.php / connect.php): the task's email thread (by messageId), the newer `mail` of the thread, a reply seen as sent
+ * in Outlook, and 🔌 app / 📧 mail notes. Works the same on every device (only the data decides).
+ */
+function keepServerParts(now, back) {
+  if (!now || !back) return;
+  const key = (e) => (e && typeof e.messageId === 'string' && e.messageId ? 'm:' + e.messageId : 'x:' + JSON.stringify([e && e.at, e && e.fromName, e && e.preview]));
+  if (Array.isArray(now.thread)) {
+    const seen = new Map();
+    for (const e of [...(Array.isArray(back.thread) ? back.thread : []), ...now.thread]) if (e && typeof e === 'object' && !seen.has(key(e))) seen.set(key(e), clone(e));
+    back.thread = [...seen.values()].sort((x, y) => String(x.at || '').localeCompare(String(y.at || ''))).slice(-THREAD_MAX);
+  }
+  const keepMail = (n, b) => {
+    if (!n || !b) return;
+    if (n.mail && b.mail && n.mail.conversationId === b.mail.conversationId && n.mail.at && (!b.mail.at || Date.parse(n.mail.at) > Date.parse(b.mail.at))) b.mail = clone(n.mail);
+    const r = n.reply;
+    if (r && r.state === 'sent' && b.mail && (!b.reply || b.reply.state !== 'sent' || Date.parse(r.sentAt || 0) > Date.parse(b.reply.sentAt || 0))) b.reply = clone(r);
+  };
+  keepMail(now, back);
+  for (const st of back.steps || []) keepMail((now.steps || []).find((x) => x.id === st.id), st);
+  const had = new Set((back.workNotes || []).map((n) => n.id));
+  (now.workNotes || []).forEach((n, k) => {
+    if (!n || had.has(n.id) || !(n.mail || n.app)) return; // (a 👥 team note comes as a change of its own, which Undo may take back)
+    back.workNotes ||= [];
+    back.workNotes.splice(Math.min(k, back.workNotes.length), 0, clone(n));
+  });
+}
+
+/** Can `child` stay in `main` after an Undo? (main still there, not the same, not itself inside a project, child is not a project) */
+function linkStillOk(data, child, main) {
+  return !!child && !!main && child.id !== main.id && !parentIdsOf(main).length && !isMainProject(data, child);
 }
 
 /** A team tick / untick you undid stays undone (see teamUndoKey in rules.js): kept through every later Undo too. */
@@ -632,19 +666,38 @@ const handlers = {
     const back = clone(snap);
     if (i >= 0) keepTeamSteps(list[i], back, Array.isArray(a.dropTeamSteps) ? a.dropTeamSteps : []);
     keepTeamUndone(i >= 0 ? list[i] : null, back, typeof a.teamUndone === 'string' ? a.teamUndone : null);
-    if (i >= 0) list[i] = back;
-    else list.splice(Math.min(Math.max(0, a.index ?? 0), list.length), 0, back);
-    // Undo of deleting a project: its tasks go back into it ({ childId: projectId }; only the link, nothing else of theirs)
-    if (a.parentIds && typeof a.parentIds === 'object' && !Array.isArray(a.parentIds)) {
-      for (const [cid, pid] of Object.entries(a.parentIds)) {
-        const c = list.find((x) => x.id === cid);
-        if (c && pid === snap.id && c.id !== snap.id && !parentIdsOf(c).includes(pid)) setParents(c, [...parentIdsOf(c), pid]);
+    if (i >= 0) keepServerParts(list[i], back);
+    // an undone delete of a task made from an email: a task the server made since for the same thread is folded back into it
+    const conv = i < 0 && Array.isArray(back.thread) && back.mail && back.mail.conversationId;
+    if (conv) {
+      for (let k = list.length - 1; k >= 0; k--) {
+        const d = list[k];
+        if (!d || d.id === back.id || !Array.isArray(d.thread) || !d.mail || d.mail.conversationId !== conv) continue;
+        keepServerParts(d, back);
+        const onlyServer = !(d.steps || []).length && !(d.files || []).length && (d.workNotes || []).every((n) => n.mail || n.app)
+          && !list.some((x) => parentIdsOf(x).includes(d.id));
+        if (onlyServer) list.splice(k, 1); // nothing of yours in it: the two are one task again
       }
     }
+    if (i >= 0) list[i] = back;
+    else list.splice(Math.min(Math.max(0, a.index ?? 0), list.length), 0, back);
     if (typeof a.removeProjectId === 'string' && a.removeProjectId !== snap.id) { // Undo of "Make it a project": the new one goes
       const k = list.findIndex((x) => x.id === a.removeProjectId);
       if (k >= 0) list.splice(k, 1);
     }
+    // the saved links are checked against the data as it is now (another device may have deleted a project, or made
+    // this task a project): only projects that are still there, never a project inside a project
+    const data = state.data;
+    if (parentIdsOf(back).length) setParents(back, parentIdsOf(back).filter((pid) => linkStillOk(data, back, list.find((x) => x.id === pid))));
+    // Undo of deleting a project: its tasks go back into it ({ childId: projectId }; only the link, nothing else of theirs)
+    if (a.parentIds && typeof a.parentIds === 'object' && !Array.isArray(a.parentIds)) {
+      for (const [cid, pid] of Object.entries(a.parentIds)) {
+        const c = list.find((x) => x.id === cid);
+        if (c && pid === snap.id && c.id !== snap.id && !parentIdsOf(c).includes(pid) && linkStillOk(data, c, back)) setParents(c, [...parentIdsOf(c), pid]);
+      }
+    }
+    for (const pid of parentIdsOf(back)) { const m = list.find((x) => x.id === pid); if (m) m.isMain = true; }
+    if (list.some((x) => x.id !== back.id && parentIdsOf(x).includes(back.id))) back.isMain = true;
     const undone = [a.undoOpId, ...(Array.isArray(a.undoOpIds) ? a.undoOpIds : [])].filter(Boolean).flatMap((id) => [id, id + 't', id + 'm', id + 'u']);
     for (const id of undone) {
       for (const events of Object.values(state.history)) {

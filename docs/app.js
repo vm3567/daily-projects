@@ -19,8 +19,8 @@ import { ServerRepo, SERVER_TOKEN_KEY } from './serverrepo.js';
 import { MockRepo } from './mockrepo.js';
 import { device } from './device.js';
 import { DATA_OWNER, DATA_REPO, DATA_BRANCH, MOVED_TO, REFRESH_MS, AI_DAILY_LIMIT, BRIEF_CLAIM_MINUTES, WAIT_RED_DAYS, NO_WORK_NOTE_DAYS } from './config.js';
-import { dotColour, greenByTeamOnly, isSnoozed, restUntil, restReason, onlyDaysLabel, openIdFromHash, awakeProjects, activeProjects, nextStep, todayIndia, isSundayIndia, colourCounts, isOverdue, indiaDate, waitingDays, daysWithoutWork, dayScore, greenStreak, addDays, monthOf, fmtMinutes, takeBackWaits, staffStepAction, pasteGoesToProject, singleStepClose, versionRequest, askDiaryAgain, diaryLoadedAt, photoNeedsFetch, teamUndoKey, teamActionUndone, teamProgressOf, projectKeyIgnored, teamMovedTo, serverHolder, keepMovedStep, teamMemberFor, repliesOf, mailThreads, replyMailto, MAILTO_BODY_MAX, emailPath, pasteReason } from './rules.js';
-import { parentIdsOf, isMainProject, mainProjects, activeTasks, todayWithoutEmptyMains, mainSummary, childrenOf, deleteQuestion } from './rules.js';
+import { dotColour, greenByTeamOnly, isSnoozed, restUntil, restReason, onlyDaysLabel, openIdFromHash, awakeProjects, activeProjects, nextStep, todayIndia, isSundayIndia, colourCounts, isOverdue, indiaDate, waitingDays, daysWithoutWork, dayScore, greenStreak, addDays, monthOf, fmtMinutes, takeBackWaits, staffStepAction, pasteGoesToProject, singleStepClose, versionRequest, askDiaryAgain, pasteInForm, diaryLoadedAt, photoNeedsFetch, teamUndoKey, teamActionUndone, teamProgressOf, projectKeyIgnored, teamMovedTo, serverHolder, keepMovedStep, teamMemberFor, repliesOf, mailThreads, replyMailto, MAILTO_BODY_MAX, emailPath, pasteReason } from './rules.js';
+import { parentIdsOf, isMainProject, mainProjects, activeTasks, todayWithoutEmptyMains, mainSummary, childrenOf, deleteQuestion, pickEnterTarget } from './rules.js';
 import { newId, clone, opMonth, groupHasTimer, cleanLink, carriedOps } from './ops.js';
 import * as ai from './ai.js';
 import { parseVoice } from './voice.js';
@@ -724,7 +724,7 @@ async function recordPastScores() {
 
 function todayScore() {
   const today = todayIndia();
-  const active = awakeProjects(store.view.data, todayIndia());
+  const active = todayWithoutEmptyMains(awakeProjects(store.view.data, today), today); // an empty 📂 project is left out, as in colourCounts
   return { green: active.filter((p) => dotColour(p, today) === 'green').length, total: active.length };
 }
 
@@ -994,7 +994,7 @@ function pickBar(list) {
     box ? h('div', { class: 'pick-box' },
       h('input', { class: 'main-box-input', key: 'pick-q', value: box.q, placeholder: 'Type a project name…', autocomplete: 'off', 'aria-label': 'Project name',
         onInput: (e, el) => { box.q = el.value; render(); },
-        onKeydown: (e) => { if (e.key === 'Escape') { ui.pickBox = null; render(); } else if (e.key === 'Enter') { e.preventDefault(); if (mains[0] && (exact || !q)) add(mains[0]); else if (q) create(q); } } }),
+        onKeydown: (e) => { if (e.key === 'Escape') { ui.pickBox = null; render(); } else if (e.key === 'Enter') { e.preventDefault(); const t = pickEnterTarget(mains, q); if (t && t.add) add(t.add); else if (t) create(t.create); } } }),
       h('div', { class: 'pick-list' }, mains.slice(0, 10).map((m) =>
         h('button', { class: 'main-box-item', key: 'pk-' + m.id, type: 'button', onClick: () => add(m) }, `📂 ${m.name}`)),
         q && !exact ? h('button', { class: 'main-box-item create', key: 'pk-new', type: 'button', onClick: () => create(q) }, `+ Create '${q}' as a new project`) : null)) : null);
@@ -3361,6 +3361,7 @@ function start() {
   // Ctrl+V anywhere on an open project: a screenshot or a copied file is added to it (the update box handles its own paste)
   document.addEventListener('paste', (e) => {
     if (e.defaultPrevented || !store || !store.view) return;
+    if (pasteInForm(e.target)) return; // naming a new task: its own box takes the paste, never the open task's update
     // the project page must be on screen (not the Diary, Dashboard, Settings, Time, People, the round, Quick capture, or a sheet on top)
     if (!pasteGoesToProject(ui, { viewerOpen: !document.getElementById('viewer').hidden, narrow: matchMedia('(max-width: 760px)').matches })) return;
     if (e.clipboardData && (e.clipboardData.getData('text/plain') || '').trim()) return; // text with a picture of it: the text

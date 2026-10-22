@@ -274,7 +274,7 @@ test('project description: taken from the project\'s tasks (the first one that h
   assert.equal(projectAboutOf([{ title: 'old server, no field' }]), '');
   assert.match(APP, /class: 'prow-about' }, aboutShort\(p\.projectAbout\)\)/, 'manager\'s Projects list row');
   assert.match(APP, /class: 'project-about' }/, 'under the title of the project and task pages');
-  assert.match(readFileSync(new URL('../team/public_html/sw.js', import.meta.url), 'utf8'), /const CACHE = 'worktask-v23'/, 'new files reach the phones');
+  assert.match(readFileSync(new URL('../team/public_html/sw.js', import.meta.url), 'utf8'), /const CACHE = 'worktask-v24'/, 'new files reach the phones');
 });
 
 // ---------------------------------------------------------------- 📧 morning email (one person's pending work as a table to fill in)
@@ -688,4 +688,44 @@ test('project reminders: a tap on a "/projects/#open=<id>" notification opens th
   assert.match(sw, /const c = url\.pathname === '\/' \? list\.find\(\(x\) => new URL\(x\.url\)\.pathname === '\/'\) : null;/, 'only Work Task links go to the Work Task window');
   assert.match(APP, /proj = \/\^\\\/projects\\\/\/\.test\(m\.url \|\| ''\), id = !proj && \/#open=\(\\d\+\)\/\.exec\(m\.url \|\| ''\)/);
   assert.match(APP, /proj \? \(\) => \{ location\.href = m\.url; \}/, 'the in-app bar opens the project');
+});
+
+test('🎤 one-line task: the site lets its own pages use the microphone, so the 🎤 button can work (it was switched off for everyone)', () => {
+  const ht = readFileSync(new URL('../team/public_html/.htaccess', import.meta.url), 'utf8');
+  const policy = /Permissions-Policy "([^"]*)"/.exec(ht);
+  assert.ok(policy, 'a Permissions-Policy is sent');
+  const fn = APP.slice(APP.indexOf('function quickBox('), APP.indexOf('// ---------- manager: team today'));
+  assert.match(fn, /rec\.start\(\)/, 'the 🎤 button is there');
+  assert.match(policy[1], /(^|,\s*)microphone=\(self\)/, 'so the microphone is allowed for this site itself');
+  assert.ok(!/microphone=\(\)/.test(policy[1]), 'never switched off for all');
+  assert.match(policy[1], /geolocation=\(\)/, 'location stays off');
+});
+
+test('sign-out: the next person on the same page never gets the half-typed one-line task, the round, or the owner\'s Outlook status', () => {
+  const fn = APP.slice(APP.indexOf('function signedOut()'), APP.indexOf('async function photoUrl('));
+  for (const s of ['state.quick = null', 'state.round = null', 'state.sentLocal = null', 'state.movingAll = 0', 'state.settingsAsk = null', 'outlookOn = null']) assert.ok(fn.includes(s), s);
+  const ask = APP.slice(APP.indexOf('function outlookConnected()'), APP.indexOf('async function morningEmail('));
+  assert.match(ask, /outlookOn = state\.user && state\.user\.owner \? !!\(d\.outlook && d\.outlook\.connected\) : null;/, 'an answer arriving after sign-out is not kept for the next person');
+});
+
+test('Settings asks team.today and outlook.status once per visit, not again on every redraw', () => {
+  const settings = APP.slice(APP.indexOf('function settingsScreen()'), APP.indexOf('function outlookCard()'));
+  const card = APP.slice(APP.indexOf('function outlookCard()'), APP.indexOf('// ---------------------------------------------------------------- start'));
+  assert.ok(!/(^|[^=])\s*api\('team\.today'\)\.then/.test(settings.replace(/\(ask\.today \|\|= api\('team\.today'\)\)/, '')), 'no bare ask on each draw');
+  assert.match(settings, /\(ask\.today \|\|= api\('team\.today'\)\)\.then/, 'kept in state.settingsAsk');
+  assert.match(card, /\(ask\.outlook \|\|= api\('outlook\.status'\)\)\.then\(\(d\) => show\(ask\.latest \|\| d\.outlook\)\)/, 'kept; a redraw shows the newest answer');
+  assert.equal((card.match(/api\('outlook\.status'\)/g) || []).length, 1);
+  assert.ok(!/(?<!\|\|= )api\('outlook\.status'\)/.test(card), 'only through the kept answer');
+  assert.match(card, /ask\.latest = o;/, 'Connect / Check now / Save answers are kept too');
+  const go = APP.slice(APP.indexOf('function go(view)'), APP.indexOf('function formHasText('));
+  assert.match(go, /state\.settingsAsk = null;/, 'a new visit asks again');
+});
+
+test('a photo message sent again after a lost answer carries the same clientId (kept once); a different photo or words, a new one', () => {
+  const photo = APP.slice(APP.indexOf('async function sendMsgPhoto'), APP.indexOf('// Ctrl+V on an open task'));
+  assert.ok(!/fd\.append\('clientId', newClientId\(\)\)/.test(photo), 'not a new id on every try');
+  assert.match(photo, /const ids = \(state\.photoCid \|\|= \{\}\), sig = JSON\.stringify\(\[text, f\.name, f\.size, f\.type\]\);/);
+  assert.match(photo, /if \(!ids\[key\] \|\| ids\[key\]\.sig !== sig\) ids\[key\] = \{ id: newClientId\(\), sig \};/);
+  assert.match(photo, /fd\.append\('clientId', ids\[key\]\.id\)/);
+  assert.ok(photo.indexOf('delete ids[key]') > photo.indexOf("await api('comment.photo'"), 'forgotten only after it went');
 });

@@ -1100,6 +1100,7 @@ a.team-line.msg { background: #eef4ff; border-color: #93b4f8; color: #1e40af; fo
 img.rich-photo { width: 72px; height: 72px; object-fit: cover; border-radius: 6px; margin: 2px 4px 2px 0; vertical-align: top; border: 1px solid var(--line); cursor: pointer; }
 .rich-edit img.rich-photo { cursor: default; }
 .note-rich { flex: 1; min-width: 0; }
+.note-lines { white-space: pre-line; }
 .diary-rich { display: inline-block; vertical-align: top; max-width: 100%; }
 .update-form.editing { border-color: #f0b44c; background: #fffaf0; }
 .edit-banner { display: flex; gap: 8px; align-items: center; font-size: 13px; color: #8a5a00; }

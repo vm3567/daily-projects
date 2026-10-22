@@ -100,6 +100,16 @@ export function startEditNote(ctx, p, n) {
   }, 30);
 }
 
+/**
+ * ✎ on a paused or finished task's update: a small question box. It holds one line only, so an update with a table, a
+ * list, photos or several lines is not changed there (it would come back flat); an answer with no change saves nothing.
+ */
+function promptEditNote(ctx, p, n) {
+  if (n.html || String(n.text).includes('\n')) { ctx.toast('Unpause or reopen the task to change this update (it has a table, list, photos or several lines)', 4000); return; }
+  const v = prompt('Change your update:', n.text);
+  if (v && v.trim() && v !== n.text) ctx.store.dispatch('editWorkNote', { projectId: p.id, noteId: n.id, text: v });
+}
+
 /** New messages from the team on this project: read them and answer here (or mark them seen). */
 function teamMessages(ctx, p) {
   const t = ctx.onServer && ctx.teamDaily ? ctx.teamDaily(p) : null;
@@ -503,9 +513,11 @@ function notesLog(ctx, p, notesShown) {
       return h('li', { key: 'n-' + n.id },
         h('span', { class: 'muted small' }, `${fmtDay(indiaDate(n.createdAt))} ${fmtTime(n.createdAt)}`),
         n.html ? h('div', { class: 'note-rich' }, noteBody(ctx, p, n)) // a table, list or photos: shown, ✎ opens it in the write box
-          : autoField('input', { value: n.text, 'aria-label': 'Work note', key: 'nt-' + n.id, 'data-mention': '1' },
-            (v) => { if (v.trim()) store.dispatch('editWorkNote', { projectId: p.id, noteId: n.id, text: v }); }),
-        n.html && !n.team && p.state === 'active' ? h('button', { class: 'link small', type: 'button', title: 'Change this update', onClick: () => startEditNote(ctx, p, n) }, '✎') : null,
+          // a note of several lines (a 🔌 app note, a team note…): a one-line box would glue its lines together, so it is only shown
+          : String(n.text).includes('\n') ? h('div', { class: 'note-rich note-lines', key: 'nt-' + n.id }, n.text)
+            : autoField('input', { value: n.text, 'aria-label': 'Work note', key: 'nt-' + n.id, 'data-mention': '1' },
+              (v) => { if (v.trim() && v !== n.text) store.dispatch('editWorkNote', { projectId: p.id, noteId: n.id, text: v }); }), // only a real change is saved
+        (n.html || String(n.text).includes('\n')) && !n.team && p.state === 'active' ? h('button', { class: 'link small', type: 'button', title: 'Change this update', onClick: () => startEditNote(ctx, p, n) }, '✎') : null,
         st ? h('span', { class: 'tag on-step', title: 'This note is about this step' }, `on: ${st.text}`) : null,
         n.mail ? linkChip(n.link) : null, // a reply in an email thread (from Outlook): open that email
         ...notePhotos(p, n).map((f) => h('button', { class: 'tag photo', key: 'nf-' + f.id, title: 'Open photo', onClick: () => openFile(ctx, f) }, '📷')),
@@ -1140,7 +1152,7 @@ function projectDiary(ctx, p, upd) {
       node: diaryLine(team ? '👥' : n.app ? '🔌' : '📝', team ? null : n.app ? (p.fromApp || 'App') : 'You', team ? n.text.slice(3) : noteBody(ctx, p, n), [
         about(n.stepId),
         ...files.map((f) => h('button', { class: 'link small', type: 'button', key: 'f-' + f.id, onClick: () => openFile(ctx, f) }, ` 📷 ${f.name}`)),
-        team ? null : h('button', { class: 'link small', type: 'button', title: 'Change this update', onClick: () => (p.state === 'active' ? startEditNote(ctx, p, n) : (() => { const v = prompt('Change your update:', n.text); if (v && v.trim()) store.dispatch('editWorkNote', { projectId: p.id, noteId: n.id, text: v }); })()) }, ' ✎'),
+        team ? null : h('button', { class: 'link small', type: 'button', title: 'Change this update', onClick: () => (p.state === 'active' ? startEditNote(ctx, p, n) : promptEditNote(ctx, p, n)) }, ' ✎'),
         team ? null : h('button', { class: 'link small', type: 'button', title: 'Delete this update', onClick: () => { if (confirm('Delete this update?')) ctx.act('deleteWorkNote', { projectId: p.id, noteId: n.id }, 'Update deleted'); } }, ' ✕'),
       ]),
     });

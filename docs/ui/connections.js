@@ -173,6 +173,7 @@ export function howToText({ base, key }) {
     '      Check it: <hex> = HMAC-SHA256(signing secret, timestamp + "." + body), and the timestamp is within 5 minutes.',
     '      Answer 200. Any other answer is tried again (for up to 24 hours).',
     '   b) Or ask now and then:  POST ' + a.decisions + '  {"since": "2026-10-22T10:00:00+05:30"}',
+    '      Keep the answer\'s "until" for next time. If it says "more": true, ask again at once with since = until.',
     '',
     'Example (curl):',
     "curl -X POST '" + a.push + "' \\",

@@ -985,7 +985,7 @@ test('📂 Projects page: a click on a project row selects it and stays on the p
   assert.match(mainsSrc, /ctx\.ui\.view === 'mains' && ctx\.showHere \? ctx\.showHere\(c\.id\)/, 'a task in the TASKS table while on the Projects page');
   const here = app.slice(app.indexOf('  showHere: (id) => {'), app.indexOf('  openProject: (id) => {'));
   assert.match(here, /select\(id\);/);
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-20'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-21'/, 'phones get the new copy');
 });
 
 test('📂 project page: "✕ Remove" on a task row takes it out of this project only — the task is kept (and stays in its other projects)', () => {
@@ -1565,7 +1565,7 @@ test('🔌 app wiring (app.js): "🔌 From apps" after ✉ Replies with the wait
   assert.match(app, /function go\(view\) \{\n\s*if \(view !== 'settings'\) forgetOnce\(\);/);
   assert.match(app, /if \(onServer\) loadApps\(appsCtx, force \|\| ui\.view === 'apps'\);/);
   assert.match(app, /replies: '✉ Replies', apps: '🔌 From apps', mains: '📂 Projects' \}\[ui\.view\]/, 'its page title');
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-20'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-21'/, 'phones get the new copy');
 });
 
 test('🔌 the PHP connector (team/connector/worktask-connector.php): the same text the app downloads, placeholders only (no real key), valid PHP 7.4+ (php -l), with wt_push / wt_withdraw / wt_decisions / wt_receive_decision', async () => {
@@ -1625,4 +1625,138 @@ test('🔌 From apps: ✕ Reject puts the cursor straight into the reason box', 
   const src = readFileSync(new URL('../docs/ui/connections.js', import.meta.url), 'utf8');
   assert.match(src, /cx\.rejecting = it\.id; cx\.reason = ''; ctx\.render\(\); focusReason\(it\.id\);/);
   assert.match(src, /key: 'rej-reason-' \+ it\.id/);
+});
+
+// ---------------------------------------------------------------- review round 12 (Daily Projects screens)
+test('dashboard and the top bar\'s score leave out an empty 📂 project (as colourCounts), so one green task is an all-green day', () => {
+  const s = { data: emptyData(), history: {} };
+  const g = s.data.groups[0].id;
+  applyOps(s, [
+    makeOp('createMainProject', { projectId: 'e', name: 'Holder', groupId: g }),
+    makeOp('createProject', { projectId: 't', name: 'Task', groupId: g, parentId: 'e' }),
+    makeOp('addStep', { projectId: 't', stepId: 'ts', text: 'Do it' }),
+    makeOp('addWorkNote', { projectId: 't', noteId: 'n1', text: 'Did some' }),
+  ]);
+  const text = renderDashboard(fakeCtx(s, {})).textContent;
+  assert.ok(text.includes('🔥 1'), 'today counts as all green');
+  const APP = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
+  const fn = APP.slice(APP.indexOf('function todayScore()'), APP.indexOf('function saveTypedText()'));
+  assert.match(fn, /todayWithoutEmptyMains\(awakeProjects\(store\.view\.data, today\), today\)/, 'the top bar uses the same list');
+});
+
+test('📂 the list\'s "Add to project" box: Enter uses pickEnterTarget (the exact name, nothing when empty), never mains[0]', () => {
+  const APP = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
+  const bar = APP.slice(APP.indexOf('function pickBar(list)'), APP.indexOf('function rowAction('));
+  assert.match(bar, /const t = pickEnterTarget\(mains, q\); if \(t && t\.add\) add\(t\.add\); else if \(t\) create\(t\.create\);/);
+  assert.ok(!/add\(mains\[0\]\)/.test(bar), 'not the first match');
+});
+
+test('Work notes: a note of several lines is shown (not a one-line box that glues its lines); a box saves only a real change', () => {
+  const s = sampleState();
+  s.data.projects[0].workNotes.unshift({ id: 'an1', text: 'Amount: 12,500\nVendor: ABC Minerals', stepId: null, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), app: true });
+  const ctx = fakeCtx(s, { selected: 'p1', update: {}, showMore: true });
+  const sent = [];
+  ctx.store.dispatch = (type, a) => { sent.push([type, a]); return true; };
+  const el = renderDetail(ctx);
+  assert.ok(!rFind(el, (n) => n.nodeName === 'INPUT' && keyOf(n) === 'nt-an1'), 'no one-line box for it');
+  const shown = rFind(el, (n) => keyOf(n) === 'nt-an1');
+  assert.ok(shown && shown.className.includes('note-lines') && shown.textContent === 'Amount: 12,500\nVendor: ABC Minerals', 'shown with its lines');
+  // a one-line note: leaving the box with no change sends nothing; a change is saved
+  const box = rFind(el, (n) => n.nodeName === 'INPUT' && keyOf(n) === 'nt-n1');
+  box.__on.focusout(null, { value: 'Kiln at 1150' });
+  assert.deepEqual(sent, [], 'no change: nothing saved');
+  box.__on.focusout(null, { value: 'Kiln at 1160' });
+  assert.deepEqual(sent, [['editWorkNote', { projectId: 'p1', noteId: 'n1', text: 'Kiln at 1160' }]]);
+});
+
+test('✎ on a paused task\'s rich update does not flatten it through the question box; an unchanged answer saves nothing', () => {
+  const s = sampleState();
+  applyOps(s, [
+    makeOp('addWorkNote', { projectId: 'p1', noteId: 'rn', text: 'x', html: '<table><tr><td>Clay</td><td>20</td></tr></table>' }),
+    makeOp('pause', { projectId: 'p1' }),
+  ]);
+  const n = s.data.projects[0].workNotes.find((x) => x.id === 'rn');
+  assert.ok(n && n.html, 'a rich note');
+  const ctx = fakeCtx(s, { selected: 'p1', update: {} });
+  const sent = []; const toasts = []; const asked = [];
+  ctx.store.dispatch = (type, a) => { sent.push([type, a]); return true; };
+  ctx.toast = (m) => toasts.push(m);
+  globalThis.prompt = (q, v) => { asked.push(v); return String(v).replace(/\n/g, ' '); };
+  try {
+    const pens = rAll(renderDetail(ctx), (x) => x.nodeName === 'BUTTON' && x.textContent === ' ✎' && x.getAttribute('title') === 'Change this update');
+    for (const b of pens) b.__on.click();
+    assert.ok(pens.length >= 2, 'a ✎ for each update');
+    assert.ok(!sent.some(([t, a]) => t === 'editWorkNote' && a.noteId === 'rn'), 'the rich note is not sent flat');
+    assert.ok(toasts.some((m) => /Unpause or reopen/.test(m)), 'says why');
+    assert.ok(!sent.some(([t]) => t === 'editWorkNote'), 'a plain note answered unchanged: nothing saved');
+    assert.ok(asked.includes('Kiln at 1150'), 'a plain one-line note is still asked');
+  } finally { delete globalThis.prompt; }
+});
+
+test('rich box: a paste whose HTML is too big (or cleans to nothing) pastes the plain words; a box past 2 MB is "too big", never empty', async () => {
+  const { RAW_MAX } = await import('../docs/rich.js');
+  const s = sampleState();
+  const ctx = fakeCtx(s, { selected: 'p1', update: {} });
+  const toasts = [];
+  ctx.toast = (m) => toasts.push(m);
+  const box = rFind(renderDetail(ctx), (n) => keyOf(n) === 'wn-p1');
+  const ed = fakeEditor();
+  await withEditor({ 'wn-p1': ed }, (cmds) => {
+    const big = '<table>' + '<tr><td style="mso-x:1">Clay</td></tr>'.repeat(Math.ceil(RAW_MAX / 30) + 10) + '</table>';
+    const e = ev({ clipboardData: clip({ html: big, text: 'Clay\nClay' }) });
+    box.__on.paste(e, ed);
+    assert.ok(e.prevented);
+    assert.deepEqual(cmds, [['insertText', 'Clay\nClay']], 'the plain words are pasted');
+    assert.ok(toasts.some((m) => /Too big to paste as a table/.test(m)));
+    cmds.length = 0;
+    box.__on.paste(ev({ clipboardData: clip({ html: '<svg><text>Kiln</text></svg>', text: 'Kiln' }) }), ed);
+    assert.deepEqual(cmds, [['insertText', 'Kiln']], 'HTML that cleans to nothing: the words');
+  }, { focused: ed });
+  const huge = fakeEditor('<p>' + 'a'.repeat(RAW_MAX + 10) + '</p>');
+  assert.equal(richedit.readDraft({}, huge).tooBig, true, 'Save + done stops with a message instead of ticking an "empty" update');
+});
+
+test('🔗 Link keeps an address with &reg= / &times= / &copy= as typed (no ® or ×)', async () => {
+  const ed = fakeEditor();
+  const url = 'https://erp.example/r?id=5&reg=south&times=3&copy=1';
+  await withEditor({}, (cmds) => {
+    richedit.insertLink(ed, () => url);
+    assert.equal(cmds.length, 1);
+    const [cmd, html] = cmds[0];
+    assert.equal(cmd, 'insertHTML');
+    const href = /href="([^"]*)"/.exec(html)[1].replace(/&amp;/g, '&');
+    assert.equal(href, url);
+  });
+});
+
+test('a screenshot pasted while naming a new task goes into that box, never into the task open on the right', async () => {
+  const { pasteInForm } = await import('../docs/rules.js');
+  const s = mainsState();
+  const ui = { selected: 'p1', update: {} };
+  const ctx = liveCtx(s, ui);
+  ctx.store.repo = { createBlobBase64: async () => 'sha-new' };
+  const d = {};
+  const box = richedit.newTaskBox(ctx, d, { key: 'new', onCancel: () => {}, onCreate: () => {} });
+  const name = rFind(box, (n) => n.nodeName === 'INPUT' && keyOf(n) === 'new-name');
+  assert.ok(name.__on && name.__on.paste, 'the name box has its own paste');
+  await withEditor({ 'new-rich': fakeEditor('') }, async () => {
+    const e = ev({ clipboardData: clip({ files: [new File(['b'], 'image.png', { type: 'image/png' })] }) });
+    name.__on.paste(e, name);
+    assert.ok(e.prevented, 'taken by the new task box');
+    await new Promise((r) => setTimeout(r, 30));
+    assert.equal(d.photos.length, 1, 'the photo is in the new task\'s notes');
+    const t = ev({ clipboardData: clip({ text: 'Glaze', files: [] }) });
+    name.__on.paste(t, name);
+    assert.ok(!t.prevented, 'typed words paste as usual');
+  });
+  assert.ok(!(ui.update.p1 && (ui.update.p1.photos || []).length), 'task p1 got nothing');
+  // the page-wide paste handler leaves a paste inside the box alone
+  const inBox = { closest: (sel) => (sel === '.new-task-box' ? {} : null) };
+  assert.equal(pasteInForm(inBox), true);
+  assert.equal(pasteInForm({ closest: () => null }), false);
+  assert.equal(pasteInForm({ nodeType: 3, parentNode: inBox }), true, 'a text node inside it');
+  assert.equal(pasteInForm(null), false);
+  const APP = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
+  const h = APP.slice(APP.indexOf("document.addEventListener('paste'"));
+  assert.ok(h.indexOf('if (pasteInForm(e.target)) return;') >= 0 && h.indexOf('if (pasteInForm(e.target)) return;') < h.indexOf('pasteIntoProject(ctx, p, files)'));
 });

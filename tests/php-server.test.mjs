@@ -1603,7 +1603,7 @@ test('cron.php: runs the jobs from the command line, skips while another run hol
 // ---------------------------------------------------------------- 🔌 Connections: outside apps send tasks and approvals (connect.php)
 const CB_PORT = DB_PORT + 12000; // a tiny fake app that receives the decisions
 const CB = `http://127.0.0.1:${CB_PORT}/hook`;
-const cb = { reqs: [], code: 200, server: null };
+const cb = { reqs: [], code: 200, delay: 0, server: null };
 async function fakeApp() {
   if (cb.server) return;
   cb.server = createServer((req, res) => {
@@ -1611,6 +1611,7 @@ async function fakeApp() {
     req.on('data', (c) => { body += c; });
     req.on('end', () => {
       cb.reqs.push({ method: req.method, path: req.url, headers: req.headers, body });
+      if (cb.delay) return setTimeout(() => { res.writeHead(cb.code, { 'Content-Type': 'application/json' }); res.end('{}'); }, cb.delay);
       res.writeHead(cb.code, cb.code >= 300 && cb.code < 400 ? { Location: 'http://127.0.0.1:1/elsewhere' } : { 'Content-Type': 'application/json' });
       res.end('{}');
     });
@@ -1876,4 +1877,132 @@ test('connections: Rotate key — the old key stops at once, the new key and a n
   for (const a of ['conn_create #', 'conn_rotate #', 'conn_delete #', 'conn_update #', 'conn_decide #']) assert.ok(log.includes(a), a);
   assert.ok(!/wt[cs]_[0-9a-f]{20}/.test(log), 'no key or secret in the log');
   assert.equal(sqlOut("SELECT v FROM wt.settings WHERE k = 'schema'").trim(), '33', 'the tables step (v15) ran');
+});
+
+// ---------------------------------------------------------------- review round 12 (connect.php / outlook.php)
+// Server functions called directly (as the 5-minute job and a request would), to make the races happen on purpose.
+const phpRun = (code) => promisify(execFile)('php', ['-r', ['bootstrap', 'auth', 'api', 'dp'].map((f) => `require '${join(ROOT, 'team', 'app', f + '.php')}';`).join(' ') + ' ' + code],
+  { env: env(), encoding: 'utf8' }).then((r) => r.stdout);
+const itemId = (conn, ext) => Number(sqlOut(`SELECT id FROM wt.conn_items WHERE conn_id = ${Number(conn)} AND external_id = '${ext}'`).trim());
+
+test('review r12: a push and the 5-minute job making the same app task at once (both saw it not made) give ONE task', { skip }, async () => {
+  sql(`INSERT INTO wt.conn_items (conn_id, external_id, kind, title, details, fields, status, created_at, updated_at) VALUES (${cn.purchase.id}, 'T-RACE', 'task', 'Race task', '', '[]', 'pending', NOW(), NOW())`);
+  const iid = itemId(cn.purchase.id, 'T-RACE');
+  // the same stale row (dp_task_id still empty) handed to two makers, one after the other and then two at once
+  await phpRun(`$it = one('SELECT * FROM conn_items WHERE id = ${iid}'); var_export([conn_make_task($it, ['name' => 'Purchase']), conn_make_task($it, ['name' => 'Purchase'])]);`);
+  await Promise.all([phpRun(`$it = one('SELECT * FROM conn_items WHERE id = ${iid}'); $it['dp_task_id'] = null; conn_make_task($it, ['name' => 'Purchase']);`),
+    phpRun(`conn_jobs(); $it = one('SELECT * FROM conn_items WHERE id = ${iid}'); $it['dp_task_id'] = null; conn_make_task($it, ['name' => 'Purchase']);`)]);
+  const made = (await dpNow()).data.projects.filter((p) => p.name === 'Race task');
+  assert.equal(made.length, 1, 'one task, never two');
+  assert.equal(sqlOut(`SELECT CONCAT(status, ' ', dp_task_id) FROM wt.conn_items WHERE id = ${iid}`).trim(), 'done ' + made[0].id, 'the item points at that task');
+});
+
+test('review r12: a task update whose note cannot be written is refused (503) and written when the app sends it again — never lost', { skip }, async () => {
+  const t = { external_id: 'T-NOTE', kind: 'task', title: 'Clay order', fields: { Amount: '12,500' } };
+  assert.equal((await appCall('connect.push', t, cn.purchase.key)).status, 'done');
+  const owner = sqlOut("SELECT v FROM wt.settings WHERE k = 'dp_owner'").trim();
+  sql("UPDATE wt.settings SET v = '0' WHERE k = 'dp_owner'"); // the projects cannot be saved just now
+  let r;
+  try { r = await appCall('connect.push', { ...t, fields: { Amount: '15,000' } }, cn.purchase.key); } finally { sql(`UPDATE wt.settings SET v = '${owner}' WHERE k = 'dp_owner'`); }
+  assert.equal(r.s, 503, 'the app is told to send it again');
+  assert.match(r.error, /Send the same again/);
+  const r2 = await appCall('connect.push', { ...t, fields: { Amount: '15,000' } }, cn.purchase.key);
+  assert.ok(r2.ok, r2.error);
+  const task = (await dpNow()).data.projects.find((p) => p.name === 'Clay order');
+  assert.equal(task.workNotes[0].text, '🔌 Purchase updated this:\nAmount: 15,000 (was 12,500)', 'the change reaches the task on the second send');
+});
+
+test('review r12: a withdraw racing the owner\'s ✓ Approve leaves it approved (and says so to the app)', { skip }, async () => {
+  await appCall('connect.push', { external_id: 'PO-WR', kind: 'approval', title: 'Approve PO WR' }, cn.purchase.key);
+  const iid = itemId(cn.purchase.id, 'PO-WR');
+  // the withdraw read the item while it waited; the owner approved before its UPDATE ran
+  const out = await phpRun(`$it = one('SELECT * FROM conn_items WHERE id = ${iid}'); $c = one('SELECT * FROM connections WHERE id = ${cn.purchase.id}');
+    q("UPDATE conn_items SET status = 'approved', decided_at = NOW() WHERE id = ${iid}"); echo json_encode(conn_withdraw($c, $it));`);
+  assert.deepEqual(JSON.parse(out), { id: iid, status: 'approved' }, 'the app hears the real status');
+  assert.equal(sqlOut(`SELECT status FROM wt.conn_items WHERE id = ${iid}`).trim(), 'approved', 'the decision is kept');
+  // a plain withdraw of a waiting one still works
+  await appCall('connect.push', { external_id: 'PO-WR2', kind: 'approval', title: 'Approve PO WR2' }, cn.purchase.key);
+  assert.equal((await appCall('connect.withdraw', { external_id: 'PO-WR2' }, cn.purchase.key)).status, 'withdrawn');
+});
+
+test('review r12: decisions made while an app had no decision address (or whose sending failed) are sent once an address is added', { skip }, async () => {
+  await fakeApp();
+  cb.code = 200; cb.reqs = []; cb.delay = 0;
+  const late = await call('conn.create', { name: 'Late' }, tok.boss);
+  for (const ext of ['L-1', 'L-2']) await appCall('connect.push', { external_id: ext, kind: 'approval', title: 'Approve ' + ext }, late.key);
+  for (const ext of ['L-1', 'L-2']) {
+    const it = (await appItems()).find((i) => i.externalId === ext && i.app === 'Late');
+    assert.equal((await call('conn.decide', { id: it.id, decision: 'approved' }, tok.boss)).item.delivery, 'ask');
+  }
+  sql(`UPDATE wt.conn_items SET callback_failed = 1, callback_tries = 7 WHERE conn_id = ${late.connection.id} AND external_id = 'L-2'`); // gave up on a broken address
+  assert.ok((await call('conn.update', { id: late.connection.id, callback_url: CB }, tok.boss)).ok);
+  assert.deepEqual((await appItems()).filter((i) => i.app === 'Late').map((i) => i.delivery), ['waiting', 'waiting'], 'queued for the new address');
+  await cronIn(1);
+  assert.deepEqual(cb.reqs.map((q) => JSON.parse(q.body).external_id).sort(), ['L-1', 'L-2'], 'both sent by the 5-minute job');
+  assert.deepEqual((await appItems()).filter((i) => i.app === 'Late').map((i) => i.delivery), ['sent', 'sent']);
+  assert.ok((await call('conn.delete', { id: late.connection.id }, tok.boss)).ok);
+});
+
+test('review r12: connect.decisions with more than 500 decisions — "more" and until = the last one\'s time, so asking again from until gets the rest', { skip }, async () => {
+  const many = await call('conn.create', { name: 'Many' }, tok.boss);
+  const cid = many.connection.id;
+  sql(`SET SESSION cte_max_recursion_depth = 2000; INSERT INTO wt.conn_items (conn_id, external_id, kind, title, status, decided_at, created_at, updated_at)
+    WITH RECURSIVE n (i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 501)
+    SELECT ${cid}, CONCAT('M-', i), 'approval', 'x', 'approved', NOW() - INTERVAL (600 - i) MINUTE, NOW(), NOW() FROM n`);
+  const a = await appCall('connect.decisions', {}, many.key);
+  assert.ok(a.ok, a.error);
+  assert.deepEqual([a.decisions.length, a.more], [500, true]);
+  assert.equal(a.until, a.decisions[499].decided_at, 'until = the last one given');
+  const b = await appCall('connect.decisions', { since: a.until }, many.key);
+  assert.equal(b.more, false);
+  const got = new Set([...a.decisions, ...b.decisions].map((x) => x.external_id));
+  assert.equal(got.size, 501, 'none skipped');
+  assert.ok((await call('conn.delete', { id: cid }, tok.boss)).ok);
+});
+
+test('review r12: two senders at once (the owner\'s ✓ and the 5-minute job) tell the app ONCE', { skip }, async () => {
+  await fakeApp();
+  cb.code = 200; cb.reqs = []; cb.delay = 1500; // the app answers slowly: both senders are in the middle together
+  try {
+    await appCall('connect.push', { external_id: 'PO-TWICE', kind: 'approval', title: 'Approve PO TWICE' }, cn.purchase.key);
+    const iid = itemId(cn.purchase.id, 'PO-TWICE');
+    sql(`UPDATE wt.conn_items SET status = 'approved', decided_at = NOW(), callback_next_at = NOW() WHERE id = ${iid}`);
+    await Promise.all([phpRun(`conn_send(${iid});`), phpRun(`conn_send(${iid});`)]);
+    assert.equal(cb.reqs.filter((q) => JSON.parse(q.body).external_id === 'PO-TWICE').length, 1, 'one decision sent, not two');
+    assert.equal((await appItems()).find((i) => i.id === iid).delivery, 'sent');
+  } finally { cb.delay = 0; }
+  // a second ✓ that lost the race does not send again either
+  await appCall('connect.push', { external_id: 'PO-TWICE2', kind: 'approval', title: 'Approve PO TWICE2' }, cn.purchase.key);
+  const it2 = (await appItems()).find((i) => i.externalId === 'PO-TWICE2');
+  cb.reqs = [];
+  const [d1, d2] = await Promise.all([call('conn.decide', { id: it2.id, decision: 'approved' }, tok.boss), call('conn.decide', { id: it2.id, decision: 'approved' }, tok.boss)]);
+  assert.equal([d1, d2].filter((d) => d.ok).length, 1, 'one decision counts');
+  assert.equal(cb.reqs.filter((q) => JSON.parse(q.body).external_id === 'PO-TWICE2').length, 1, 'sent once');
+});
+
+test('review r12: a new email from them in the thread of a FINISHED 📧 task (or finished project) opens it again, so it is seen on ✉ Replies; your own email does not', { skip }, async () => {
+  await fakeMicrosoft();
+  await connectOutlook();
+  const at = new Date(Date.now() - 3 * 86400e3).toISOString();
+  const fin = (id, conv, name, extra = {}) => ({ id, name, state: 'finished', stateChangedAt: at, groupId: 'g1', createdAt: at, steps: [], workNotes: [], links: [], files: [], notes: '',
+    mail: { conversationId: conv, messageId: conv + '-1', fromName: 'Ravi', fromAddress: 'ravi@x.test', subject: name, at },
+    thread: [{ at, fromName: 'Ravi', fromMe: false, preview: 'First', messageId: conv + '-1' }], ...extra });
+  const finProj = { id: 'r12p', name: 'Kiln order', state: 'finished', stateChangedAt: at, groupId: 'g1', createdAt: at, steps: [], workNotes: [], mail: { conversationId: 'C-R12P' } };
+  const head = (await call('dp.head', {}, tok.boss)).head;
+  assert.ok((await call('dp.commit', { parent: head, message: 'finished threads', changes: [{ path: 'data.json', content: JSON.stringify({
+    groups: [{ id: 'g1', name: 'Acton' }], projects: [fin('r12a', 'C-R12A', '📧 PO 4411'), fin('r12b', 'C-R12B', '📧 PO 4412'), finProj] }) }] }, tok.boss)).ok);
+  const mine = { ...mail('r12-b2', 'C-R12B', 'RE: PO 4412', 'Venkat', 4, 'Thanks, closing this.'), from: { emailAddress: { name: 'Venkat', address: 'venkat@acton.test' } } };
+  ms.sent = [];
+  ms.pages = [[mail('r12-a2', 'C-R12A', 'RE: PO 4411', 'Ravi', 5, 'One more question on the price.'), mine, mail('r12-p2', 'C-R12P', 'RE: Kiln', 'Meena', 3, 'Delivery moved.')]];
+  const r = await call('outlook.check', {}, tok.boss);
+  assert.equal(r.outlook.error, '', r.outlook.error);
+  const { data, history } = await dpNow();
+  const a = data.projects.find((p) => p.id === 'r12a');
+  assert.deepEqual([a.state, a.thread.length, a.activeSince], ['active', 2, istDay(0)], 'opened again, the email in its thread');
+  assert.equal(data.projects.find((p) => p.id === 'r12b').state, 'finished', 'your own email does not open it');
+  assert.equal(data.projects.find((p) => p.id === 'r12p').state, 'active', 'a finished project with that thread opens too');
+  assert.ok(history[istDay(0).slice(0, 7)].some((e) => e.kind === 'reopened' && e.projectId === 'r12a'), 'a "Reopened" history line');
+  const { repliesOf } = await import('../docs/rules.js');
+  assert.ok(repliesOf(data, istDay(0)).waiting.some((m) => m.id === 'r12a'), 'listed on ✉ Replies');
+  await saveProjects([]);
 });
