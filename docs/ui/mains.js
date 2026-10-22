@@ -201,42 +201,23 @@ export function newProjectHere(ctx, p) {
   return op ? projectId : null;
 }
 
-/** The "📂 Projects" page: one card per project (red first) with its tasks (a task in two projects shows in both). */
-export function renderMainProjects(ctx) {
+/** Top of the 📂 Projects list: "3 projects · 8 tasks in them · red first" and "+ New project" (the list itself is like ✅ Tasks). */
+export function renderProjectsHead(ctx) {
   const { store } = ctx;
   const data = store.view.data;
-  const today = todayIndia();
-  const mains = redFirst(mainProjects(data), (m) => listColour(data, m, today));
-  const kidsOf = (m) => redFirst(childrenOf(data, m.id).filter((c) => c.state !== 'finished'), (c) => dotColour(c, today));
-  const inside = new Set(mains.flatMap((m) => kidsOf(m).map((c) => c.id))).size; // each task once
+  const mains = mainProjects(data).filter((m) => m.state !== 'finished');
+  const inside = new Set(mains.flatMap((m) => childrenOf(data, m.id).filter((c) => c.state !== 'finished').map((c) => c.id))).size; // each task once
   const newMain = () => {
     const name = globalThis.prompt ? prompt('Name of the new project (it holds a few tasks):') : null;
     if (!name || !name.trim()) return;
     const projectId = newId();
     if (store.dispatch('createMainProject', { projectId, name: name.trim(), groupId: data.groups[0] && data.groups[0].id })) {
       ctx.toast(`New project: 📂 ${name.trim()}`);
-      ctx.render();
+      if (ctx.showHere) ctx.showHere(projectId); else ctx.render();
     }
   };
-  return h('div', { class: 'mains-page', key: 'mains-page' },
+  return h('div', { class: 'mains-head', key: 'mains-head' },
     h('p', { class: 'muted mains-line' }, `${mains.length} project${mains.length === 1 ? '' : 's'} · ${inside} task${inside === 1 ? '' : 's'} in them · red first`),
     h('button', { class: 'btn primary new-main', type: 'button', onClick: newMain }, '+ New project'),
-    mains.length ? null : h('p', { class: 'empty-list' }, 'No projects yet. Make one here, or open a task and use ⋯ → 📂 Add to a project.'),
-    mains.map((m) => {
-      const kids = kidsOf(m);
-      return h('div', { class: 'main-card', key: 'mc-' + m.id },
-        h('div', { class: 'main-card-head' },
-          h('span', { class: `dot ${mainColour(m, kids, today)}` }),
-          h('button', { class: 'link main-card-name', type: 'button', onClick: () => ctx.showHere(m.id) }, `📂 ${m.name}`),
-          h('span', { class: 'muted small main-card-sum' }, mainSummary(kids, today)),
-          h('button', { class: 'btn small main-open', type: 'button', onClick: () => openAddTasks(ctx, m) }, '+ Add tasks')), // (the name opens the project)
-        addTasksPicker(ctx, m),
-        kids.length ? h('ul', { class: 'main-card-list' }, kids.map((c) => {
-          const ns = c.state === 'active' ? nextStep(c, today) : null;
-          return h('li', { key: 'mcc-' + c.id },
-            h('button', { class: 'main-card-row', type: 'button', onClick: () => ctx.showHere(c.id) },
-              h('span', { class: `dot ${dotColour(c, today)}` }), ` ${c.name}`,
-              h('span', { class: 'muted small' }, ` — ${c.state !== 'active' ? c.state : ns ? ns.text : 'No next step'}${c.team ? ` · 👥 ${c.team.name}` : ''}`)));
-        })) : null);
-    }));
+    mains.length ? null : h('p', { class: 'empty-list' }, 'No projects yet. Make one here, or open a task and use ⋯ → 📂 Add to a project.'));
 }

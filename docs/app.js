@@ -8,7 +8,7 @@ import { installAutocorrect, setAutocorrect, autocorrectOn } from './ui/autocorr
 import { renderDashboard } from './ui/dashboard.js';
 import { renderTimeReport } from './ui/timereport.js';
 import { renderReplies, renderReplyRound, replyArea, readyCount } from './ui/replies.js';
-import { projectChips, renderMainProjects, openMainBox, listColour } from './ui/mains.js';
+import { projectChips, renderProjectsHead, openMainBox, listColour } from './ui/mains.js';
 import { projectMatches, diaryEntries, backupPayload, summaryText, personMessageText, personMessageHtml, sentMarkOf, copyNotice } from './reports.js';
 import { closeViewer, uploadBlob } from './ui/files.js';
 import { Store } from './store.js';
@@ -18,7 +18,7 @@ import { MockRepo } from './mockrepo.js';
 import { device } from './device.js';
 import { DATA_OWNER, DATA_REPO, DATA_BRANCH, MOVED_TO, REFRESH_MS, AI_DAILY_LIMIT, BRIEF_CLAIM_MINUTES, WAIT_RED_DAYS, NO_WORK_NOTE_DAYS } from './config.js';
 import { dotColour, greenByTeamOnly, isSnoozed, restUntil, restReason, onlyDaysLabel, openIdFromHash, awakeProjects, activeProjects, nextStep, todayIndia, isSundayIndia, colourCounts, isOverdue, indiaDate, waitingDays, daysWithoutWork, dayScore, greenStreak, addDays, monthOf, fmtMinutes, takeBackWaits, staffStepAction, pasteGoesToProject, singleStepClose, versionRequest, askDiaryAgain, diaryLoadedAt, photoNeedsFetch, teamUndoKey, teamActionUndone, teamProgressOf, projectKeyIgnored, teamMovedTo, serverHolder, keepMovedStep, teamMemberFor, repliesOf, mailThreads, replyMailto, MAILTO_BODY_MAX, emailPath, pasteReason } from './rules.js';
-import { parentIdsOf, isMainProject, mainProjects, activeTasks, todayWithoutEmptyMains } from './rules.js';
+import { parentIdsOf, isMainProject, mainProjects, activeTasks, todayWithoutEmptyMains, mainSummary, childrenOf } from './rules.js';
 import { newId, clone, opMonth, groupHasTimer, cleanLink, carriedOps } from './ops.js';
 import * as ai from './ai.js';
 import { parseVoice } from './voice.js';
@@ -646,6 +646,7 @@ function visibleProjects() {
   if (q) return all.filter((p) => projectMatches(p, q));
   if (ui.view === 'today') return todayWithoutEmptyMains(awakeProjects(store.view.data, todayIndia()), todayIndia()); // a 📂 project with no own step: its tasks show instead
   if (ui.view === 'all') return activeTasks(store.view.data); // ✅ Tasks: tasks only, each once (projects are on 📂 Projects)
+  if (ui.view === 'mains') return mainProjects(store.view.data).filter((p) => p.state !== 'finished'); // 📂 Projects: projects only, a list like Tasks
   if (ui.view === 'paused') return all.filter((p) => p.state === 'paused');
   if (ui.view === 'finished') return all.filter((p) => p.state === 'finished');
   if (ui.view.startsWith('group:')) {
@@ -882,7 +883,8 @@ function projectRow(p, today, opts = {}) {
   const colour = opts.colour || rowColour(p, today); // a 📂 project in the lists (not Today): the worst of it and its tasks
   const ns = nextStep(p, today); // shown as "Next:"
   const due = nextStep(p, today, { dueOnly: true }); // what the tick box ticks
-  const canTick = due && p.state === 'active';
+  const asProject = ui.view === 'mains' && !ui.search; // 📂 Projects list: "3 tasks · 1 red" instead of the next step
+  const canTick = due && p.state === 'active' && !asProject;
   return h('li', {
     key: 'p-' + p.id, 'data-id': p.id, class: 'prow' + (ui.selected === p.id ? ' current' : '') + (isMainProject(store.view.data, p) ? ' main-row' : ''),
     onContextmenu: (e) => { e.preventDefault(); ui.rowMenu = { id: p.id, x: e.clientX, y: e.clientY }; render(); },
@@ -893,7 +895,7 @@ function projectRow(p, today, opts = {}) {
         title: `Tick: ${due.text}`, 'aria-label': `Tick next step of ${p.name}: ${due.text}`,
         onChange: (e, el) => quickTick(p, due, el),
       })
-      : p.state === 'active'
+      : p.state === 'active' && !asProject
         ? h('button', {
           class: 'quick-add', title: 'Add the first step', 'aria-label': `Add a step to ${p.name}`,
           onClick: () => { ui.quickAdd = ui.quickAdd === p.id ? null : p.id; render(); focusKey('qa-' + p.id); },
@@ -906,7 +908,8 @@ function projectRow(p, today, opts = {}) {
         h('span', { class: 'prow-name' }, isMainProject(store.view.data, p) ? '📂 ' : '', p.name,
           p.state !== 'active' ? h('span', { class: 'tag' }, p.state) : null,
           p.priority === 'high' ? h('span', { class: 'tag high' }, 'High') : null),
-        h('span', { class: 'prow-next' + (ns ? '' : ' warn') }, ns ? `Next: ${ns.text}` : 'No next step — add one',
+        asProject ? h('span', { class: 'prow-next' }, mainSummary(childrenOf(store.view.data, p.id).filter((c) => c.state !== 'finished'), today)) : null,
+        asProject ? null : h('span', { class: 'prow-next' + (ns ? '' : ' warn') }, ns ? `Next: ${ns.text}` : 'No next step — add one',
           ns && ns.waiting ? waitingTag(ns) : null,
           ns && ns.snoozedUntil && ns.snoozedUntil > today ? h('span', { class: 'tag repeat' }, `↻ from ${fmtDay(ns.snoozedUntil)}`) : null,
           isOverdue(p, today) ? h('span', { class: 'tag late' }, `Overdue · ${fmtDay(p.deadline)}`) : null,
@@ -1430,7 +1433,7 @@ function rowMenu() {
 
 /** Lists where a 📂 project shows (and sorts by) the worst of it and its tasks. Today and search: its own dot. */
 function rollsUpHere() {
-  return !ui.search && (ui.view.startsWith('group:') || ui.view === 'paused' || ui.view === 'finished');
+  return !ui.search && (ui.view.startsWith('group:') || ui.view === 'paused' || ui.view === 'finished' || ui.view === 'mains');
 }
 
 function rowColour(p, today) {
@@ -1750,7 +1753,6 @@ function renderListColumn() {
   if (ui.view === 'dashboard' && !ui.search) return h('div', { class: 'col-inner' }, head, timerStrip(), renderDashboard(ctx));
   if (ui.view === 'time' && !ui.search) return h('div', { class: 'col-inner' }, head, timerStrip(), renderTimeReport(ctx));
   if (ui.view === 'people' && !ui.search) return h('div', { class: 'col-inner' }, head, timerStrip(), renderPeopleList(ctx), rowMenu());
-  if (ui.view === 'mains' && !ui.search) return h('div', { class: 'col-inner' }, head, timerStrip(), renderMainProjects(ctx));
 
   const list = sortForView(visibleProjects(), today);
   const showSort = !ui.search && ui.view !== 'paused' && ui.view !== 'finished' && list.length > 1;
@@ -1769,7 +1771,7 @@ function renderListColumn() {
     ui.view === 'today' && !ui.search ? inboxReminder() : null,
     ui.view === 'today' && !ui.search ? renderBrief() : null,
     h('div', { class: 'list-tools' },
-      ui.view === 'finished' || ui.view === 'paused' || ui.search ? null : newProjectForm(),
+      ui.view === 'mains' && !ui.search ? renderProjectsHead(ctx) : ui.view === 'finished' || ui.view === 'paused' || ui.search ? null : newProjectForm(),
       showSort && !ui.adding ? sortSwitch() : null),
     ...listParts(list, today),
     empty,
@@ -2490,7 +2492,7 @@ function goProject(step) {
 /** The next project after this one (in the tab you are in) that is not green yet — red first. */
 function nextOpenProject(id) {
   const today = todayIndia();
-  let list = ['diary', 'settings', 'dashboard', 'time', 'people', 'inbox', 'replies', 'mains'].includes(ui.view) || ui.search
+  let list = ['diary', 'settings', 'dashboard', 'time', 'people', 'inbox', 'replies'].includes(ui.view) || ui.search
     ? store.view.data.projects.filter((p) => p.state === 'active') : sortForView(visibleProjects(), today);
   list = list.filter((p) => p.state === 'active' && (p.id === id || !isSnoozed(p, today)));
   const i = Math.max(0, list.findIndex((p) => p.id === id));
@@ -2727,7 +2729,7 @@ function onKey(e) {
   if (e.repeat && !isArrow && e.key !== 'j' && e.key !== 'k') return; // holding x / o / r must not repeat
   const focused = document.activeElement;
   if (isArrow && focused && (focused.type === 'radio' || focused.nodeName === 'SUMMARY')) return;
-  if (isArrow && ['diary', 'settings', 'dashboard', 'time', 'inbox', 'replies', 'mains'].includes(ui.view) && !ui.search) return; // let the page scroll
+  if (isArrow && ['diary', 'settings', 'dashboard', 'time', 'inbox', 'replies'].includes(ui.view) && !ui.search) return; // let the page scroll
   const k = e.key;
   if (ui.round) {
     const map = { x: 'done', s: 'add', w: 'note', o: 'ok', c: 'chase', n: 'skip', ArrowRight: 'skip' };
@@ -2746,7 +2748,7 @@ function onKey(e) {
   if (k === 'ArrowRight' || k === 'ArrowLeft') {
     const step = k === 'ArrowRight' ? 1 : -1;
     if (ui.view === 'people' && !ui.search) goPerson(step);
-    else if (ui.selected && !['diary', 'settings', 'dashboard', 'time', 'inbox', 'replies', 'mains'].includes(ui.view)) goProject(step);
+    else if (ui.selected && !['diary', 'settings', 'dashboard', 'time', 'inbox', 'replies'].includes(ui.view)) goProject(step);
     else handled = false;
   } else if (k === 'Backspace') {
     if (ui.navStack && ui.navStack.length) goBack(); else handled = false;

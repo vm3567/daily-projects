@@ -887,32 +887,29 @@ test('📂 a task shows a chip "📂 Kilns ›" for each project it is in (opens
   assert.ok(!renderDetail(liveCtx(s, { selected: 'p1', update: {} })).textContent.includes('TASKS ('), 'no table on a task');
 });
 
-test('📂 Projects page: the line (each task counted once), "+ New project", one card per project (red first) with its tasks (a task in two projects under both) and "Open ›"', () => {
+test('📂 Projects page head: the line (each task counted once) and "+ New project"; the page is a plain list of projects like ✅ Tasks (owner asked, 22 Oct)', async () => {
   const s = mainsState();
   const ctx = liveCtx(s, {});
   globalThis.prompt = () => 'Furnaces';
-  let page;
+  let head;
   try {
-    page = mains.renderMainProjects(ctx);
-    assert.ok(page.textContent.includes('1 project · 2 tasks in them · red first'));
-    btn(page, '+ New project').__on.click();
+    head = mains.renderProjectsHead(ctx);
+    assert.ok(head.textContent.includes('1 project · 2 tasks in them · red first'));
+    btn(head, '+ New project').__on.click();
   } finally { delete globalThis.prompt; }
   const fur = s.data.projects.find((p) => p.name === 'Furnaces');
   assert.ok(fur && fur.isMain, 'made as a project (shows while empty)');
   applyOps(s, [makeOp('addToProject', { projectId: 'p1', parentId: fur.id })]);
-  page = mains.renderMainProjects(ctx);
-  const text = page.textContent;
-  assert.ok(text.includes('2 projects · 2 tasks in them · red first'), 'Kiln is in both, counted once');
-  for (const bit of ['📂 Kilns', '2 tasks · 1 red', 'Kiln 2', '— No next step · 👥 Ravi', 'Kiln', 'Fire samples', '📂 Furnaces', '1 task · ', '+ Add tasks']) assert.ok(text.includes(bit), bit);
-  assert.ok(!text.includes('Open ›'), 'no "Open" button: the name opens the project (owner asked, 22 Oct)');
-  const cards = rAll(page, (n) => n.className === 'main-card');
-  assert.equal(cards.length, 2);
-  for (const c of cards) assert.ok(c.textContent.includes('Kiln'), 'the task in two projects shows under both');
-  btn(cards[0], '+ Add tasks').__on.click();
-  assert.ok(rAll(mains.renderMainProjects(ctx), (n) => n.className === 'add-tasks').length === 1, '"+ Add tasks" opens the tick list under that card');
-  // an empty project
-  applyOps(s, [makeOp('removeFromProject', { projectId: 'p1', parentId: fur.id })]);
-  assert.ok(mains.renderMainProjects(ctx).textContent.includes('No tasks in it yet'));
+  head = mains.renderProjectsHead(ctx);
+  assert.ok(head.textContent.includes('2 projects · 2 tasks in them · red first'), 'Kiln is in both, counted once');
+  assert.ok(!head.textContent.includes('Kiln 2'), 'no task lists on the Projects page: only projects');
+  const { readFileSync } = await import('node:fs');
+  const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
+  assert.match(app, /if \(ui\.view === 'mains'\) return mainProjects\(store\.view\.data\)\.filter\(\(p\) => p\.state !== 'finished'\);/, 'the list shows projects only');
+  assert.match(app, /const asProject = ui\.view === 'mains' && !ui\.search;/, 'a project row shows "N tasks · …" instead of the next step');
+  assert.match(app, /asProject \? h\('span', \{ class: 'prow-next' \}, mainSummary\(/);
+  assert.ok(!/'replies', 'mains'\]\.includes\(ui\.view\)/.test(app), '↓ ↑ move through projects like tasks');
+  assert.ok(!/renderMainProjects/.test(app), 'the old cards are gone');
 });
 
 test('📂 app wiring (app.js): ✅ Tasks and 📂 Projects menu items (keys; listed under ?; Ctrl-K), flat lists with project chips, Today without empty projects, Undo of a new / deleted project; the team sync never sends parentIds', async () => {
@@ -976,15 +973,13 @@ test('📂 a project name opens the project on the 📂 Projects page (its own p
   assert.match(open, /ui\.view = p\.state !== 'active' \? p\.state : isMainProject\(store\.view\.data, p\) \? 'mains' : 'all';/);
 });
 
-test('📂 Projects page: clicking a project name or a task in a card shows it on the right and stays on the Projects page', async () => {
+test('📂 Projects page: a click on a project row selects it and stays on the page (like ✅ Tasks); a task in a project\'s TASKS table opens on the right without leaving', async () => {
   const { readFileSync } = await import('node:fs');
   const mainsSrc = readFileSync(new URL('../docs/ui/mains.js', import.meta.url), 'utf8');
   const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
-  assert.match(mainsSrc, /main-card-name', type: 'button', onClick: \(\) => ctx\.showHere\(m\.id\)/, 'project name');
-  assert.match(mainsSrc, /main-card-row', type: 'button', onClick: \(\) => ctx\.showHere\(c\.id\)/, 'a task in a card');
+  assert.match(app, /h\('button', \{ class: 'prow-btn', onClick: \(\) => select\(p\.id\) \}/, 'rows only select (no jump)');
   assert.match(mainsSrc, /ctx\.ui\.view === 'mains' && ctx\.showHere \? ctx\.showHere\(c\.id\)/, 'a task in the TASKS table while on the Projects page');
   const here = app.slice(app.indexOf('  showHere: (id) => {'), app.indexOf('  openProject: (id) => {'));
-  assert.match(here, /if \(ui\.view !== 'mains'\) \{ ui\.view = 'mains';/);
   assert.match(here, /select\(id\);/);
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-5'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-6'/, 'phones get the new copy');
 });
