@@ -1,7 +1,7 @@
 // Work Task: the team app. Staff see and fill their own tasks; the manager gives tasks and sees everything.
 // No outside libraries. All text from the server is put on screen as text (never as HTML).
 
-import { addDay, weekdayOf, dueOn, itemKey, diaryRows, fieldChanged, lateValue, afterFlush, boxStillThere, updateSaveBody, redrawHow, projectRowState, aboutShort, projectAboutOf, giveBackShow, keptNotice, noticeHow, pasteWaits, msgBoxSent, redrawAfterSend, taskSaveBody, morningMail, followupRows, followupGroups, followupSummary, roundKey, roundPlan, roundMark, parseQuickTask } from './logic.js'; // the rules (checked in tests/team-app.test.mjs)
+import { addDay, weekdayOf, dueOn, itemKey, diaryRows, fieldChanged, lateValue, afterFlush, boxStillThere, updateSaveBody, redrawHow, projectRowState, aboutShort, projectAboutOf, giveBackShow, keptNotice, noticeHow, pasteWaits, msgBoxSent, redrawAfterSend, taskSaveBody, morningMail, morningOrder, morningSummary, morningTitle, morningLast, mailDate, sentTag, sentTime, followupRows, followupGroups, followupSummary, roundKey, roundPlan, roundMark, parseQuickTask } from './logic.js'; // the rules (checked in tests/team-app.test.mjs)
 
 const TOKEN_KEY = 'wt.token';
 const state = {
@@ -98,7 +98,7 @@ const stateTag = (s) => el('span', { class: 'tag ' + (s === 'stuck' ? 'red' : s 
 class OfflineError extends Error {}
 class AuthError extends Error {} // signed out (password reset, sign-in too old)
 class RetryError extends Error {} // the server had a hiccup: try again later
-const READS = new Set(['me', 'my.today', 'team.today', 'tasks.list', 'users.list', 'task.get', 'projects.overview', 'project.team', 'project.mine', 'report.week', 'followup.list']);
+const READS = new Set(['me', 'my.today', 'team.today', 'tasks.list', 'users.list', 'task.get', 'projects.overview', 'project.team', 'project.mine', 'report.week', 'followup.list', 'people.morning']);
 const cacheKey = (a, body) => 'wt.c.' + a + ':' + JSON.stringify(body || {});
 function readCache(a, body) { try { return JSON.parse(localStorage.getItem(cacheKey(a, body)) || 'null'); } catch { return null; } }
 function writeCache(a, body, out) { try { localStorage.setItem(cacheKey(a, body), JSON.stringify(out)); } catch { /* phone storage full: still works online */ } }
@@ -424,7 +424,10 @@ async function loadList() {
       if (me.role === 'admin' && data && data.people) state.team = data; // the people in the menu
     }
     else if (view === 'tasks') data = await api('tasks.list', { status: state.closed ? 'closed' : 'open' });
-    else if (view === 'people') data = await api('users.list');
+    else if (view === 'people') { // (each person's pending work and today's morning email: one request; the page still shows without it)
+      const [u, m] = await Promise.all([api('users.list'), api('people.morning').catch(() => null)]);
+      data = { ...u, morning: m };
+    }
     else if (view === 'projects') data = await api('projects.overview');
     else if (view === 'report') data = await api('report.week', state.reportEnd ? { end: state.reportEnd } : {});
     else if (view === 'search') data = { search: true }; // the results come as you type
@@ -984,7 +987,7 @@ function teamList() {
       const tag = !tasks.length ? el('span', { class: 'tag grey' }, 'No tasks today')
         : el('span', { class: 'tag ' + (sent === tasks.length ? 'green' : d.late ? 'red' : 'amber') }, `${sent} of ${tasks.length} sent`);
       return [sec(p.name, tag), el('ul', { class: 'list-body' }, tasks.map(row)),
-        el('p', { class: 'list-note' }, el('button', { class: 'chip', onClick: () => morningEmail(p) }, '📧 Morning email'))];
+        el('p', { class: 'list-note' }, el('button', { class: 'chip', onClick: () => morningEmail(p) }, '📧 Morning email'), sentMark(p, istDay(new Date())))];
     }),
     filt ? el('p', { class: 'list-note' }, el('button', { class: 'link', onClick: () => { state.personFilter = 0; softRender(); } }, '← Show everyone')) : null,
   ];
@@ -1744,7 +1747,7 @@ function teamToday() {
       return el('div', { class: 'card person' + (tasks.length && sent < tasks.length && d.late ? ' late' : '') },
         el('div', { class: 'person-head' }, el('h3', null, p.name), tag),
         tasks.map((t) => teamRow(t, d)),
-        el('div', { class: 'row' }, el('button', { class: 'chip', onClick: () => morningEmail(p) }, '📧 Morning email')));
+        el('div', { class: 'row' }, el('button', { class: 'chip', onClick: () => morningEmail(p) }, '📧 Morning email'), sentMark(p, istDay(new Date()))));
     }),
   ];
 }
@@ -1765,12 +1768,53 @@ async function morningEmail(p) {
   let got;
   try { got = await ready; } catch (ex) { toast(ex.message, 5000); return; }
   const { out, mail } = got;
+  markSent(p.id, out.today); // (on the server, so every device shows it; the email opens even if this fails)
   if (!copied) try { await navigator.clipboard.writeText(mail.text); copied = true; } catch { /* not allowed either */ }
   const email = out.person.email || '';
   el('a', { href: 'mailto:' + encodeURIComponent(email).replace(/%40/g, '@') + '?subject=' + encodeURIComponent(mail.subject) }).click(); // Outlook opens
   const noEmail = email ? '' : ` No email saved for ${out.person.name}: add it on the People page.`;
   if (copied) notice('msg', 'Table copied — press Ctrl+V in the email, then Send.', noEmail.trim() || null, null, { stay: !email });
   else notice('msg', 'Could not copy. Select these words, copy them into the email, then Send.' + noEmail, mail.text, null, { copy: true, stay: true });
+}
+
+/** The manager pressed 📧 Morning email: save the time on the server; if that fails, show the mark on this device anyway. */
+function markSent(userId, today) {
+  const show = (at) => {
+    state.sentLocal = { ...(state.sentLocal || {}), [userId]: at };
+    softRender();
+  };
+  api('morning.sent', { userId }).then((r) => show(r.sentAt), () => show(today + ' ' + new Date().toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkata', hour12: false })));
+}
+
+/** When the morning email to this person was last sent (the server's time, or this device's own when the server could not be told). */
+const sentAtOf = (id, serverAt) => { const mine = (state.sentLocal || {})[id] || ''; return mine > (serverAt || '') ? mine : serverAt || null; };
+
+/** Team today: a small '✓ 9:05' next to the 📧 Morning email button once sent today. */
+function sentMark(p, today) {
+  const t = sentTime(sentAtOf(p.id, p.morningSentAt), today);
+  return t ? el('span', { class: 'm-sent small', title: 'Morning email sent today' }, ' ✓ ' + t) : null;
+}
+
+/** People page: one staff person's pending work, as in the morning email (the same items, order and summary). */
+function morningCard(mp, today) {
+  const list = morningOrder(mp.items);
+  if (!list.length) return el('p', { class: 'muted small' }, 'No pending work today.');
+  const open = (x) => (x.projectRef ? openDetail('project:' + x.projectRef) : x.taskId ? openDetail('task:' + x.taskId) : null);
+  const line = (cls, words) => el('div', { class: 'm-line ' + cls }, words);
+  return [
+    el('p', { class: 'muted small' }, morningSummary(list)),
+    el('table', { class: 'mtable' },
+      el('thead', null, el('tr', null, el('th', { class: 'm-no' }, '#'), el('th', null, 'Work'), el('th', { class: 'm-last' }, 'Last update'))),
+      el('tbody', null, list.map((x, i) => el('tr', { class: x.taskId || x.projectRef ? 'm-open' : null, onClick: () => open(x) },
+        el('td', { class: 'm-no' }, String(i + 1)),
+        el('td', null, el('b', null, morningTitle(x)),
+          x.kind === 'project' && x.about ? line('m-about', aboutShort(x.about)) : null,
+          x.lateSince ? line('m-late', `Late since ${mailDate(x.lateSince)}`) : null,
+          x.stuck ? line('m-stuck', 'Stuck') : null,
+          x.now ? line('m-grey', `Now: ${x.now}`) : null,
+          x.repeat ? line('m-grey', x.repeat) : null),
+        el('td', { class: 'm-last muted' }, morningLast(x)))))),
+  ];
 }
 
 /** Top of Team today: what is waiting for the manager. */
@@ -1986,13 +2030,30 @@ function peopleScreen() {
     if (v === null || v.trim() === (u.email || '')) return;
     try { await api('user.save', { id: u.id, name: u.name, role: u.role, email: v.trim() }); toast('Email saved ✓'); loadView(); } catch (ex) { toast(ex.message, 5000); }
   };
+  // the morning email: each active staff person's pending work and whether it went today (from people.morning)
+  const morning = state.data.morning, today = istDay(new Date()); // (this device's day: a saved copy from yesterday shows not sent)
+  const mpOf = (u) => (morning && u.active && u.role === 'staff' ? morning.people.find((x) => x.id === u.id) : null);
+  const sentOf = (mp) => sentAtOf(mp.id, mp.sentAt);
+  const sentCount = morning ? morning.people.filter((mp) => sentTime(sentOf(mp), today)).length : 0;
+  const head = (u, mp) => {
+    if (!mp) return [el('div', { class: 'row spread' }, el('div', null, el('strong', null, u.name), ' ', el('span', { class: 'muted small' }, '@' + u.username)),
+      el('span', { class: 'tag ' + (!u.active ? 'grey' : u.role === 'admin' ? '' : 'green') }, !u.active ? 'Switched off' : u.role === 'admin' ? 'Manager' : 'Staff')),
+    el('div', { class: 'meta' }, u.lastLogin ? `Last signed in ${fmtDay(u.lastLogin)} ${fmtTime(u.lastLogin)}` : 'Not signed in yet', u.email ? ` · 📧 ${u.email}` : '')];
+    const at = sentOf(mp), sent = !!sentTime(at, today);
+    return [el('div', { class: 'row spread m-head' },
+      el('div', { class: 'm-who' }, el('strong', null, u.name), ' ', el('span', { class: 'muted small' }, '@' + u.username), ' ',
+        u.email ? el('span', { class: 'muted small' }, u.email) : el('button', { class: 'link small', onClick: () => setEmail(u) }, 'no email — add one')),
+      el('span', { class: 'tag ' + (sent ? 'green' : 'amber') }, (sent ? '✓ ' : '') + sentTag(at, today))),
+    el('div', { class: 'meta' }, u.lastLogin ? `Last signed in ${fmtDay(u.lastLogin)} ${fmtTime(u.lastLogin)}` : 'Not signed in yet'),
+    el('div', { class: 'row' }, el('button', { class: 'chip', onClick: () => morningEmail(u) }, sent ? '📧 Send again' : '📧 Morning email')),
+    morningCard(mp, today)];
+  };
   return [
     el('h1', null, 'People'),
+    morning ? el('p', { class: 'muted' }, `Morning emails today: ${sentCount} of ${morning.people.length} sent`) : null,
     state.newPerson ? shareBox(state.newPerson) : null,
     users.map((u) => el('div', { class: 'card' },
-      el('div', { class: 'row spread' }, el('div', null, el('strong', null, u.name), ' ', el('span', { class: 'muted small' }, '@' + u.username)),
-        el('span', { class: 'tag ' + (!u.active ? 'grey' : u.role === 'admin' ? '' : 'green') }, !u.active ? 'Switched off' : u.role === 'admin' ? 'Manager' : 'Staff')),
-      el('div', { class: 'meta' }, u.lastLogin ? `Last signed in ${fmtDay(u.lastLogin)} ${fmtTime(u.lastLogin)}` : 'Not signed in yet', u.email ? ` · 📧 ${u.email}` : ''),
+      head(u, mpOf(u)),
       u.id === state.user.id ? null : el('div', { class: 'row' },
         el('button', { onClick: () => rename(u) }, '✎ Name'),
         el('button', { onClick: () => setEmail(u) }, '📧 Email'),

@@ -188,3 +188,20 @@ table.report td.ok { color: var(--green); font-weight: 600; }
 .fu-row > .fu-btns { flex: 1 1 100%; }
 .fu-round { margin: 10px 14px; }
 .fu-round h2 { margin: 4px 0; }
+
+/* 📧 Morning email on the People page: each person's pending work (the same as the email) */
+.m-head { flex-wrap: wrap; gap: 6px; }
+.m-who { min-width: 0; overflow-wrap: anywhere; }
+table.mtable { width: 100%; table-layout: fixed; border-collapse: collapse; margin-top: 6px; font-size: 14px; }
+table.mtable th { text-align: left; font-size: 12px; color: var(--muted); font-weight: 600; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+table.mtable td { padding: 7px 8px; border-bottom: 1px solid var(--line); vertical-align: top; overflow-wrap: anywhere; word-break: normal; }
+table.mtable .m-no { width: 2.2em; color: var(--muted); }
+table.mtable .m-last { width: 38%; }
+table.mtable tr.m-open { cursor: pointer; }
+table.mtable tr.m-open:hover td { background: var(--panel); }
+.m-line { font-size: 12px; margin-top: 2px; }
+.m-about, .m-grey { color: var(--muted); }
+.m-late { color: var(--red); }
+.m-stuck { color: var(--amber); }
+.m-sent { color: var(--green); margin-left: 6px; white-space: nowrap; }
+@media (max-width: 480px) { table.mtable .m-last { width: 34%; } table.mtable { font-size: 13px; } }

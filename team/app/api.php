@@ -496,7 +496,7 @@ function handle(string $a, array $in): array {
         foreach (all('SELECT day, state FROM updates WHERE task_id = ? ORDER BY day DESC LIMIT 30', [$t['id']]) as $u) { if ($u['state'] !== 'stuck') break; $first = $u['day']; }
         $since[$t['id']] = is_array($first) ? $first['day'] : $first;
       }
-      return ['today' => $day, 'fillBy' => $fillBy, 'late' => date('H:i') >= $fillBy, 'people' => array_map(fn($p) => public_user($p) + ['lastUpdate' => $lastDay[(int)$p['id']] ?? null], $people),
+      return ['today' => $day, 'fillBy' => $fillBy, 'late' => date('H:i') >= $fillBy, 'people' => array_map(fn($p) => public_user($p) + ['lastUpdate' => $lastDay[(int)$p['id']] ?? null, 'morningSentAt' => morning_sent_at((int)$p['id'], $day)], $people),
         'tasks' => $out, 'stuckSince' => (object)$since] + $att;
     }
     case 'followup.list': // every open task given to staff, for the manager's 🔁 Follow-up screen
@@ -519,6 +519,17 @@ function handle(string $a, array $in): array {
       return ['today' => $day, 'person' => ['id' => (int)$u['id'], 'name' => $u['name'], 'email' => (string)($u['email'] ?? '')],
         'manager' => $me['name'], 'items' => morning_items((int)$u['id'], $day)];
     }
+    case 'morning.sent': { // the manager pressed 📧 Morning email for this person: remember the time (only today's counts)
+      $u = one('SELECT id FROM users WHERE id = ?', [(int)($in['userId'] ?? 0)]);
+      if (!$u) throw new ApiError('Person not found.', 404);
+      $at = now();
+      set_setting('ms:' . (int)$u['id'], $at);
+      return ['sentAt' => $at];
+    }
+    case 'people.morning': // the People page: each active staff person's pending work (as in the morning email) and today's send, in one go
+      return ['today' => $day, 'people' => array_map(fn($p) => ['id' => (int)$p['id'], 'name' => $p['name'], 'email' => (string)($p['email'] ?? ''),
+        'items' => morning_items((int)$p['id'], $day), 'sentAt' => morning_sent_at((int)$p['id'], $day)],
+        all("SELECT * FROM users WHERE active = 1 AND role = 'staff' ORDER BY name"))];
     case 'project.sync': {
       // Daily Projects: "this whole project is given to <person>". steps = the project's open steps, in order.
       // Makes a task for each new step, keeps titles and order up to date, moves them to a new person,
@@ -867,13 +878,20 @@ function morning_items(int $who, string $day): array {
     $lates = array_filter(array_map($late, $list));
     $out[] = ['kind' => 'project', 'title' => $cur['project'] ?: $cur['title'], 'about' => $cur['projectAbout'],
       'now' => str_ends_with((string)$cur['stepRef'], ':whole') ? '' : $cur['title'], // (given as one task: no step to name)
-      'repeat' => '', 'lateSince' => $lates ? min($lates) : null, 'stuck' => (bool)array_filter($list, fn($t) => $t['stuck']), 'lastUpdate' => $last('p:' . $ref)];
+      'repeat' => '', 'lateSince' => $lates ? min($lates) : null, 'stuck' => (bool)array_filter($list, fn($t) => $t['stuck']), 'lastUpdate' => $last('p:' . $ref),
+      'taskId' => $cur['id'], 'projectRef' => (string)$ref]; // (to open it from the People page)
   }
   foreach ($plain as $t) {
     $out[] = ['kind' => 'task', 'title' => $t['title'], 'about' => '', 'now' => '', 'repeat' => $repeat($t),
-      'lateSince' => $late($t), 'stuck' => $t['stuck'], 'lastUpdate' => $last('t:' . $t['id'])];
+      'lateSince' => $late($t), 'stuck' => $t['stuck'], 'lastUpdate' => $last('t:' . $t['id']), 'taskId' => $t['id'], 'projectRef' => null];
   }
   return $out;
+}
+
+/** When the manager last pressed 📧 Morning email for this person, if it was today ('YYYY-MM-DD HH:MM:SS'), else null. */
+function morning_sent_at(int $who, string $day): ?string {
+  $at = setting('ms:' . $who, '');
+  return substr($at, 0, 10) === $day ? $at : null;
 }
 
 /**

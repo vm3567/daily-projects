@@ -185,21 +185,50 @@ const MAIL_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Se
 const mailDate = (day) => `${Number(day.slice(8, 10))} ${MAIL_MONTHS[Number(day.slice(5, 7)) - 1]}`; // '20 Oct'
 
 /**
+ * The morning email's order (the email and the People page use this one rule):
+ * late first, then stuck, then the rest (projects before tasks, then by title).
+ */
+export function morningOrder(items) {
+  const rank = (x) => (x.lateSince ? 0 : x.stuck ? 1 : 2);
+  return [...(items || [])].sort((a, b) => rank(a) - rank(b) || (a.kind === 'project' ? 0 : 1) - (b.kind === 'project' ? 0 : 1)
+    || String(a.title || '').localeCompare(String(b.title || '')));
+}
+
+/** The summary line: '4 items · 1 late · 1 stuck'. */
+export function morningSummary(items) {
+  const list = items || [];
+  const late = list.filter((x) => x.lateSince).length;
+  const stuck = list.filter((x) => x.stuck).length;
+  return [`${list.length} item${list.length === 1 ? '' : 's'}`, late ? `${late} late` : '', stuck ? `${stuck} stuck` : ''].filter(Boolean).join(' · ');
+}
+
+/** One item's bold title (📁 for a project) and its last update ('21 Oct: note', or '—'). */
+export const morningTitle = (x) => (x.kind === 'project' ? '📁 ' : '') + (x.title || '');
+export const morningLast = (x) => (x.lastUpdate ? `${mailDate(x.lastUpdate.day)}: ${x.lastUpdate.note || ''}` : '—');
+export { mailDate };
+
+/** The time of the last morning-email press, only if it was today: '9:05' (24-hour clock, no leading 0), else ''. */
+export function sentTime(sentAt, today) {
+  const at = String(sentAt || '');
+  if (!today || at.slice(0, 10) !== today || at.length < 16) return '';
+  return `${Number(at.slice(11, 13))}:${at.slice(14, 16)}`;
+}
+
+/** The People page's tag: 'Sent today 9:05', or 'Not sent yet' (yesterday's press counts as not sent). */
+export const sentTag = (sentAt, today) => { const t = sentTime(sentAt, today); return t ? `Sent today ${t}` : 'Not sent yet'; };
+
+/**
  * The manager's morning email to one person: all their pending work in a table they fill in and send back.
  * items: from the server's morning.mail. Returns { subject, html, text }. Inline styles only (Outlook drops <style>).
  * Order: late first, then stuck, then the rest (projects before tasks, then by title).
  */
 export function morningMail({ person, manager, items, today }) {
-  const rank = (x) => (x.lateSince ? 0 : x.stuck ? 1 : 2);
-  const list = [...(items || [])].sort((a, b) => rank(a) - rank(b) || (a.kind === 'project' ? 0 : 1) - (b.kind === 'project' ? 0 : 1)
-    || String(a.title || '').localeCompare(String(b.title || '')));
+  const list = morningOrder(items);
   const name = (person && person.name) || '';
   const subject = `Your work for ${MAIL_DAYS[weekdayOf(today)]} ${mailDate(today)} – please reply by evening`;
-  const late = list.filter((x) => x.lateSince).length;
-  const stuck = list.filter((x) => x.stuck).length;
-  const summary = [`${list.length} item${list.length === 1 ? '' : 's'}`, late ? `${late} late` : '', stuck ? `${stuck} stuck` : ''].filter(Boolean).join(' · ');
-  const title = (x) => (x.kind === 'project' ? '📁 ' : '') + (x.title || '');
-  const lastText = (x) => (x.lastUpdate ? `${mailDate(x.lastUpdate.day)}: ${x.lastUpdate.note || ''}` : '—');
+  const summary = morningSummary(list);
+  const title = morningTitle;
+  const lastText = morningLast;
   const STATUS = 'Done / Going on / Stuck';
   const end = ['Status: keep one of Done / Going on / Stuck.', 'Any problem or help needed: write below.'];
 

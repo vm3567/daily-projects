@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { addDay, weekdayOf, dueOn, itemKey, diaryRows, fieldChanged, lateValue, afterFlush, boxStillThere, updateSaveBody, redrawHow, projectRowState, giveBackShow, keptNotice, noticeHow, pasteWaits, msgBoxSent, redrawAfterSend, taskSaveBody, aboutShort, projectAboutOf, morningMail, escHtml, followupRule, followupRows, followupGroups, followupSummary, roundKey, roundSaved, roundPlan, roundMark, parseQuickTask } from '../team/public_html/logic.js';
+import { addDay, weekdayOf, dueOn, itemKey, diaryRows, fieldChanged, lateValue, afterFlush, boxStillThere, updateSaveBody, redrawHow, projectRowState, giveBackShow, keptNotice, noticeHow, pasteWaits, msgBoxSent, redrawAfterSend, taskSaveBody, aboutShort, projectAboutOf, morningMail, morningOrder, morningSummary, sentTag, sentTime, escHtml, followupRule, followupRows, followupGroups, followupSummary, roundKey, roundSaved, roundPlan, roundMark, parseQuickTask } from '../team/public_html/logic.js';
 const APP = readFileSync(new URL('../team/public_html/app.js', import.meta.url), 'utf8');
 
 // Wed 21 Oct 2026 is "today" in these checks; 18 Oct is a Sunday.
@@ -274,7 +274,7 @@ test('project description: taken from the project\'s tasks (the first one that h
   assert.equal(projectAboutOf([{ title: 'old server, no field' }]), '');
   assert.match(APP, /class: 'prow-about' }, aboutShort\(p\.projectAbout\)\)/, 'manager\'s Projects list row');
   assert.match(APP, /class: 'project-about' }/, 'under the title of the project and task pages');
-  assert.match(readFileSync(new URL('../team/public_html/sw.js', import.meta.url), 'utf8'), /const CACHE = 'worktask-v16'/, 'new files reach the phones');
+  assert.match(readFileSync(new URL('../team/public_html/sw.js', import.meta.url), 'utf8'), /const CACHE = 'worktask-v17'/, 'new files reach the phones');
 });
 
 // ---------------------------------------------------------------- 📧 morning email (one person's pending work as a table to fill in)
@@ -369,6 +369,65 @@ test('morning email: the Team today page has the button, copies the table (HTML 
   assert.match(fn, /Table copied — press Ctrl\+V in the email, then Send\./);
   assert.match(fn, /add it on the People page/);
   assert.match(APP, /'Email \(optional, for the morning email\)', email/, 'People: an Email box');
+});
+
+// ---------------------------------------------------------------- 📧 morning email on the People page (and the sent mark)
+test('morning email on People: one order and summary rule, used by the email and the People page', () => {
+  const items = [{ kind: 'task', title: 'B task' }, { kind: 'project', title: 'Z project', stuck: true }, { kind: 'task', title: 'A late', lateSince: '2026-10-20' }, { kind: 'project', title: 'C project' }];
+  assert.deepEqual(morningOrder(items).map((x) => x.title), ['A late', 'Z project', 'C project', 'B task']);
+  assert.equal(items[0].title, 'B task', 'the list given is not changed');
+  assert.deepEqual(morningOrder(null), []);
+  assert.equal(morningSummary(items), '4 items · 1 late · 1 stuck');
+  assert.equal(morningSummary([{ kind: 'task', title: 'x' }]), '1 item');
+  const mail = readFileSync(new URL('../team/public_html/logic.js', import.meta.url), 'utf8');
+  const fn = mail.slice(mail.indexOf('export function morningMail('), mail.indexOf('/** Days from day a'));
+  assert.match(fn, /const list = morningOrder\(items\)/, 'the email uses the shared order');
+  assert.match(fn, /morningSummary\(list\)/, 'and the shared summary');
+  assert.ok(!/const rank =/.test(fn), 'no second copy of the order rule in the email');
+  const card = APP.slice(APP.indexOf('function morningCard('), APP.indexOf('/** Top of Team today'));
+  assert.match(card, /morningOrder\(mp\.items\)/, 'the People page uses the same order');
+  assert.match(card, /morningSummary\(list\)/, 'and the same summary');
+});
+
+test('morning email on People: the sent tag — today\'s time, or "Not sent yet" (yesterday\'s press does not count)', () => {
+  assert.equal(sentTag('2026-10-22 09:05:31', '2026-10-22'), 'Sent today 9:05');
+  assert.equal(sentTag('2026-10-22 14:30:00', '2026-10-22'), 'Sent today 14:30');
+  assert.equal(sentTag('2026-10-21 09:05:00', '2026-10-22'), 'Not sent yet', 'yesterday is not today');
+  assert.equal(sentTag(null, '2026-10-22'), 'Not sent yet');
+  assert.equal(sentTag('', '2026-10-22'), 'Not sent yet');
+  assert.equal(sentTime('2026-10-22 09:05:31', '2026-10-22'), '9:05');
+  assert.equal(sentTime('2026-10-21 09:05:31', '2026-10-22'), '');
+});
+
+test('morning email on People: each staff card has the table (# | Work | Last update), the button turns to "Send again", and the press is saved on the server', () => {
+  const people = APP.slice(APP.indexOf('function peopleScreen('), APP.indexOf('function settingsScreen('));
+  const card = APP.slice(APP.indexOf('function morningCard('), APP.indexOf('/** Top of Team today'));
+  assert.match(card, /el\('th', \{ class: 'm-no' \}, '#'\), el\('th', null, 'Work'\), el\('th', \{ class: 'm-last' \}, 'Last update'\)/, 'the three columns');
+  assert.match(card, /'No pending work today\.'/);
+  assert.match(card, /openDetail\('project:' \+ x\.projectRef\)/, 'a project row opens the project');
+  assert.match(card, /openDetail\('task:' \+ x\.taskId\)/, 'a task row opens the task');
+  assert.match(card, /Late since \$\{mailDate\(x\.lateSince\)\}/); assert.match(card, /'Stuck'/); assert.match(card, /Now: \$\{x\.now\}/);
+  assert.match(card, /aboutShort\(x\.about\)/, 'the about line, cut');
+  assert.match(people, /sent \? '📧 Send again' : '📧 Morning email'/, 'the button text after sending');
+  assert.match(people, /onClick: \(\) => morningEmail\(u\)/, 'it runs the same morning email');
+  assert.match(people, /sentTag\(at, today\)/, 'the sent tag');
+  assert.match(people, /'no email — add one'/, 'a link to add a missing email');
+  assert.match(people, /`Morning emails today: \$\{sentCount\} of \$\{morning\.people\.length\} sent`/, 'the count at the top');
+  assert.match(people, /u\.active && u\.role === 'staff'/, 'managers and switched-off people: no table, no email button');
+  assert.match(APP, /api\('users\.list'\), api\('people\.morning'\)\.catch\(\(\) => null\)/, 'the page loads it in one request, beside the people');
+  const fn = APP.slice(APP.indexOf('async function morningEmail('), APP.indexOf('/** Top of Team today'));
+  assert.match(fn, /markSent\(p\.id, out\.today\)/, 'the morning email marks it sent');
+  assert.ok(fn.indexOf('markSent(') < fn.indexOf("'mailto:'"), 'as soon as the email starts');
+  assert.match(fn, /api\('morning\.sent', \{ userId \}\)\.then\(\(r\) => show\(r\.sentAt\), \(\) => show\(/, 'saved on the server; shown on this device even if that fails');
+  assert.match(readFileSync(new URL('../team/public_html/styles.css', import.meta.url), 'utf8'), /table\.mtable \{[^}]*table-layout: fixed/, 'the table never squeezes words to one letter a line');
+});
+
+test('morning email on People: Team today shows a small ✓ time next to the 📧 Morning email button', () => {
+  assert.match(APP.slice(APP.indexOf('function teamList('), APP.indexOf('function tasksList(')), /'📧 Morning email'\), sentMark\(p, /, 'on the Team today list');
+  assert.match(APP.slice(APP.indexOf('function teamToday('), APP.indexOf('async function morningEmail(')), /'📧 Morning email'\), sentMark\(p, /, 'and on the full Team today page');
+  const mark = APP.slice(APP.indexOf('function sentMark('), APP.indexOf('function morningCard('));
+  assert.match(mark, /sentTime\(sentAtOf\(p\.id, p\.morningSentAt\), today\)/);
+  assert.match(mark, /' ✓ ' \+ t/);
 });
 
 // ---------------------------------------------------------------- 🔁 Follow-up, the daily round, work in one line

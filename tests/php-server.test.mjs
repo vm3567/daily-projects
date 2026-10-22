@@ -960,6 +960,42 @@ test('morning email: morning.mail is manager-only and lists late, stuck, a given
   await saveProjects([]);
 });
 
+test('morning email on People: people.morning and morning.sent are manager-only; each active staff person with the same items as morning.mail and today\'s send (yesterday\'s counts as not sent)', { skip }, async () => {
+  assert.equal((await call('people.morning', {}, tok.mira)).s, 403, 'staff cannot read the page');
+  assert.equal((await call('morning.sent', { userId: id.mira }, tok.mira)).s, 403, 'staff cannot mark it sent');
+  assert.equal((await call('morning.sent', { userId: id.mira }, tok.anita)).s, 403, 'other staff refused too');
+  assert.equal((await call('morning.sent', { userId: 999999 }, tok.boss)).s, 404);
+  // someone switched off: not on the list
+  const off = await call('user.save', { name: 'PM Off', username: 'pmoff', password: 'first-pass-123' }, tok.boss);
+  assert.ok(off.ok, off.error);
+  await call('task.save', { assigneeId: off.user.id, title: 'PM off job', repeat: 'daily', skipSunday: false }, tok.boss);
+  await call('user.active', { id: off.user.id, active: false }, tok.boss);
+  await call('task.save', { assigneeId: id.mira, title: 'PM late job', repeat: 'once', dueDate: istDay(1) }, tok.boss);
+
+  const r = await call('people.morning', {}, tok.boss);
+  assert.ok(r.ok, r.error);
+  assert.equal(r.today, istDay(0));
+  const staff = (await call('users.list', {}, tok.boss)).users.filter((u) => u.active && u.role === 'staff').map((u) => u.id).sort((a, b) => a - b);
+  assert.deepEqual(r.people.map((p) => p.id).sort((a, b) => a - b), staff, 'every active staff person, never the manager or a switched-off person');
+  const mira = r.people.find((p) => p.id === id.mira);
+  assert.equal(mira.name, 'Mira'); assert.equal(mira.email, 'mira.k@example.com');
+  assert.deepEqual(mira.items, (await call('morning.mail', { userId: id.mira }, tok.boss)).items, 'the same items as the morning email');
+  assert.ok(mira.items.some((x) => x.title === 'PM late job' && x.lateSince === istDay(1) && x.taskId > 0), 'with the task to open');
+  assert.equal(mira.sentAt, null, 'not sent yet');
+
+  const sent = await call('morning.sent', { userId: id.mira }, tok.boss);
+  assert.ok(sent.ok, sent.error);
+  assert.equal(sent.sentAt.slice(0, 10), istDay(0));
+  const again = (await call('people.morning', {}, tok.boss)).people.find((p) => p.id === id.mira);
+  assert.equal(again.sentAt, sent.sentAt, 'today\'s time, on every device');
+  assert.equal((await call('team.today', {}, tok.boss)).people.find((p) => p.id === id.mira).morningSentAt, sent.sentAt, 'on Team today too');
+  assert.equal((await call('people.morning', {}, tok.boss)).people.find((p) => p.id === id.anita).sentAt, null, 'only that person');
+
+  sql(`USE wt; UPDATE settings SET v = '${istDay(1)} 09:05:00' WHERE k = 'ms:${id.mira}';`);
+  assert.equal((await call('people.morning', {}, tok.boss)).people.find((p) => p.id === id.mira).sentAt, null, 'yesterday\'s send shows as not sent today');
+  assert.equal((await call('team.today', {}, tok.boss)).people.find((p) => p.id === id.mira).morningSentAt, null);
+});
+
 // ---------------------------------------------------------------- 🔁 Follow-up, 🔔 Chase, work in one line
 test('follow-up: followup.list is manager-only and lists every open task given to staff, with by-date, silent days (Sundays off), stuck, newest update; a project once; never done/cancelled', { skip }, async () => {
   for (const [u, n] of [['kavi', 'Kavi'], ['nila', 'Nila']]) {
