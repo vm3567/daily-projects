@@ -899,11 +899,18 @@ function projectRow(p, today, opts = {}) {
   const due = nextStep(p, today, { dueOnly: true }); // what the tick box ticks
   const asProject = ui.view === 'mains' && !ui.search; // 📂 Projects list: "3 tasks · 1 red" instead of the next step
   const canTick = due && p.state === 'active' && !asProject;
+  const picking = canPickRows(); // ✅ Tasks and groups: a select box for moving many tasks at once
   return h('li', {
     key: 'p-' + p.id, 'data-id': p.id, class: 'prow' + (ui.selected === p.id ? ' current' : '') + (isMainProject(store.view.data, p) ? ' main-row' : ''),
     onContextmenu: (e) => { e.preventDefault(); ui.rowMenu = { id: p.id, x: e.clientX, y: e.clientY }; render(); },
   },
-    canTick
+    picking
+      ? h('input', {
+        type: 'checkbox', class: 'row-pick', key: 'pick-' + p.id, checked: picked.has(p.id) ? true : undefined,
+        title: 'Select (then 📂 Add to project…)', 'aria-label': `Select ${p.name}`,
+        onChange: (e, el) => { if (el.checked) picked.add(p.id); else picked.delete(p.id); render(); },
+      })
+      : canTick
       ? h('input', {
         type: 'checkbox', class: 'quick-tick', key: 'qt-' + p.id + '-' + due.id,
         title: `Tick: ${due.text}`, 'aria-label': `Tick next step of ${p.name}: ${due.text}`,
@@ -934,6 +941,50 @@ function projectRow(p, today, opts = {}) {
     rowAction(p, due, colour),
     canDrag() ? h('span', { class: 'grip', 'aria-hidden': 'true', title: 'Drag to reorder' }, '⋮⋮') : null,
     ui.quickAdd === p.id ? quickAddForm(p) : null);
+}
+
+/** ✅ Tasks and groups: rows can be selected, then put into one 📂 project together. Today keeps its tick box. */
+const picked = new Set();
+function canPickRows() {
+  return !ui.search && (ui.view === 'all' || ui.view.startsWith('group:'));
+}
+
+/** The bar over the list while tasks are selected: "3 selected · 📂 Add to project… · Clear". */
+function pickBar(list) {
+  for (const id of [...picked]) if (!list.some((p) => p.id === id)) picked.delete(id); // (only what is on screen)
+  if (!canPickRows() || !picked.size) return null;
+  const data = store.view.data;
+  const box = ui.pickBox;
+  const add = (main) => {
+    let n = 0;
+    for (const id of picked) if (store.dispatch('addToProject', { projectId: id, parentId: main.id })) n++;
+    toast(`${n} task${n === 1 ? '' : 's'} added to 📂 ${main.name}`);
+    picked.clear(); ui.pickBox = null; render();
+  };
+  const create = (name) => {
+    const ids = [...picked];
+    const projectId = newId();
+    if (!store.dispatch('createMainProject', { projectId, name, groupId: data.groups[0] && data.groups[0].id, childId: ids[0] })) return;
+    for (const id of ids.slice(1)) store.dispatch('addToProject', { projectId: id, parentId: projectId });
+    toast(`New project 📂 ${name} with ${ids.length} task${ids.length === 1 ? '' : 's'}`);
+    picked.clear(); ui.pickBox = null; render();
+  };
+  const q = box ? box.q.trim() : '';
+  const mains = mainProjects(data).filter((m) => m.state !== 'finished' && (!q || m.name.toLowerCase().includes(q.toLowerCase())));
+  const exact = mains.some((m) => m.name.toLowerCase() === q.toLowerCase());
+  return h('div', { class: 'pick-bar', key: 'pick-bar' },
+    h('div', { class: 'row' },
+      h('strong', null, `${picked.size} selected`),
+      h('button', { class: 'btn primary small', type: 'button', onClick: () => { ui.pickBox = box ? null : { q: '' }; render(); focusKey('pick-q'); } }, '📂 Add to project…'),
+      h('button', { class: 'link small', type: 'button', onClick: () => { for (const p of list) picked.add(p.id); render(); } }, 'Select all'),
+      h('button', { class: 'link small', type: 'button', onClick: () => { picked.clear(); ui.pickBox = null; render(); } }, 'Clear')),
+    box ? h('div', { class: 'pick-box' },
+      h('input', { class: 'main-box-input', key: 'pick-q', value: box.q, placeholder: 'Type a project name…', autocomplete: 'off', 'aria-label': 'Project name',
+        onInput: (e, el) => { box.q = el.value; render(); },
+        onKeydown: (e) => { if (e.key === 'Escape') { ui.pickBox = null; render(); } else if (e.key === 'Enter') { e.preventDefault(); if (mains[0] && (exact || !q)) add(mains[0]); else if (q) create(q); } } }),
+      h('div', { class: 'pick-list' }, mains.slice(0, 10).map((m) =>
+        h('button', { class: 'main-box-item', key: 'pk-' + m.id, type: 'button', onClick: () => add(m) }, `📂 ${m.name}`)),
+        q && !exact ? h('button', { class: 'main-box-item create', key: 'pk-new', type: 'button', onClick: () => create(q) }, `+ Create '${q}' as a new project`) : null)) : null);
 }
 
 /** One-tap action on a row that is not green yet: "Chased" for a waiting step (a real update). */
@@ -1799,6 +1850,7 @@ function renderListColumn() {
       ui.view === 'mains' && !ui.search ? renderProjectsHead(ctx) : ui.view === 'finished' || ui.view === 'paused' || ui.search ? null : newProjectForm(),
       ui.view === 'all' && !ui.search && !ui.adding ? taskFilterSwitch() : showSort && !ui.adding ? sortSwitch() : null,
       !ui.search && list.length && ui.view !== 'mains' ? h('button', { class: 'btn small copy-list', type: 'button', title: 'Copy these as a numbered list (for an AI chat or an email)', onClick: () => copyList(currentList(), { title: viewTitle() }) }, '📋 Copy list') : null),
+    pickBar(list),
     ...listParts(list, today),
     empty,
     rowMenu());

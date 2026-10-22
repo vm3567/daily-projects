@@ -1067,3 +1067,9 @@ a.team-line.msg { background: #eef4ff; border-color: #93b4f8; color: #1e40af; fo
 .sub-remove:hover { color: var(--red, #c62828); }
 .old-steps { list-style: none; margin: 4px 0 0; padding: 0; }
 .old-step { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 6px 0; border-top: 1px solid var(--line); font-size: 14px; }
+.pick-bar { margin: 6px 0 8px; padding: 8px 10px; border: 1px solid var(--brand, #3b5bdb); border-radius: 10px; background: var(--bg); }
+.pick-bar .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.pick-box { margin-top: 8px; }
+.row-pick { width: 18px; height: 18px; margin: 0 4px; flex: none; }
+.pick-list { display: flex; flex-direction: column; margin-top: 4px; max-height: 260px; overflow-y: auto; }
+.pick-bar { position: relative; z-index: 1; }

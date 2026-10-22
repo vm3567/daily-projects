@@ -981,7 +981,7 @@ test('📂 Projects page: a click on a project row selects it and stays on the p
   assert.match(mainsSrc, /ctx\.ui\.view === 'mains' && ctx\.showHere \? ctx\.showHere\(c\.id\)/, 'a task in the TASKS table while on the Projects page');
   const here = app.slice(app.indexOf('  showHere: (id) => {'), app.indexOf('  openProject: (id) => {'));
   assert.match(here, /select\(id\);/);
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-13'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-14'/, 'phones get the new copy');
 });
 
 test('📂 project page: "✕ Remove" on a task row takes it out of this project only — the task is kept (and stays in its other projects)', () => {
@@ -1072,4 +1072,15 @@ test('menu order (owner, 22 Oct): Today, Tasks, Projects, Replies, Inbox, Groups
   assert.ok(!menu.includes('menu-person'), 'People shows just its count');
   assert.match(menu, /moreOpen \? 'More ▾' : 'More ▸'/);
   assert.match(app, /const moreOpen = !!ui\.moreMenu \|\| \['diary', 'dashboard', 'time'\]\.includes\(ui\.view\);/, 'open while one of them is on screen');
+});
+
+test('✅ Tasks and groups: a select box on each row (instead of +), a bar "N selected · 📂 Add to project… · Select all · Clear" that puts all selected tasks into one project (or a new one); Today keeps its tick box', async () => {
+  const { readFileSync } = await import('node:fs');
+  const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
+  assert.match(app, /function canPickRows\(\) \{\n  return !ui\.search && \(ui\.view === 'all' \|\| ui\.view\.startsWith\('group:'\)\);/, 'Tasks and groups only (not Today)');
+  assert.match(app, /picking\n      \? h\('input', \{\n        type: 'checkbox', class: 'row-pick'/, 'the select box takes the place of + and the tick');
+  assert.match(app, /for \(const id of picked\) if \(store\.dispatch\('addToProject', \{ projectId: id, parentId: main\.id \}\)\) n\+\+;/, 'all selected go into the chosen project');
+  assert.match(app, /store\.dispatch\('createMainProject', \{ projectId, name, groupId: data\.groups\[0\] && data\.groups\[0\]\.id, childId: ids\[0\] \}\)/, 'or a new project made with them');
+  assert.match(app, /`\$\{picked\.size\} selected`/);
+  assert.match(app, /pickBar\(list\),\n    \.\.\.listParts\(list, today\),/);
 });
