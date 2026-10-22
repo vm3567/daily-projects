@@ -434,6 +434,7 @@ export function singleStepClose(t, projects, savedIds, history, now = Date.now()
   if (p && p.team) return null; // part of a given project now: that path keeps it
   const step = p && p.steps.find((st) => st.id === t.stepRef);
   if (step && !step.done) return null;
+  if (step && step.movedTo) return null; // "Make it a project": the person's task stays as it is (with the old project)
   if (singleStepCloseWaits(step, t.stepRef, history, now)) return null; // Undo still on screen: next time
   if (step && t.reopenedAt && step.doneAt && Date.parse(String(t.reopenedAt).replace(' ', 'T') + '+05:30') > Date.parse(step.doneAt)) return null; // opened again there after your tick
   if (!step && !projects.some((x) => x.id === t.projectRef)) {
@@ -685,4 +686,29 @@ export function canGiveStep(member, project, step, task) {
 /** The steps of a People-page list that can be given (for "→ Give all N"). items = [{ project, step }]. */
 export function givableSteps(items, member, taskOf) {
   return items.filter(({ project, step }) => canGiveStep(member, project, step, taskOf ? taskOf(step.id) : null));
+}
+
+/**
+ * "No paste" email (Send pending list → Outlook): 'draft' = the finished email goes straight into the owner's Outlook
+ * Drafts (outlook.compose, never sent); 'paste' = the old way (table copied, a new mail opens, you paste it).
+ * Draft only when Outlook is connected AND the person has an email saved.
+ */
+export function emailPath({ connected = false, email = '' } = {}) {
+  return connected === true && /^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+$/.test(String(email || '').trim()) ? 'draft' : 'paste';
+}
+
+/** Why the email goes the paste way, in one short line (null when it goes as a draft). error: Outlook's words when the draft failed. */
+export function pasteReason({ connected = false, email = '', name = '', error = '' } = {}) {
+  if (!String(email || '').trim()) return `Add ${String(name || '').split(/\s+/)[0] || 'the person'}'s email first`;
+  if (error) return String(error).replace(/[.\s]+$/, '');
+  if (connected !== true) return 'Outlook not connected';
+  return emailPath({ connected, email }) === 'paste' ? 'That email address does not look right' : null;
+}
+
+/** A step made into its own project is still sent with its old (given) project while the person's task is open —
+ *  and also while the team list has not loaded yet (unknown = keep it, so the person's task is never cancelled by mistake). */
+export function keepMovedStep(step, task, teamLoaded) {
+  if (!step || !step.movedTo) return false;
+  if (!teamLoaded) return true;
+  return !!task && task.status === 'open';
 }

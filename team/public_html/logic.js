@@ -461,3 +461,20 @@ export function outlookLine(o, today) {
   parts.push(`${o.addedToday || 0} email${o.addedToday === 1 ? '' : 's'} added today`);
   return parts.join(' · ') + (o.error ? ` — ${o.error}` : '');
 }
+
+/**
+ * "No paste" morning email: 'draft' = the finished email goes straight into the owner's Outlook Drafts
+ * (outlook.compose, never sent); 'paste' = the old way (table copied, the email opens, you paste it).
+ * Draft only when Outlook is connected AND the person has an email saved. (Same rule as docs/rules.js emailPath.)
+ */
+export function emailPath({ connected = false, email = '' } = {}) {
+  return connected === true && /^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+$/.test(String(email || '').trim()) ? 'draft' : 'paste';
+}
+
+/** Why the email goes the paste way, in one short line (null when it goes as a draft). error: Outlook's words when the draft failed. */
+export function pasteReason({ connected = false, email = '', name = '', error = '' } = {}) {
+  if (!String(email || '').trim()) return `Add ${String(name || '').split(/\s+/)[0] || 'the person'}'s email first`;
+  if (error) return String(error).replace(/[.\s]+$/, '');
+  if (connected !== true) return 'Outlook not connected';
+  return emailPath({ connected, email }) === 'paste' ? 'That email address does not look right' : null;
+}

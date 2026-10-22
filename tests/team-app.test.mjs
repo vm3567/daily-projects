@@ -274,7 +274,7 @@ test('project description: taken from the project\'s tasks (the first one that h
   assert.equal(projectAboutOf([{ title: 'old server, no field' }]), '');
   assert.match(APP, /class: 'prow-about' }, aboutShort\(p\.projectAbout\)\)/, 'manager\'s Projects list row');
   assert.match(APP, /class: 'project-about' }/, 'under the title of the project and task pages');
-  assert.match(readFileSync(new URL('../team/public_html/sw.js', import.meta.url), 'utf8'), /const CACHE = 'worktask-v18'/, 'new files reach the phones');
+  assert.match(readFileSync(new URL('../team/public_html/sw.js', import.meta.url), 'utf8'), /const CACHE = 'worktask-v19'/, 'new files reach the phones');
 });
 
 // ---------------------------------------------------------------- 📧 morning email (one person's pending work as a table to fill in)
@@ -649,4 +649,36 @@ test('one People page: Work Task\'s menu opens the People page on the projects p
   assert.match(app, /item\('People ↗', false, \(\) => openPeoplePage\(\)\)/);
   assert.match(app, /function openPeoplePage\(\) \{ location\.href = 'projects\/#people'; \}/);
   assert.match(dp, /if \(location\.hash === '#people'\) \{ ui\.view = 'people';/, 'the projects page opens on People');
+});
+
+test('no-paste morning email rule (logic.js): draft only when Outlook is connected AND an email is saved; else paste, with why', async () => {
+  const { emailPath, pasteReason } = await import('../team/public_html/logic.js');
+  assert.equal(emailPath({ connected: true, email: 'nila@acton.test' }), 'draft');
+  assert.equal(emailPath({ connected: false, email: 'nila@acton.test' }), 'paste');
+  assert.equal(emailPath({ connected: true, email: '' }), 'paste');
+  assert.equal(emailPath({ connected: true, email: 'bad' }), 'paste');
+  assert.equal(emailPath({ connected: null, email: 'nila@acton.test' }), 'paste', 'still asking: paste');
+  assert.equal(pasteReason({ connected: true, email: '', name: 'Nila Devi' }), "Add Nila's email first");
+  assert.equal(pasteReason({ connected: false, email: 'nila@acton.test' }), 'Outlook not connected');
+  assert.equal(pasteReason({ connected: true, email: 'nila@acton.test', error: 'Microsoft did not answer (error 500). It will try again.' }), 'Microsoft did not answer (error 500). It will try again');
+  assert.equal(pasteReason({ connected: true, email: 'nila@acton.test' }), null);
+  const dp = await import('../docs/rules.js');
+  for (const c of [{ connected: true, email: 'a@b.test' }, { connected: false, email: 'a@b.test' }, { connected: true, email: '' }]) assert.equal(emailPath(c), dp.emailPath(c), 'the same rule in both apps');
+});
+
+test('no-paste morning email wiring: connected → outlook.compose with the built html/subject, tab opened in the tap, marked sent; else the copy + mailto way with why', () => {
+  const fn = APP.slice(APP.indexOf('async function morningEmail('), APP.indexOf('/** The manager pressed 📧 Morning email'));
+  assert.match(fn, /const connected = outlookConnected\(\);\n\s*const tryDraft = connected && \(p\.email === undefined \|\| emailPath\(\{ connected, email: p\.email \}\) === 'draft'\);/);
+  assert.match(fn, /const tab = tryDraft \? window\.open\('about:blank', '_blank'\) : null;/, 'the tab is opened in the tap');
+  assert.ok(fn.indexOf("window.open('about:blank'") < fn.indexOf('await copying;') && fn.indexOf('await copying;') < fn.indexOf('await ready;'), 'the copy is started and the tab opened before anything is awaited');
+  assert.match(fn, /if \(tryDraft && emailPath\(\{ connected, email \}\) === 'draft'\) \{\n\s*try \{\n\s*const r = await api\('outlook\.compose', \{ to: email, subject: mail\.subject, html: mail\.html \}\);\n\s*markSent\(p\.id, out\.today\);/, 'the finished email to the saved address, then marked sent');
+  assert.match(fn, /tab\.location\.href = r\.webLink;/);
+  assert.match(fn, /'Draft ready in Outlook — check it and press Send\.'/);
+  assert.match(fn, /\} catch \(ex\) \{ why = pasteReason\(\{ connected, email, name: out\.person\.name, error: ex\.message \}\); \}/, 'a failed draft falls back, saying why');
+  assert.match(fn, /if \(tab\) tab\.close\(\);\n\s*markSent\(p\.id, out\.today\);[^]*'mailto:'/, 'the fallback: close the blank tab, mark sent, open the email');
+  assert.match(fn, /table copied, paste it with ⌘ Cmd\+V/);
+  assert.ok(!/\/send|sendMail/.test(fn), 'never sends');
+  assert.match(APP, /function outlookConnected\(\) \{\n\s*if \(outlookOn === null && state\.user && state\.user\.owner\) \{\n\s*outlookOn = api\('outlook\.status'\)/, 'asked once per page load (owner only), kept in memory');
+  assert.match(APP, /outlookOn = !!o\.connected;/, 'Settings → Outlook keeps it up to date');
+  for (const s of ['function teamList() {', 'function teamToday() {', 'function peopleScreen() {']) assert.match(APP.slice(APP.indexOf(s), APP.indexOf(s) + 200), /outlookConnected\(\);/, `${s} asks before the button is pressed`);
 });

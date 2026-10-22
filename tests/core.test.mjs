@@ -1308,3 +1308,81 @@ test('people give: which steps can go to the person\'s Work Task list (linked, o
   const items = [{ project: p, step: open }, { project: p, step: { id: 's2', done: false } }, { project: p, step: { id: 's3', done: true } }];
   assert.deepEqual(givableSteps(items, member, (id) => (id === 's2' ? { status: 'open' } : null)).map((x) => x.step.id), ['s1']);
 });
+
+test('no-paste email rule (docs/rules.js): draft only when Outlook is connected AND an email is saved; else paste, with why in one short line', async () => {
+  const { emailPath, pasteReason } = await import('../docs/rules.js');
+  assert.equal(emailPath({ connected: true, email: 'nila@acton.test' }), 'draft');
+  assert.equal(emailPath({ connected: false, email: 'nila@acton.test' }), 'paste', 'not connected');
+  assert.equal(emailPath({ connected: true, email: '' }), 'paste', 'no email saved');
+  assert.equal(emailPath({ connected: true, email: 'not-an-email' }), 'paste', 'a bad email');
+  assert.equal(emailPath({ connected: true, email: 'a@b.test, c@d.test' }), 'paste', 'one person only');
+  assert.equal(emailPath({ connected: null, email: 'nila@acton.test' }), 'paste', 'still asking the server: paste');
+  assert.equal(emailPath(), 'paste');
+  assert.equal(pasteReason({ connected: true, email: '', name: 'Nila Devi' }), "Add Nila's email first");
+  assert.equal(pasteReason({ connected: false, email: 'nila@acton.test', name: 'Nila' }), 'Outlook not connected');
+  assert.equal(pasteReason({ connected: true, email: 'nila@acton.test', name: 'Nila', error: 'Sign-in expired — press Connect again.' }), 'Sign-in expired — press Connect again');
+  assert.equal(pasteReason({ connected: true, email: 'nila@acton.test', name: 'Nila' }), null, 'goes as a draft: no reason');
+});
+
+test('make it a project (stepToProject): a new active project from the step (name, group, tag, priority, about, target date, email + reply); the old step done with movedTo; counts as work; one Undo puts both back', async () => {
+  const { dayScore, singleStepClose } = await import('../docs/rules.js');
+  const s = withProject('2026-10-01');
+  applyOp(s, op('addTag', { groupId: 'g2', tagId: 't1', name: 'Plant' }, '2026-10-01'));
+  applyOp(s, op('setProjectField', { projectId: 'p1', field: 'tagId', value: 't1' }, '2026-10-01'));
+  applyOp(s, op('setProjectField', { projectId: 'p1', field: 'priority', value: 'high' }, '2026-10-01'));
+  applyOp(s, op('setStepField', { projectId: 'p1', stepId: 's1', field: 'note', value: '  Ask  for\n3 quotes  ' }, '2026-10-01'));
+  applyOp(s, op('setStepField', { projectId: 'p1', stepId: 's1', field: 'dueDate', value: '2026-10-20' }, '2026-10-01'));
+  const step = s.data.projects[0].steps.find((x) => x.id === 's1');
+  step.text = '  Order   clay for line 2 ';
+  step.mail = { conversationId: 'C-1', messageId: 'M-1' };
+  step.reply = { text: 'Dear Ravi', state: 'ready' };
+  const before = clone(s.data.projects.find((p) => p.id === 'p1'));
+  const t = op('stepToProject', { projectId: 'p1', stepId: 's1', newProjectId: 'pn' }, '2026-10-02');
+  assert.ok(applyOp(s, t));
+  const made = s.data.projects.find((p) => p.id === 'pn');
+  const old = s.data.projects.find((p) => p.id === 'p1');
+  assert.deepEqual([made.name, made.state, made.groupId, made.tagId, made.priority, made.about, made.deadline], ['Order clay for line 2', 'active', 'g2', 't1', 'high', 'Ask for 3 quotes', '2026-10-20']);
+  assert.deepEqual(made.mail, { conversationId: 'C-1', messageId: 'M-1' }, 'the email thread moves');
+  assert.deepEqual(made.reply, { text: 'Dear Ravi', state: 'ready' }, 'the reply draft moves');
+  const s1 = old.steps.find((x) => x.id === 's1');
+  assert.deepEqual([s1.done, s1.movedTo, s1.mail, s1.reply], [true, 'pn', undefined, undefined], 'the old step: done, linked, its email gone with the project');
+  assert.equal(old.lastTickDate, '2026-10-02', 'your work, like a tick');
+  const h = s.history['2026-10'];
+  assert.ok(h.some((e) => e.projectId === 'p1' && e.kind === 'step_ticked' && e.stepId === 's1'), 'counts as a tick');
+  assert.ok(h.some((e) => e.projectId === 'p1' && e.detail === 'Step moved to its own project: Order clay for line 2'));
+  assert.ok(h.some((e) => e.projectId === 'pn' && e.kind === 'created' && e.detail === 'Made from a step of Kiln trial'));
+  assert.equal(dayScore(s.data, s.history, '2026-10-02').green >= 1, true, 'the old project is green today');
+  assert.equal(singleStepClose({ status: 'open', stepRef: 's1', seq: null }, s.data.projects, null, s.history, Date.parse(T('2026-10-03'))), null, 'the person\'s team task is left as it is');
+  // refused: a done step, a missing step, a taken id
+  assert.equal(applyOp(s, op('stepToProject', { projectId: 'p1', stepId: 's1', newProjectId: 'px' }, '2026-10-02')), false, 'a done step');
+  assert.equal(applyOp(s, op('stepToProject', { projectId: 'p1', stepId: 'nope', newProjectId: 'px' }, '2026-10-02')), false, 'a missing step');
+  assert.equal(applyOp(s, op('stepToProject', { projectId: 'p1', stepId: 's2', newProjectId: 'pn' }, '2026-10-02')), false, 'the new id is taken');
+  assert.equal(applyOp(s, op('stepToProject', { projectId: 'p1', stepId: 's2' }, '2026-10-02')), false, 'no new id');
+  // one Undo: the old project back as it was, the new one gone, the history lines gone
+  applyOp(s, op('restoreProject', { project: before, undoOpId: t.id, removeProjectId: 'pn' }, '2026-10-02', '10:01:00'));
+  assert.ok(!s.data.projects.some((p) => p.id === 'pn'), 'the new project is gone');
+  const back = s.data.projects.find((p) => p.id === 'p1').steps.find((x) => x.id === 's1');
+  assert.deepEqual([back.done, back.movedTo, back.mail && back.mail.conversationId], [false, undefined, 'C-1']);
+  assert.ok(!s.history['2026-10'].some((e) => [t.id, t.id + 't', t.id + 'm'].includes(e.id)), 'no history left from it');
+});
+
+test('make it a project: a step with no note, due date or email gets the normal target date; a long step name is cut to 200', () => {
+  const s = withProject('2026-10-01');
+  s.data.projects[0].steps[1].text = 'x'.repeat(250);
+  assert.ok(applyOp(s, op('stepToProject', { projectId: 'p1', stepId: 's2', newProjectId: 'pn' }, '2026-10-02')));
+  const made = s.data.projects.find((p) => p.id === 'pn');
+  assert.equal(made.name.length, 200);
+  assert.equal(made.about, undefined);
+  assert.ok(made.deadline > '2026-10-02', 'the usual target date');
+  assert.equal(made.mail, undefined);
+});
+
+test('make it a project: the moved step stays on the person\'s list while their task is open, or while the team list is not loaded yet', async () => {
+  const { keepMovedStep } = await import('../docs/rules.js');
+  const step = { id: 's1', movedTo: 'p2', done: true };
+  assert.equal(keepMovedStep(step, undefined, false), true, 'team list not loaded: keep it (never cancel by mistake)');
+  assert.equal(keepMovedStep(step, { status: 'open' }, true), true, 'task still open: keep it');
+  assert.equal(keepMovedStep(step, { status: 'done' }, true), false, 'task finished: let it go');
+  assert.equal(keepMovedStep(step, undefined, true), false, 'no team task at all: nothing to keep');
+  assert.equal(keepMovedStep({ id: 's2', done: true }, { status: 'open' }, true), false, 'a normal done step is not kept');
+});

@@ -24,6 +24,7 @@ const HISTORY_WORDS = {
   team_ticked: 'Done by the team', team_note: 'Team note', team_step_added: 'Step added by the team', team_step_unticked: 'Opened again by the team',
   team_note_deleted: 'Team note removed', team_moved: 'Moved in Work Task', mail_note: 'Email reply',
   reply_prepared: 'Reply prepared', reply_sent: 'Reply sent', mail_replied: 'Reply sent (seen in Outlook)',
+  step_to_project: 'Step made a project',
 };
 
 /** Text box that saves on its own: after a short pause in typing, and when leaving the box. */
@@ -134,6 +135,27 @@ function stepNotes(p, s) {
   return h('div', { class: 'step-notes' }, notes.map((n) => h('div', { key: 'sn-' + n.id }, `📝 ${fmtDay(indiaDate(n.createdAt))}: ${n.text}`)));
 }
 
+/**
+ * "↗ Make it a project": the step becomes its own project (one change; Undo puts both back as they were), then the new
+ * project opens with its name ready to change. A step given to the team: ask first (the person's task stays as it is).
+ */
+function makeItAProject(ctx, p, s, tt) {
+  if (tt && tt.status === 'open' && !confirm(`${tt.assignee.name}'s task stays with ${p.name}. Continue?`)) return;
+  const newProjectId = newId();
+  const done = ctx.act('stepToProject', { projectId: p.id, stepId: s.id, newProjectId }, `↗ Now its own project: ${s.text}`, 8000);
+  if (!done) return;
+  ctx.ui.openStep = null;
+  ctx.openProject(newProjectId);
+  setTimeout(() => { const f = document.querySelector('.title-input'); if (f) { f.focus(); f.select(); } }, 30);
+}
+
+/** A step made into its own project: "→ moved to project: <name>", a link that opens it. */
+function movedLink(ctx, s) {
+  const to = ctx.store.view.data.projects.find((x) => x.id === s.movedTo);
+  return to ? h('button', { class: 'link small moved-to', type: 'button', title: 'Open that project', onClick: () => ctx.openProject(to.id) }, ` → moved to project: ${to.name}`)
+    : h('span', { class: 'muted small' }, ' → moved to a project (deleted)');
+}
+
 /** 👥 on a step given to the team: who, and today's update (or that it is missing). Opens the team task. */
 function teamChip(t, info) {
   const u = t.today;
@@ -189,7 +211,7 @@ function stepRow(ctx, p, s, box = null) {
         },
       }),
       s.done
-        ? h('span', { class: 'step-text' }, s.text, h('span', { class: 'muted small' }, ` · ${fmtDay(s.doneAt ? indiaDate(s.doneAt) : '')}`))
+        ? h('span', { class: 'step-text' }, s.text, h('span', { class: 'muted small' }, ` · ${fmtDay(s.doneAt ? indiaDate(s.doneAt) : '')}`), s.movedTo ? movedLink(ctx, s) : null)
         : autoField('input', {
           class: 'step-text', value: s.text, 'aria-label': 'Step', key: 'st-' + s.id, 'data-mention': '1',
           title: 'Click: Today\'s update is about this step. Enter: write what happened.',
@@ -245,6 +267,10 @@ function stepRow(ctx, p, s, box = null) {
         href: live ? `../#task=${tt.id}` : '../#new=' + encodeURIComponent(JSON.stringify({ title: s.text, project: p.name, projectRef: p.id, stepRef: s.id })),
         title: live ? 'See the daily updates for this step' : 'Give this step to a team member; their daily updates show here',
       }, live ? `👥 Team task: ${tt.assignee.name}` : '👥 Give to team') : null,
+      s.done ? null : h('button', {
+        class: 'btn small', title: 'This step is really a project of its own: make it one (the step is ticked here, with a link)',
+        onClick: () => makeItAProject(ctx, p, s, live ? tt : null),
+      }, '↗ Make it a project'),
       h('button', {
         class: 'btn danger small',
         onClick: () => ctx.act('deleteStep', { projectId: p.id, stepId: s.id }, `Step deleted: ${s.text}`),

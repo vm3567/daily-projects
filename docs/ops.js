@@ -469,7 +469,11 @@ const handlers = {
     keepTeamUndone(i >= 0 ? list[i] : null, back, typeof a.teamUndone === 'string' ? a.teamUndone : null);
     if (i >= 0) list[i] = back;
     else list.splice(Math.min(Math.max(0, a.index ?? 0), list.length), 0, back);
-    const undone = [a.undoOpId, ...(Array.isArray(a.undoOpIds) ? a.undoOpIds : [])].filter(Boolean).flatMap((id) => [id, id + 't']);
+    if (typeof a.removeProjectId === 'string' && a.removeProjectId !== snap.id) { // Undo of "Make it a project": the new one goes
+      const k = list.findIndex((x) => x.id === a.removeProjectId);
+      if (k >= 0) list.splice(k, 1);
+    }
+    const undone = [a.undoOpId, ...(Array.isArray(a.undoOpIds) ? a.undoOpIds : [])].filter(Boolean).flatMap((id) => [id, id + 't', id + 'm']);
     for (const id of undone) {
       for (const events of Object.values(state.history)) {
         const k = events.findIndex((e) => e.id === id);
@@ -938,6 +942,40 @@ const handlers = {
     if (item.mail) step.mail = cleanMail(item.mail); // later replies in the thread come here as notes
     if (item.mail && item.reply) step.reply = clone(item.reply); // a reply draft goes with it
     inbox.splice(inbox.indexOf(item), 1);
+    return true;
+  },
+
+  /**
+   * "↗ Make it a project": an open step becomes its own active project (one change, so Undo is one step). The new
+   * project: name = the step's words, same group / tag / priority, about = the step's note, target date = the step's
+   * due date, and the step's email thread and reply draft. The old step is ticked done (your work, like a tick) with
+   * movedTo = the new project. A team task on the step is left as it is (see rules.js singleStepClose).
+   */
+  stepToProject(state, op, a) {
+    const { data } = state;
+    const p = findProject(data, a.projectId);
+    const s = p && p.steps.find((x) => x.id === a.stepId);
+    if (!s || s.done || typeof a.newProjectId !== 'string' || !a.newProjectId || findProject(data, a.newProjectId)) return false;
+    const name = cleanText(s.text, 1000).replace(/\s+/g, ' ').trim().slice(0, 200) || 'New project';
+    const made0 = { ...op, id: op.id + 't' }; // its own history line (Undo takes both away, see restoreProject)
+    if (!handlers.createProject(state, made0, { projectId: a.newProjectId, name, groupId: p.groupId, priority: p.priority, ...(cleanDate(s.dueDate) ? { deadline: s.dueDate } : {}) })) return false;
+    const made = findProject(data, a.newProjectId);
+    if (p.tagId && made.groupId === p.groupId) made.tagId = p.tagId;
+    const about = cleanText(s.note, 5000).replace(/\s+/g, ' ').trim().slice(0, ABOUT_MAX);
+    if (about) made.about = about;
+    if (s.link) made.links.push({ id: a.newProjectId + '-link', ...s.link });
+    if (s.mail) { made.mail = clone(s.mail); delete s.mail; } // later replies in the thread go to the new project
+    if (s.reply) { made.reply = clone(s.reply); delete s.reply; }
+    for (const e of Object.values(state.history)) for (const x of e) if (x.id === made0.id) x.detail = `Made from a step of ${p.name}`;
+    // the old step: done (moved), like a tick — no repeat copy, it lives on as the new project
+    s.done = true;
+    s.doneAt = op.at;
+    s.updatedAt = op.at;
+    s.movedTo = a.newProjectId;
+    p.lastTickDate = laterDate(p.lastTickDate, indiaDate(op.at));
+    touch(p, op);
+    addEvent(state, op, p, 'step_ticked', s.text, { stepId: s.id, movedTo: a.newProjectId });
+    addEvent(state, { ...op, id: op.id + 'm' }, p, 'step_to_project', `Step moved to its own project: ${made.name}`);
     return true;
   },
 

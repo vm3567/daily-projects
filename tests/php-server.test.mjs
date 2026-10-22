@@ -1096,7 +1096,7 @@ test('work in one line: giving the same quick task twice (same clientId) makes o
 });
 
 // ---------------------------------------------------------------- Outlook → Daily Projects Inbox (against a fake Microsoft)
-const ms = { reqs: [], token: null, pages: [[]], sent: [], bodies: {}, draftCode: 201, server: null };
+const ms = { reqs: [], token: null, pages: [[]], sent: [], bodies: {}, draftCode: 201, composeCode: 201, server: null };
 async function fakeMicrosoft() {
   if (ms.server) return;
   ms.server = createServer((req, res) => {
@@ -1114,6 +1114,10 @@ async function fakeMicrosoft() {
         return send(200, { value: ms.pages[n] || [], ...(ms.pages[n + 1] ? { '@odata.nextLink': `${MS}/v1.0/next?page=${n + 1}` } : {}) });
       }
       if (u.pathname === '/v1.0/me/mailFolders/sentitems/messages') return send(200, { value: ms.sent });
+      if (u.pathname === '/v1.0/me/messages' && req.method === 'POST') { // a new draft (outlook.compose)
+        if (ms.composeCode !== 201) return send(ms.composeCode, { error: { code: 'x' } });
+        return send(201, { id: 'new-draft-1', isDraft: true, webLink: 'https://outlook.office365.com/owa/?ItemID=new-draft-1&exvsurl=1' });
+      }
       let mm = /^\/v1\.0\/me\/messages\/([^/]+)\/createReply$/.exec(u.pathname);
       if (mm && req.method === 'POST') {
         if (ms.draftCode !== 201) return send(ms.draftCode, { error: { code: 'x' } });
@@ -1344,6 +1348,46 @@ test('replies: outlook.draft is owner-only, uses the SAVED reply text and messag
   ms.draftCode = 403;
   assert.match((await call('outlook.draft', { ref: 'rs1' }, tok.boss)).error, /needs admin approval/, 'outlook.php\'s plain-words errors');
   ms.draftCode = 201;
+});
+
+test('no-paste email: outlook.compose is owner-only, saves the finished email as a DRAFT (POST /me/messages: HTML body, To, Subject), never sends; bad address / too big refused; scripts stripped; not connected = a clear error', { skip }, async () => {
+  await fakeMicrosoft();
+  sql('UPDATE wt.settings SET v = UNIX_TIMESTAMP() + 86400 WHERE k = \'jobs_at\'');
+  const good = { to: 'nila@acton.test', subject: 'Your work for Thu 22 Oct – please reply by evening', html: '<div><table><tr><td>Send kiln photos</td></tr></table></div>' };
+  assert.equal((await call('outlook.disconnect', {}, tok.boss)).ok, true);
+  assert.match((await call('outlook.compose', good, tok.boss)).error, /Outlook is not connected/, 'not connected: a clear error (the app copies the table instead)');
+  await connectOutlook();
+  assert.equal((await call('outlook.compose', good, tok.suresh)).s, 403, 'staff cannot');
+  const m2 = (await call('login', { username: 'mgr2', password: 'mgr2-pass-456' })).token;
+  assert.equal((await call('outlook.compose', good, m2)).s, 403, 'another manager cannot');
+  ms.reqs = [];
+  const evil = '<div onclick="alert(1)"><script>alert(2)</script><iframe src="https://x.test"></iframe><a href="javascript:alert(3)" onmouseover=\'x()\'>link</a><table><tr><td>Send kiln photos</td></tr></table></div>';
+  const r = await call('outlook.compose', { ...good, html: evil }, tok.boss);
+  assert.ok(r.ok, r.error);
+  assert.equal(r.webLink, 'https://outlook.office365.com/owa/?ItemID=new-draft-1&exvsurl=1');
+  const made = ms.reqs.filter((x) => x.path === '/v1.0/me/messages' && x.method === 'POST');
+  assert.equal(made.length, 1, 'one draft');
+  const b = JSON.parse(made[0].body);
+  assert.equal(b.subject, good.subject);
+  assert.deepEqual(b.toRecipients, [{ emailAddress: { address: 'nila@acton.test' } }]);
+  assert.equal(b.body.contentType, 'HTML');
+  assert.match(b.body.content, /<table><tr><td>Send kiln photos<\/td><\/tr><\/table>/, 'the table is inside');
+  assert.doesNotMatch(b.body.content, /<script|alert\(2\)|<iframe|onclick|onmouseover|javascript:/i, 'scripts, frames and on...= handlers removed');
+  assert.ok(!ms.reqs.some((x) => /\/send(Mail)?$/i.test(x.path)), 'nothing is ever sent');
+  const log = execFileSync('mysql', ['-u', 'root', `--socket=${SOCK}`, '-N', '-e', "SELECT detail FROM wt.audit WHERE action = 'outlook_compose'"], { encoding: 'utf8' });
+  assert.match(log, /draft to nila@acton\.test/, 'the audit line names who it was for');
+  assert.doesNotMatch(log, /kiln photos/, 'never the body in the log');
+  ms.reqs = [];
+  for (const to of ['', 'not-an-email', 'a@b.test, c@d.test', 'a@b.test\nBcc: x@y.test']) assert.match((await call('outlook.compose', { ...good, to }, tok.boss)).error, /email address does not look right/, `refused: ${JSON.stringify(to)}`);
+  assert.match((await call('outlook.compose', { ...good, html: '<p>' + 'x'.repeat(300 * 1024) + '</p>' }, tok.boss)).error, /too big/);
+  assert.match((await call('outlook.compose', { ...good, subject: 'x'.repeat(256) }, tok.boss)).error, /subject is too long/);
+  assert.match((await call('outlook.compose', { ...good, html: '  ' }, tok.boss)).error, /empty/);
+  assert.equal(ms.reqs.filter((x) => x.path === '/v1.0/me/messages').length, 0, 'a refused email never reaches Microsoft');
+  ms.composeCode = 403;
+  assert.match((await call('outlook.compose', good, tok.boss)).error, /Mail\.ReadWrite not approved/, 'no consent: plain words');
+  ms.composeCode = 401;
+  assert.match((await call('outlook.compose', good, tok.boss)).error, /Sign-in expired/);
+  ms.composeCode = 201;
 });
 
 test('replies: the Outlook check reads Sent Items and marks replied (not work): a ready draft, a waiting step; not a reply older than the newest email; not other threads', { skip }, async () => {

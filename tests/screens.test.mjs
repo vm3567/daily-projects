@@ -364,10 +364,10 @@ test('send sheet wiring: Outlook/Copy copy the table (html + plain), Outlook ope
   const APP = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
   const sheet = APP.slice(APP.indexOf('function openSheet('), APP.indexOf('function closeSheet('));
   assert.match(sheet, /new ClipboardItem\(\{ 'text\/html': new Blob\(\[html\], \{ type: 'text\/html' \}\), 'text\/plain': new Blob\(\[area\.value\], \{ type: 'text\/plain' \}\) \}\)/);
-  assert.match(sheet, /const outlook = async \(\) => \{\n\s*if \(html\) \{[^]*?const done = copyTable\(\);[^]*?location\.href = `mailto:\$\{[^`]*\}\?subject=\$\{encodeURIComponent\(subject\)\}`;/, 'copy first (inside the click), then mailto with To and Subject');
+  assert.match(sheet, /const outlook = async \(\) => \{[^]*?\n\s*if \(html\) \{ \/\/ the table cannot go in a link[^]*?const done = copyTable\(\);[^]*?location\.href = `mailto:\$\{[^`]*\}\?subject=\$\{encodeURIComponent\(subject\)\}`;/, 'copy first (inside the click), then mailto with To and Subject');
   assert.ok(!/mailto:[^`]*body=/.test(sheet), 'no body in the mailto');
   assert.match(sheet, /if \(html\) \{ say\(await copyTable\(\)\); return; \}/, 'Copy copies the table too');
-  assert.match(sheet, /const say = \(how\) => \{ const words = copyNotice\(how\);/, 'the honest notice');
+  assert.match(sheet, /const say = \(how, why = ''\) => \{ const words = copyNotice\(how\);/, 'the honest notice (with why the paste way, for the no-paste email)');
   assert.match(sheet, /write\.then\(\(\) => 'html', \(\) => copyPlain\(\)\)/, 'only a real table copy says html');
   assert.match(sheet, /Changes in this box only go to WhatsApp/);
   assert.match(sheet, /const wa = \(\) => \{[^\n]*if \(onSent\) onSent\('whatsapp'\)/);
@@ -573,4 +573,91 @@ test('page safety rules: no style="…" attributes in the projects app screens (
   }
   const css = readFileSync(new URL('../docs/styles.css', import.meta.url), 'utf8');
   assert.match(css, /\.reply-round \.round-actions \.round-btn\.primary \{ grid-column: 1 \/ -1;/, 'the Outlook button takes the whole row in the replies round');
+});
+
+test('no-paste email (Send pending list → Outlook): connected + email → outlook.compose with the built html/subject, the tab opened inside the click, sent mark; else copy + mailto with why', async () => {
+  const { readFileSync } = await import('node:fs');
+  const APP = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
+  const sheet = APP.slice(APP.indexOf('function openSheet('), APP.indexOf('function closeSheet('));
+  const out = sheet.slice(sheet.indexOf('const outlook = async'), sheet.indexOf('const first = '));
+  assert.match(out, /if \(html && draft\) \{\n\s*const connected = outlookConnected\(\);\n\s*if \(emailPath\(\{ connected, email \}\) === 'draft'\) \{/, 'the rule picks the way');
+  assert.match(out, /const tab = window\.open\('about:blank', '_blank'\);[^\n]*\n[^]*?await teamApi\('outlook\.compose', \{ to: email, subject, html \}\)/, 'the tab is opened before anything is awaited (inside the click), then the draft is made');
+  assert.ok(out.indexOf("window.open('about:blank'") < out.indexOf('await '), 'no await before the tab opens');
+  assert.match(out, /tab\.location\.href = out\.webLink;/, 'the draft opens in that tab');
+  assert.match(out, /'Draft ready in Outlook — check it and press Send\.'/);
+  assert.match(out, /tell\('Draft ready[^\n]*\n\s*if \(onSent\) onSent\('outlook'\);[^\n]*\n\s*return;/, 'marked sent as today');
+  assert.match(out, /catch \(e\) \{\n\s*if \(tab\) tab\.close\(\);\n\s*why = pasteReason\(\{ connected, email, name: to && to\.name, error: e\.message \}\);/, 'a failed draft: the paste way, saying why');
+  assert.match(out, /\} else why = pasteReason\(\{ connected, email, name: to && to\.name \}\)/, 'not connected / no email: the paste way, saying why');
+  assert.match(out, /const done = copyTable\(\);[^]*say\(how, why\);[^]*location\.href = `mailto:/, 'the fallback still copies the table and opens a new mail');
+  assert.ok(!/\/send|sendMail/.test(out), 'never sends');
+  const open = APP.slice(APP.indexOf('function openPersonMessage('), APP.indexOf('function teamMorning('));
+  assert.match(open, /outlookConnected\(\);[^\n]*\n\s*const data/, 'asked when the sheet opens, before the button is pressed');
+  assert.match(open, /draft: true,/, 'the pending list uses the no-paste way');
+  assert.match(APP, /let outlookOn = null;[^]*?function outlookConnected\(\) \{\n\s*if \(outlookOn === null\) \{\n\s*outlookOn = onServer \? teamApi\('outlook\.status'\)\.then\(\(o\) => \{ outlookOn = !!\(o\.outlook && o\.outlook\.connected\); \}, \(\) => \{ outlookOn = false; \}\) : false;/, 'outlook.status once per page load, kept in memory');
+  assert.match(APP, /emailPath, pasteReason \} from '\.\/rules\.js'/);
+  assert.match(sheet, /const say = \(how, why = ''\) => \{[^\n]*tell\(why \? `\$\{why\} — /, 'one short line: why, then what was copied');
+});
+
+test('make it a project: the step\'s ⋯ details have "↗ Make it a project" (one act, then the new project opens); a team-linked step asks first; the old step shows "→ moved to project" as a link', () => {
+  const find = (node, f) => (f(node) ? node : (node.childNodes || []).map((c) => find(c, f)).find(Boolean));
+  const btn = (el, words) => find(el, (n) => n.nodeName === 'BUTTON' && n.textContent.includes(words));
+  const s = sampleState();
+  const calls = [], opened = [];
+  const ctx = fakeCtx(s, { selected: 'p1', update: {}, openStep: 's2' });
+  ctx.act = (type, args, msg) => { calls.push({ type, args, msg }); return { op: {}, undo: () => {} }; };
+  ctx.openProject = (id) => opened.push(id);
+  const b = btn(renderDetail(ctx), '↗ Make it a project');
+  assert.ok(b, 'the button is in the step details');
+  b.__on.click();
+  assert.equal(calls.length, 1, 'one change (so Undo is one step)');
+  assert.equal(calls[0].type, 'stepToProject');
+  assert.deepEqual([calls[0].args.projectId, calls[0].args.stepId], ['p1', 's2']);
+  assert.ok(calls[0].args.newProjectId, 'a new id');
+  assert.deepEqual(opened, [calls[0].args.newProjectId], 'the new project opens');
+  assert.equal(ctx.ui.openStep, null);
+  // a done step: no button
+  assert.ok(!btn(renderDetail(fakeCtx(s, { selected: 'p1', update: {}, openStep: 's1', showDone: true })), '↗ Make it a project'), 'not on a done step');
+  // given to the team: ask first; No = nothing changes
+  const asked = [];
+  const saved = globalThis.confirm;
+  try {
+    calls.length = 0;
+    const tctx = fakeCtx(s, { selected: 'p1', update: {}, openStep: 's2' });
+    tctx.onServer = true;
+    tctx.teamInfo = () => ({ byStep: new Map(), fillBy: '18:00' });
+    tctx.teamPeople = () => [];
+    tctx.teamTask = (id) => (id === 's2' ? { id: 7, status: 'open', assignee: { id: 2, name: 'Valar' }, stepRef: 's2' } : null);
+    tctx.act = ctx.act;
+    tctx.openProject = ctx.openProject;
+    globalThis.confirm = (q) => { asked.push(q); return false; };
+    btn(renderDetail(tctx), '↗ Make it a project').__on.click();
+    assert.deepEqual(asked, ["Valar's task stays with Kiln. Continue?"]);
+    assert.equal(calls.length, 0, 'No: nothing changes');
+    globalThis.confirm = (q) => { asked.push(q); return true; };
+    btn(renderDetail(tctx), '↗ Make it a project').__on.click();
+    assert.equal(calls.length, 1, 'Yes: made (the team task is not touched here)');
+  } finally { globalThis.confirm = saved; }
+  // after it: the old step is done with a link to the new project
+  applyOps(s, [makeOp('stepToProject', { projectId: 'p1', stepId: 's2', newProjectId: 'pn' })]);
+  opened.length = 0;
+  const after = fakeCtx(s, { selected: 'p1', update: {}, showDone: true });
+  after.openProject = (id) => opened.push(id);
+  const link = btn(renderDetail(after), '→ moved to project: Fire samples');
+  assert.ok(link, 'the old step links to the new project');
+  link.__on.click();
+  assert.deepEqual(opened, ['pn']);
+});
+
+test('make it a project wiring (app.js): Undo also takes the new project away; a given project keeps sending the moved step while its team task is open', async () => {
+  const { readFileSync } = await import('node:fs');
+  const APP = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
+  const act = APP.slice(APP.indexOf('function act(type, args, message'), APP.indexOf('/** Remember how far the list'));
+  assert.match(act, /type === 'stepToProject' \? \{ removeProjectId: args\.newProjectId \} : \{\}/);
+  assert.match(act, /store\.dispatch\('restoreProject', \{ project: before, index, undoOpId: op\.id, undoMonth: opMonth\(op\), \.\.\.made \}\)/);
+  const steps = APP.slice(APP.indexOf('const projectSteps = (p) =>'), APP.indexOf('const wholeRef ='));
+  // the rule itself (keep while the task is open, and while the team list is not loaded) is checked in core.test.mjs
+  assert.match(steps, /const movedButGiven = \(x\) => keepMovedStep\(x, team\.byStep\.get\(x\.id\), !!team\.listAt\);/);
+  assert.match(steps, /\(!x\.done \|\| movedButGiven\(x\)\)/, 'the person\'s task is not cancelled by the move');
+  const DETAIL = readFileSync(new URL('../docs/ui/detail.js', import.meta.url), 'utf8');
+  assert.match(DETAIL, /setTimeout\(\(\) => \{ const f = document\.querySelector\('\.title-input'\); if \(f\) \{ f\.focus\(\); f\.select\(\); \} \}, 30\);/, 'the new project\'s name is ready to change');
 });

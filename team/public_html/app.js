@@ -1,7 +1,7 @@
 // Work Task: the team app. Staff see and fill their own tasks; the manager gives tasks and sees everything.
 // No outside libraries. All text from the server is put on screen as text (never as HTML).
 
-import { addDay, weekdayOf, dueOn, itemKey, diaryRows, fieldChanged, lateValue, afterFlush, boxStillThere, updateSaveBody, redrawHow, projectRowState, aboutShort, projectAboutOf, giveBackShow, keptNotice, noticeHow, pasteWaits, msgBoxSent, redrawAfterSend, taskSaveBody, morningMail, morningOrder, morningSummary, morningTitle, morningLast, mailDate, sentTag, sentTime, followupRows, followupGroups, followupSummary, roundKey, roundPlan, roundMark, parseQuickTask, outlookLine } from './logic.js'; // the rules (checked in tests/team-app.test.mjs)
+import { addDay, weekdayOf, dueOn, itemKey, diaryRows, fieldChanged, lateValue, afterFlush, boxStillThere, updateSaveBody, redrawHow, projectRowState, aboutShort, projectAboutOf, giveBackShow, keptNotice, noticeHow, pasteWaits, msgBoxSent, redrawAfterSend, taskSaveBody, morningMail, morningOrder, morningSummary, morningTitle, morningLast, mailDate, sentTag, sentTime, followupRows, followupGroups, followupSummary, roundKey, roundPlan, roundMark, parseQuickTask, outlookLine, emailPath, pasteReason } from './logic.js'; // the rules (checked in tests/team-app.test.mjs)
 
 const TOKEN_KEY = 'wt.token';
 const state = {
@@ -956,6 +956,7 @@ async function refreshTeamCount() {
 
 /** Manager: what needs you, then each person's tasks today (the menu can show one person only). */
 function teamList() {
+  outlookConnected(); // asked once per page load, so 📧 Morning email knows by the time it is pressed
   const d = state.data;
   const stuck = d.stuck || [], unread = d.unread || [], sugg = d.suggestions || [];
   const filt = state.personFilter;
@@ -1729,6 +1730,7 @@ function openPeoplePage() { location.href = 'projects/#people'; }
 // ---------- manager: team today
 
 function teamToday() {
+  outlookConnected(); // asked once per page load, so 📧 Morning email knows by the time it is pressed
   const d = state.data;
   const byPerson = new Map();
   for (const t of d.tasks) { if (!byPerson.has(t.assignee.id)) byPerson.set(t.assignee.id, []); byPerson.get(t.assignee.id).push(t); }
@@ -1756,28 +1758,61 @@ function teamToday() {
 }
 
 /**
- * 📧 Morning email: copy the person's pending work as a table (Ctrl+V in the email), then open the email with To and Subject filled.
- * The copy is started at once, in the tap itself (browsers only allow copying straight after a tap); the table follows from the server.
+ * Is the owner's Outlook connected (for the "no paste" morning email)? Asked once per page load (outlook.status, owner
+ * only), kept in memory; Settings' Outlook card keeps it up to date. false until the answer comes.
+ */
+let outlookOn = null; // null: not asked; a promise while asking; then true / false
+function outlookConnected() {
+  if (outlookOn === null && state.user && state.user.owner) {
+    outlookOn = api('outlook.status').then((d) => { outlookOn = !!(d.outlook && d.outlook.connected); }, () => { outlookOn = false; });
+  }
+  return outlookOn === true;
+}
+
+/**
+ * 📧 Morning email. "No paste": with the owner's Outlook connected and the person's email saved, the finished email
+ * (table inside, To and Subject filled) goes straight into Outlook Drafts (outlook.compose, never sent) and opens in a new
+ * tab — you check it and press Send. Otherwise (or if that fails): copy the table (Ctrl+V in the email), then open the
+ * email with To and Subject filled, and say why in one short line.
+ * The copy and the new tab are started at once, in the tap itself (browsers only allow them straight after a tap).
  */
 async function morningEmail(p) {
   const ready = api('morning.mail', { userId: p.id }).then((out) => ({ out, mail: morningMail({ person: out.person, manager: out.manager, items: out.items, today: out.today }) }));
+  const connected = outlookConnected();
+  const tryDraft = connected && (p.email === undefined || emailPath({ connected, email: p.email }) === 'draft');
   let copied = false;
-  try {
-    if (!window.ClipboardItem || !navigator.clipboard || !navigator.clipboard.write) throw new Error('no table copy');
-    const blob = (type, key) => ready.then(({ mail }) => new Blob([mail[key]], { type }));
-    await navigator.clipboard.write([new ClipboardItem({ 'text/html': blob('text/html', 'html'), 'text/plain': blob('text/plain', 'text') })]);
-    copied = true;
-  } catch { /* table copy not allowed here: plain words below */ }
+  const copying = (async () => {
+    try {
+      if (!window.ClipboardItem || !navigator.clipboard || !navigator.clipboard.write) throw new Error('no table copy');
+      const blob = (type, key) => ready.then(({ mail }) => new Blob([mail[key]], { type }));
+      await navigator.clipboard.write([new ClipboardItem({ 'text/html': blob('text/html', 'html'), 'text/plain': blob('text/plain', 'text') })]);
+      copied = true;
+    } catch { /* table copy not allowed here: plain words below */ }
+  })();
+  const tab = tryDraft ? window.open('about:blank', '_blank') : null; // opened now, inside the tap (a tab opened later is blocked)
+  await copying;
   let got;
-  try { got = await ready; } catch (ex) { toast(ex.message, 5000); return; }
+  try { got = await ready; } catch (ex) { if (tab) tab.close(); toast(ex.message, 5000); return; }
   const { out, mail } = got;
+  const email = out.person.email || '';
+  let why = '';
+  if (tryDraft && emailPath({ connected, email }) === 'draft') {
+    try {
+      const r = await api('outlook.compose', { to: email, subject: mail.subject, html: mail.html });
+      markSent(p.id, out.today); // the same sent mark as the paste way
+      if (tab) { try { tab.opener = null; } catch { /* fine */ } tab.location.href = r.webLink; } else window.open(r.webLink, '_blank', 'noopener');
+      notice('msg', 'Draft ready in Outlook — check it and press Send.', null, null, {});
+      return;
+    } catch (ex) { why = pasteReason({ connected, email, name: out.person.name, error: ex.message }); }
+  } else if (!email || (state.user && state.user.owner)) why = pasteReason({ connected, email, name: out.person.name }) || '';
+  if (tab) tab.close();
   markSent(p.id, out.today); // (on the server, so every device shows it; the email opens even if this fails)
   if (!copied) try { await navigator.clipboard.writeText(mail.text); copied = true; } catch { /* not allowed either */ }
-  const email = out.person.email || '';
   el('a', { href: 'mailto:' + encodeURIComponent(email).replace(/%40/g, '@') + '?subject=' + encodeURIComponent(mail.subject) }).click(); // Outlook opens
-  const noEmail = email ? '' : ` No email saved for ${out.person.name}: add it on the People page.`;
-  if (copied) notice('msg', 'Table copied — press Ctrl+V in the email, then Send.', noEmail.trim() || null, null, { stay: !email });
-  else notice('msg', 'Could not copy. Select these words, copy them into the email, then Send.' + noEmail, mail.text, null, { copy: true, stay: true });
+  const lead = why ? why + ' — ' : '';
+  const noEmail = email ? null : 'Then add it on the People page.';
+  if (copied) notice('msg', lead + (lead ? 'table copied, paste it with ⌘ Cmd+V (Ctrl+V), then Send.' : 'Table copied — press Ctrl+V in the email, then Send.'), noEmail, null, { stay: !email });
+  else notice('msg', lead + 'Could not copy. Select these words, copy them into the email, then Send.', mail.text, null, { copy: true, stay: true });
 }
 
 /** The manager pressed 📧 Morning email: save the time on the server; if that fails, show the mark on this device anyway. */
@@ -2005,6 +2040,7 @@ function shareBox(p) {
 }
 
 function peopleScreen() {
+  outlookConnected(); // asked once per page load, so 📧 Morning email knows by the time it is pressed
   const users = state.data.users;
   const err = el('p', { class: 'err', hidden: true });
   const name = el('input', { required: true, placeholder: 'Suresh Kumar' });
@@ -2130,6 +2166,7 @@ function outlookCard() {
     line.classList.toggle('bad', !!o.error);
     checkBtn.hidden = offBtn.hidden = !o.connected;
     connectBtn.textContent = o.connected ? 'Connect again' : 'Connect Outlook';
+    outlookOn = !!o.connected; // the 📧 Morning email buttons follow (no-paste draft)
   };
   const run = async (b, a, body, after) => {
     b.disabled = true;

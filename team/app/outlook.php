@@ -437,6 +437,40 @@ function ol_draft(string $id): string {
   return $link;
 }
 
+/** outlook.compose: the app's email HTML, made safe anyway (no scripts, frames, on...= handlers or javascript: links). */
+function ol_clean_html(string $html): string {
+  $html = (string)preg_replace('#<(script|iframe|object|embed|style)\b[^>]*>.*?</\1\s*>#is', '', $html);
+  $html = (string)preg_replace('#</?(script|iframe|object|embed|frame|frameset|base|meta|link)\b[^>]*>#i', '', $html);
+  return (string)preg_replace_callback('#<[a-z][^>]*>#i', function ($m) {
+    $tag = (string)preg_replace('#\s+on[a-z]+\s*=\s*("[^"]*"|\'[^\']*\'|[^\s>]+)#i', '', $m[0]);
+    return (string)preg_replace('#(href|src)\s*=\s*(["\']?)\s*(javascript|vbscript|data):#i', '$1=$2#', $tag);
+  }, $html);
+}
+
+/**
+ * "No paste" email: the finished email (the table already inside, To and Subject filled) saved in the owner's Outlook
+ * Drafts. Never sent: the owner checks it and presses Send. Returns the draft's link.
+ */
+function ol_compose(string $to, string $subject, string $html): string {
+  if (strlen($to) > 254 || !filter_var($to, FILTER_VALIDATE_EMAIL)) throw new OlError('That email address does not look right. Fix it on the person\'s page.');
+  if (trim($subject) === '') throw new OlError('The email has no subject.');
+  if (mb_strlen($subject) > 255) throw new OlError('The subject is too long (255 letters at most).');
+  if (trim($html) === '') throw new OlError('The email is empty.');
+  if (strlen($html) > 300 * 1024) throw new OlError('The email is too big for a draft (300 KB at most).');
+  if (setting('ol_refresh') === '') throw new OlError('Outlook is not connected.');
+  $token = ol_access_token();
+  [$code, $j] = ol_http(ol_graph_base() . '/v1.0/me/messages', null, $token, [
+    'subject' => ol_one_line($subject, 255),
+    'body' => ['contentType' => 'HTML', 'content' => ol_clean_html($html)],
+    'toRecipients' => [['emailAddress' => ['address' => $to]]],
+  ]);
+  if ($code === 403) throw new OlError('Outlook did not allow making a draft (Mail.ReadWrite not approved) — press Connect again, or ask IT.');
+  if ($code !== 201 && $code !== 200) throw ol_graph_error($code);
+  $link = ol_link((string)($j['webLink'] ?? ''));
+  if (!$link) throw new OlError('Outlook made the draft but sent no link. Look in your Drafts folder.');
+  return $link;
+}
+
 /** The newest email's words as plain text (for Claude writing a reply on the Mac), cut to $max letters. */
 function ol_mail_body(string $id, int $max = 6000): array {
   if (setting('ol_refresh') === '') throw new OlError('Outlook is not connected.');
@@ -584,6 +618,12 @@ function ol_handle(string $a, array $in, array $me): ?array {
         $link = ol_draft(trim((string)($in['ref'] ?? '')));
         audit($me['id'], 'outlook_draft', '');
         return ['webLink' => $link];
+      case 'outlook.compose': { // a new email saved as a draft (never sent); no body in the log
+        $to = trim((string)($in['to'] ?? ''));
+        $link = ol_compose($to, (string)($in['subject'] ?? ''), (string)($in['html'] ?? ''));
+        audit($me['id'], 'outlook_compose', 'draft to ' . $to);
+        return ['webLink' => $link];
+      }
       case 'outlook.disconnect':
         ol_forget_signin();
         audit($me['id'], 'outlook_off', '');

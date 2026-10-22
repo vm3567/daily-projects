@@ -16,7 +16,7 @@ import { ServerRepo, SERVER_TOKEN_KEY } from './serverrepo.js';
 import { MockRepo } from './mockrepo.js';
 import { device } from './device.js';
 import { DATA_OWNER, DATA_REPO, DATA_BRANCH, MOVED_TO, REFRESH_MS, AI_DAILY_LIMIT, BRIEF_CLAIM_MINUTES, WAIT_RED_DAYS, NO_WORK_NOTE_DAYS } from './config.js';
-import { dotColour, greenByTeamOnly, isSnoozed, restUntil, awakeProjects, activeProjects, nextStep, todayIndia, isSundayIndia, colourCounts, isOverdue, indiaDate, waitingDays, daysWithoutWork, dayScore, greenStreak, addDays, monthOf, fmtMinutes, takeBackWaits, staffStepAction, pasteGoesToProject, singleStepClose, versionRequest, askDiaryAgain, diaryLoadedAt, photoNeedsFetch, teamUndoKey, teamActionUndone, teamProgressOf, projectKeyIgnored, teamMovedTo, serverHolder, teamMemberFor, repliesOf, mailThreads, replyMailto, MAILTO_BODY_MAX } from './rules.js';
+import { dotColour, greenByTeamOnly, isSnoozed, restUntil, awakeProjects, activeProjects, nextStep, todayIndia, isSundayIndia, colourCounts, isOverdue, indiaDate, waitingDays, daysWithoutWork, dayScore, greenStreak, addDays, monthOf, fmtMinutes, takeBackWaits, staffStepAction, pasteGoesToProject, singleStepClose, versionRequest, askDiaryAgain, diaryLoadedAt, photoNeedsFetch, teamUndoKey, teamActionUndone, teamProgressOf, projectKeyIgnored, teamMovedTo, serverHolder, keepMovedStep, teamMemberFor, repliesOf, mailThreads, replyMailto, MAILTO_BODY_MAX, emailPath, pasteReason } from './rules.js';
 import { newId, clone, opMonth, groupHasTimer, cleanLink, carriedOps } from './ops.js';
 import * as ai from './ai.js';
 import { parseVoice } from './voice.js';
@@ -99,7 +99,9 @@ function act(type, args, message, ms = 4000) {
   const op = store.dispatch(type, args);
   if (!op) return null;
   const undo = before ? () => {
-    if (store.dispatch('restoreProject', { project: before, index, undoOpId: op.id, undoMonth: opMonth(op) })) toast('Undone', 1500);
+    // (Make it a project: the new project goes too)
+    const made = type === 'stepToProject' ? { removeProjectId: args.newProjectId } : {};
+    if (store.dispatch('restoreProject', { project: before, index, undoOpId: op.id, undoMonth: opMonth(op), ...made })) toast('Undone', 1500);
   } : null;
   if (message) toast(message, ms, undo);
   return { op, undo };
@@ -327,14 +329,15 @@ function personNamed(name) {
  * html: the same message as an email table — then Outlook and Copy put the table on the clipboard (with plain lines
  * as the fallback) and Outlook opens a new mail with To and Subject (you paste the table in). onSent: WhatsApp or Outlook pressed.
  */
-function openSheet({ title, text, busy = false, error = '', extra = null, subject = 'Update', to = null, html = '', onSent = null }) {
+function openSheet({ title, text, busy = false, error = '', extra = null, subject = 'Update', to = null, html = '', onSent = null, draft = false }) {
   const v = document.getElementById('viewer');
   v.hidden = false;
   v.classList.add('sheet-mode');
   const area = h('textarea', { class: 'sheet-text', rows: 12, 'aria-label': title });
   area.value = text || '';
   const notice = h('p', { class: 'sheet-notice small', role: 'status', hidden: true });
-  const say = (how) => { const words = copyNotice(how); notice.textContent = words; notice.hidden = false; toast(words, 6000); };
+  const tell = (words) => { notice.textContent = words; notice.hidden = false; toast(words, 6000); };
+  const say = (how, why = '') => { const words = copyNotice(how); tell(why ? `${why} — ${words.charAt(0).toLowerCase()}${words.slice(1)}` : words); };
   const copyPlain = async () => {
     try { await navigator.clipboard.writeText(area.value); return 'text'; }
     catch { area.select(); return document.execCommand && document.execCommand('copy') ? 'text' : 'none'; }
@@ -359,11 +362,31 @@ function openSheet({ title, text, busy = false, error = '', extra = null, subjec
   const email = to && to.email;
   const wa = () => { window.open(`https://wa.me/${phone || ''}?text=${encodeURIComponent(area.value)}`, '_blank', 'noopener'); if (onSent) onSent('whatsapp'); };
   // Outlook on the web, new mail with To, subject and text filled in (you use Outlook in Chrome)
+  // draft: "no paste" — with Outlook connected and an email saved, the finished email (table inside) goes straight into
+  // the owner's Outlook Drafts (outlook.compose, never sent) and opens; else (or if that fails) the copy + new mail way.
   const outlook = async () => {
+    let why = '';
+    if (html && draft) {
+      const connected = outlookConnected();
+      if (emailPath({ connected, email }) === 'draft') {
+        const tab = window.open('about:blank', '_blank'); // opened now, inside the click (a tab opened later is blocked)
+        tell('Making the draft in Outlook…');
+        try {
+          const out = await teamApi('outlook.compose', { to: email, subject, html });
+          if (tab) { try { tab.opener = null; } catch { /* fine */ } tab.location.href = out.webLink; } else window.open(out.webLink, '_blank', 'noopener');
+          tell('Draft ready in Outlook — check it and press Send.');
+          if (onSent) onSent('outlook'); // marked sent as today, the same as the paste way
+          return;
+        } catch (e) {
+          if (tab) tab.close();
+          why = pasteReason({ connected, email, name: to && to.name, error: e.message });
+        }
+      } else why = pasteReason({ connected, email, name: to && to.name }) || '';
+    }
     if (html) { // the table cannot go in a link: copy it, then open the mail with To and Subject only
       const done = copyTable();
       const how = await done;
-      say(how);
+      say(how, why);
       location.href = `mailto:${encodeURIComponent(email || '').replace(/%40/g, '@')}?subject=${encodeURIComponent(subject)}`;
     } else window.open(`https://outlook.office.com/mail/deeplink/compose?to=${encodeURIComponent(email || '')}&subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(area.value)}`, '_blank', 'noopener');
     if (onSent) onSent('outlook');
@@ -387,6 +410,7 @@ function openSheet({ title, text, busy = false, error = '', extra = null, subjec
 /** "📋 Send pending list": the words for WhatsApp, the table for Outlook. A person with a Work Task account gets the
  *  server's projects and tasks first and their sent mark is kept on the server (as in the Work Task app). */
 function openPersonMessage(person) {
+  outlookConnected(); // asked now (once per page load), so the Outlook button knows by the time it is pressed
   const data = store.view.data;
   const today = todayIndia();
   const link = personTeamLink(person);
@@ -396,8 +420,20 @@ function openPersonMessage(person) {
   const email = (link && link.user && link.user.email) || person.email || '';
   openSheet({
     title: `Pending list for ${person.name}`, text: personMessageText(data, person, today, items), subject: mail.subject, html: mail.html,
-    to: { ...person, email }, onSent: () => markPersonSent(person, link),
+    to: { ...person, email }, onSent: () => markPersonSent(person, link), draft: true,
   });
+}
+
+/**
+ * Is the owner's Outlook connected (for the "no paste" email)? Asked once per page load (outlook.status), kept in memory.
+ * false until the answer comes, on this computer's copy (not worktask.in), and for anyone but the owner.
+ */
+let outlookOn = null; // null: not asked; a promise while asking; then true / false
+function outlookConnected() {
+  if (outlookOn === null) {
+    outlookOn = onServer ? teamApi('outlook.status').then((o) => { outlookOn = !!(o.outlook && o.outlook.connected); }, () => { outlookOn = false; }) : false;
+  }
+  return outlookOn === true;
 }
 
 /** Remember that today's list went out: on the server for a Work Task person, else in this app's data. */
@@ -2852,7 +2888,9 @@ function teamPeople() {
  *  (snoozed, or the next copy of a repeating step) is sent on the day it comes back, not before. */
 const projectSteps = (p) => {
   const today = todayIndia();
-  const open = p.steps.filter((x) => !x.done && !(x.snoozedUntil && x.snoozedUntil > today)).map((x) => ({ stepRef: x.id, title: x.text, details: x.note || '', dueDate: x.dueDate || null }));
+  // a step made into its own project ("Make it a project") whose team task is still open: kept, so the person's task stays
+  const movedButGiven = (x) => keepMovedStep(x, team.byStep.get(x.id), !!team.listAt);
+  const open = p.steps.filter((x) => (!x.done || movedButGiven(x)) && !(x.snoozedUntil && x.snoozedUntil > today)).map((x) => ({ stepRef: x.id, title: x.text, details: x.note || '', dueDate: x.dueDate || null }));
   if (open.length || p.steps.length) return open; // (steps all done or snoozed: nothing to do; the whole-project task is only for no steps at all)
   // no steps at all: the person still gets the project, as one task with its name, until steps are added
   return [{ stepRef: wholeRef(p.id), title: p.name, details: p.status || '' }];
