@@ -9,7 +9,7 @@ import { renderDashboard } from './ui/dashboard.js';
 import { renderTimeReport } from './ui/timereport.js';
 import { renderReplies, renderReplyRound, replyArea, readyCount } from './ui/replies.js';
 import { projectChips, renderProjectsHead, openMainBox, listColour } from './ui/mains.js';
-import { projectMatches, diaryEntries, backupPayload, summaryText, personMessageText, personMessageHtml, sentMarkOf, copyNotice } from './reports.js';
+import { projectMatches, diaryEntries, backupPayload, summaryText, personMessageText, personMessageHtml, sentMarkOf, copyNotice, tasksListText } from './reports.js';
 import { closeViewer, uploadBlob } from './ui/files.js';
 import { Store } from './store.js';
 import { GitHubRepo } from './github.js';
@@ -212,6 +212,7 @@ const ctx = {
   openReplyDraft: (m) => openReplyDraft(m),
   openMail: (m) => openMail(m),
   startReplyRound: () => startReplyRound(),
+  copyList: (tasks, opts) => copyList(tasks, opts),
   // on the 📂 Projects page: show a project or a task on the right and stay on the page (nothing jumps away)
   showHere: (id) => {
     if (!store.view.data.projects.some((x) => x.id === id)) return;
@@ -725,6 +726,18 @@ function markShownOpened() {
   if (!ui.selected || (ui.view === 'people' && !ui.search)) return;
   const detail = document.getElementById('detail');
   if (detail && detail.offsetParent !== null) { markOpened(ui.selected); }
+}
+
+/** "📋 Copy list": the tasks as a numbered list (rich for email, plain for an AI chat), copied in one tap. */
+async function copyList(tasks, opts = {}) {
+  const { text, html } = tasksListText(tasks, todayIndia(), opts);
+  const n = (tasks || []).length;
+  try {
+    if (window.ClipboardItem && navigator.clipboard && navigator.clipboard.write) {
+      await navigator.clipboard.write([new ClipboardItem({ 'text/html': new Blob([html], { type: 'text/html' }), 'text/plain': new Blob([text], { type: 'text/plain' }) })]);
+    } else await navigator.clipboard.writeText(text);
+    toast(`📋 Copied ${n} task${n === 1 ? '' : 's'} — paste into an AI chat or an email.`);
+  } catch { toast('Could not copy here. Try again, or use Chrome.'); }
 }
 
 function select(id) {
@@ -1772,7 +1785,8 @@ function renderListColumn() {
     ui.view === 'today' && !ui.search ? renderBrief() : null,
     h('div', { class: 'list-tools' },
       ui.view === 'mains' && !ui.search ? renderProjectsHead(ctx) : ui.view === 'finished' || ui.view === 'paused' || ui.search ? null : newProjectForm(),
-      showSort && !ui.adding ? sortSwitch() : null),
+      showSort && !ui.adding ? sortSwitch() : null,
+      !ui.search && list.length && ui.view !== 'mains' ? h('button', { class: 'btn small copy-list', type: 'button', title: 'Copy these as a numbered list (for an AI chat or an email)', onClick: () => copyList(currentList(), { title: viewTitle() }) }, '📋 Copy list') : null),
     ...listParts(list, today),
     empty,
     rowMenu());

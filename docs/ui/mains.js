@@ -192,7 +192,8 @@ export function subProjectsBlock(ctx, p, today = todayIndia()) {
       }))) : h('p', { class: 'muted small' }, 'No tasks in it yet.'),
     h('div', { class: 'sub-buttons' },
       h('button', { class: 'btn small', type: 'button', onClick: () => openAddTasks(ctx, p) }, '+ Add tasks'),
-      h('button', { class: 'btn small', type: 'button', onClick: () => newProjectHere(ctx, p) }, '+ New task here')),
+      h('button', { class: 'btn small', type: 'button', onClick: () => newProjectHere(ctx, p) }, '+ New task here'),
+      h('button', { class: 'btn small', type: 'button', title: 'Copy this project\'s tasks as a numbered list (for an AI chat or an email)', onClick: () => ctx.copyList && ctx.copyList(childrenOf(ctx.store.view.data, p.id).filter((c) => c.state !== 'finished'), { title: `📂 ${p.name}`, about: p.about || '' }) }, '📋 Copy list')),
     addTasksPicker(ctx, p));
 }
 

@@ -1874,3 +1874,18 @@ test('✉ Replies from tasks made from an email: waiting while the newest email 
   applyOp(s, op('setReply', { projectId: 't1', text: 'Dear Ravi, welcome.' }, '2026-10-22'));
   assert.ok(repliesOf(s.data, '2026-10-22').ready.some((x) => x.id === 't1'));
 });
+
+test('📋 Copy list: tasks as a numbered list (title, description, next step, person, overdue, about, last update), rich and plain, text made safe', async () => {
+  const { tasksListText } = await import('../docs/reports.js');
+  const today = '2026-10-22';
+  const tasks = [
+    { name: 'Kiln 2', state: 'active', deadline: '2026-10-20', about: 'SV changed in the power failure', team: { name: 'Ruthuraj' },
+      steps: [{ id: 'a', text: 'Check the SV', done: false }], workNotes: [{ text: 'Checked <b>servo</b>', createdAt: '2026-10-21T06:00:00Z' }] },
+    { name: 'Kiln 1', state: 'active', steps: [], workNotes: [] },
+  ];
+  const { text, html } = tasksListText(tasks, today, { title: '📂 Kilns', about: 'All kiln problems' });
+  assert.match(text, /^📂 Kilns\nAll kiln problems\n\n1\. Kiln 2 — Next: Check the SV · with Ruthuraj · overdue since 20 Oct\n   About: SV changed in the power failure\n   Last update: 21 Oct: Checked <b>servo<\/b>\n2\. Kiln 1 — No next step$/);
+  assert.match(html, /<ol[^>]*><li[^>]*><b>Kiln 2<\/b>/);
+  assert.ok(html.includes('Checked &lt;b&gt;servo&lt;/b&gt;') && !html.includes('<b>servo'), 'made safe in the rich copy');
+  assert.match(tasksListText([], today).text, /No tasks\./);
+});
