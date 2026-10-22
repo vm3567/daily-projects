@@ -1,7 +1,7 @@
 // Pure logic behind search, the Diary, Today's summary and the backup file.
 // No screen code here, so it is covered by automatic tests (tests/reports.test.mjs).
 
-import { indiaDate, monthOf, nextStep, personStatus, minutesBetween, fmtMinutes, personSteps, waitingDays, replaceMentions, givenProjectsOf } from './rules.js';
+import { indiaDate, monthOf, nextStep, personStatus, minutesBetween, fmtMinutes, personSteps, waitingDays, replaceMentions, givenProjectsOf, sameTeamName } from './rules.js';
 
 /** Search: project name, notes, steps (text, note, waiting on) and work notes. `q` is lower-case. */
 export function projectMatches(p, q) {
@@ -129,6 +129,11 @@ export function teamOrder(items) {
     || String(a.title || '').localeCompare(String(b.title || '')));
 }
 
+/** Steps of a project given to this person (on Work Task) are covered by the project's own row: not listed again. */
+function notInGivenProject(person) {
+  return ({ project }) => !(project && project.team && sameTeamName(person, project.team.name));
+}
+
 /**
  * Every pending row for one person, in the order of the list and the email:
  *  1. Work Task: the server's items (people.morning / morning.mail) when given; else the projects given to them here
@@ -146,7 +151,9 @@ export function pendingRows(data, person, today, serverItems = null) {
       return { group: 'team', kind: 'project', title: p.name, project: '', about: p.about || '', now: next ? plain(next.text) : '', repeat: '',
         lateSince: p.deadline && p.deadline < today ? p.deadline : null, stuck: false, waiting: '', lastUpdate: lastNoteOf(p) };
     });
-  const { waiting, discuss } = personSteps(data, person, { openOnly: true });
+  const own = personSteps(data, person, { openOnly: true });
+  const waiting = own.waiting.filter(notInGivenProject(person));
+  const discuss = own.discuss.filter(notInGivenProject(person));
   const step = (group) => ({ step: s, project: p }) => {
     const lateSince = s.dueDate && s.dueDate < today ? s.dueDate : p.deadline && p.deadline < today ? p.deadline : null;
     let wait = '';
@@ -162,7 +169,9 @@ export function pendingRows(data, person, today, serverItems = null) {
  * serverItems: the Work Task items from the server (null = use the projects given here).
  */
 export function personMessageText(data, person, today, serverItems = null) {
-  const { waiting, discuss } = personSteps(data, person, { openOnly: true });
+  const own = personSteps(data, person, { openOnly: true });
+  const waiting = own.waiting.filter(notInGivenProject(person));
+  const discuss = own.discuss.filter(notInGivenProject(person));
   const team = pendingRows(data, person, today, serverItems).filter((r) => r.group === 'team');
   const first = person.name.split(/\s+/)[0];
   const plain = plainFor(data, person);
@@ -172,7 +181,7 @@ export function personMessageText(data, person, today, serverItems = null) {
     if (showWait) { const d = waitingDays(step, today); if (d >= 1) bits.push(`— pending ${d} day${d === 1 ? '' : 's'}`); }
     return bits.join(' ');
   };
-  const teamLine = (r, i) => [`${i + 1}. ${r.kind === 'project' ? '📁 ' : ''}${r.title}`, r.now ? `— Now: ${r.now}` : '',
+  const teamLine = (r, i) => [`${i + 1}. ${r.kind === 'project' ? '📁 ' : ''}${r.title}`, '', // (the email shows a project's title and description only, not its steps)
     r.lateSince ? `— late since ${mailDate(r.lateSince)}` : '', r.stuck ? '— stuck' : ''].filter(Boolean).join(' ');
   if (!team.length && !waiting.length && !discuss.length) return `Hi ${first},\n\nNothing is pending between us right now. Thank you!`;
   const lines = [`Hi ${first},`, '', 'Here are the open items between us:'];
@@ -204,7 +213,7 @@ export function personMessageHtml(data, person, today, opts = {}) {
     r.about ? ['#666', r.about] : null,
     r.lateSince ? ['#c62828', `Late since ${mailDate(r.lateSince)}`] : null,
     r.stuck ? ['#e65100', 'Stuck'] : null,
-    r.now ? ['#666', `Now: ${r.now}`] : null,
+    // (no 'Now: step' line: the email shows a project's title and description only)
     r.repeat ? ['#666', r.repeat] : null,
     r.waiting ? ['#666', r.waiting] : null,
   ].filter(Boolean);

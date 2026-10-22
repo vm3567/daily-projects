@@ -242,7 +242,7 @@ export function morningMail({ person, manager, items, today }) {
     + (x.kind === 'project' && x.about ? `<div style="color:#666;font-size:13px;margin-top:2px;">${escHtml(x.about)}</div>` : '')
     + (x.lateSince ? small('#c62828', `Late since ${mailDate(x.lateSince)}`) : '')
     + (x.stuck ? small('#e65100', 'Stuck') : '')
-    + (x.now ? small('#666', `Now: ${x.now}`) : '')
+    // (no 'Now: step' line: the email shows a project's title and description only)
     + (x.repeat ? small('#666', x.repeat) : '')
     + '</td>'
     + `<td style="${cell}color:#666;">${escHtml(lastText(x))}</td>`
@@ -270,7 +270,6 @@ export function morningMail({ person, manager, items, today }) {
       if (x.kind === 'project' && x.about) text.push(`   ${x.about}`);
       if (x.lateSince) text.push(`   Late since ${mailDate(x.lateSince)}`);
       if (x.stuck) text.push('   Stuck');
-      if (x.now) text.push(`   Now: ${x.now}`);
       if (x.repeat) text.push(`   ${x.repeat}`);
       text.push(`   Last update: ${lastText(x)}`, '   What I did today: ', `   Status: ${STATUS}`, '');
     });

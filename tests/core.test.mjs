@@ -1079,7 +1079,7 @@ test('pending list as an email table: columns, order, late / waiting / last upda
   // order: the given project, then waiting on him, then to discuss
   const at = (t) => m.html.indexOf(t);
   assert.ok(at('📁 Basin mould') > 0 && at('📁 Basin mould') < at('Send burner quote') && at('Send burner quote') < at('Check &lt;b&gt;glaze'), 'given, waiting, discuss');
-  assert.match(m.html, /Now: Cast 3 trial moulds/);
+  assert.ok(!/Now:/.test(m.html), 'the email shows a project\'s title and description only, not its steps (owner, 22 Oct)');
   assert.match(m.html, /color:#c62828;[^>]*>Late since 15 Oct</, 'project past its target date');
   assert.match(m.html, /Late since 20 Oct/, 'step past its date');
   assert.match(m.html, /Waiting on Ravi Kumar · 3 days/);
@@ -1091,7 +1091,7 @@ test('pending list as an email table: columns, order, late / waiting / last upda
   assert.match(m.html, /Status: keep one of Done \/ Going on \/ Stuck\.<\/p>.*Any problem or help needed: write below\./);
   assert.match(m.html, /Thanks,<br>Venkat<\/p><\/div>$/);
   assert.match(personMessageHtml(s.data, s.data.people[0], '2026-10-22').html, />Thanks<\/p><\/div>$/, 'no owner name: just Thanks');
-  assert.match(m.text, /1\. 📁 Basin mould\n {3}Late since 15 Oct\n {3}Now: Cast 3 trial moulds\n {3}Last update: —/);
+  assert.match(m.text, /1\. 📁 Basin mould\n {3}Late since 15 Oct\n {3}Last update: —/);
   // nothing pending
   applyOp(s, op('addPerson', { personId: 'n', name: 'Nobody' }, '2026-10-01'));
   const none = personMessageHtml(s.data, s.data.people.find((x) => x.id === 'n'), '2026-10-22');
@@ -1116,7 +1116,7 @@ test('pending list for a Work Task person: the server items first (late, stuck, 
   const text = personMessageText(s.data, s.data.people[0], '2026-10-22', items);
   assert.ok(text.indexOf('Projects and tasks (Work Task):') < text.indexOf('Waiting on you:'));
   const own = personMessageText(s.data, s.data.people[0], '2026-10-22');
-  assert.match(own, /Projects given:\n1\. 📁 Basin mould — Now: Cast 3 trial moulds — late since 15 Oct/);
+  assert.match(own, /Projects given:\n1\. 📁 Basin mould — late since 15 Oct/); assert.ok(!/Now:/.test(own), 'no steps in the email (owner, 22 Oct)');
   assert.ok(own.indexOf('Projects given:') < own.indexOf('To discuss:'));
 });
 
@@ -1542,4 +1542,19 @@ test('reminders: the chip texts and the "#open=<id>" link', async () => {
   assert.equal(openIdFromHash('#open='), null);
   assert.equal(openIdFromHash('#people'), null);
   assert.equal(openIdFromHash('#open=a"><b'), null, 'only a plain id');
+});
+
+test('pending list: steps of a project given to the person are not listed again under To discuss / Waiting (the project row covers them)', async () => {
+  const { personMessageHtml, personMessageText, pendingRows } = await import('../docs/reports.js');
+  const s = pendingState();
+  // p2 "Basin mould" is given to Ravi; a step there that also says @Ravi Kumar must not show twice
+  applyOp(s, op('addStep', { projectId: 'p2', stepId: 'g1', text: 'Residue test @Ravi Kumar' }, '2026-10-05'));
+  const items = [{ kind: 'project', title: 'Basin mould', about: 'New line', now: 'Residue test', lateSince: null, stuck: false, lastUpdate: null }];
+  const rows = pendingRows(s.data, s.data.people[0], '2026-10-22', items);
+  assert.equal(rows.filter((r) => /Residue test/.test(r.title)).length, 0, 'the given project\'s step is not its own row');
+  assert.ok(rows.some((r) => r.title === 'Basin mould'), 'the project row is there');
+  assert.ok(rows.some((r) => /Check <b>gl/.test(r.title)), 'steps of projects NOT given to him still show');
+  const m = personMessageHtml(s.data, s.data.people[0], '2026-10-22', { items });
+  assert.ok(!/Residue test/.test(m.html), 'not in the email table either');
+  assert.ok(!/Residue test/.test(personMessageText(s.data, s.data.people[0], '2026-10-22', items)), 'nor in the plain words');
 });

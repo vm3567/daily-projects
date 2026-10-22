@@ -274,7 +274,7 @@ test('project description: taken from the project\'s tasks (the first one that h
   assert.equal(projectAboutOf([{ title: 'old server, no field' }]), '');
   assert.match(APP, /class: 'prow-about' }, aboutShort\(p\.projectAbout\)\)/, 'manager\'s Projects list row');
   assert.match(APP, /class: 'project-about' }/, 'under the title of the project and task pages');
-  assert.match(readFileSync(new URL('../team/public_html/sw.js', import.meta.url), 'utf8'), /const CACHE = 'worktask-v20'/, 'new files reach the phones');
+  assert.match(readFileSync(new URL('../team/public_html/sw.js', import.meta.url), 'utf8'), /const CACHE = 'worktask-v21'/, 'new files reach the phones');
 });
 
 // ---------------------------------------------------------------- 📧 morning email (one person's pending work as a table to fill in)
@@ -323,7 +323,7 @@ test('morning email: red Late, orange Stuck, Now, about and repeat lines; "—" 
   const { html } = MM(mmItems);
   assert.match(html, /color:#c62828[^>]*>Late since 20 Oct</);
   assert.match(html, /color:#e65100[^>]*>Stuck</);
-  assert.match(html, /color:#666[^>]*>Now: Test 3 samples</);
+  assert.ok(!/Now: Test 3 samples/.test(html), 'the email shows a project\'s title and description only, not its steps (owner, 22 Oct)');
   assert.match(html, /color:#666[^>]*>New glaze for line 2</, 'the project\'s about under its name');
   assert.match(html, />Daily</); assert.match(html, />Weekly \(Mon\)</);
   assert.match(html, />21 Oct: Mixed 20 kg</);
@@ -352,7 +352,7 @@ test('morning email: the plain-words version (for when a table cannot be copied)
   const { text } = MM(mmItems);
   assert.ok(!/<[a-z]/i.test(text), 'no HTML');
   assert.match(text, /^Hi Suresh, good morning\./);
-  assert.match(text, /3\. 📁 Basin glaze\n   New glaze for line 2\n   Now: Test 3 samples\n   Last update: 21 Oct: Mixed 20 kg\n   What I did today: \n   Status: Done \/ Going on \/ Stuck/);
+  assert.match(text, /3\. 📁 Basin glaze\n   New glaze for line 2\n   Last update: 21 Oct: Mixed 20 kg\n   What I did today: \n   Status: Done \/ Going on \/ Stuck/);
   assert.match(text, /1\. Fix pump\n   Late since 20 Oct\n   Last update: —/);
   assert.match(text, /Status: keep one of Done \/ Going on \/ Stuck\.\nAny problem or help needed: write below\.\n\nThanks,\nBoss$/);
 });
