@@ -444,3 +444,20 @@ export function parseQuickTask(text, people, today) {
   return out;
 }
 
+
+/**
+ * Settings → 📧 Outlook: the status line. "Connected as name@company.com · last check 10:42 · 3 emails added today",
+ * or the last problem in plain words, or how to start.
+ */
+export function outlookLine(o, today) {
+  if (!o) return '';
+  const hm = (at) => (at && at.length >= 16 ? `${at.slice(0, 10) === today ? '' : `${at.slice(8, 10)}/${at.slice(5, 7)} `}${at.slice(11, 16)}` : '');
+  if (!o.connected) {
+    if (o.error) return `Not connected — ${o.error}`;
+    return o.clientId && o.secretEnd ? 'Not connected yet — press Connect Outlook.' : 'Not set up yet — fill in the three details from Azure and press Save.';
+  }
+  const parts = [`Connected as ${o.account || 'your Outlook'}`];
+  parts.push(o.lastCheck ? `last check ${hm(o.lastCheck)}` : 'not checked yet');
+  parts.push(`${o.addedToday || 0} email${o.addedToday === 1 ? '' : 's'} added today`);
+  return parts.join(' · ') + (o.error ? ` — ${o.error}` : '');
+}

@@ -954,3 +954,210 @@ test('project description: older saved data without about still loads and works'
   assert.ok(applyOp(old, op('setProjectField', { projectId: 'p1', field: 'about', value: 'Test firing' }, '2026-10-02')));
   assert.equal(old.data.projects[0].about, 'Test firing');
 });
+
+// ---------------------------------------------------------------- Outlook emails in the Inbox (worktask.in reads the owner's Outlook)
+const MAIL = { conversationId: 'conv-AAA', count: 1 };
+const OUTLOOK = 'https://outlook.office365.com/owa/?ItemID=abc&exvsurl=1';
+
+test('inbox from email: an item keeps its link, note and thread (mail); bad links and empty parts are dropped', () => {
+  const s = fresh();
+  assert.ok(applyOp(s, op('addInbox', { itemId: 'm1', text: '📧 Kiln quote — from Ravi', link: { url: OUTLOOK, title: 'Kiln quote' }, note: '22 Oct 10:15 · Please see the price', mail: MAIL }, '2026-10-22')));
+  assert.deepEqual(s.data.inbox[0], { id: 'm1', text: '📧 Kiln quote — from Ravi', createdAt: T('2026-10-22'), link: { url: OUTLOOK, title: 'Kiln quote' }, note: '22 Oct 10:15 · Please see the price', mail: { conversationId: 'conv-AAA', count: 1 } });
+  assert.ok(applyOp(s, op('addInbox', { itemId: 'm2', text: 'Plain idea', link: { url: 'javascript:alert(1)' }, note: '  ', mail: { conversationId: 5 } }, '2026-10-22')));
+  assert.deepEqual(s.data.inbox[1], { id: 'm2', text: 'Plain idea', createdAt: T('2026-10-22') }, 'no link, note or mail when they are not right');
+});
+
+test('inbox from email: updateInbox (a reply in the same thread) changes the note, link and count; nothing when the item is gone', () => {
+  const s = fresh();
+  applyOp(s, op('addInbox', { itemId: 'm1', text: '📧 Kiln quote — from Ravi', link: { url: OUTLOOK, title: 'Kiln quote' }, note: 'first', mail: MAIL }, '2026-10-22'));
+  assert.ok(applyOp(s, op('updateInbox', { itemId: 'm1', note: '💬 2 emails · latest from Anil 22 Oct 14:05\nOK go ahead', link: { url: OUTLOOK + '2', title: 'Kiln quote' }, count: 2 }, '2026-10-22')));
+  const it = s.data.inbox[0];
+  assert.equal(it.text, '📧 Kiln quote — from Ravi', 'the subject stays');
+  assert.equal(it.note, '💬 2 emails · latest from Anil 22 Oct 14:05\nOK go ahead');
+  assert.equal(it.link.url, OUTLOOK + '2');
+  assert.deepEqual(it.mail, { conversationId: 'conv-AAA', count: 2 });
+  assert.equal(applyOp(s, op('updateInbox', { itemId: 'gone', note: 'x' }, '2026-10-22')), false);
+});
+
+test('inbox from email: made into a step or a project, the thread (mail) and the note go with it; Undo puts them back', () => {
+  const s = withProject('2026-10-01');
+  applyOp(s, op('addInbox', { itemId: 'm1', text: '📧 Kiln quote — from Ravi', note: 'first lines', link: { url: OUTLOOK, title: 'Kiln quote' }, mail: MAIL }, '2026-10-22'));
+  applyOp(s, op('addInbox', { itemId: 'm2', text: '📧 New glaze — from Anil', note: 'glaze lines', mail: { conversationId: 'conv-BBB', count: 3 } }, '2026-10-22'));
+  assert.ok(applyOp(s, op('inboxToStep', { itemId: 'm1', projectId: 'p1', stepId: 'sm' }, '2026-10-22')));
+  const step = s.data.projects.find((p) => p.id === 'p1').steps.find((x) => x.id === 'sm');
+  assert.deepEqual(step.mail, { conversationId: 'conv-AAA' });
+  assert.equal(step.note, 'first lines');
+  assert.equal(step.link.url, OUTLOOK);
+  assert.ok(applyOp(s, op('inboxToProject', { itemId: 'm2', projectId: 'pm', groupId: 'g1' }, '2026-10-22')));
+  const made = s.data.projects.find((p) => p.id === 'pm');
+  assert.deepEqual(made.mail, { conversationId: 'conv-BBB' });
+  assert.match(made.notes, /glaze lines/);
+  assert.ok(applyOp(s, op('inboxUndo', { item: { id: 'm2', text: '📧 New glaze — from Anil', createdAt: T('2026-10-22'), note: 'glaze lines', mail: { conversationId: 'conv-BBB', count: 3 } }, index: 0, removeProjectId: 'pm' }, '2026-10-22')));
+  assert.deepEqual(s.data.inbox[0].mail, { conversationId: 'conv-BBB', count: 3 }, 'Undo keeps the thread');
+  assert.equal(s.data.inbox[0].note, 'glaze lines');
+});
+
+test('inbox from email: a reply note on a project (addMailNote) is not your work — the dot and the day score do not change', async () => {
+  const { dayScore, lastWorkDate, dotColour } = await import('../docs/rules.js');
+  const { summaryText } = await import('../docs/reports.js');
+  const s = withProject('2026-10-01');
+  const before = [dotColour(s.data.projects[0], '2026-10-22'), lastWorkDate(s.data.projects[0]), JSON.stringify(dayScore(s.data, s.history, '2026-10-22'))];
+  assert.ok(applyOp(s, op('addMailNote', { projectId: 'p1', noteId: 'ml1', stepId: 's1', text: '📧 New reply from Anil 22 Oct 14:05 (step: Order clay): sent', link: { url: OUTLOOK, title: 'Kiln quote' } }, '2026-10-22')));
+  const p = s.data.projects[0];
+  assert.deepEqual([p.workNotes[0].mail, p.workNotes[0].stepId, p.workNotes[0].link.url], [true, 's1', OUTLOOK]);
+  assert.equal(Object.values(s.history).flat().at(-1).kind, 'mail_note');
+  assert.deepEqual([dotColour(p, '2026-10-22'), lastWorkDate(p), JSON.stringify(dayScore(s.data, s.history, '2026-10-22'))], before, 'not counted as work');
+  assert.equal(p.state, 'active');
+  assert.ok(!summaryText(s.data, s.history, '2026-10-22', '22 Oct').includes('New reply'), 'not in "what I did today"');
+  assert.equal(applyOp(s, op('addMailNote', { projectId: 'nope', noteId: 'ml2', text: 'x' }, '2026-10-22')), false);
+});
+
+test('inbox from email: the Inbox shows the note and "Open in Outlook"; a reply note shows its email link', async () => {
+  const { readFileSync } = await import('node:fs');
+  const APP = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
+  const fn = APP.slice(APP.indexOf('function renderInbox('), APP.indexOf('function inboxReminder('));
+  assert.match(fn, /linkChip\(item\.link, item\.mail \? '✉ Open in Outlook' : null\)/);
+  assert.match(fn, /item\.note \? h\('div', \{ class: 'inbox-note muted small'[^)]*\}, item\.note\) : null/);
+  const DETAIL = readFileSync(new URL('../docs/ui/detail.js', import.meta.url), 'utf8');
+  assert.match(DETAIL, /n\.mail \? linkChip\(n\.link\) : null/);
+  assert.match(DETAIL, /mail_note: 'Email reply'/);
+});
+
+// ---------- Send pending list: the email table, the sent mark, one People page with Work Task ----------
+
+function pendingState() {
+  const s = fresh();
+  applyOp(s, op('addPerson', { personId: 'r', name: 'Ravi Kumar' }, '2026-10-01'));
+  applyOp(s, op('createProject', { projectId: 'p1', name: 'Kiln trial', groupId: 'g2' }, '2026-10-01'));
+  applyOp(s, op('setProjectField', { projectId: 'p1', field: 'deadline', value: '2026-11-30' }, '2026-10-01'));
+  applyOp(s, op('addStep', { projectId: 'p1', stepId: 'd1', text: 'Check <b>glaze</b> & "fit" with @Ravi Kumar' }, '2026-10-01'));
+  applyOp(s, op('setStepField', { projectId: 'p1', stepId: 'd1', field: 'dueDate', value: '2026-10-20' }, '2026-10-01'));
+  applyOp(s, op('addStep', { projectId: 'p1', stepId: 'w1', text: 'Send burner quote' }, '2026-10-01'));
+  applyOp(s, op('setStepField', { projectId: 'p1', stepId: 'w1', field: 'waiting', value: true }, '2026-10-19'));
+  applyOp(s, op('setStepField', { projectId: 'p1', stepId: 'w1', field: 'waitingOn', value: 'Ravi Kumar' }, '2026-10-19'));
+  applyOp(s, op('addWorkNote', { projectId: 'p1', noteId: 'n1', stepId: 'd1', text: 'Glaze looked thin on the rim, asked for a new batch ' + 'x'.repeat(100) }, '2026-10-21'));
+  // a project given to him on Work Task ("Give project to…")
+  applyOp(s, op('createProject', { projectId: 'p2', name: 'Basin mould', groupId: 'g2' }, '2026-10-01'));
+  applyOp(s, op('setProjectField', { projectId: 'p2', field: 'deadline', value: '2026-10-15' }, '2026-10-01'));
+  applyOp(s, op('addStep', { projectId: 'p2', stepId: 'g1', text: 'Cast 3 trial moulds' }, '2026-10-01'));
+  applyOp(s, op('setProjectTeam', { projectId: 'p2', userId: 7, name: 'Ravi' }, '2026-10-02'));
+  return s;
+}
+
+test('givenProjectsOf: projects given on Work Task match the person by name, first name and any case; finished and others left out', async () => {
+  const { givenProjectsOf, sameTeamName, teamMemberFor } = await import('../docs/rules.js');
+  const s = pendingState();
+  const ravi = s.data.people[0];
+  assert.deepEqual(givenProjectsOf(s.data, ravi).map((p) => p.id), ['p2'], 'first name "Ravi" matches "Ravi Kumar"');
+  applyOp(s, op('setProjectTeam', { projectId: 'p2', userId: 7, name: '  ravi KUMAR ' }, '2026-10-03'));
+  assert.deepEqual(givenProjectsOf(s.data, ravi).map((p) => p.id), ['p2'], 'full name, any case, extra spaces');
+  applyOp(s, op('pause', { projectId: 'p2' }, '2026-10-04'));
+  assert.equal(givenProjectsOf(s.data, ravi).length, 1, 'paused still shows');
+  applyOp(s, op('createProject', { projectId: 'p3', name: 'Other', groupId: 'g2' }, '2026-10-01'));
+  applyOp(s, op('setProjectTeam', { projectId: 'p3', userId: 8, name: 'Valar' }, '2026-10-02'));
+  applyOp(s, op('createProject', { projectId: 'p4', name: 'Old', groupId: 'g2' }, '2026-10-01'));
+  applyOp(s, op('setProjectTeam', { projectId: 'p4', userId: 7, name: 'Ravi' }, '2026-10-02'));
+  applyOp(s, op('finish', { projectId: 'p4' }, '2026-10-05'));
+  assert.deepEqual(givenProjectsOf(s.data, ravi).map((p) => p.id), ['p2'], 'another person and a finished project are left out');
+  assert.equal(sameTeamName({ name: 'Ravi' }, 'Ravi Kumar'), false, 'a longer team name is not a match for a short person name');
+  assert.equal(sameTeamName({ name: 'Ravi Kumar' }, 'Ravichandran'), false);
+  assert.equal(teamMemberFor({ name: 'Ravi Kumar' }, [{ id: 1, name: 'Ravi' }, { id: 2, name: 'ravi kumar' }]).id, 2, 'the full name wins');
+  assert.equal(teamMemberFor({ name: 'Mani' }, [{ id: 1, name: 'Ravi' }]), null);
+});
+
+test('pending list as an email table: columns, order, late / waiting / last update lines, escaping, subject', async () => {
+  const { personMessageHtml } = await import('../docs/reports.js');
+  const s = pendingState();
+  const m = personMessageHtml(s.data, s.data.people[0], '2026-10-22', { owner: 'Venkat' });
+  assert.equal(m.subject, 'Your work for Thu 22 Oct – please reply by evening');
+  const heads = ['>#</th>', '>Work</th>', '>Last update</th>', '>What I did today</th>', '>Status</th>'].map((x) => m.html.indexOf(x));
+  assert.ok(heads.every((x, i) => x > 0 && (i === 0 || x > heads[i - 1])), 'five columns in order');
+  assert.match(m.html, /^<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;/);
+  assert.ok(!/<style|class=/.test(m.html), 'inline styles only');
+  assert.match(m.html, /Hi Ravi, good morning\. Here is your pending work\. Please fill the last two columns and reply by evening\./);
+  assert.match(m.html, /3 items · 2 late/);
+  // order: the given project, then waiting on him, then to discuss
+  const at = (t) => m.html.indexOf(t);
+  assert.ok(at('📁 Basin mould') > 0 && at('📁 Basin mould') < at('Send burner quote') && at('Send burner quote') < at('Check &lt;b&gt;glaze'), 'given, waiting, discuss');
+  assert.match(m.html, /Now: Cast 3 trial moulds/);
+  assert.match(m.html, /color:#c62828;[^>]*>Late since 15 Oct</, 'project past its target date');
+  assert.match(m.html, /Late since 20 Oct/, 'step past its date');
+  assert.match(m.html, /Waiting on Ravi Kumar · 3 days/);
+  assert.match(m.html, /<b>Check &lt;b&gt;glaze&lt;\/b&gt; &amp; &quot;fit&quot;<\/b><div style="color:#666;font-size:12px;margin-top:2px;">Kiln trial<\/div>/, 'step bold, project grey under it, @Ravi Kumar taken out');
+  assert.ok(!m.html.includes('<b>glaze</b>'), 'typed HTML is escaped');
+  assert.match(m.html, /21 Oct: Glaze looked thin on the rim, asked for a new batch[^<]{0,40}…/, 'newest note on the step, cut short');
+  assert.ok(m.html.includes('>—</td>'), 'no update: a dash');
+  assert.match(m.html, /Done \/ Going on \/ Stuck/);
+  assert.match(m.html, /Status: keep one of Done \/ Going on \/ Stuck\.<\/p>.*Any problem or help needed: write below\./);
+  assert.match(m.html, /Thanks,<br>Venkat<\/p><\/div>$/);
+  assert.match(personMessageHtml(s.data, s.data.people[0], '2026-10-22').html, />Thanks<\/p><\/div>$/, 'no owner name: just Thanks');
+  assert.match(m.text, /1\. 📁 Basin mould\n {3}Late since 15 Oct\n {3}Now: Cast 3 trial moulds\n {3}Last update: —/);
+  // nothing pending
+  applyOp(s, op('addPerson', { personId: 'n', name: 'Nobody' }, '2026-10-01'));
+  const none = personMessageHtml(s.data, s.data.people.find((x) => x.id === 'n'), '2026-10-22');
+  assert.ok(!none.html.includes('<table') && none.html.includes('No pending work today.'));
+});
+
+test('pending list for a Work Task person: the server items first (late, stuck, then the rest), then the steps; text too', async () => {
+  const { personMessageHtml, personMessageText, pendingRows } = await import('../docs/reports.js');
+  const s = pendingState();
+  const items = [
+    { kind: 'task', title: 'Clean dryer', now: '', repeat: 'Every day', lateSince: null, stuck: false, lastUpdate: null },
+    { kind: 'task', title: 'Stuck <job>', now: '', lateSince: null, stuck: true, lastUpdate: { day: '2026-10-21', note: 'No clay' } },
+    { kind: 'project', title: 'Basin mould', about: 'New line', now: 'Cast 3 trial moulds', lateSince: '2026-10-18', stuck: false, lastUpdate: null },
+  ];
+  const rows = pendingRows(s.data, s.data.people[0], '2026-10-22', items);
+  assert.deepEqual(rows.map((r) => r.title.slice(0, 11)), ['Basin mould', 'Stuck <job>', 'Clean dryer', 'Send burner', 'Check <b>gl']);
+  const m = personMessageHtml(s.data, s.data.people[0], '2026-10-22', { items });
+  assert.match(m.html, /Stuck &lt;job&gt;<\/b><div style="color:#e65100;[^>]*>Stuck</);
+  assert.match(m.html, /Every day/);
+  assert.match(m.html, /21 Oct: No clay/);
+  assert.ok(!m.html.includes('Kiln trial</div><div style="color:#666;font-size:12px;margin-top:2px;">Now'), 'the given project here is not added twice');
+  const text = personMessageText(s.data, s.data.people[0], '2026-10-22', items);
+  assert.ok(text.indexOf('Projects and tasks (Work Task):') < text.indexOf('Waiting on you:'));
+  const own = personMessageText(s.data, s.data.people[0], '2026-10-22');
+  assert.match(own, /Projects given:\n1\. 📁 Basin mould — Now: Cast 3 trial moulds — late since 15 Oct/);
+  assert.ok(own.indexOf('Projects given:') < own.indexOf('To discuss:'));
+});
+
+test('markPersonSent: saved on the person, not counted as work; "sent today" shows only today (India time)', async () => {
+  const { dayScore, dotColour } = await import('../docs/rules.js');
+  const { sentTodayTime, sentMarkOf, copyNotice } = await import('../docs/reports.js');
+  const s = pendingState();
+  const before = JSON.stringify(s.history);
+  const score = dayScore(s.data, s.history, '2026-10-22');
+  const dot = dotColour(s.data.projects[0], '2026-10-22');
+  assert.equal(applyOp(s, op('markPersonSent', { personId: 'r', at: '2026-10-22T03:35:00.000Z' }, '2026-10-22', '09:05:00')), true);
+  assert.equal(s.data.people[0].sentAt, '2026-10-22T03:35:00.000Z');
+  assert.equal(JSON.stringify(s.history), before, 'no history line');
+  assert.deepEqual(dayScore(s.data, s.history, '2026-10-22'), score, 'not work');
+  assert.equal(dotColour(s.data.projects[0], '2026-10-22'), dot);
+  assert.equal(applyOp(s, op('markPersonSent', { personId: 'nobody' }, '2026-10-22')), false);
+  assert.equal(sentTodayTime('2026-10-22T03:35:00.000Z', '2026-10-22'), '9:05');
+  assert.equal(sentTodayTime('2026-10-21T19:00:00.000Z', '2026-10-22'), '0:30', 'after midnight in India is today');
+  assert.equal(sentTodayTime('2026-10-21T03:35:00.000Z', '2026-10-22'), '', "yesterday's send is not shown");
+  assert.equal(sentTodayTime('2026-10-22 09:05:00', '2026-10-22'), '9:05', "the Work Task server's time (India)");
+  assert.equal(sentTodayTime('', '2026-10-22'), '');
+  // where the mark comes from: the server for a Work Task person, this app's data for everyone else
+  assert.deepEqual(sentMarkOf(s.data.people[0], { id: 7, sentAt: '2026-10-22 10:15:00' }, '2026-10-22'), { source: 'server', time: '10:15' });
+  assert.deepEqual(sentMarkOf(s.data.people[0], { id: 7, sentAt: null }, '2026-10-22'), { source: 'server', time: '' }, 'own mark ignored when linked');
+  assert.deepEqual(sentMarkOf(s.data.people[0], null, '2026-10-22'), { source: 'op', time: '9:05' });
+  // the copy notice never claims a table it did not copy
+  assert.match(copyNotice('html'), /^Table copied — click in the email and paste \(⌘ Cmd\+V on Mac, Ctrl\+V on Windows\), then Send\.$/);
+  assert.match(copyNotice('text'), /plain lines, not the table/);
+  assert.ok(!/Table copied/.test(copyNotice('text')) && !/Table copied/.test(copyNotice('none')));
+});
+
+test('inbox from email: the thread (mail) keeps the newest email\'s id, sender and subject — on the item, a reply, the step / project made from it', () => {
+  const s = withProject('2026-10-01');
+  const m1 = { conversationId: 'conv-CCC', count: 1, messageId: 'AAMk-1', fromName: 'Ravi  K', fromAddress: 'ravi@acton.test', subject: 'Kiln quote' };
+  applyOp(s, op('addInbox', { itemId: 'm1', text: '📧 Kiln quote — from Ravi', mail: { ...m1, junk: 'x', fromAddress: 'not an address' } }, '2026-10-22'));
+  assert.deepEqual(s.data.inbox[0].mail, { conversationId: 'conv-CCC', count: 1, messageId: 'AAMk-1', fromName: 'Ravi K', subject: 'Kiln quote' }, 'only clean parts');
+  applyOp(s, op('updateInbox', { itemId: 'm1', count: 2, mail: { conversationId: 'other', messageId: 'AAMk-2', fromName: 'Anil', fromAddress: 'anil@acton.test', subject: 'RE: Kiln quote' } }, '2026-10-22'));
+  assert.deepEqual(s.data.inbox[0].mail, { conversationId: 'conv-CCC', count: 2, messageId: 'AAMk-2', fromName: 'Anil', subject: 'RE: Kiln quote', fromAddress: 'anil@acton.test' }, 'the newest email; the thread never changes');
+  applyOp(s, op('inboxToStep', { itemId: 'm1', projectId: 'p1', stepId: 'sm' }, '2026-10-22'));
+  const step = s.data.projects[0].steps.find((x) => x.id === 'sm');
+  assert.deepEqual(step.mail, { conversationId: 'conv-CCC', messageId: 'AAMk-2', fromName: 'Anil', subject: 'RE: Kiln quote', fromAddress: 'anil@acton.test' });
+  applyOp(s, op('addMailNote', { projectId: 'p1', noteId: 'ml9', stepId: 'sm', text: 'reply', mail: { messageId: 'AAMk-3', fromName: 'Ravi', fromAddress: 'ravi@acton.test', subject: 'RE: RE: Kiln quote' } }, '2026-10-22'));
+  assert.deepEqual([step.mail.conversationId, step.mail.messageId, step.mail.fromAddress], ['conv-CCC', 'AAMk-3', 'ravi@acton.test'], 'a reply note moves it to the newest email');
+});

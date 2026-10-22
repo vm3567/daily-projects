@@ -1,7 +1,7 @@
 // Pure logic behind search, the Diary, Today's summary and the backup file.
 // No screen code here, so it is covered by automatic tests (tests/reports.test.mjs).
 
-import { indiaDate, monthOf, nextStep, personStatus, minutesBetween, fmtMinutes, personSteps, waitingDays, replaceMentions } from './rules.js';
+import { indiaDate, monthOf, nextStep, personStatus, minutesBetween, fmtMinutes, personSteps, waitingDays, replaceMentions, givenProjectsOf } from './rules.js';
 
 /** Search: project name, notes, steps (text, note, waiting on) and work notes. `q` is lower-case. */
 export function projectMatches(p, q) {
@@ -67,7 +67,7 @@ export function summaryText(data, history, today, dateText) {
     const mins = minutesBetween(p, today, today, data.timer);
     if (mins > 0) entry(p.id).mins = mins;
     for (const n of p.workNotes) {
-      if (indiaDate(n.createdAt) !== today) continue;
+      if (indiaDate(n.createdAt) !== today || n.mail) continue; // (an email reply is not something you did)
       const st = n.stepId && p.steps.find((s) => s.id === n.stepId);
       entry(p.id).notes.push(st ? `${n.text} (on: ${st.text})` : n.text);
     }
@@ -95,33 +95,185 @@ export function summaryText(data, history, today, dateText) {
 
 const shortDate = new Intl.DateTimeFormat('en-IN', { day: 'numeric', month: 'short', timeZone: 'UTC' });
 
-/**
- * A message to one person with everything open between you: what you are waiting on from them,
- * and what you need to discuss with them. "@Name" becomes just "Name".
- */
-export function personMessageText(data, person, today) {
-  const { waiting, discuss } = personSteps(data, person, { openOnly: true });
-  const first = person.name.split(/\s+/)[0];
-  // The message goes TO this person, so their own "@Name" is taken out; other "@Names" just lose the "@".
+/** A person's own "@Name" taken out of a text that goes TO them; other "@Names" just lose the "@". */
+function plainFor(data, person) {
   // (matched like the app matches "@names": the longest name wins, so "@Ravi Kumar Sharma" is not cut to "Sharma")
-  const plain = (t) => replaceMentions(t, data.people, (who, written) => (who.id === person.id ? ' ' : written))
+  return (t) => replaceMentions(t, data.people, (who, written) => (who.id === person.id ? ' ' : written))
     .replace(/@(\S)/g, '$1')
     .replace(/\s+(to|with|for|from|by|and|ask|tell)\s*$/i, '') // a word left dangling at the end ("... with")
     .replace(/\s{2,}/g, ' ')
     .replace(/\s+([,.;:)])/g, '$1')
     .trim();
+}
+
+const MAIL_DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const MAIL_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+/** '2026-10-21' -> '21 Oct' */
+export const mailDate = (day) => `${Number(String(day).slice(8, 10))} ${MAIL_MONTHS[Number(String(day).slice(5, 7)) - 1]}`;
+/** Words safe to put inside HTML (names, steps and notes are typed by people). */
+export const escHtml = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+const cut = (t, n) => { const s = String(t || '').replace(/\s+/g, ' ').trim(); return s.length > n ? s.slice(0, n - 1).replace(/\s+\S*$/, '') + '…' : s; };
+
+/** The newest work note on a step (or on the project when the step has none): { day, note }, or null. */
+function lastNoteOf(project, stepId = null) {
+  const notes = (project.workNotes || []).filter((n) => n && n.text && n.createdAt);
+  const newest = (list) => list.reduce((a, n) => (!a || n.createdAt > a.createdAt ? n : a), null);
+  const n = (stepId && newest(notes.filter((x) => x.stepId === stepId))) || newest(notes);
+  return n ? { day: indiaDate(n.createdAt), note: n.text } : null;
+}
+
+/** Work Task order (same as the morning email): late first, then stuck, then the rest (projects before tasks, then by title). */
+export function teamOrder(items) {
+  const rank = (x) => (x.lateSince ? 0 : x.stuck ? 1 : 2);
+  return [...(items || [])].sort((a, b) => rank(a) - rank(b) || (a.kind === 'project' ? 0 : 1) - (b.kind === 'project' ? 0 : 1)
+    || String(a.title || '').localeCompare(String(b.title || '')));
+}
+
+/**
+ * Every pending row for one person, in the order of the list and the email:
+ *  1. Work Task: the server's items (people.morning / morning.mail) when given; else the projects given to them here
+ *     ("Give project to…"), in the morning email's order;
+ *  2. steps waiting on them; 3. steps to discuss (@name).
+ * Row: { group: 'team'|'waiting'|'discuss', kind, title, project, about, now, repeat, lateSince, stuck, waiting, lastUpdate {day, note}|null }
+ */
+export function pendingRows(data, person, today, serverItems = null) {
+  const plain = plainFor(data, person);
+  const team = serverItems
+    ? (serverItems || []).map((x) => ({ group: 'team', kind: x.kind === 'project' ? 'project' : 'task', title: x.title || '', project: '', about: x.about || '',
+      now: x.now || '', repeat: x.repeat || '', lateSince: x.lateSince || null, stuck: !!x.stuck, waiting: '', lastUpdate: x.lastUpdate && x.lastUpdate.day ? x.lastUpdate : null }))
+    : givenProjectsOf(data, person).map((p) => {
+      const next = nextStep(p, today);
+      return { group: 'team', kind: 'project', title: p.name, project: '', about: p.about || '', now: next ? plain(next.text) : '', repeat: '',
+        lateSince: p.deadline && p.deadline < today ? p.deadline : null, stuck: false, waiting: '', lastUpdate: lastNoteOf(p) };
+    });
+  const { waiting, discuss } = personSteps(data, person, { openOnly: true });
+  const step = (group) => ({ step: s, project: p }) => {
+    const lateSince = s.dueDate && s.dueDate < today ? s.dueDate : p.deadline && p.deadline < today ? p.deadline : null;
+    let wait = '';
+    if (s.waiting) { const d = waitingDays(s, today); wait = `Waiting on ${s.waitingOn || person.name}${d >= 1 ? ` · ${d} day${d === 1 ? '' : 's'}` : ''}`; }
+    return { group, kind: 'step', title: plain(s.text), project: p.name, about: '', now: '', repeat: '', lateSince, stuck: false, waiting: wait, lastUpdate: lastNoteOf(p, s.id) };
+  };
+  return [...teamOrder(team), ...waiting.map(step('waiting')), ...discuss.map(step('discuss'))];
+}
+
+/**
+ * A message to one person with everything open between you: their Work Task projects and tasks, what you are
+ * waiting on from them, and what you need to discuss with them. "@Name" becomes just "Name".
+ * serverItems: the Work Task items from the server (null = use the projects given here).
+ */
+export function personMessageText(data, person, today, serverItems = null) {
+  const { waiting, discuss } = personSteps(data, person, { openOnly: true });
+  const team = pendingRows(data, person, today, serverItems).filter((r) => r.group === 'team');
+  const first = person.name.split(/\s+/)[0];
+  const plain = plainFor(data, person);
   const line = ({ step, project }, i, showWait) => {
     const bits = [`${i + 1}. ${plain(step.text)}`, `(${project.name})`];
     if (step.dueDate) bits.push(`— by ${shortDate.format(new Date(step.dueDate + 'T00:00:00Z'))}`);
     if (showWait) { const d = waitingDays(step, today); if (d >= 1) bits.push(`— pending ${d} day${d === 1 ? '' : 's'}`); }
     return bits.join(' ');
   };
-  if (!waiting.length && !discuss.length) return `Hi ${first},\n\nNothing is pending between us right now. Thank you!`;
+  const teamLine = (r, i) => [`${i + 1}. ${r.kind === 'project' ? '📁 ' : ''}${r.title}`, r.now ? `— Now: ${r.now}` : '',
+    r.lateSince ? `— late since ${mailDate(r.lateSince)}` : '', r.stuck ? '— stuck' : ''].filter(Boolean).join(' ');
+  if (!team.length && !waiting.length && !discuss.length) return `Hi ${first},\n\nNothing is pending between us right now. Thank you!`;
   const lines = [`Hi ${first},`, '', 'Here are the open items between us:'];
+  if (team.length) lines.push('', serverItems ? 'Projects and tasks (Work Task):' : 'Projects given:', ...team.map(teamLine));
   if (waiting.length) lines.push('', 'Waiting on you:', ...waiting.map((it, i) => line(it, i, true)));
   if (discuss.length) lines.push('', 'To discuss:', ...discuss.map((it, i) => line(it, i, false)));
   lines.push('', 'Could you please share an update on these? Thank you.');
   return lines.join('\n');
+}
+
+/**
+ * The pending list as an email table (the same look as the Work Task morning email): { subject, html, text }.
+ * Inline styles only (Outlook drops <style>). Columns: # | Work | Last update | What I did today | Status.
+ * opts: { items: the server's Work Task items or null, owner: your name for the sign-off ('' = just "Thanks") }.
+ */
+export function personMessageHtml(data, person, today, opts = {}) {
+  const rows = pendingRows(data, person, today, opts.items || null);
+  const name = String(person.name || '').split(/\s+/)[0];
+  const owner = String(opts.owner || '').trim();
+  const weekday = MAIL_DAYS[new Date(today + 'T00:00:00Z').getUTCDay()];
+  const subject = `Your work for ${weekday} ${mailDate(today)} – please reply by evening`;
+  const late = rows.filter((r) => r.lateSince).length;
+  const stuck = rows.filter((r) => r.stuck).length;
+  const summary = [`${rows.length} item${rows.length === 1 ? '' : 's'}`, late ? `${late} late` : '', stuck ? `${stuck} stuck` : ''].filter(Boolean).join(' · ');
+  const title = (r) => (r.kind === 'project' ? '📁 ' : '') + r.title;
+  const last = (r) => (r.lastUpdate ? `${mailDate(r.lastUpdate.day)}: ${cut(r.lastUpdate.note, 80)}` : '—');
+  const extras = (r) => [
+    r.project ? ['#666', r.project] : null,
+    r.about ? ['#666', r.about] : null,
+    r.lateSince ? ['#c62828', `Late since ${mailDate(r.lateSince)}`] : null,
+    r.stuck ? ['#e65100', 'Stuck'] : null,
+    r.now ? ['#666', `Now: ${r.now}`] : null,
+    r.repeat ? ['#666', r.repeat] : null,
+    r.waiting ? ['#666', r.waiting] : null,
+  ].filter(Boolean);
+  const STATUS = 'Done / Going on / Stuck';
+  const end = ['Status: keep one of Done / Going on / Stuck.', 'Any problem or help needed: write below.'];
+  const hello = `Hi ${name}, good morning.${rows.length ? ' Here is your pending work. Please fill the last two columns and reply by evening.' : ''}`;
+
+  const font = 'font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#222;';
+  const cell = 'border:1px solid #bbb;padding:6px 8px;vertical-align:top;text-align:left;';
+  const small = ([colour, words]) => `<div style="color:${colour};font-size:12px;margin-top:2px;">${escHtml(words)}</div>`;
+  const body = rows.map((r, i) => '<tr>'
+    + `<td style="${cell}">${i + 1}</td>`
+    + `<td style="${cell}"><b>${escHtml(title(r))}</b>${extras(r).map(small).join('')}</td>`
+    + `<td style="${cell}color:#666;">${escHtml(last(r))}</td>`
+    + `<td style="${cell}min-width:220px;height:40px;">&nbsp;</td>`
+    + `<td style="${cell}color:#888;white-space:nowrap;">${STATUS}</td>`
+    + '</tr>').join('');
+  const head = ['#', 'Work', 'Last update', 'What I did today', 'Status'].map((x) => `<th style="${cell}background:#f2f2f2;font-weight:bold;">${x}</th>`).join('');
+  const p = (words, extra = '') => `<p style="margin:0 0 10px 0;${extra}">${words}</p>`;
+  const html = `<div style="${font}">`
+    + p(escHtml(hello))
+    + (rows.length
+      ? p(escHtml(summary), 'color:#666;')
+        + `<table style="border-collapse:collapse;${font}" cellpadding="0" cellspacing="0"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`
+        + `<p style="margin:10px 0 4px 0;">${end[0]}</p>` + p(end[1])
+      : p('No pending work today.'))
+    + p(owner ? `Thanks,<br>${escHtml(owner)}` : 'Thanks')
+    + '</div>';
+
+  const text = [hello, ''];
+  if (rows.length) {
+    text.push(summary, '');
+    rows.forEach((r, i) => {
+      text.push(`${i + 1}. ${title(r)}`, ...extras(r).map(([, w]) => `   ${w}`));
+      text.push(`   Last update: ${last(r)}`, '   What I did today: ', `   Status: ${STATUS}`, '');
+    });
+    text.push(...end, '');
+  } else text.push('No pending work today.', '');
+  text.push(owner ? `Thanks,\n${owner}` : 'Thanks');
+  return { subject, html, text: text.join('\n') };
+}
+
+/** The time a pending list was sent, only if that was today (India): '9:05', else ''.
+ *  Takes this app's saved time (ISO, UTC) or the Work Task server's ('2026-10-22 09:05:00', already India time). */
+export function sentTodayTime(sentAt, today) {
+  const s = String(sentAt || '');
+  if (!s || !today) return '';
+  if (s.includes('T')) {
+    const ms = Date.parse(s);
+    if (Number.isNaN(ms)) return '';
+    const d = new Date(ms + 330 * 60000);
+    return d.toISOString().slice(0, 10) === today ? `${d.getUTCHours()}:${String(d.getUTCMinutes()).padStart(2, '0')}` : '';
+  }
+  if (s.length < 16 || s.slice(0, 10) !== today) return '';
+  return `${Number(s.slice(11, 13))}:${s.slice(14, 16)}`;
+}
+
+/** Where a person's "sent today" mark lives: a person with a Work Task account (member = their people.morning entry)
+ *  uses the SERVER's time (so it matches the Work Task app); everyone else this app's own mark (person.sentAt). */
+export function sentMarkOf(person, member, today) {
+  if (member) return { source: 'server', time: sentTodayTime(member.sentAt, today) };
+  return { source: 'op', time: sentTodayTime(person && person.sentAt, today) };
+}
+
+/** The honest words after a copy: 'html' = the table was copied, 'text' = only plain lines, else nothing. */
+export function copyNotice(how) {
+  if (how === 'html') return 'Table copied — click in the email and paste (⌘ Cmd+V on Mac, Ctrl+V on Windows), then Send.';
+  if (how === 'text') return 'Your browser copied plain lines, not the table — paste them in the email (⌘ Cmd+V on Mac, Ctrl+V on Windows).';
+  return 'Could not copy — select the words in the box and copy them.';
 }
 
 /**

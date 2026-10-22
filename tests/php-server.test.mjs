@@ -4,6 +4,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, execFileSync } from 'node:child_process';
+import { createServer } from 'node:http';
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync, existsSync, readFileSync } from 'node:fs';
 import { randomBytes, createHash } from 'node:crypto';
 const md5 = (x) => createHash('md5').update(x).digest('hex');
@@ -30,7 +31,9 @@ async function until(fn, what, ms = 30000) {
   throw new Error(`timed out waiting for ${what}`);
 }
 const sql = (q) => execFileSync('mysql', ['-u', 'root', `--socket=${SOCK}`, '-e', q], { stdio: 'pipe' });
-const env = () => ({ ...process.env, WT_TEST_DIR: dir, WT_DB_HOST: `127.0.0.1;port=${DB_PORT}`, WT_PUSH_LOG: join(dir, 'push.log') });
+const MS_PORT = DB_PORT + 10000; // a fake Microsoft (sign-in and Graph) for the Outlook checks
+const MS = `http://127.0.0.1:${MS_PORT}`;
+const env = () => ({ ...process.env, WT_TEST_DIR: dir, WT_DB_HOST: `127.0.0.1;port=${DB_PORT}`, WT_PUSH_LOG: join(dir, 'push.log'), WT_MS_BASE: MS });
 
 async function call(a, body = {}, t, form) {
   const h = {};
@@ -1089,4 +1092,192 @@ test('work in one line: giving the same quick task twice (same clientId) makes o
   assert.equal(a.task.id, b.task.id, 'the second tap gives back the same task');
   assert.deepEqual([a.task.repeat, a.task.dueDate, a.task.skipSunday], ['once', istDay(-1), true]);
   assert.equal((await call('followup.list', {}, tok.boss)).rows.filter((x) => x.title === 'Send kiln photos' && x.person.id === id.nila).length, 1, 'one row');
+});
+
+// ---------------------------------------------------------------- Outlook → Daily Projects Inbox (against a fake Microsoft)
+const ms = { reqs: [], token: null, pages: [[]], server: null };
+async function fakeMicrosoft() {
+  if (ms.server) return;
+  ms.server = createServer((req, res) => {
+    let body = '';
+    req.on('data', (c) => { body += c; });
+    req.on('end', () => {
+      const u = new URL(req.url, MS);
+      const form = Object.fromEntries(new URLSearchParams(body));
+      ms.reqs.push({ method: req.method, path: u.pathname, url: req.url, auth: req.headers.authorization || '', form });
+      const send = (code, j) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(j)); };
+      if (u.pathname.endsWith('/oauth2/v2.0/token')) { const [code, j] = ms.token(form); return send(code, j); }
+      if (u.pathname === '/v1.0/me') return send(200, { mail: 'venkat@acton.test', userPrincipalName: 'venkat@acton.test' });
+      if (u.pathname === '/v1.0/me/mailFolders/inbox/messages' || u.pathname === '/v1.0/next') {
+        const n = Number(u.searchParams.get('page') || 0);
+        return send(200, { value: ms.pages[n] || [], ...(ms.pages[n + 1] ? { '@odata.nextLink': `${MS}/v1.0/next?page=${n + 1}` } : {}) });
+      }
+      send(404, { error: 'not_found' });
+    });
+  });
+  await new Promise((r) => ms.server.listen(MS_PORT, '127.0.0.1', r));
+}
+after(() => { try { ms.server?.close(); } catch { /* gone */ } });
+
+const OL = { clientId: '11111111-2222-3333-4444-555555555555', tenantId: 'acton.onmicrosoft.com', secret: 'Sec~ret.Value_9xAB12' };
+const mail = (id, conv, subject, from, minsAgo, preview) => ({
+  id, conversationId: conv, subject, from: { emailAddress: { name: from, address: `${from.toLowerCase()}@x.test` } },
+  receivedDateTime: new Date(Date.now() - minsAgo * 60000).toISOString().replace(/\.\d+Z$/, 'Z'), bodyPreview: preview,
+  webLink: `https://outlook.office365.com/owa/?ItemID=${id}&exvsurl=1`,
+});
+async function dpNow() {
+  const snap = await call('dp.snapshot', {}, tok.boss);
+  const get = async (path) => (snap.entries[path] ? JSON.parse(await (await fetch(`${B}dp.blob&sha=${snap.entries[path]}`, { headers: { Authorization: 'Bearer ' + tok.boss } })).text()) : null);
+  const month = istDay(0).slice(0, 7);
+  return { head: snap.commit, data: await get('data.json'), history: { [month]: (await get(`history/${month}.json`)) || [] } };
+}
+const callback = async (q) => { const r = await fetch(`http://127.0.0.1:${WEB_PORT}/outlook.php?${new URLSearchParams(q)}`); return { s: r.status, text: await r.text() }; };
+const stateOf = (url) => new URL(url).searchParams.get('state');
+
+test('outlook: only the owner can set it up; the client secret is saved locked and never sent back (only its last 4 letters)', { skip }, async () => {
+  const m = (await call('login', { username: 'mgr2', password: 'mgr2-pass-456' })).token;
+  assert.ok(m, 'the other manager signs in');
+  assert.equal((await call('outlook.save', OL, m)).s, 403, 'another manager cannot');
+  assert.equal((await call('outlook.status', {}, m)).s, 403);
+  assert.equal((await call('outlook.save', OL, tok.suresh)).s, 403, 'staff cannot');
+  assert.match((await call('outlook.save', { ...OL, clientId: 'not-an-id' }, tok.boss)).error, /Application \(client\) ID/);
+  assert.match((await call('outlook.save', { ...OL, secret: '' }, tok.boss)).error, /client secret/, 'the secret is needed the first time');
+  const r = await call('outlook.save', OL, tok.boss);
+  assert.ok(r.ok, r.error);
+  assert.equal(r.outlook.secretEnd, 'AB12');
+  assert.equal(r.outlook.redirectUri, `http://127.0.0.1:${WEB_PORT}/outlook.php`, 'built from the address the app is opened on');
+  assert.equal(r.outlook.scopes, 'offline_access User.Read Mail.ReadWrite');
+  const st = await call('outlook.status', {}, tok.boss);
+  for (const x of [r, st]) assert.ok(!JSON.stringify(x).includes(OL.secret), 'never sent back');
+  assert.deepEqual([st.outlook.clientId, st.outlook.tenantId, st.outlook.connected], [OL.clientId, OL.tenantId, false]);
+  const stored = execFileSync('mysql', ['-u', 'root', `--socket=${SOCK}`, '-N', '-e', "SELECT GROUP_CONCAT(v) FROM wt.settings WHERE k LIKE 'ol\\_%'; SELECT GROUP_CONCAT(detail) FROM wt.audit"], { encoding: 'utf8' });
+  assert.ok(!stored.includes(OL.secret), 'locked in the database, and not in the audit log');
+  assert.match(readFileSync(join(dir, 'config.php'), 'utf8'), /'enc_key' => '[0-9a-f]{64}'/, 'the lock key was made and kept in config.php');
+  const again = await call('outlook.save', { clientId: OL.clientId, tenantId: OL.tenantId, secret: '' }, tok.boss);
+  assert.ok(again.ok && again.outlook.secretEnd === 'AB12', 'saving without typing the secret keeps the saved one');
+  assert.equal((await call('outlook.check', {}, tok.boss)).error, 'Outlook is not connected. Press Connect Outlook first.');
+});
+
+test('outlook: Connect — the sign-in comes back only with the right state, once, within 10 minutes (PKCE, the secret goes to Microsoft only)', { skip }, async () => {
+  await fakeMicrosoft();
+  sql('UPDATE wt.settings SET v = UNIX_TIMESTAMP() + 86400 WHERE k = \'jobs_at\''); // only "Check now" in these checks (the 10-minute job waits)
+  ms.token = (f) => (f.grant_type === 'authorization_code' && f.code === 'CODE-1' ? [200, { access_token: 'AT-0', refresh_token: 'RT-1' }] : [400, { error: 'invalid_grant' }]);
+  assert.equal((await call('outlook.connect', {}, tok.suresh)).s, 403, 'staff cannot');
+  const wrong = await callback({ code: 'CODE-1', state: 'wrong-state' });
+  assert.equal(wrong.s, 400); assert.match(wrong.text, /not valid/);
+  let c = await call('outlook.connect', {}, tok.boss);
+  const u = new URL(c.url);
+  assert.equal(`${u.origin}${u.pathname}`, `${MS}/acton.onmicrosoft.com/oauth2/v2.0/authorize`);
+  const p = Object.fromEntries(u.searchParams);
+  assert.deepEqual([p.client_id, p.response_type, p.scope, p.code_challenge_method, p.redirect_uri], [OL.clientId, 'code', 'offline_access User.Read Mail.ReadWrite', 'S256', `http://127.0.0.1:${WEB_PORT}/outlook.php`]);
+  assert.ok(!c.url.includes(OL.secret), 'the secret never goes to the browser');
+  sql("UPDATE wt.settings SET v = JSON_SET(v, '$.exp', 1) WHERE k = 'ol_oauth'");
+  const late = await callback({ code: 'CODE-1', state: stateOf(c.url) });
+  assert.equal(late.s, 400); assert.match(late.text, /more than 10 minutes/);
+  assert.equal(ms.reqs.length, 0, 'Microsoft was not asked');
+  c = await call('outlook.connect', {}, tok.boss);
+  const challenge = new URL(c.url).searchParams.get('code_challenge');
+  const ok = await callback({ code: 'CODE-1', state: stateOf(c.url) });
+  assert.equal(ok.s, 200, ok.text); assert.match(ok.text, /Outlook connected ✓/);
+  const tr = ms.reqs.find((x) => x.path.endsWith('/token'));
+  assert.deepEqual([tr.form.grant_type, tr.form.code, tr.form.client_id, tr.form.client_secret, tr.form.redirect_uri], ['authorization_code', 'CODE-1', OL.clientId, OL.secret, `http://127.0.0.1:${WEB_PORT}/outlook.php`]);
+  assert.equal(createHash('sha256').update(tr.form.code_verifier).digest('base64url'), challenge, 'PKCE: the verifier matches the challenge');
+  assert.match((await callback({ code: 'CODE-1', state: stateOf(c.url) })).text, /not valid/, 'a state works once');
+  const st = (await call('outlook.status', {}, tok.boss)).outlook;
+  assert.deepEqual([st.connected, st.account, st.error], [true, 'venkat@acton.test', '']);
+  assert.ok(!JSON.stringify(st).includes('RT-1'), 'the sign-in never goes to the browser');
+  const stored = execFileSync('mysql', ['-u', 'root', `--socket=${SOCK}`, '-N', '-e', "SELECT GROUP_CONCAT(v) FROM wt.settings WHERE k LIKE 'ol\\_%'"], { encoding: 'utf8' });
+  assert.ok(!stored.includes('RT-1'), 'kept locked');
+});
+
+test('outlook: each new email → one Daily Projects Inbox item; a thread stays one item; replies to a step / project become notes there (not work); seen emails are skipped; next pages are followed; a new sign-in from Microsoft is kept', { skip }, async () => {
+  await fakeMicrosoft();
+  const at = new Date(Date.now() - 3 * 86400e3).toISOString();
+  await saveProjects([
+    { id: 'olp1', name: 'Kiln quote', state: 'active', groupId: 'g1', createdAt: at, activeSince: istDay(3), steps: [{ id: 'ols1', text: 'Reply to Ravi', done: false, mail: { conversationId: 'C-STEP' } }], workNotes: [] },
+    { id: 'olp2', name: 'Glaze trial', state: 'paused', groupId: 'g1', createdAt: at, stateChangedAt: at, steps: [], workNotes: [], mail: { conversationId: 'C-PROJ' } },
+  ]);
+  ms.reqs = [];
+  ms.token = (f) => (f.grant_type === 'refresh_token' && f.refresh_token === 'RT-1' ? [200, { access_token: 'AT-1', refresh_token: 'RT-2' }] : [400, { error: 'invalid_grant' }]);
+  ms.pages = [
+    [mail('m1', 'C1', 'Kiln quote for November', 'Ravi', 50, 'Please find the price for the new kiln.'), mail('m2', 'C2', 'Glaze samples', 'Anil', 40, 'Samples sent today.'),
+     mail('m3', 'C1', 'RE: Kiln quote for November', 'Sandeep', 30, 'OK, go ahead with the order.')],
+    [mail('m4', 'C-STEP', 'RE: Reply', 'Ravi', 20, 'Here is the answer you asked for.'), mail('m5', 'C-PROJ', 'RE: Glaze', 'Meena', 10, 'New glaze recipe attached.')],
+  ];
+  const r = await call('outlook.check', {}, tok.boss);
+  assert.ok(r.ok, r.error);
+  assert.deepEqual([r.outlook.error, r.outlook.addedToday], ['', 5]);
+  const list = ms.reqs.find((x) => x.path === '/v1.0/me/mailFolders/inbox/messages');
+  assert.match(decodeURIComponent(list.url), /\$select=id,subject,from,receivedDateTime,bodyPreview,webLink,conversationId/);
+  assert.match(decodeURIComponent(list.url), /\$filter=receivedDateTime gt \d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ/);
+  assert.match(decodeURIComponent(list.url), /\$orderby=receivedDateTime asc/);
+  assert.equal(list.auth, 'Bearer AT-1');
+  assert.ok(ms.reqs.some((x) => x.path === '/v1.0/next' && x.auth === 'Bearer AT-1'), 'the next page was read');
+  let { data, history } = await dpNow();
+  const inbox = data.inbox;
+  assert.equal(inbox.length, 2, 'two threads, two items (the step and project replies are notes)');
+  const [i1, i2] = inbox;
+  assert.equal(i1.text, '📧 Kiln quote for November — from Ravi', 'the first email names the item');
+  assert.match(i1.note, /^💬 2 emails · latest from Sandeep \d{1,2} [A-Z][a-z]{2} \d\d:\d\d\nOK, go ahead with the order\.$/);
+  assert.deepEqual([i1.link.url, i1.mail], ['https://outlook.office365.com/owa/?ItemID=m3&exvsurl=1',
+    { conversationId: 'C1', count: 2, messageId: 'm3', fromName: 'Sandeep', fromAddress: 'sandeep@x.test', subject: 'RE: Kiln quote for November' }], 'the newest email opens (and is kept for a later reply draft)');
+  assert.equal(i2.text, '📧 Glaze samples — from Anil');
+  assert.match(i2.note, /^\d{1,2} [A-Z][a-z]{2} \d\d:\d\d · Samples sent today\.$/);
+  assert.deepEqual(i2.mail, { conversationId: 'C2', count: 1, messageId: 'm2', fromName: 'Anil', fromAddress: 'anil@x.test', subject: 'Glaze samples' });
+  const p1 = data.projects.find((p) => p.id === 'olp1'); const p2 = data.projects.find((p) => p.id === 'olp2');
+  assert.match(p1.workNotes[0].text, /^📧 New reply from Ravi .* \(step: Reply to Ravi\): Here is the answer you asked for\.$/);
+  assert.deepEqual([p1.workNotes[0].stepId, p1.workNotes[0].mail, p1.workNotes[0].link.url], ['ols1', true, 'https://outlook.office365.com/owa/?ItemID=m4&exvsurl=1']);
+  assert.match(p2.workNotes[0].text, /^📧 New reply from Meena .*: New glaze recipe attached\.$/);
+  assert.equal(p2.state, 'paused', 'the project\'s state is not changed');
+  assert.deepEqual(p1.steps[0].mail, { conversationId: 'C-STEP', messageId: 'm4', fromName: 'Ravi', fromAddress: 'ravi@x.test', subject: 'RE: Reply' }, 'the step keeps the newest email of its thread');
+  assert.deepEqual([p2.mail.messageId, p2.mail.fromAddress], ['m5', 'meena@x.test'], 'so does the project');
+  assert.deepEqual(history[istDay(0).slice(0, 7)].filter((e) => e.kind === 'mail_note').map((e) => e.projectId).sort(), ['olp1', 'olp2']);
+  const { dayScore, lastWorkDate } = await import('../docs/rules.js');
+  assert.equal(dayScore(data, history, istDay(0)).green, 0, 'a reply is not your work: the day score is not raised');
+  assert.equal(lastWorkDate(p1), null);
+  // again: the same emails are not added twice, and Microsoft's new sign-in (RT-2) is the one used now
+  const head = (await dpNow()).head;
+  ms.reqs = [];
+  ms.token = (f) => (f.grant_type === 'refresh_token' && f.refresh_token === 'RT-2' ? [200, { access_token: 'AT-2' }] : [400, { error: 'invalid_grant' }]);
+  const r2 = await call('outlook.check', {}, tok.boss);
+  assert.deepEqual([r2.outlook.error, r2.outlook.addedToday], ['', 5]);
+  assert.equal(ms.reqs[0].form.refresh_token, 'RT-2', 'the rotated sign-in was stored');
+  assert.equal((await dpNow()).head, head, 'nothing new: no new version');
+  // the owner sorts: the Kiln item is deleted; the Glaze item becomes a project (it keeps its thread)
+  ({ data } = await dpNow());
+  data.inbox = [];
+  data.projects.push({ id: 'olp3', name: 'Glaze samples', state: 'active', groupId: 'g1', createdAt: at, steps: [], workNotes: [], mail: { conversationId: 'C2' } });
+  assert.ok((await call('dp.commit', { parent: head, changes: [{ path: 'data.json', content: JSON.stringify(data) }], message: 'sorted' }, tok.boss)).ok);
+  ms.pages = [[...ms.pages[0], mail('m6', 'C1', 'RE: Kiln quote for November', 'Ravi', 5, 'One more thing.'), mail('m7', 'C2', 'RE: Glaze samples', 'Anil', 4, 'Did they arrive?'),
+    mail('m8', 'C9', 'Fresh topic', 'Kavi', 3, 'Hello.')]];
+  const r3 = await call('outlook.check', {}, tok.boss);
+  assert.equal(r3.outlook.addedToday, 8);
+  ({ data } = await dpNow());
+  assert.deepEqual(data.inbox.map((x) => x.text), ['↩ New reply: RE: Kiln quote for November — from Ravi', '📧 Fresh topic — from Kavi'], 'a removed thread comes back once as a new reply; another thread is its own item');
+  assert.deepEqual([data.inbox[0].mail.conversationId, data.inbox[0].mail.count, data.inbox[0].mail.messageId], ['C1', 1, 'm6']);
+  assert.match(data.projects.find((p) => p.id === 'olp3').workNotes[0].text, /^📧 New reply from Anil .*: Did they arrive\?$/, 'made into a project: the reply is a note there, not a new item');
+  sql('UPDATE wt.settings SET v = 0 WHERE k = \'jobs_at\'');
+});
+
+test('outlook: an expired sign-in says so in plain words and stops; not connected = nothing is fetched; Disconnect forgets the sign-in', { skip }, async () => {
+  await fakeMicrosoft();
+  sql('UPDATE wt.settings SET v = UNIX_TIMESTAMP() + 86400 WHERE k = \'jobs_at\'');
+  ms.token = () => [400, { error: 'invalid_grant', error_description: 'AADSTS70008: The refresh token has expired.' }];
+  const before = (await dpNow()).head;
+  const r = await call('outlook.check', {}, tok.boss);
+  assert.deepEqual([r.outlook.error, r.outlook.connected], ['Sign-in expired — press Connect again', false]);
+  assert.equal((await dpNow()).head, before, 'nothing written');
+  // not connected: the 10-minute job asks Microsoft nothing
+  ms.reqs = [];
+  sql('UPDATE wt.settings SET v = 0 WHERE k = \'jobs_at\'');
+  await call('me', {}, tok.boss); await call('me', {}, tok.boss);
+  assert.equal(ms.reqs.length, 0, 'not connected: nothing fetched');
+  // connected again, then Disconnect
+  ms.token = (f) => (f.grant_type === 'authorization_code' ? [200, { access_token: 'AT-9', refresh_token: 'RT-9' }] : [200, { access_token: 'AT-9' }]);
+  const c = await call('outlook.connect', {}, tok.boss);
+  assert.equal((await callback({ code: 'CODE-9', state: stateOf(c.url) })).s, 200);
+  assert.equal((await call('outlook.status', {}, tok.boss)).outlook.connected, true);
+  const d = await call('outlook.disconnect', {}, tok.boss);
+  assert.deepEqual([d.outlook.connected, d.outlook.account, d.outlook.secretEnd], [false, '', 'AB12'], 'the sign-in is gone; the setup stays');
+  assert.equal(execFileSync('mysql', ['-u', 'root', `--socket=${SOCK}`, '-N', '-e', "SELECT COUNT(*) FROM wt.settings WHERE k = 'ol_refresh'"], { encoding: 'utf8' }).trim(), '0');
 });

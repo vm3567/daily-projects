@@ -735,6 +735,7 @@ kbd.hint {
 .inbox-list { list-style: none; margin: 0; padding: 0; }
 .inbox-list li { border: 1px solid var(--line, #e2e8f0); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; background: #fff; }
 .inbox-text { font-size: 14.5px; margin-bottom: 8px; }
+.inbox-note { white-space: pre-wrap; margin: -4px 0 8px; overflow-wrap: anywhere; }
 .inbox-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .inbox-pick { max-width: 220px; }
 .chip.sugg { border-style: solid; background: var(--brand-soft); color: #1e40af; }
@@ -973,3 +974,18 @@ a.team-line.msg { background: #eef4ff; border-color: #93b4f8; color: #1e40af; fo
   font: inherit; font-size: 14px; line-height: 1.45; color: var(--muted); cursor: text; text-align: left; }
 .about-input:focus { outline: none; border-color: var(--line); color: var(--text); }
 .about-input::placeholder { color: var(--grey); opacity: .75; }
+
+/* People: sent mark, Work Task table, team account box */
+.sent-tag { color: #2e7d32; font-weight: 600; align-self: center; }
+.sent-mark { color: #2e7d32; margin-left: 6px; font-weight: 600; }
+.sheet-notice { background: #e8f5e9; color: #1b5e20; padding: 6px 8px; border-radius: 6px; margin: 6px 0; }
+.wt-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.wt-table th, .wt-table td { border: 1px solid var(--line, #bbb); padding: 6px 8px; vertical-align: top; text-align: left; }
+.wt-table th { background: var(--soft, #f2f2f2); }
+.wt-table tr.wt-open { cursor: pointer; }
+.wt-sub { color: #666; font-size: 12px; margin-top: 2px; }
+.wt-sub.bad { color: #c62828; }
+.wt-sub.warn { color: #e65100; }
+.team-account { display: flex; flex-direction: column; gap: 6px; }
+.people-signin { display: flex; align-items: center; gap: 4px; flex-basis: 100%; }
+.people-add { flex-wrap: wrap; }

@@ -7,7 +7,7 @@ import { installMentions } from './ui/mention.js';
 import { installAutocorrect, setAutocorrect, autocorrectOn } from './ui/autocorrect.js';
 import { renderDashboard } from './ui/dashboard.js';
 import { renderTimeReport } from './ui/timereport.js';
-import { projectMatches, diaryEntries, backupPayload, summaryText, personMessageText } from './reports.js';
+import { projectMatches, diaryEntries, backupPayload, summaryText, personMessageText, personMessageHtml, sentMarkOf, copyNotice } from './reports.js';
 import { closeViewer, uploadBlob } from './ui/files.js';
 import { Store } from './store.js';
 import { GitHubRepo } from './github.js';
@@ -15,7 +15,7 @@ import { ServerRepo, SERVER_TOKEN_KEY } from './serverrepo.js';
 import { MockRepo } from './mockrepo.js';
 import { device } from './device.js';
 import { DATA_OWNER, DATA_REPO, DATA_BRANCH, MOVED_TO, REFRESH_MS, AI_DAILY_LIMIT, BRIEF_CLAIM_MINUTES, WAIT_RED_DAYS, NO_WORK_NOTE_DAYS } from './config.js';
-import { dotColour, greenByTeamOnly, isSnoozed, restUntil, awakeProjects, activeProjects, nextStep, todayIndia, isSundayIndia, colourCounts, isOverdue, indiaDate, waitingDays, daysWithoutWork, dayScore, greenStreak, addDays, monthOf, fmtMinutes, takeBackWaits, staffStepAction, pasteGoesToProject, singleStepClose, versionRequest, askDiaryAgain, diaryLoadedAt, photoNeedsFetch, teamUndoKey, teamActionUndone, teamProgressOf, projectKeyIgnored, teamMovedTo, serverHolder } from './rules.js';
+import { dotColour, greenByTeamOnly, isSnoozed, restUntil, awakeProjects, activeProjects, nextStep, todayIndia, isSundayIndia, colourCounts, isOverdue, indiaDate, waitingDays, daysWithoutWork, dayScore, greenStreak, addDays, monthOf, fmtMinutes, takeBackWaits, staffStepAction, pasteGoesToProject, singleStepClose, versionRequest, askDiaryAgain, diaryLoadedAt, photoNeedsFetch, teamUndoKey, teamActionUndone, teamProgressOf, projectKeyIgnored, teamMovedTo, serverHolder, teamMemberFor } from './rules.js';
 import { newId, clone, opMonth, groupHasTimer, cleanLink, carriedOps } from './ops.js';
 import * as ai from './ai.js';
 import { parseVoice } from './voice.js';
@@ -153,9 +153,15 @@ const ctx = {
   goTime: () => go('time'),
   draftFollowUp: (p, s) => draftFollowUp(p, s),
   openSummary: () => openSummary(),
-  openPersonMessage: (person) => openSheet({
-    title: `Pending list for ${person.name}`, text: personMessageText(store.view.data, person, todayIndia()), subject: 'Pending items', to: person,
-  }),
+  openPersonMessage: (person) => openPersonMessage(person),
+  teamLink: (person) => personTeamLink(person),
+  teamAccounts: () => (onServer ? teamAccounts() : null),
+  sentMark: (person) => { const link = personTeamLink(person); return sentMarkOf(person, link && link.member, todayIndia()); },
+  giveSignIn: (person, email) => giveSignIn(person, email),
+  newPasswordFor: (person, account) => newPasswordFor(person, account),
+  setTeamEmail: (account, email) => setTeamEmail(account, email),
+  toggleTeamUser: (account) => toggleTeamUser(account),
+  moveAllTasks: (account, to) => moveAllTasks(account, to),
   openPerson: (id) => { pushNav(); go('people'); ctx.selectPerson(id); },
   goBack: () => goBack(),
   openInList: (id) => { select(id); const row = root.querySelector(`.prow[data-id="${CSS.escape(id)}"]`); if (row) row.scrollIntoView({ block: 'nearest' }); },
@@ -311,34 +317,133 @@ function personNamed(name) {
 }
 
 /** to = a person: WhatsApp and Outlook open straight to them when their number / email is saved on their page. */
-function openSheet({ title, text, busy = false, error = '', extra = null, subject = 'Update', to = null }) {
+/**
+ * The send sheet: the words in a box, then WhatsApp / Outlook / Copy.
+ * html: the same message as an email table — then Outlook and Copy put the table on the clipboard (with plain lines
+ * as the fallback) and Outlook opens a new mail with To and Subject (you paste the table in). onSent: WhatsApp or Outlook pressed.
+ */
+function openSheet({ title, text, busy = false, error = '', extra = null, subject = 'Update', to = null, html = '', onSent = null }) {
   const v = document.getElementById('viewer');
   v.hidden = false;
   v.classList.add('sheet-mode');
   const area = h('textarea', { class: 'sheet-text', rows: 12, 'aria-label': title });
   area.value = text || '';
+  const notice = h('p', { class: 'sheet-notice small', role: 'status', hidden: true });
+  const say = (how) => { const words = copyNotice(how); notice.textContent = words; notice.hidden = false; toast(words, 6000); };
+  const copyPlain = async () => {
+    try { await navigator.clipboard.writeText(area.value); return 'text'; }
+    catch { area.select(); return document.execCommand && document.execCommand('copy') ? 'text' : 'none'; }
+  };
+  // the table AND plain lines in one copy; the blobs are made here, inside the click, so the browser allows it
+  const copyTable = () => {
+    let write = null;
+    try {
+      if (window.ClipboardItem && navigator.clipboard && navigator.clipboard.write) {
+        const item = new ClipboardItem({ 'text/html': new Blob([html], { type: 'text/html' }), 'text/plain': new Blob([area.value], { type: 'text/plain' }) });
+        write = navigator.clipboard.write([item]);
+      }
+    } catch { write = null; }
+    return write ? write.then(() => 'html', () => copyPlain()) : copyPlain();
+  };
   const copy = async () => {
+    if (html) { say(await copyTable()); return; }
     try { await navigator.clipboard.writeText(area.value); toast('Copied ✓ — paste it in WhatsApp or email', 2500); }
     catch { area.select(); document.execCommand && document.execCommand('copy'); toast('Copied ✓', 2000); }
   };
   const phone = to && to.phone;
   const email = to && to.email;
-  const wa = () => window.open(`https://wa.me/${phone || ''}?text=${encodeURIComponent(area.value)}`, '_blank', 'noopener');
+  const wa = () => { window.open(`https://wa.me/${phone || ''}?text=${encodeURIComponent(area.value)}`, '_blank', 'noopener'); if (onSent) onSent('whatsapp'); };
   // Outlook on the web, new mail with To, subject and text filled in (you use Outlook in Chrome)
-  const outlook = () => window.open(`https://outlook.office.com/mail/deeplink/compose?to=${encodeURIComponent(email || '')}&subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(area.value)}`, '_blank', 'noopener');
+  const outlook = async () => {
+    if (html) { // the table cannot go in a link: copy it, then open the mail with To and Subject only
+      const done = copyTable();
+      const how = await done;
+      say(how);
+      location.href = `mailto:${encodeURIComponent(email || '').replace(/%40/g, '@')}?subject=${encodeURIComponent(subject)}`;
+    } else window.open(`https://outlook.office.com/mail/deeplink/compose?to=${encodeURIComponent(email || '')}&subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(area.value)}`, '_blank', 'noopener');
+    if (onSent) onSent('outlook');
+  };
   const first = to ? to.name.split(/\s+/)[0] : '';
   v.replaceChildren(
     h('div', { class: 'sheet' },
       h('div', { class: 'sheet-head' }, h('strong', null, title), h('button', { class: 'icon', 'aria-label': 'Close', onClick: closeSheet }, '✕')),
       busy ? h('p', { class: 'muted' }, 'Writing…') : error ? h('p', { class: 'error' }, error) : area,
-      busy || error ? null : h('p', { class: 'muted small' }, 'You can change the words before sending.',
+      busy || error ? null : h('p', { class: 'muted small' }, html ? 'Outlook and Copy send the table. Changes in this box only go to WhatsApp (and plain copies).' : 'You can change the words before sending.',
         to && (!phone || !email) ? ` Tip: save ${first}'s ${!phone && !email ? 'phone and email' : !phone ? 'phone' : 'email'} on ${first}'s page, and these buttons go straight to ${first}.` : ''),
+      notice,
       h('div', { class: 'row sheet-actions' },
         busy || error ? null : h('button', { class: 'btn wa' + (phone ? ' primary' : ''), onClick: wa, title: phone ? `Opens WhatsApp chat with ${to.name}` : 'Opens WhatsApp; you pick the person' }, phone ? `WhatsApp ${first}` : 'WhatsApp'),
-        busy || error ? null : h('button', { class: 'btn' + (email ? ' primary' : ''), onClick: outlook, title: email ? `New Outlook mail to ${email}` : 'New Outlook mail; you add the person' }, email ? `✉ Outlook ${first}` : '✉ Outlook'),
-        busy || error ? null : h('button', { class: 'btn', onClick: copy }, '📋 Copy'),
+        busy || error ? null : h('button', { class: 'btn' + (email ? ' primary' : ''), onClick: outlook, title: html ? 'Copies the table, then opens a new mail — paste it in' : email ? `New Outlook mail to ${email}` : 'New Outlook mail; you add the person' }, email ? `✉ Outlook ${first}` : '✉ Outlook'),
+        busy || error ? null : h('button', { class: 'btn', onClick: copy, title: html ? 'Copies the table (and plain lines)' : 'Copies the words' }, '📋 Copy'),
         extra)));
   if (!busy && !error) setTimeout(() => area.focus(), 30);
+}
+
+/** "📋 Send pending list": the words for WhatsApp, the table for Outlook. A person with a Work Task account gets the
+ *  server's projects and tasks first and their sent mark is kept on the server (as in the Work Task app). */
+function openPersonMessage(person) {
+  const data = store.view.data;
+  const today = todayIndia();
+  const link = personTeamLink(person);
+  const items = link && link.member ? link.member.items || [] : null;
+  const owner = ((team.accounts || []).find((u) => u.owner) || {}).name || '';
+  const mail = personMessageHtml(data, person, today, { items, owner });
+  const email = (link && link.user && link.user.email) || person.email || '';
+  openSheet({
+    title: `Pending list for ${person.name}`, text: personMessageText(data, person, today, items), subject: mail.subject, html: mail.html,
+    to: { ...person, email }, onSent: () => markPersonSent(person, link),
+  });
+}
+
+/** Remember that today's list went out: on the server for a Work Task person, else in this app's data. */
+function markPersonSent(person, link) {
+  if (link && link.member) {
+    const member = link.member;
+    teamApi('morning.sent', { userId: member.id }).then((r) => { member.sentAt = r.sentAt; render(); }, (e) => toast(e.message, 5000));
+  } else store.dispatch('markPersonSent', { personId: person.id, at: new Date().toISOString() });
+  render();
+}
+
+/** Each Work Task staff person's pending work and today's send (people.morning, manager only). null while loading, false if it failed. */
+function teamMorning(force = false) {
+  if (!onServer) return false;
+  if (team.morning !== undefined && team.morning !== null && !force) return team.morning;
+  if (!team.morningLoading) {
+    team.morningLoading = true;
+    teamApi('people.morning').then((out) => { team.morning = out; team.morningLoading = false; render(); })
+      .catch(() => { team.morning = false; team.morningLoading = false; render(); });
+  }
+  return team.morning === undefined ? null : team.morning;
+}
+
+/** A person's Work Task account (users.list) and pending work (people.morning), matched by name; null when none. */
+function personTeamLink(person) {
+  if (!onServer || !person) return null;
+  const users = (teamAccounts() || []).filter((u) => !u.owner);
+  const user = teamMemberFor(person, users);
+  const m = teamMorning();
+  const member = m && m.people ? (user ? m.people.find((x) => x.id === user.id) : teamMemberFor(person, m.people)) || null : null;
+  if (!user && !member) return null;
+  return { user, member, loading: m === null, failed: m === false };
+}
+
+function refreshTeamPeople() { teamAccounts(true); teamMorning(true); }
+
+async function setTeamEmail(account, email) {
+  try { await teamApi('user.save', { id: account.id, name: account.name, role: account.role, email: String(email || '').trim() }); toast('Email saved ✓'); refreshTeamPeople(); }
+  catch (e) { toast(e.message, 6000); refreshTeamPeople(); }
+}
+
+async function toggleTeamUser(account) {
+  if (account.active && !confirm(`Switch off ${account.name}? They can no longer sign in. Their updates stay.`)) return;
+  try { await teamApi('user.active', { id: account.id, active: !account.active }); toast(account.active ? 'Switched off' : 'Switched on'); refreshTeamPeople(); }
+  catch (e) { toast(e.message, 6000); }
+}
+
+async function moveAllTasks(account, to) {
+  if (!confirm(`Move all of ${account.name}'s open tasks to ${to.name}?`)) return;
+  try { const out = await teamApi('tasks.moveAll', { fromId: account.id, toId: to.id }); toast(`${out.moved} task${out.moved === 1 ? '' : 's'} moved to ${to.name} ✓`); refreshTeamPeople(); loadTeam(true); }
+  catch (e) { toast(e.message, 6000); }
 }
 
 function closeSheet() {
@@ -1091,7 +1196,8 @@ function renderInbox() {
     items.length ? h('ul', { class: 'inbox-list' }, items.map((item) => {
       const sugg = inboxSuggestions(item.text);
       return h('li', { key: 'ib-' + item.id },
-        h('div', { class: 'inbox-text' }, item.text, h('span', { class: 'muted small' }, ` · ${fmtDay(indiaDate(item.createdAt))} `), linkChip(item.link)),
+        h('div', { class: 'inbox-text' }, item.text, h('span', { class: 'muted small' }, ` · ${fmtDay(indiaDate(item.createdAt))} `), linkChip(item.link, item.mail ? '✉ Open in Outlook' : null)),
+        item.note ? h('div', { class: 'inbox-note muted small', key: 'ibn-' + item.id }, item.note) : null, // from an email: when, and how it starts
         h('div', { class: 'inbox-actions' },
           sugg.map((p) => h('button', { class: 'chip sugg', key: 'sg-' + p.id, title: `Add as a step in ${p.name}`, onClick: () => toStep(item, p) }, `→ ${p.name}`)),
           h('select', {
@@ -1205,15 +1311,15 @@ function sendSignIn(person, username, password, isNew) {
 }
 
 /** Give a person a Work Task sign-in (username from their first name; a number is added if it is taken). */
-async function giveSignIn(person) {
+async function giveSignIn(person, email = '') {
   const base = (person.name.trim().split(/\s+/)[0] || 'user').toLowerCase().replace(/[^a-z0-9._-]/g, '') || 'user';
   const password = firstPassword();
   for (const extra of ['', '1', '2', '3', String(Date.now() % 1000)]) {
     let name = (base + extra).slice(0, 40);
     if (name.length < 3) name = (name + 'user').slice(0, 40);
     try {
-      const out = await teamApi('user.save', { name: person.name, username: name, password, role: 'staff' });
-      teamAccounts(true);
+      const out = await teamApi('user.save', { name: person.name, username: name, password, role: 'staff', ...(email ? { email: String(email).trim() } : {}) });
+      refreshTeamPeople();
       sendSignIn(person, out.user.username, password, true);
       return;
     } catch (e) {
@@ -1226,7 +1332,7 @@ async function giveSignIn(person) {
 async function newPasswordFor(person, account) {
   if (!confirm(`Give ${person.name} a new first password?\nThey are signed out and choose their own again.`)) return;
   const password = firstPassword();
-  try { await teamApi('user.reset', { id: account.id, password }); sendSignIn(person, account.username, password, false); }
+  try { await teamApi('user.reset', { id: account.id, password }); sendSignIn(person, account.username, password, false); } // shown once, in the sheet
   catch (e) { toast(e.message, 6000); }
 }
 
@@ -1239,7 +1345,7 @@ function personMenu(m) {
   }, h('span', { class: 'rm-icon', 'aria-hidden': 'true' }, icon), label);
   const open = () => { ui.view = 'people'; ui.search = ''; rememberUi(); ctx.selectPerson(person.id); };
   const accounts = onServer ? teamAccounts() : null;
-  const account = accounts && accounts.find((u) => u.name.trim().toLowerCase() === person.name.trim().toLowerCase());
+  const account = accounts && teamMemberFor(person, accounts.filter((u) => !u.owner));
   const el = h('div', { class: 'row-menu', role: 'menu', key: 'person-menu', 'aria-label': `Actions for ${person.name}` },
     h('div', { class: 'row-menu-title' }, person.name),
     item('↗', 'Open', open),
@@ -2898,6 +3004,7 @@ function start() {
   if (!isMock && !onServer && MOVED_TO) { showMoved(); return; } // first: it passes #say= / #add= on to the new address
   takeClipFromHash();
   takeVoiceFromHash();
+  if (location.hash === '#people') { ui.view = 'people'; ui.search = ''; history.replaceState(null, '', location.pathname + location.search); } // from Work Task's "People ↗"
   if (onServer) takeOpsFromHash(); // before the store starts: it reads the waiting changes once
   if (onServer && !serverToken()) { toSignIn(); return; }
   const key = device.githubKey();

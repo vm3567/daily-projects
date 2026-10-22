@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { addDay, weekdayOf, dueOn, itemKey, diaryRows, fieldChanged, lateValue, afterFlush, boxStillThere, updateSaveBody, redrawHow, projectRowState, giveBackShow, keptNotice, noticeHow, pasteWaits, msgBoxSent, redrawAfterSend, taskSaveBody, aboutShort, projectAboutOf, morningMail, morningOrder, morningSummary, sentTag, sentTime, escHtml, followupRule, followupRows, followupGroups, followupSummary, roundKey, roundSaved, roundPlan, roundMark, parseQuickTask } from '../team/public_html/logic.js';
+import { addDay, weekdayOf, dueOn, itemKey, diaryRows, fieldChanged, lateValue, afterFlush, boxStillThere, updateSaveBody, redrawHow, projectRowState, giveBackShow, keptNotice, noticeHow, pasteWaits, msgBoxSent, redrawAfterSend, taskSaveBody, aboutShort, projectAboutOf, morningMail, morningOrder, morningSummary, sentTag, sentTime, escHtml, followupRule, followupRows, followupGroups, followupSummary, roundKey, roundSaved, roundPlan, roundMark, parseQuickTask, outlookLine } from '../team/public_html/logic.js';
 const APP = readFileSync(new URL('../team/public_html/app.js', import.meta.url), 'utf8');
 
 // Wed 21 Oct 2026 is "today" in these checks; 18 Oct is a Sunday.
@@ -274,7 +274,7 @@ test('project description: taken from the project\'s tasks (the first one that h
   assert.equal(projectAboutOf([{ title: 'old server, no field' }]), '');
   assert.match(APP, /class: 'prow-about' }, aboutShort\(p\.projectAbout\)\)/, 'manager\'s Projects list row');
   assert.match(APP, /class: 'project-about' }/, 'under the title of the project and task pages');
-  assert.match(readFileSync(new URL('../team/public_html/sw.js', import.meta.url), 'utf8'), /const CACHE = 'worktask-v17'/, 'new files reach the phones');
+  assert.match(readFileSync(new URL('../team/public_html/sw.js', import.meta.url), 'utf8'), /const CACHE = 'worktask-v18'/, 'new files reach the phones');
 });
 
 // ---------------------------------------------------------------- 📧 morning email (one person's pending work as a table to fill in)
@@ -606,4 +606,47 @@ test('follow-up: the buttons sit on their own line under the words (the words ar
   assert.match(css, /\.fu-row\s*\{[^}]*flex-wrap:\s*wrap/, 'the row wraps');
   assert.match(css, /\.fu-row\s*>\s*\.prow-btn\s*\{[^}]*flex:\s*1 1 100%/, 'the words take the whole width');
   assert.match(css, /\.fu-row\s*>\s*\.fu-btns\s*\{[^}]*flex:\s*1 1 100%/, 'the buttons go on the next line');
+});
+
+test('outlook: the status line in plain words (connected, last check, emails today; or the problem)', () => {
+  const base = { clientId: 'c', secretEnd: 'ab12', connected: true, account: 'venkat@acton.com', lastCheck: '2026-10-21 10:42:10', addedToday: 3, error: '' };
+  assert.equal(outlookLine(base, TODAY), 'Connected as venkat@acton.com · last check 10:42 · 3 emails added today');
+  assert.equal(outlookLine({ ...base, addedToday: 1, lastCheck: '2026-10-20 09:05:00' }, TODAY), 'Connected as venkat@acton.com · last check 20/10 09:05 · 1 email added today');
+  assert.equal(outlookLine({ ...base, connected: false, error: 'Sign-in expired — press Connect again' }, TODAY), 'Not connected — Sign-in expired — press Connect again');
+  assert.equal(outlookLine({ ...base, error: 'Microsoft says: needs admin approval — ask IT' }, TODAY), 'Connected as venkat@acton.com · last check 10:42 · 3 emails added today — Microsoft says: needs admin approval — ask IT');
+  assert.equal(outlookLine({ connected: false }, TODAY), 'Not set up yet — fill in the three details from Azure and press Save.');
+  assert.equal(outlookLine({ connected: false, clientId: 'c', secretEnd: 'ab12' }, TODAY), 'Not connected yet — press Connect Outlook.');
+});
+
+test('outlook: the Settings section (owner only) — three fields, the Redirect URI, Connect / Check now / Disconnect; the secret box is never filled from the server', () => {
+  const settings = APP.slice(APP.indexOf('function settingsScreen()'), APP.indexOf('function outlookCard()'));
+  assert.match(settings, /state\.user && state\.user\.owner \? outlookCard\(\) : null/, 'only the owner of the projects sees it');
+  const fn = APP.slice(APP.indexOf('function outlookCard()'), APP.indexOf('// ---------------------------------------------------------------- start'));
+  assert.match(fn, /el\('h2', null, '📧 Outlook'\)/);
+  for (const label of ['Application \\(client\\) ID', 'Directory \\(tenant\\) ID', 'Client secret ', 'Redirect URI to register']) assert.match(fn, new RegExp(`el\\('label', null, '${label}'`), label);
+  assert.match(fn, /const secret = el\('input', \{ type: 'password', autocomplete: 'new-password'/, 'a password box');
+  assert.ok(!/secret\.value = (?!'')/.test(fn), 'the secret box is only ever emptied, never filled');
+  assert.ok(!/o\.secret\b(?!End)/.test(fn), 'nothing but the last 4 letters is read');
+  assert.match(fn, /secretSaved\.textContent = o\.secretEnd \? `saved ✓ \(ends …\$\{o\.secretEnd\}\)`/);
+  assert.match(fn, /redirect\.textContent = o\.redirectUri/);
+  assert.match(fn, /api\('outlook\.status'\)/);
+  assert.match(fn, /run\(saveBtn, 'outlook\.save', \{ clientId: clientId\.value\.trim\(\), tenantId: tenantId\.value\.trim\(\), secret: secret\.value\.trim\(\) \}, \(\) => \{ secret\.value = '';/);
+  assert.match(fn, /run\(connectBtn, 'outlook\.connect', \{\}, \(out\) => \{ if \(out\.url\) location\.href = out\.url; \}\)/, 'Connect goes to the Microsoft sign-in');
+  assert.match(fn, /run\(checkBtn, 'outlook\.check'/);
+  assert.match(fn, /confirm\('Disconnect Outlook\?[^']*'\)\) run\(offBtn, 'outlook\.disconnect'/);
+  assert.match(fn, /checkBtn\.hidden = offBtn\.hidden = !o\.connected/);
+  assert.match(fn, /line\.textContent = outlookLine\(o, o\.today\)/);
+  assert.match(fn, /offline_access, User\.Read and Mail\.ReadWrite \(it only reads your emails; it never sends any\)/, 'the permissions to add in Azure');
+  const sw = readFileSync(new URL('../team/public_html/sw.js', import.meta.url), 'utf8');
+  assert.match(sw, /url\.pathname === '\/outlook\.php'/, 'the sign-in page is never kept on the phone');
+});
+
+test('one People page: Work Task\'s menu opens the People page on the projects page, which opens on People', async () => {
+  const { readFileSync } = await import('node:fs');
+  const app = readFileSync(new URL('../team/public_html/app.js', import.meta.url), 'utf8');
+  const dp = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
+  assert.ok(!/go\('people'\)/.test(app), 'no link left to the old Work Task People page');
+  assert.match(app, /item\('People ↗', false, \(\) => openPeoplePage\(\)\)/);
+  assert.match(app, /function openPeoplePage\(\) \{ location\.href = 'projects\/#people'; \}/);
+  assert.match(dp, /if \(location\.hash === '#people'\) \{ ui\.view = 'people';/, 'the projects page opens on People');
 });

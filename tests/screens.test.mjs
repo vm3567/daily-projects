@@ -262,3 +262,124 @@ test('project description goes to the team: both project.sync calls send about, 
   assert.match(APP, /function syncSig\(userId, p, steps, needsPhoto\) \{\n\s*return JSON\.stringify\(\[[^\]]*p\.about \|\| ''\]\);/, 'the description is in the change signature');
   assert.ok(!/JSON\.stringify\(\[(p\.team\.userId|person\.id), p\.name/.test(APP), 'no signature made without it');
 });
+
+test('a reply from an email thread shows on the project page with its "Open mail" link', () => {
+  const s = sampleState();
+  applyOps(s, [makeOp('addMailNote', { projectId: 'p1', noteId: 'ml1', text: '📧 New reply from Anil 22 Oct 14:05: price OK', link: { url: 'https://outlook.office365.com/owa/?ItemID=x', title: 'Kiln quote' } })]);
+  const el = renderDetail(fakeCtx(s, { selected: 'p1', update: {}, showMore: true }));
+  const links = [];
+  const walk = (n) => { if (n.nodeName === 'A') links.push(n); (n.childNodes || []).forEach(walk); };
+  walk(el);
+  assert.ok(links.some((a) => a.getAttribute('href') === 'https://outlook.office365.com/owa/?ItemID=x' && a.textContent === '✉ Open mail'), 'the email opens from the note');
+});
+
+// ---------- One People page: Send pending list, sent mark, Work Task projects and account ----------
+
+const findIn = (node, f) => (f(node) ? node : (node.childNodes || []).map((c) => findIn(c, f)).find(Boolean));
+const allIn = (node, f, out = []) => { if (f(node)) out.push(node); (node.childNodes || []).forEach((c) => allIn(c, f, out)); return out; };
+const hasClass = (c) => (n) => (n.className || '').split(' ').includes(c);
+
+test('person page: "📋 Send again" and a green "✓ Sent today 9:05" once sent today; nothing before', () => {
+  const s = sampleState();
+  const before = renderPerson(fakeCtx(s, { person: 'r' })).textContent;
+  assert.ok(before.includes('📋 Send pending list') && !before.includes('Sent today'));
+  const ctx = fakeCtx(s, { person: 'r' });
+  ctx.sentMark = () => ({ source: 'op', time: '9:05' });
+  const el = renderPerson(ctx);
+  assert.ok(el.textContent.includes('📋 Send again'));
+  const tag = findIn(el, hasClass('sent-tag'));
+  assert.equal(tag && tag.textContent, '✓ Sent today 9:05');
+  // without ctx.sentMark the page reads the person's own mark (only today's)
+  applyOps(s, [makeOp('markPersonSent', { personId: 'r', at: new Date().toISOString() })]);
+  assert.ok(renderPerson(fakeCtx(s, { person: 'r' })).textContent.includes('📋 Send again'));
+  const list = renderPeopleList(fakeCtx(s, {}));
+  assert.match(findIn(list, hasClass('sent-mark')).textContent, /^✓ \d{1,2}:\d\d$/, 'the People list row shows ✓ and the time');
+});
+
+test('person page: projects given here show as "📁 Projects given to …" with the next step, and the list counts them', () => {
+  const s = sampleState();
+  applyOps(s, [makeOp('createProject', { projectId: 'p9', name: 'Basin mould', groupId: s.data.groups[0].id }),
+    makeOp('addStep', { projectId: 'p9', stepId: 'g1', text: 'Cast 3 trial moulds' }),
+    makeOp('setProjectTeam', { projectId: 'p9', userId: 7, name: 'ravi' })]);
+  const ctx = fakeCtx(s, { person: 'r' });
+  ctx.teamProgress = () => ({ stuck: true, lastUpdate: null });
+  const text = renderPerson(ctx).textContent;
+  assert.ok(text.includes('📁 Projects given to Ravi (1)'));
+  assert.ok(text.includes('📁 Basin mould') && text.includes('Now: Cast 3 trial moulds') && text.includes('0 of 1 steps done') && text.includes('stuck'));
+  assert.ok(text.indexOf('📁 Projects given to') < text.indexOf('To discuss with Ravi'), 'above the To discuss list');
+  assert.ok(renderPeopleList(fakeCtx(s, {})).textContent.includes('1 project'), 'counted in the People list row');
+});
+
+test('person page for a Work Task person: the server list as a table, the Team account box, one email box, in order', () => {
+  const s = sampleState();
+  applyOps(s, [makeOp('addWorkNote', { projectId: 'p1', noteId: 'n7', text: 'About @Ravi: call back' })]);
+  const user = { id: 7, name: 'Ravi', username: 'ravi', role: 'staff', active: true, email: 'ravi@acton.in', lastLogin: '2026-10-21 09:00:00' };
+  const member = { id: 7, name: 'Ravi', sentAt: null, items: [
+    { kind: 'task', title: 'Clean dryer', repeat: 'Every day', lastUpdate: null },
+    { kind: 'project', title: 'Basin mould', now: 'Cast moulds', lateSince: '2026-10-18', projectRef: 'p1', lastUpdate: { day: '2026-10-21', note: 'Half done' } },
+    { kind: 'task', title: 'Fix press', stuck: true, lastUpdate: null },
+  ] };
+  const opened = [];
+  const ctx = fakeCtx(s, { person: 'r' });
+  Object.assign(ctx, { onServer: true, teamLink: () => ({ user, member }), teamAccounts: () => [user, { id: 8, name: 'Valar', active: true }],
+    openProject: (id) => opened.push(id), newPasswordFor: () => {}, toggleTeamUser: () => {}, setTeamEmail: () => {}, moveAllTasks: () => {} });
+  const el = renderPerson(ctx);
+  const text = el.textContent;
+  assert.ok(text.includes('📁 Projects and tasks from Work Task (3)'));
+  const rows = allIn(findIn(el, hasClass('wt-table')), (n) => n.nodeName === 'TR');
+  assert.deepEqual(rows[0].childNodes.map((c) => c.textContent), ['#', 'Work', 'Last update']);
+  assert.deepEqual(rows.slice(1).map((r) => r.childNodes[1].childNodes[0].textContent), ['📁 Basin mould', 'Fix press', 'Clean dryer'], 'late, stuck, then the rest');
+  assert.ok(rows[1].textContent.includes('Late since 18 Oct') && rows[1].textContent.includes('Now: Cast moulds') && rows[1].textContent.includes('21 Oct: Half done'));
+  assert.ok(rows[2].textContent.includes('Stuck') && rows[3].textContent.includes('Every day') && rows[3].textContent.includes('—'));
+  rows[1].__on.click();
+  assert.deepEqual(opened, ['p1'], 'tap a project row = open it');
+  for (const bit of ['Team account', '@ravi', '🔑 New password', 'Switch off', '↔ Move all tasks to…']) assert.ok(text.includes(bit), bit);
+  assert.equal(allIn(el, (n) => n.getAttribute && n.getAttribute('aria-label') === 'Email').length, 0, 'no second email box');
+  assert.equal(findIn(el, (n) => n.getAttribute && n.getAttribute('aria-label') === 'Work Task email').value, 'ravi@acton.in');
+  const order = ['📋 Send pending list', 'Team account', '📁 Projects and tasks from Work Task', 'To discuss with Ravi', 'Notes about Ravi'].map((t) => text.indexOf(t));
+  assert.ok(order.every((x, i) => x >= 0 && (i === 0 || x > order[i - 1])), 'sections in order: ' + order);
+  assert.ok(renderPeopleList(Object.assign(fakeCtx(s, {}), { teamLink: () => ({ user, member }) })).textContent.includes('1 project · 2 tasks'));
+});
+
+test('People: "+ Add a person" can also give a Work Task sign-in (checkbox, only on the server)', () => {
+  const s = sampleState();
+  assert.ok(!renderPeopleList(fakeCtx(s, {})).textContent.includes('Work Task sign-in'), 'not off the server');
+  const given = [];
+  const ui = { addSignIn: true };
+  const ctx = Object.assign(fakeCtx(s, ui), { onServer: true, giveSignIn: (person, email) => given.push([person.name, email]) });
+  ctx.store.dispatch = (type, args) => applyOps(s, [makeOp(type, args)]).length > 0;
+  const list = renderPeopleList(ctx);
+  assert.ok(list.textContent.includes('Also give them a Work Task sign-in'));
+  const form = findIn(list, hasClass('people-add'));
+  form.__on.submit({ preventDefault() {}, target: { elements: { name: { value: 'Mani' }, signin: { checked: true }, email: { value: ' mani@acton.in ' } } } });
+  assert.ok(s.data.people.some((p) => p.name === 'Mani'));
+  assert.deepEqual(given, [['Mani', 'mani@acton.in']]);
+  ui.addSignIn = false;
+  form.__on.submit({ preventDefault() {}, target: { elements: { name: { value: 'Kavi' }, signin: { checked: false } } } });
+  assert.equal(given.length, 1, 'unticked: only added here');
+});
+
+test('send sheet wiring: Outlook/Copy copy the table (html + plain), Outlook opens mailto with the subject only; sent marks; Work Task account calls', async () => {
+  const { readFileSync } = await import('node:fs');
+  const APP = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
+  const sheet = APP.slice(APP.indexOf('function openSheet('), APP.indexOf('function closeSheet('));
+  assert.match(sheet, /new ClipboardItem\(\{ 'text\/html': new Blob\(\[html\], \{ type: 'text\/html' \}\), 'text\/plain': new Blob\(\[area\.value\], \{ type: 'text\/plain' \}\) \}\)/);
+  assert.match(sheet, /const outlook = async \(\) => \{\n\s*if \(html\) \{[^]*?const done = copyTable\(\);[^]*?location\.href = `mailto:\$\{[^`]*\}\?subject=\$\{encodeURIComponent\(subject\)\}`;/, 'copy first (inside the click), then mailto with To and Subject');
+  assert.ok(!/mailto:[^`]*body=/.test(sheet), 'no body in the mailto');
+  assert.match(sheet, /if \(html\) \{ say\(await copyTable\(\)\); return; \}/, 'Copy copies the table too');
+  assert.match(sheet, /const say = \(how\) => \{ const words = copyNotice\(how\);/, 'the honest notice');
+  assert.match(sheet, /write\.then\(\(\) => 'html', \(\) => copyPlain\(\)\)/, 'only a real table copy says html');
+  assert.match(sheet, /Changes in this box only go to WhatsApp/);
+  assert.match(sheet, /const wa = \(\) => \{[^\n]*if \(onSent\) onSent\('whatsapp'\)/);
+  assert.match(sheet, /if \(onSent\) onSent\('outlook'\);/);
+  assert.ok(!/copy = async[^\n]*onSent/.test(sheet), 'Copy alone does not mark it sent');
+  const open = APP.slice(APP.indexOf('function openPersonMessage('), APP.indexOf('function teamMorning('));
+  assert.match(open, /personMessageHtml\(data, person, today, \{ items, owner \}\)/);
+  assert.match(open, /if \(link && link\.member\) \{[^]*teamApi\('morning\.sent', \{ userId: member\.id \}\)[^]*\} else store\.dispatch\('markPersonSent', \{ personId: person\.id, at: new Date\(\)\.toISOString\(\) \}\)/, 'server mark for a Work Task person, the op for others');
+  assert.match(APP, /teamApi\('people\.morning'\)/);
+  assert.match(APP, /teamApi\('user\.save', \{ id: account\.id, name: account\.name, role: account\.role, email: /, 'email');
+  assert.match(APP, /teamApi\('user\.reset', \{ id: account\.id, password \}\); sendSignIn\(/, 'new password, shown once');
+  assert.match(APP, /teamApi\('user\.active', \{ id: account\.id, active: !account\.active \}\)/, 'switch off / on');
+  assert.match(APP, /teamApi\('tasks\.moveAll', \{ fromId: account\.id, toId: to\.id \}\)/, 'move all tasks');
+  assert.match(APP, /teamApi\('user\.save', \{ name: person\.name, username: name, password, role: 'staff', \.\.\.\(email \? \{ email: String\(email\)\.trim\(\) \} : \{\}\) \}\)/, 'new sign-in from + Add a person');
+});

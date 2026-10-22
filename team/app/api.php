@@ -5,6 +5,7 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/push.php';
 require_once __DIR__ . '/jobs.php';
+require_once __DIR__ . '/outlook.php';
 
 const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
@@ -210,6 +211,8 @@ function handle(string $a, array $in): array {
   if ($dp !== null) return $dp;
   $push = push_handle($a, $in, $me);
   if ($push !== null) return $push;
+  $ol = ol_handle($a, $in, $me); // the owner's Outlook → Daily Projects Inbox
+  if ($ol !== null) return $ol;
   switch ($a) {
     case 'me':
       return ['user' => public_user($me), 'today' => $day];

@@ -205,3 +205,7 @@ table.mtable tr.m-open:hover td { background: var(--panel); }
 .m-stuck { color: var(--amber); }
 .m-sent { color: var(--green); margin-left: 6px; white-space: nowrap; }
 @media (max-width: 480px) { table.mtable .m-last { width: 34%; } table.mtable { font-size: 13px; } }
+
+/* Settings → 📧 Outlook */
+.ol-card .ol-redirect { display: block; font-size: 13px; overflow-wrap: anywhere; user-select: all; }
+.ol-card .ol-status.bad { color: var(--red); }

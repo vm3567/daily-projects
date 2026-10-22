@@ -2,7 +2,8 @@
 // A step is linked to a person when its text or note has "@Name", or "Waiting on" is that person.
 
 import { h, fmtDay, fmtTime } from './dom.js';
-import { mentionedPeople, initials, indiaDate, personSteps, personStatus, waitingDays, todayIndia, stepLinkedTo, awakeProjects, addDays } from '../rules.js';
+import { mentionedPeople, initials, indiaDate, personSteps, personStatus, waitingDays, todayIndia, stepLinkedTo, awakeProjects, addDays, givenProjectsOf, nextStep } from '../rules.js';
+import { sentMarkOf, mailDate, teamOrder } from '../reports.js';
 import { newId } from '../ops.js';
 
 export function openCount(data, person) {
@@ -19,13 +20,28 @@ export function peopleByFollowUp(data, today = todayIndia()) {
     .sort((a, b) => ORDER[a.st.colour] - ORDER[b.st.colour] || a.person.name.localeCompare(b.person.name));
 }
 
-function statusWords(st) {
-  if (!st.open) return 'Nothing open';
+/** A person's Work Task account and pending work (from the app; null when not linked or not on the server). */
+const linkOf = (ctx, person) => (ctx.teamLink ? ctx.teamLink(person) : null);
+/** "Sent today" mark: the server's for a Work Task person, else this app's own. */
+const markOf = (ctx, person) => (ctx.sentMark ? ctx.sentMark(person) : sentMarkOf(person, null, todayIndia()));
+
+/** What a person has on Work Task, for the list row: { projects, tasks } (the server's list, else the projects given here). */
+export function teamCounts(data, person, link) {
+  if (link && link.member) {
+    const items = link.member.items || [];
+    return { projects: items.filter((x) => x.kind === 'project').length, tasks: items.filter((x) => x.kind !== 'project').length };
+  }
+  return { projects: givenProjectsOf(data, person).length, tasks: 0 };
+}
+
+function statusWords(st, counts = { projects: 0, tasks: 0 }) {
+  const extra = [counts.projects ? `${counts.projects} project${counts.projects === 1 ? '' : 's'}` : '', counts.tasks ? `${counts.tasks} task${counts.tasks === 1 ? '' : 's'}` : ''].filter(Boolean);
+  if (!st.open) return extra.length ? extra.join(' · ') : 'Nothing open';
   const bits = [];
   if (st.waiting) bits.push(`Waiting ${st.maxWait ? st.maxWait + ' day' + (st.maxWait > 1 ? 's' : '') : 'since today'}`);
   if (st.discuss) bits.push(`${st.discuss} to discuss`);
   if (st.late) bits.push('date passed');
-  return bits.join(' · ');
+  return [...bits, ...extra].join(' · ');
 }
 
 export function renderPeopleList(ctx) {
@@ -41,21 +57,34 @@ export function renderPeopleList(ctx) {
         const name = input.value.replace(/^@+/, '').trim();
         if (!name) return;
         const personId = newId();
-        if (store.dispatch('addPerson', { personId, name })) { input.value = ''; ctx.selectPerson(personId); }
-        else ctx.toast(`"${name}" is already in People`);
+        const signIn = e.target.elements.signin && e.target.elements.signin.checked;
+        const email = e.target.elements.email ? e.target.elements.email.value.trim() : '';
+        if (store.dispatch('addPerson', { personId, name })) {
+          input.value = ''; ui.addSignIn = false;
+          ctx.selectPerson(personId);
+          // also a Work Task sign-in (user.save: name, username, first password, staff, email); the password is shown once
+          const person = (store.view.data.people || []).find((x) => x.id === personId);
+          if (signIn && person && ctx.giveSignIn) ctx.giveSignIn(person, email);
+        } else ctx.toast(`"${name}" is already in People`);
       },
     },
     h('input', { name: 'name', placeholder: 'Add a person (name)', key: 'new-person', autocomplete: 'off' }),
-    h('button', { class: 'btn primary small', type: 'submit' }, 'Add')),
+    h('button', { class: 'btn primary small', type: 'submit' }, 'Add'),
+    ctx.onServer ? h('label', { class: 'small people-signin', key: 'new-person-signin' },
+      h('input', { type: 'checkbox', name: 'signin', checked: !!ui.addSignIn, onChange: (e, el) => { ui.addSignIn = el.checked; ctx.render(); } }),
+      ' Also give them a Work Task sign-in') : null,
+    ctx.onServer && ui.addSignIn ? h('input', { name: 'email', type: 'email', key: 'new-person-email', placeholder: 'Email (optional, for the morning email)', autocomplete: 'off' }) : null),
     people.length ? null : h('p', { class: 'empty-list' }, 'No people yet. Add a name above, or type @ and a name in any step.'),
-    h('ul', { class: 'plist people-list', key: 'people-list' }, peopleByFollowUp(data).map(({ person, st }) => (
+    h('ul', { class: 'plist people-list', key: 'people-list' }, peopleByFollowUp(data).map(({ person, st }) => { const sent = markOf(ctx, person).time; return (
       h('li', { key: 'pp-' + person.id, 'data-id': person.id, class: 'prow' + (ui.person === person.id ? ' current' : ''), onContextmenu: (e) => ctx.openPersonMenu(person.id, e) },
         h('button', { class: 'prow-btn', onClick: () => ctx.selectPerson(person.id) },
           h('span', { class: `dot ${st.colour}`, 'aria-label': st.colour }),
           h('span', { class: 'avatar' }, initials(person.name)),
           h('span', { class: 'prow-text' },
-            h('span', { class: 'prow-name' }, person.name, st.open ? h('span', { class: 'count-pill' }, String(st.open)) : null),
-            h('span', { class: 'prow-next' + (st.colour === 'red' ? ' warn' : '') }, statusWords(st)))))))));
+            h('span', { class: 'prow-name' }, person.name, st.open ? h('span', { class: 'count-pill' }, String(st.open)) : null,
+              sent ? h('span', { class: 'sent-mark small', title: `Pending list sent today at ${sent}` }, `✓ ${sent}`) : null),
+            h('span', { class: 'prow-next' + (st.colour === 'red' ? ' warn' : '') }, statusWords(st, teamCounts(data, person, linkOf(ctx, person))))))));
+    })));
 }
 
 function stepItem(ctx, { project, step }) {
@@ -145,6 +174,86 @@ function taskBox(ctx, person) {
     h('button', { class: 'chip', type: 'button', onClick: newProject }, '+ New project')));
 }
 
+/** One Work Task row's grey / red / orange lines (the same look as the email). */
+function itemLines(x) {
+  return [
+    x.kind === 'project' && x.about ? h('div', { class: 'wt-sub' }, x.about) : null,
+    x.lateSince ? h('div', { class: 'wt-sub bad' }, `Late since ${mailDate(x.lateSince)}`) : null,
+    x.stuck ? h('div', { class: 'wt-sub warn' }, 'Stuck') : null,
+    x.now ? h('div', { class: 'wt-sub' }, `Now: ${x.now}`) : null,
+    x.repeat ? h('div', { class: 'wt-sub' }, x.repeat) : null,
+  ];
+}
+
+/**
+ * "📁 Projects and tasks from Work Task": the server's list for this person (people.morning) as a table
+ * (# | Work | Last update). When it cannot load (or no account): the projects given to them here.
+ */
+function teamSection(ctx, person, link) {
+  const data = ctx.store.view.data;
+  const first = person.name.split(/\s+/)[0];
+  const today = todayIndia();
+  if (link && link.member) {
+    const items = teamOrder(link.member.items || []);
+    const open = (x) => (x.projectRef && data.projects.some((p) => p.id === x.projectRef) ? () => ctx.openProject(x.projectRef) : null);
+    return h('section', { class: 'block wt-block', key: 'wt-' + person.id },
+      h('h3', null, `📁 Projects and tasks from Work Task (${items.length})`),
+      items.length ? h('table', { class: 'wt-table' },
+        h('thead', null, h('tr', null, h('th', null, '#'), h('th', null, 'Work'), h('th', null, 'Last update'))),
+        h('tbody', null, items.map((x, i) => {
+          const go = open(x);
+          return h('tr', { key: 'wt-' + (x.taskId || i), class: go ? 'wt-open' : '', onClick: go || undefined, title: go ? 'Open the project' : '' },
+            h('td', null, String(i + 1)),
+            h('td', null, h('b', null, (x.kind === 'project' ? '📁 ' : '') + (x.title || '')), ...itemLines(x)),
+            h('td', { class: 'muted' }, x.lastUpdate && x.lastUpdate.day ? `${mailDate(x.lastUpdate.day)}: ${x.lastUpdate.note || ''}` : '—'));
+        }))) : h('p', { class: 'muted small' }, `Nothing pending for ${first} on Work Task.`));
+  }
+  const given = givenProjectsOf(data, person);
+  const note = link && link.loading ? 'Loading Work Task…' : link && link.failed ? 'Work Task list could not load — showing the projects given from here.' : '';
+  if (!given.length && !note) return null;
+  return h('section', { class: 'block wt-block', key: 'wt-' + person.id },
+    h('h3', null, `📁 Projects given to ${person.name} (${given.length})`),
+    note ? h('p', { class: 'muted small' }, note) : null,
+    given.length ? h('ul', { class: 'person-steps' }, given.map((p) => {
+      const next = nextStep(p, today);
+      const tp = ctx.teamProgress ? ctx.teamProgress(p.id) : null;
+      const done = p.steps.filter((x) => x.done).length;
+      const bits = [p.steps.length ? `${done} of ${p.steps.length} steps done` : '', tp && tp.stuck ? '⚠️ stuck' : '',
+        tp && tp.lastUpdate ? (tp.lastUpdate === today ? 'updated today' : `last update ${mailDate(tp.lastUpdate)}`) : '', p.state === 'paused' ? 'paused' : ''].filter(Boolean);
+      return h('li', { key: 'gp-' + p.id, class: 'person-step given-project' },
+        h('button', { class: 'link given-open', title: 'Open the project', onClick: () => ctx.openProject(p.id) }, h('b', null, `📁 ${p.name}`)),
+        h('div', { class: 'muted small' }, next ? `Now: ${next.text}` : 'No open step', bits.length ? ` · ${bits.join(' · ')}` : ''));
+    })) : null);
+}
+
+/** "Team account": the person's Work Task sign-in — email, new password, switch off / on, move all tasks. */
+function teamAccountBox(ctx, person, link) {
+  const { ui } = ctx;
+  if (!ctx.onServer) return null;
+  const first = person.name.split(/\s+/)[0];
+  const u = link && link.user;
+  if (!u) {
+    return h('div', { class: 'block team-account', key: 'ta-' + person.id },
+      h('span', { class: 'muted small' }, `No Work Task sign-in for ${first}. `),
+      ctx.giveSignIn ? h('button', { class: 'btn small', onClick: () => ctx.giveSignIn(person) }, '🔑 Give a Work Task sign-in') : null);
+  }
+  const others = (ctx.teamAccounts ? ctx.teamAccounts() || [] : []).filter((x) => x.active && x.id !== u.id && !x.owner);
+  return h('div', { class: 'block team-account', key: 'ta-' + person.id },
+    h('div', { class: 'small' }, h('strong', null, 'Team account'), ` · @${u.username}`, u.active ? '' : ' · switched off',
+      h('span', { class: 'muted' }, u.lastLogin ? ` · last signed in ${String(u.lastLogin).slice(0, 10)}` : ' · not signed in yet')),
+    h('label', { class: 'small' }, '✉ ', h('input', {
+      key: 'ta-email-' + u.id, type: 'email', value: u.email || '', placeholder: 'Email (for the pending list)', 'aria-label': 'Work Task email', autocomplete: 'off',
+      onChange: (e, el) => { if (el.value.trim() !== (u.email || '')) ctx.setTeamEmail(u, el.value); },
+    })),
+    h('div', { class: 'row' },
+      h('button', { class: 'btn small', onClick: () => ctx.newPasswordFor(person, u) }, '🔑 New password'),
+      h('button', { class: 'btn small', onClick: () => ctx.toggleTeamUser(u) }, u.active ? 'Switch off' : 'Switch on'),
+      u.active ? h('button', { class: 'btn small', onClick: () => { ui.movingAll = ui.movingAll === u.id ? 0 : u.id; ctx.render(); } }, '↔ Move all tasks to…') : null),
+    ui.movingAll === u.id ? h('div', { class: 'row' }, h('span', { class: 'small muted' }, `All of ${first}'s open tasks go to:`),
+      others.map((x) => h('button', { class: 'chip', key: 'mv-' + x.id, onClick: () => { ui.movingAll = 0; ctx.moveAllTasks(u, x); } }, x.name)),
+      h('button', { class: 'link', onClick: () => { ui.movingAll = 0; ctx.render(); } }, 'Cancel')) : null);
+}
+
 export function renderPerson(ctx) {
   const { store, ui } = ctx;
   const data = store.view.data;
@@ -161,6 +270,9 @@ export function renderPerson(ctx) {
   }
   notes.sort((a, b) => (a.note.createdAt < b.note.createdAt ? 1 : -1));
   const first = person.name.split(/\s+/)[0];
+  const link = linkOf(ctx, person);
+  const sent = markOf(ctx, person).time;
+  const linked = !!(link && link.user);
 
   return h('div', { class: 'detail-inner', key: 'person-' + person.id },
     h('div', { class: 'detail-top' },
@@ -177,7 +289,8 @@ export function renderPerson(ctx) {
         onKeydown: (e, el) => { if (e.key === 'Enter') { e.preventDefault(); el.blur(); } },
       }),
       h('div', { class: 'state-buttons' },
-        h('button', { class: 'btn primary small', title: 'Copy or send everything pending with this person', onClick: () => ctx.openPersonMessage(person) }, '📋 Send pending list'),
+        h('button', { class: 'btn primary small', title: 'Copy or send everything pending with this person', onClick: () => ctx.openPersonMessage(person) }, sent ? '📋 Send again' : '📋 Send pending list'),
+        sent ? h('span', { class: 'sent-tag small', title: 'Pending list sent today' }, `✓ Sent today ${sent}`) : null,
         ctx.canGoBack() ? h('button', { class: 'btn small', title: 'Back (Backspace)', onClick: () => ctx.goBack() }, '← Back') : null,
         (() => { const pv = ctx.neighbourPerson(-1); return h('button', { class: 'btn small', disabled: pv ? undefined : true, title: pv ? `Previous: ${pv.name} (←)` : '', onClick: () => pv && ctx.selectPerson(pv.id) }, '‹'); })(),
         (() => { const nx = ctx.neighbourPerson(1); return h('button', { class: 'btn small', disabled: nx ? undefined : true, title: nx ? `Next person with open work: ${nx.name} (→)` : 'No more people with open work', onClick: () => nx && ctx.selectPerson(nx.id) }, nx ? `${nx.name.split(' ')[0]} ›` : '›'); })(),
@@ -198,7 +311,7 @@ export function renderPerson(ctx) {
           else ctx.toast(el.value.trim() ? `Saved — WhatsApp now goes straight to ${first}` : 'Number removed', 2000);
         },
       })),
-      h('label', null, '✉ ', h('input', {
+      linked ? null : h('label', null, '✉ ', h('input', {
         key: 'pemail-' + person.id, type: 'email', value: person.email || '', placeholder: 'Email', 'aria-label': 'Email', autocomplete: 'off',
         onChange: (e, el) => {
           if (el.value.trim() === (person.email || '')) return;
@@ -206,7 +319,9 @@ export function renderPerson(ctx) {
           else ctx.toast(el.value.trim() ? `Saved — Outlook now writes to ${first}` : 'Email removed', 2000);
         },
       }))),
+    teamAccountBox(ctx, person, link),
     h('p', { class: 'meta-line static' }, 'Linked by @name in steps, or by "Waiting on".'),
+    teamSection(ctx, person, link),
     taskBox(ctx, person),
     list(`Waiting on ${first}`, waiting, ctx, `Nothing waiting on ${first}. Tick "Waiting" on a step and pick ${first}.`),
     list(`To discuss with ${first}`, discuss, ctx, `Nothing to discuss. Type @${first} in any step.`),

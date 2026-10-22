@@ -97,6 +97,33 @@ export function cleanUrl(v) {
   }
 }
 
+/** An Inbox item's optional parts: link, note (up to 600 letters), mail = { conversationId, count } of the email thread. */
+export function inboxExtras(a) {
+  const out = {};
+  const link = cleanLink(a && a.link);
+  if (link) out.link = link;
+  const note = cleanText(a && a.note, 600).trim();
+  if (note) out.note = note;
+  const mail = cleanMail(a && a.mail, true);
+  if (mail) out.mail = mail;
+  return out;
+}
+
+/**
+ * The email thread an Inbox item / step / project came from: conversationId, and the newest email's Graph id, sender
+ * and subject (kept for a later "draft a reply" in Outlook). With `withCount`, how many emails the item holds.
+ */
+export function cleanMail(m, withCount = false) {
+  const conv = m && typeof m.conversationId === 'string' ? m.conversationId.slice(0, 400) : '';
+  if (!conv) return null;
+  const out = { conversationId: conv };
+  if (withCount) out.count = Math.max(1, Math.min(9999, Math.floor(Number(m.count) || 1)));
+  const str = (k, max) => { const v = typeof m[k] === 'string' ? m[k].replace(/\s+/g, ' ').trim().slice(0, max) : ''; if (v) out[k] = v; };
+  str('messageId', 400); str('fromName', 120); str('subject', 200);
+  if (typeof m.fromAddress === 'string' && /^[^\s@]+@[^\s@]+$/.test(m.fromAddress.trim()) && m.fromAddress.length <= 200) out.fromAddress = m.fromAddress.trim();
+  return out;
+}
+
 /** Move item `id` in `list` to just after `afterId`, or just before `beforeId`, or to the start. */
 function moveInList(list, id, afterId, beforeId) {
   const from = list.findIndex((x) => x.id === id);
@@ -731,12 +758,42 @@ const handlers = {
 
   // ---------- People ----------
   // ---- Inbox (quick capture): ideas and tasks written down fast, sorted into projects later ----
+  // An item can come from an email (worktask.in reads the owner's Outlook Inbox): it then has a short `note`
+  // (when it came, the start of the email) and `mail` = { conversationId, count } so replies join it.
   addInbox(state, op, a) {
     const inbox = (state.data.inbox ||= []);
     const text = cleanText(a.text, 1000).replace(/\s+/g, ' ').trim();
     if (!text || inbox.some((x) => x.id === a.itemId)) return false;
+    inbox.push({ id: a.itemId, text, createdAt: op.at, ...inboxExtras(a) });
+    return true;
+  },
+
+  /** A reply in the same email thread: the item says how many emails, the newest one's start and its link. */
+  updateInbox(state, op, a) {
+    const item = (state.data.inbox || []).find((x) => x.id === a.itemId);
+    if (!item) return false;
+    const ex = inboxExtras({ note: a.note, link: a.link, mail: item.mail && { ...item.mail, ...(a.mail || {}), conversationId: item.mail.conversationId, count: a.count ?? item.mail.count } });
+    if (a.note !== undefined) { if (ex.note) item.note = ex.note; else delete item.note; }
+    if (ex.link) item.link = ex.link;
+    if (ex.mail) item.mail = ex.mail;
+    return true;
+  },
+
+  /**
+   * A new email in a thread that is already a step or a project: a short note on the project (on the step, if it was one),
+   * with the email's link. It is not your work (it does not make the dot green or count in the day score).
+   */
+  addMailNote(state, op, a) {
+    const p = findProject(state.data, a.projectId);
+    const text = cleanText(a.text, 1000).replace(/\s+/g, ' ').trim();
+    if (!p || !text || (p.workNotes ||= []).some((n) => n.id === a.noteId)) return false;
+    const stepId = a.stepId && p.steps.some((s) => s.id === a.stepId) ? a.stepId : null;
     const link = cleanLink(a.link);
-    inbox.push({ id: a.itemId, text, createdAt: op.at, ...(link ? { link } : {}) });
+    p.workNotes.unshift({ id: a.noteId, text, stepId, createdAt: op.at, updatedAt: op.at, mail: true, ...(link ? { link } : {}) });
+    // the step / project remembers the newest email of its thread (for a later "draft a reply")
+    const target = stepId ? p.steps.find((s) => s.id === stepId) : p;
+    if (a.mail && target.mail) target.mail = cleanMail({ ...target.mail, ...a.mail, conversationId: target.mail.conversationId }) || target.mail;
+    addEvent(state, op, p, 'mail_note', text);
     return true;
   },
 
@@ -770,8 +827,7 @@ const handlers = {
     }
     if (!inbox.some((x) => x.id === it.id)) {
       const text = cleanText(it.text, 1000).trim();
-      const link = cleanLink(it.link);
-      if (text) inbox.splice(Math.min(Math.max(0, a.index ?? inbox.length), inbox.length), 0, { id: it.id, text, createdAt: it.createdAt || op.at, ...(link ? { link } : {}) });
+      if (text) inbox.splice(Math.min(Math.max(0, a.index ?? inbox.length), inbox.length), 0, { id: it.id, text, createdAt: it.createdAt || op.at, ...inboxExtras(it) });
     }
     return true;
   },
@@ -781,6 +837,9 @@ const handlers = {
     const inbox = state.data.inbox || [];
     const item = inbox.find((x) => x.id === a.itemId);
     if (!item || !handlers.addStep(state, op, { projectId: a.projectId, stepId: a.stepId, text: item.text, link: item.link })) return false;
+    const step = findProject(state.data, a.projectId).steps.find((s) => s.id === a.stepId);
+    if (item.note) step.note = item.note; // the email's start, kept on the step
+    if (item.mail) step.mail = cleanMail(item.mail); // later replies in the thread come here as notes
     inbox.splice(inbox.indexOf(item), 1);
     return true;
   },
@@ -795,6 +854,8 @@ const handlers = {
     const made = findProject(state.data, a.projectId);
     if (long) made.notes = item.text; // nothing is cut off: the full text goes into the notes
     if (item.link) made.links.push({ id: a.projectId + '-link', ...item.link }); // the mail or page it came from
+    if (item.note) made.notes = made.notes ? `${made.notes}\n\n${item.note}` : item.note;
+    if (item.mail) made.mail = cleanMail(item.mail); // later replies in the thread come here as notes
     inbox.splice(inbox.indexOf(item), 1);
     return true;
   },
@@ -863,6 +924,15 @@ const handlers = {
     const i = people.findIndex((x) => x.id === a.personId);
     if (i < 0) return false;
     people.splice(i, 1); // texts keep "@Name"; they are just no longer linked
+    return true;
+  },
+
+  /** "📋 Send pending list" went out (WhatsApp or Outlook): remember when, on the person. Not work: no history line. */
+  markPersonSent(state, op, a) {
+    const person = (state.data.people || []).find((x) => x.id === a.personId);
+    const at = typeof a.at === 'string' && !Number.isNaN(Date.parse(a.at)) ? new Date(a.at).toISOString() : op.at;
+    if (!person || person.sentAt === at) return false;
+    person.sentAt = at;
     return true;
   },
 

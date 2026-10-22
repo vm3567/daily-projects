@@ -86,7 +86,7 @@ export function dotColour(project, today = todayIndia()) {
  * or a team member's update (teamWorkDate). Renaming, moving steps or other edits do not count.
  */
 /** The newest note you wrote yourself (a 👥 note about the team's work is their work, counted by teamWorkDate). */
-const ownNote = (project) => (project.workNotes || []).find((n) => !n.team && !String(n.text || '').startsWith('👥 '));
+const ownNote = (project) => (project.workNotes || []).find((n) => !n.team && !n.mail && !String(n.text || '').startsWith('👥 '));
 export function lastWorkDate(project) {
   const n = ownNote(project);
   const note = n ? indiaDate(n.createdAt) : null; // newest first
@@ -274,7 +274,7 @@ export function personStatus(data, person, today = todayIndia()) {
  */
 /** Real work in the history, the same as the dot's rule: your notes, ticks and time (the team's counts through teamDays). */
 const WORK = new Set(['note_added', 'step_ticked', 'time_logged', 'time_added']);
-const NOT_WORK = new Set(['created', 'snoozed', 'woke', 'step_remind', 'team_ticked', 'team_note', 'team_step_added', 'team_step_unticked', 'team_note_deleted', 'team_moved']); // (the team's work counts through teamDays)
+const NOT_WORK = new Set(['created', 'snoozed', 'woke', 'step_remind', 'team_ticked', 'team_note', 'team_step_added', 'team_step_unticked', 'team_note_deleted', 'team_moved', 'mail_note']); // (the team's work counts through teamDays)
 
 /** On that day, was every open step of the project waiting for a "remind me" date? */
 function restingByReminders(p, day) {
@@ -522,4 +522,27 @@ export function teamMovedTo(p, tasks) {
   const last = done[done.length - 1];
   if (!last || last.assignee.id === p.team.userId) return null;
   return p.team.since && String(last.doneAt).slice(0, 10) > p.team.since ? last.assignee : null;
+}
+
+// ---------- One People page: a Daily Projects person and their Work Task account ----------
+
+const normName = (s) => String(s || '').trim().replace(/\s+/g, ' ').toLowerCase();
+
+/** Is this Work Task name the same person? Same name (any case, extra spaces), or the team name is the person's first name. */
+export function sameTeamName(person, teamName) {
+  const full = normName(person && person.name);
+  const t = normName(teamName);
+  if (!full || !t) return false;
+  return t === full || t === full.split(' ')[0];
+}
+
+/** The Work Task account of a person (from users.list or people.morning), or null. An exact name wins over a first-name match. */
+export function teamMemberFor(person, list) {
+  const all = (list || []).filter((u) => u && sameTeamName(person, u.name));
+  return all.find((u) => normName(u.name) === normName(person && person.name)) || all[0] || null;
+}
+
+/** Projects given to this person through "Give project to…" (active or paused; not finished, not deleted). */
+export function givenProjectsOf(data, person) {
+  return (data.projects || []).filter((p) => p.team && (p.state === 'active' || p.state === 'paused') && sameTeamName(person, p.team.name));
 }

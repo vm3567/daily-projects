@@ -228,6 +228,15 @@ function migrate(PDO $pdo): void {
     "ALTER TABLE task_moves ADD COLUMN regive TINYINT(1) NOT NULL DEFAULT 0",
     // v13: each person's email address (optional), for the manager's morning email
     "ALTER TABLE users ADD COLUMN email VARCHAR(120) NULL",
+    // v14: emails from the owner's Outlook Inbox already put in the Daily Projects Inbox (by message, and by email thread)
+    "CREATE TABLE IF NOT EXISTS ol_seen (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      msg_hash CHAR(64) NOT NULL UNIQUE,
+      conv_hash CHAR(64) NOT NULL,
+      received_at DATETIME NULL,
+      added_at DATETIME NOT NULL,
+      INDEX (conv_hash), INDEX (added_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
   ];
   $pdo->exec($steps[0]);
   $done = (int)($pdo->query("SELECT v FROM settings WHERE k = 'schema'")->fetchColumn() ?: 0);

@@ -21,7 +21,7 @@ const HISTORY_WORDS = {
   snoozed: 'Snoozed', woke: 'Woken up', step_remind: 'Remind me', time_added: 'Time added', time_logged: 'Time logged',
   group_added: 'Group added', group_renamed: 'Group renamed', group_deleted: 'Group deleted',
   team_ticked: 'Done by the team', team_note: 'Team note', team_step_added: 'Step added by the team', team_step_unticked: 'Opened again by the team',
-  team_note_deleted: 'Team note removed', team_moved: 'Moved in Work Task',
+  team_note_deleted: 'Team note removed', team_moved: 'Moved in Work Task', mail_note: 'Email reply',
 };
 
 /** Text box that saves on its own: after a short pause in typing, and when leaving the box. */
@@ -442,6 +442,7 @@ function notesLog(ctx, p, notesShown) {
         autoField('input', { value: n.text, 'aria-label': 'Work note', key: 'nt-' + n.id, 'data-mention': '1' },
           (v) => { if (v.trim()) store.dispatch('editWorkNote', { projectId: p.id, noteId: n.id, text: v }); }),
         st ? h('span', { class: 'tag on-step', title: 'This note is about this step' }, `on: ${st.text}`) : null,
+        n.mail ? linkChip(n.link) : null, // a reply in an email thread (from Outlook): open that email
         ...p.files.filter((f) => f.noteId === n.id).map((f) => h('button', { class: 'tag photo', key: 'nf-' + f.id, title: 'Open photo', onClick: () => openFile(ctx, f) }, '📷')),
         n.team || String(n.id).startsWith('tn') ? null : h('button', {
           class: 'icon', title: 'Delete note',
@@ -817,10 +818,10 @@ export function isMailLink(link) {
   return !!url && /(^|\.)(outlook\.office\.com|outlook\.office365\.com|outlook\.live\.com|mail\.google\.com)$/.test(new URL(url).hostname);
 }
 
-export function linkChip(link) {
+export function linkChip(link, label = null) {
   const url = link && cleanUrl(link.url);
   if (!url) return null;
-  return h('a', { class: 'tag link-chip', href: url, target: '_blank', rel: 'noopener noreferrer', title: link.title || url, key: 'lk' }, isMailLink(link) ? '✉ Open mail' : '↗ Open page');
+  return h('a', { class: 'tag link-chip', href: url, target: '_blank', rel: 'noopener noreferrer', title: link.title || url, key: 'lk' }, label || (isMailLink(link) ? '✉ Open mail' : '↗ Open page'));
 }
 
 export function renderDetail(ctx) {

@@ -1,7 +1,7 @@
 // Work Task: the team app. Staff see and fill their own tasks; the manager gives tasks and sees everything.
 // No outside libraries. All text from the server is put on screen as text (never as HTML).
 
-import { addDay, weekdayOf, dueOn, itemKey, diaryRows, fieldChanged, lateValue, afterFlush, boxStillThere, updateSaveBody, redrawHow, projectRowState, aboutShort, projectAboutOf, giveBackShow, keptNotice, noticeHow, pasteWaits, msgBoxSent, redrawAfterSend, taskSaveBody, morningMail, morningOrder, morningSummary, morningTitle, morningLast, mailDate, sentTag, sentTime, followupRows, followupGroups, followupSummary, roundKey, roundPlan, roundMark, parseQuickTask } from './logic.js'; // the rules (checked in tests/team-app.test.mjs)
+import { addDay, weekdayOf, dueOn, itemKey, diaryRows, fieldChanged, lateValue, afterFlush, boxStillThere, updateSaveBody, redrawHow, projectRowState, aboutShort, projectAboutOf, giveBackShow, keptNotice, noticeHow, pasteWaits, msgBoxSent, redrawAfterSend, taskSaveBody, morningMail, morningOrder, morningSummary, morningTitle, morningLast, mailDate, sentTag, sentTime, followupRows, followupGroups, followupSummary, roundKey, roundPlan, roundMark, parseQuickTask, outlookLine } from './logic.js'; // the rules (checked in tests/team-app.test.mjs)
 
 const TOKEN_KEY = 'wt.token';
 const state = {
@@ -624,7 +624,7 @@ function menuColumn() {
       item('📁 Projects', state.view === 'projects', () => go('projects')),
       item('📊 Weekly report', state.view === 'report', () => go('report')),
       item('🔍 Search', state.view === 'search', () => go('search')),
-      item('People', state.view === 'people', () => go('people')),
+      item('People ↗', false, () => openPeoplePage()), // one People page: on the projects page
       item('Settings', state.view === 'settings', () => go('settings'))),
       el('button', { class: 'primary menu-cta', onClick: () => openDetail('give') }, '+ Give a task'));
     if (t && t.people && t.people.length) {
@@ -980,7 +980,7 @@ function teamList() {
         const r = taskRow(t, `${t.assignee.name}: ${sub}`, dot, dot === 'red');
         return r;
       }))] : null,
-    people.length ? null : el('p', { class: 'list-note' }, 'No team members yet. ', el('button', { class: 'link', onClick: () => go('people') }, 'Add a person')),
+    people.length ? null : el('p', { class: 'list-note' }, 'No team members yet. ', el('button', { class: 'link', onClick: () => openPeoplePage() }, 'Add a person')),
     shown.map((p) => {
       const tasks = d.tasks.filter((t) => t.assignee.id === p.id);
       const sent = tasks.filter((t) => t.today).length;
@@ -1723,6 +1723,9 @@ function quickBox(people) {
   return el('div', { class: 'fu-box' }, el('div', { class: 'fu-line' }, box, mic), card);
 }
 
+/** The one People page is on the projects page (each person's work, the morning email and their sign-in). */
+function openPeoplePage() { location.href = 'projects/#people'; }
+
 // ---------- manager: team today
 
 function teamToday() {
@@ -1737,7 +1740,7 @@ function teamToday() {
         : el('p', { class: 'muted small' }, `${fmtDay(d.today)} · updates due by ${d.fillBy}`)),
     el('button', { class: 'primary', onClick: () => go('give') }, '+ Give a task')),
     needsYou(d),
-    people.length ? null : el('div', { class: 'card' }, 'No team members yet. ', el('button', { class: 'link', onClick: () => go('people') }, 'Add a person')),
+    people.length ? null : el('div', { class: 'card' }, 'No team members yet. ', el('button', { class: 'link', onClick: () => openPeoplePage() }, 'Add a person')),
     people.map((p) => {
       const tasks = byPerson.get(p.id) || [];
       const sent = tasks.filter((t) => t.today).length;
@@ -2097,7 +2100,59 @@ function settingsScreen() {
     } },
     el('label', null, 'Updates are due by (after this, missing ones show red)', fill),
     el('button', { class: 'primary', type: 'submit' }, 'Save')),
+    state.user && state.user.owner ? outlookCard() : null,
   ];
+}
+
+/**
+ * Settings → 📧 Outlook (only the owner of the projects): connect Outlook once; then every new email in its Inbox
+ * becomes an item in the Daily Projects 📥 Inbox. The client secret is typed here and saved on the server only:
+ * it is never sent back (the box stays empty; only "saved ✓ (ends …ab12)" shows).
+ */
+function outlookCard() {
+  const clientId = el('input', { type: 'text', autocomplete: 'off', spellcheck: 'false', placeholder: 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx' });
+  const tenantId = el('input', { type: 'text', autocomplete: 'off', spellcheck: 'false', placeholder: 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx' });
+  const secret = el('input', { type: 'password', autocomplete: 'new-password', spellcheck: 'false', placeholder: 'Client secret Value' });
+  const secretSaved = el('span', { class: 'muted small' });
+  const redirect = el('code', { class: 'ol-redirect' });
+  const line = el('p', { class: 'small ol-status' }, 'Loading…');
+  const connectBtn = el('button', { type: 'button', class: 'primary' }, 'Connect Outlook');
+  const checkBtn = el('button', { type: 'button' }, 'Check now');
+  const offBtn = el('button', { type: 'button' }, 'Disconnect');
+  const show = (o) => {
+    if (!o) return;
+    // only into an untouched box (never the secret: it never comes back from the server)
+    if (!clientId.value) clientId.value = o.clientId || '';
+    if (!tenantId.value) tenantId.value = o.tenantId || '';
+    secretSaved.textContent = o.secretEnd ? `saved ✓ (ends …${o.secretEnd})` : 'not saved yet';
+    redirect.textContent = o.redirectUri || '';
+    line.textContent = outlookLine(o, o.today);
+    line.classList.toggle('bad', !!o.error);
+    checkBtn.hidden = offBtn.hidden = !o.connected;
+    connectBtn.textContent = o.connected ? 'Connect again' : 'Connect Outlook';
+  };
+  const run = async (b, a, body, after) => {
+    b.disabled = true;
+    try { const out = await api(a, body); show(out.outlook); if (after) after(out); } catch (ex) { toast(ex.message, 6000); } finally { b.disabled = false; }
+  };
+  api('outlook.status').then((d) => show(d.outlook)).catch((ex) => { line.textContent = ex.message; });
+  const saveBtn = el('button', { type: 'submit' }, 'Save');
+  connectBtn.addEventListener('click', () => run(connectBtn, 'outlook.connect', {}, (out) => { if (out.url) location.href = out.url; }));
+  checkBtn.addEventListener('click', () => run(checkBtn, 'outlook.check', {}, () => toast('Checked ✓')));
+  offBtn.addEventListener('click', () => { if (confirm('Disconnect Outlook? New emails stop coming to your Inbox.')) run(offBtn, 'outlook.disconnect', {}, () => toast('Disconnected')); });
+  return el('form', { class: 'card stack ol-card', onSubmit: (e) => {
+    e.preventDefault();
+    run(saveBtn, 'outlook.save', { clientId: clientId.value.trim(), tenantId: tenantId.value.trim(), secret: secret.value.trim() }, () => { secret.value = ''; toast('Saved ✓'); });
+  } },
+  el('h2', null, '📧 Outlook'),
+  el('p', { class: 'muted small' }, 'Every new email in your Outlook Inbox comes to your Daily Projects 📥 Inbox (replies join the same item). Set up once in Azure (App registrations): register this Redirect URI (type Web), add the delegated permissions offline_access, User.Read and Mail.ReadWrite (it only reads your emails; it never sends any), make a client secret.'),
+  el('label', null, 'Redirect URI to register', redirect),
+  el('label', null, 'Application (client) ID', clientId),
+  el('label', null, 'Directory (tenant) ID', tenantId),
+  el('label', null, 'Client secret ', secretSaved, secret),
+  saveBtn,
+  line,
+  el('div', { class: 'row' }, connectBtn, checkBtn, offBtn));
 }
 
 // ---------------------------------------------------------------- start

@@ -2,7 +2,8 @@
 // Work the server does by itself, so nothing waits for the owner's Daily Projects page being open:
 // - given projects are kept in step with the saved projects (after every save, and once a day for steps that come back),
 // - a second alert when someone has been Stuck for a day with no answer,
-// - the evening summary for the managers.
+// - the evening summary for the managers,
+// - new emails in the owner's Outlook Inbox go to the Daily Projects Inbox (outlook.php).
 // They run after an answer has been sent (any request), at most every 10 minutes (a save runs the project part at once).
 declare(strict_types=1);
 
@@ -186,6 +187,9 @@ function team_jobs(): void {
       $GLOBALS['me'] = ['id' => 0]; // the managers are told (nobody is "the one who did it")
       stuck_second_alerts();
       evening_summary();
+    }
+    if ($due) { // new emails in the owner's Outlook → the Daily Projects Inbox (when connected)
+      try { dp_migrate(); ol_check(); } catch (Throwable $e) { error_log('team jobs outlook: ' . get_class($e)); }
     }
   } catch (Throwable $e) {
     error_log('team jobs: ' . $e->getMessage());
