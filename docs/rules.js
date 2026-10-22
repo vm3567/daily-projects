@@ -382,8 +382,10 @@ export function mainChoices(data, p, query = '') {
 /** "+ Add a task here" on a project's page: the tasks that can go into it, for `query`. */
 export function addHereChoices(data, main, query = '') {
   const q = String(query || '').trim().toLowerCase();
-  return data.projects.filter((x) => x.state !== 'finished' && !parentIdsOf(x).includes(main.id) && canPutUnder(data, x, main)
+  const list = data.projects.filter((x) => x.state !== 'finished' && !parentIdsOf(x).includes(main.id) && canPutUnder(data, x, main)
     && (!q || x.name.toLowerCase().includes(q)));
+  // tasks in no project first, then the ones already in another project (owner asked, 22 Oct)
+  return [...list.filter((x) => !parentIdsOf(x).length), ...list.filter((x) => parentIdsOf(x).length)];
 }
 
 /** Today: a project with no own next step only holds its tasks; they show as normal rows (the project is left out). */

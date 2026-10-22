@@ -1899,3 +1899,15 @@ test('📂 delete question: a project says its tasks are kept (they only leave i
   applyOp(s, op('deleteProject', { projectId: 'm' }, '2026-10-22'));
   assert.equal(s.data.projects.filter((p) => ['k1', 'k2'].includes(p.id)).length, 2, 'the tasks are still there after the delete');
 });
+
+test('📂 "Add tasks" list: tasks in no project come first, then tasks already in another project', async () => {
+  const { addHereChoices } = await import('../docs/rules.js');
+  const s = { data: emptyData(), history: {} };
+  const g = s.data.groups[0].id;
+  for (const [id, name] of [['a', 'Alpha in Kilns'], ['b', 'Beta loose'], ['c', 'Gamma loose']]) applyOp(s, op('createProject', { projectId: id, name, groupId: g }, '2026-10-22'));
+  applyOp(s, op('createMainProject', { projectId: 'k', name: 'Kilns', groupId: g, childId: 'a' }, '2026-10-22'));
+  applyOp(s, op('createMainProject', { projectId: 'd', name: 'Diwali', groupId: g }, '2026-10-22'));
+  const names = addHereChoices(s.data, s.data.projects.find((p) => p.id === 'd')).map((x) => x.name);
+  assert.deepEqual(names.slice(0, 2).sort(), ['Beta loose', 'Gamma loose'], 'loose tasks first');
+  assert.equal(names[2], 'Alpha in Kilns', 'the task already in Kilns comes after');
+});

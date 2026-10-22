@@ -126,7 +126,8 @@ export function addTasksPicker(ctx, m) {
     list.length ? h('ul', { class: 'add-tasks-list' }, list.map((x) => h('li', { key: 'at-' + x.id },
       h('label', { class: 'add-tasks-row' },
         h('input', { type: 'checkbox', checked: pk.picked.has(x.id) ? true : undefined, onChange: (e, el) => { if (el.checked) pk.picked.add(x.id); else pk.picked.delete(x.id); ctx.render(); } }),
-        h('span', { class: `dot ${dotColour(x, todayIndia())}` }), ` ${x.name}`))))
+        h('span', { class: `dot ${dotColour(x, todayIndia())}` }), ` ${x.name}`,
+        parentsOf(data, x).length ? h('span', { class: 'muted small' }, `  · ${parentsOf(data, x).map((m) => '📂 ' + m.name).join(', ')}`) : null))))
       : h('p', { class: 'muted small' }, pk.q ? 'No task matches.' : 'Every task is in it already.'),
     h('div', { class: 'row' },
       h('button', { class: 'btn primary small', type: 'button', disabled: pk.picked.size ? undefined : true, onClick: add },
