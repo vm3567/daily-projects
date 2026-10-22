@@ -866,8 +866,12 @@ test('📂 project page: TASKS (N) table (dot, name + 👥, Now / "No next step"
   assert.ok(renderDetail(ctx).textContent.includes('Add 1 task'), 'the button counts the ticks');
   btn(renderDetail(ctx), 'Add 1 task').__on.click();
   assert.deepEqual(s.data.projects.find((p) => p.id === 'o').parentIds, ['m']);
-  globalThis.prompt = () => 'Kiln 3';
+  // "+ New task here" opens a box on the page now (owner asked, 22 Oct: no browser question box)
+  globalThis.prompt = () => { throw new Error('no prompt any more'); };
   try { btn(renderDetail(ctx), '+ New task here').__on.click(); } finally { delete globalThis.prompt; }
+  const name = rFind(renderDetail(ctx), (n) => n.nodeName === 'INPUT' && n.dataset.key === 'newhere-m-name');
+  name.__on.input(null, { value: 'Kiln 3' });
+  name.__on.keydown({ key: 'Enter', preventDefault() {} }, { value: 'Kiln 3' });
   const made = s.data.projects.find((p) => p.name === 'Kiln 3');
   assert.deepEqual(made.parentIds, ['m'], 'made already in it');
   assert.ok(renderDetail(ctx).textContent.includes('TASKS (4)'));
@@ -981,7 +985,7 @@ test('📂 Projects page: a click on a project row selects it and stays on the p
   assert.match(mainsSrc, /ctx\.ui\.view === 'mains' && ctx\.showHere \? ctx\.showHere\(c\.id\)/, 'a task in the TASKS table while on the Projects page');
   const here = app.slice(app.indexOf('  showHere: (id) => {'), app.indexOf('  openProject: (id) => {'));
   assert.match(here, /select\(id\);/);
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-18'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-19'/, 'phones get the new copy');
 });
 
 test('📂 project page: "✕ Remove" on a task row takes it out of this project only — the task is kept (and stays in its other projects)', () => {
@@ -1122,4 +1126,262 @@ test('📂 project page: the ▲ ▼ buttons are always visible (not hidden like
   const { readFileSync } = await import('node:fs');
   const css = readFileSync(new URL('../docs/styles.css', import.meta.url), 'utf8');
   assert.match(css, /\.sub-move \.icon\.tiny \{[^}]*visibility: visible;/);
+});
+
+test('📂 project page: a finished task shows green (green dot, green name, "✓ finished"), its Now cell calm grey', async () => {
+  const { readFileSync } = await import('node:fs');
+  const src = readFileSync(new URL('../docs/ui/mains.js', import.meta.url), 'utf8');
+  assert.match(src, /class: 'sub-row' \+ \(done \? ' sub-done' : ''\)/);
+  assert.match(src, /dot \$\{done \? 'green' : dotColour\(c, today\)\}/);
+  assert.match(src, /done \? '✓ finished' : c\.state/);
+  assert.match(src, /class: c\.state !== 'active' \? 'muted' : ns \? '' : 'warn'/);
+  const css = readFileSync(new URL('../docs/styles.css', import.meta.url), 'utf8');
+  assert.match(css, /\.sub-done \.sub-name \{ color: #2e7d32; \}/);
+});
+
+// ---------- Rich "What happened today?" box (owner asked, 22 Oct) ----------
+const { TABLE_HTML } = await import('../docs/rich.js');
+const richedit = await import('../docs/ui/richedit.js');
+const { diaryEntries, summaryText, projectMatches } = await import('../docs/reports.js');
+
+/** A pretend rich box: its HTML is what the test says; it records what is added to it. */
+function fakeEditor(html = '') {
+  const el = new Node('div');
+  el.innerHTML = html;
+  el.focus = () => {};
+  return el;
+}
+/** Run `fn` with the page's rich box (data-key) found, and browser editing commands recorded. */
+async function withEditor(editors, fn, { focused = null } = {}) {
+  const cmds = [];
+  const saved = { qs: document.querySelector, ex: document.execCommand, ae: document.activeElement };
+  document.querySelector = (sel) => { const m = /data-key="([^"]+)"/.exec(sel); return m ? editors[m[1]] || null : null; };
+  document.execCommand = (cmd, ui, value) => { cmds.push([cmd, value]); return true; };
+  document.activeElement = focused;
+  try { await fn(cmds); } finally { document.querySelector = saved.qs; document.execCommand = saved.ex; document.activeElement = saved.ae; }
+}
+const keyOf = (n) => n.dataset && n.dataset.key;
+const ev = (x = {}) => { const e = { preventDefault() { e.prevented = true; }, prevented: false, ...x }; return e; };
+const clip = ({ html = '', text = '', files = [] }) => ({ files, getData: (t) => (t === 'text/html' ? html : t === 'text/plain' ? text : '') });
+
+test('rich update box: toolbar B · I · • List · 1. List · ⊞ Table · 📷 Photo · 🔗 Link over a contenteditable box (kept on redraw)', async () => {
+  const s = sampleState();
+  const ctx = fakeCtx(s, { selected: 'p1', update: {} });
+  const el = renderDetail(ctx);
+  const tools = rFind(el, (n) => n.className === 'rich-tools');
+  assert.ok(tools, 'toolbar');
+  for (const label of ['B', 'I', '• List', '1. List', '⊞ Table', '📷 Photo', '🔗 Link']) assert.ok(rFind(tools, (n) => (n.nodeName === 'BUTTON' || n.nodeName === 'LABEL') && n.textContent.startsWith(label)), label);
+  const box = rFind(el, (n) => keyOf(n) === 'wn-p1');
+  assert.equal(box.getAttribute('contenteditable'), 'true');
+  assert.equal(box.className, 'rich-edit');
+  assert.ok(!rFind(el, (n) => n.nodeName === 'INPUT' && n.getAttribute('name') === 'note'), 'the old one-line box is gone');
+  const ed = fakeEditor();
+  await withEditor({ 'wn-p1': ed }, (cmds) => {
+    rFind(tools, (n) => n.nodeName === 'BUTTON' && n.textContent === '⊞ Table').__on.click();
+    rFind(tools, (n) => n.nodeName === 'BUTTON' && n.textContent === 'B').__on.click();
+    rFind(tools, (n) => n.nodeName === 'BUTTON' && n.textContent === '• List').__on.click();
+    assert.deepEqual(cmds, [['insertHTML', TABLE_HTML], ['bold', null], ['insertUnorderedList', null]]);
+    assert.ok(TABLE_HTML.match(/<td>/g).length === 9, 'a 3 × 3 table');
+  });
+  // the page is drawn again while typing: the box keeps what is in it (morph leaves a contenteditable alone)
+  const { morph } = await import('../docs/ui/dom.js');
+  const live = renderDetail(ctx);
+  const liveBox = rFind(live, (n) => keyOf(n) === 'wn-p1');
+  liveBox.childNodes.push({ nodeType: 3, nodeValue: 'typed' });
+  const domSrc = readFileSync(new URL('../docs/ui/dom.js', import.meta.url), 'utf8');
+  assert.match(domSrc, /getAttribute\('contenteditable'\) === 'true'\) return;/, 'morph does not touch what is typed in a rich box');
+  assert.ok(typeof morph === 'function');
+});
+
+test('rich update box: pasting HTML (Excel/Outlook/web) keeps the table, cleaned; plain text stays plain', async () => {
+  const s = sampleState();
+  const ctx = fakeCtx(s, { selected: 'p1', update: {} });
+  const box = rFind(renderDetail(ctx), (n) => keyOf(n) === 'wn-p1');
+  const ed = fakeEditor();
+  await withEditor({ 'wn-p1': ed }, (cmds) => {
+    const e = ev({ clipboardData: clip({ html: '<style>td{x}</style><table style="a"><tr><td class=x onclick=y><b>Clay</b></td><td>20</td></tr></table><script>z</script>', text: 'Clay\t20', files: [new File(['x'], 'image.png', { type: 'image/png' })] }) });
+    box.__on.paste(e, ed);
+    assert.ok(e.prevented);
+    assert.deepEqual(cmds, [['insertHTML', '<table><tr><td><b>Clay</b></td><td>20</td></tr></table>']], 'the cells win over Excel\'s picture of them');
+    cmds.length = 0;
+    box.__on.paste(ev({ clipboardData: clip({ text: 'just <b>words</b>' }) }), ed);
+    assert.deepEqual(cmds, [['insertText', 'just <b>words</b>']], 'plain words are pasted as words');
+  }, { focused: ed });
+});
+
+test('rich update box: a pasted screenshot is uploaded as a photo, shown inside the box, and saved as <img data-file> + addFile', async () => {
+  const s = sampleState();
+  const ui = { selected: 'p1', update: {} };
+  const ctx = fakeCtx(s, ui);
+  const steps = [];
+  ctx.actMany = (pid, st) => { steps.push(...st); return { undo: null }; };
+  ctx.store.repo = { createBlobBase64: async () => 'sha-shot' };
+  const box = rFind(renderDetail(ctx), (n) => keyOf(n) === 'wn-p1');
+  const ed = fakeEditor('<p>Kiln hot</p>');
+  await withEditor({ 'wn-p1': ed }, async () => {
+    const e = ev({ clipboardData: clip({ files: [new File(['png-bytes'], 'image.png', { type: 'image/png' })] }) });
+    box.__on.paste(e, ed);
+    assert.ok(e.prevented);
+    await new Promise((r) => setTimeout(r, 30));
+    const ph = ui.update.p1.photos[0];
+    assert.ok(ph && ph.sha === 'sha-shot' && ph.inline, 'uploaded');
+    assert.match(ph.name, /^pasted-.*\.png$/, 'a clear name, not image.png');
+    const img = rFind(ed, (n) => n.nodeName === 'IMG');
+    assert.equal(img.getAttribute('data-file'), ph.fileId, 'shown inside the box');
+    assert.ok(!rFind(renderDetail(ctx), (n) => n.className === 'tag photo' && n.textContent.includes('pasted-')), 'no extra chip for a photo shown inside');
+    ed.innerHTML = `<p>Kiln hot</p><img data-file="${ph.fileId}" class="rich-photo" src="blob:http://x/1">`;
+    const form = rFind(renderDetail(ctx), (n) => n.nodeName === 'FORM' && n.className.includes('update-form'));
+    form.__on.submit(ev());
+    const add = steps.find((x) => x[0] === 'addWorkNote')[1];
+    assert.equal(add.text, 'Kiln hot');
+    assert.equal(add.html, `<p>Kiln hot</p><img data-file="${ph.fileId}">`, 'only a reference to the photo; no picture data in the note');
+    const file = steps.find((x) => x[0] === 'addFile')[1];
+    assert.equal(file.fileId, ph.fileId);
+    assert.equal(file.noteId, add.noteId);
+    assert.ok(!('preview' in file) && !('inline' in file));
+    assert.equal(ui.update.p1.photos.length, 0, 'the box is empty again');
+  });
+});
+
+test('rich update box: Enter saves a quick note; Shift+Enter / in a table / rich content = new line; Ctrl/⌘+Enter saves', async () => {
+  const s = sampleState();
+  const ctx = fakeCtx(s, { selected: 'p1', update: {} });
+  const saves = [];
+  ctx.actMany = (pid, st) => { saves.push(st); return { undo: null }; };
+  const box = () => rFind(renderDetail(ctx), (n) => keyOf(n) === 'wn-p1');
+  const press = (x, ed) => { const e = ev({ key: 'Enter', shiftKey: false, metaKey: false, ctrlKey: false, ...x }); box().__on.keydown(e, ed); return e; };
+  await withEditor({}, () => {
+    let ed = fakeEditor('Kiln checked');
+    assert.ok(press({}, ed).prevented);
+    assert.equal(saves.pop()[0][1].text, 'Kiln checked', 'Enter = Save');
+    assert.ok(!press({ shiftKey: true }, fakeEditor('a')).prevented, 'Shift+Enter = new line');
+    assert.equal(saves.length, 0);
+    ed = fakeEditor('<table><tr><td>a</td></tr></table>');
+    assert.ok(!press({}, ed).prevented, 'rich content: Enter = new line');
+    globalThis.getSelection = () => ({ anchorNode: { nodeName: 'TD', parentNode: ed } });
+    try { assert.ok(!press({}, fakeEditor('x')).prevented, 'in a table cell: Enter = new line'); } finally { delete globalThis.getSelection; }
+    assert.equal(saves.length, 0);
+    assert.ok(press({ ctrlKey: true }, ed).prevented);
+    const st = saves.pop();
+    assert.equal(st[0][1].html, '<table><tr><td>a</td></tr></table>', 'Ctrl+Enter saves the table');
+    assert.ok(!st.some((x) => x[0] === 'tickStep'), 'rich: Ctrl+Enter is Save, not Save + done');
+    press({ metaKey: true }, fakeEditor('done it'));
+    assert.ok(saves.pop().some((x) => x[0] === 'tickStep'), 'a quick note: ⌘+Enter = Save + done, as before');
+  });
+});
+
+test('a saved rich update shows its table and photo thumbnail in What\'s happening, Work notes and the Diary; emails, search and summaries use the plain words', async () => {
+  const s = sampleState();
+  applyOps(s, [
+    makeOp('addWorkNote', { projectId: 'p1', noteId: 'rn', text: 'x', html: '<p>Trial <b>2</b></p><table><tr><td>Clay</td><td>Kaolin</td></tr></table><img data-file="f1">' }),
+    makeOp('addFile', { projectId: 'p1', fileId: 'f1', name: 'shot.png', sha: 'sha1', size: 9, type: 'image/png', noteId: 'rn' }),
+    makeOp('addFile', { projectId: 'p1', fileId: 'f2', name: 'extra.png', sha: 'sha2', size: 9, type: 'image/png', noteId: 'rn' }),
+  ]);
+  const el = renderDetail(fakeCtx(s, { selected: 'p1', update: {}, showMore: true, openParts: {} }));
+  const diary = rFind(el, (n) => (n.className || '').includes('block diary'));
+  const note = rFind(diary, (n) => n.className === 'rich-note');
+  assert.ok(note, 'drawn as a rich note');
+  assert.ok(rFind(note, (n) => n.nodeName === 'TABLE') && rFind(note, (n) => n.nodeName === 'B'), 'table and bold');
+  const thumb = rFind(note, (n) => n.getAttribute && n.getAttribute('data-file') === 'f1');
+  assert.ok(thumb && thumb.textContent.includes('shot.png') && thumb.__on.click, 'the photo inside it opens the viewer');
+  assert.ok(diary.textContent.includes('📷 extra.png') && !diary.textContent.includes(' 📷 shot.png'), 'a photo not inside is listed once; the inside one not twice');
+  const log = rAll(el, (n) => n.className === 'note-rich');
+  assert.equal(log.length, 1, 'Work notes list shows it rich too');
+  assert.ok(rFind(log[0], (n) => n.nodeName === 'TABLE'));
+  assert.ok(!rAll(el, (n) => n.nodeName === 'SCRIPT' || (n.attributes || []).some((a) => a.name === 'style' || a.name.startsWith('on'))).length, 'nothing that could run, no style attributes');
+  const d = diaryEntries(s.data, s.history);
+  const entry = [...d.values()].flat().find((x) => x.html);
+  assert.ok(entry.text.includes('Clay | Kaolin'), 'Diary keeps the words too');
+  assert.ok(projectMatches(s.data.projects[0], 'kaolin'), 'search finds words inside a table');
+  assert.ok(summaryText(s.data, s.history, todayIndiaNow(), 'today').includes('Clay | Kaolin'), 'summaries use plain words');
+  assert.ok(!summaryText(s.data, s.history, todayIndiaNow(), 'today').includes('<table'));
+});
+
+test('✎ on a rich update opens it in the write box; Save changes it (editWorkNote with html)', async () => {
+  const s = sampleState();
+  applyOps(s, [makeOp('addWorkNote', { projectId: 'p1', noteId: 'rn', text: 'x', html: '<ul><li>one</li></ul>' })]);
+  const ui = { selected: 'p1', update: {} };
+  const ctx = fakeCtx(s, ui);
+  const steps = [];
+  ctx.actMany = (pid, st) => { steps.push(...st); return { undo: null }; };
+  const ed = fakeEditor();
+  await withEditor({ 'wn-p1': ed }, async () => {
+    const diary = rFind(renderDetail(ctx), (n) => (n.className || '').includes('block diary'));
+    rFind(diary, (n) => n.nodeName === 'BUTTON' && n.textContent === ' ✎' && n.parentNode && rFind(n.parentNode, (x) => x.className === 'rich-note')).__on.click();
+    assert.equal(ui.update.p1.editing, 'rn');
+    await new Promise((r) => setTimeout(r, 50));
+    assert.ok(rFind(ed, (n) => n.nodeName === 'LI' && n.textContent === 'one'), 'the box is filled with the saved update');
+    const page = renderDetail(ctx);
+    assert.ok(page.textContent.includes('✎ Changing your update'), 'says it is changing an update');
+    assert.ok(!page.textContent.includes('Save + done'));
+    ed.innerHTML = '<ul><li>one</li><li>two</li></ul>';
+    rFind(page, (n) => n.nodeName === 'FORM' && n.className.includes('update-form')).__on.submit(ev());
+    assert.deepEqual(steps[0], ['editWorkNote', { projectId: 'p1', noteId: 'rn', text: '• one\n• two', html: '<ul><li>one</li><li>two</li></ul>' }]);
+    assert.equal(ui.update.p1.editing, null);
+  });
+});
+
+test('"+ New task here" (📂 project) and "+ New task": a box with a name and the rich area (no prompt); a pasted screenshot lands in the new task\'s first update', async () => {
+  const s = mainsState();
+  const ui = { selected: 'm', update: {} };
+  const ctx = liveCtx(s, ui);
+  ctx.store.repo = { createBlobBase64: async () => 'sha-new' };
+  globalThis.prompt = () => { throw new Error('no prompt'); };
+  try { btn(renderDetail(ctx), '+ New task here').__on.click(); } finally { delete globalThis.prompt; }
+  let page = renderDetail(ctx);
+  const boxForm = rFind(page, (n) => n.className === 'new-task-box');
+  assert.ok(boxForm && boxForm.textContent.includes('New task in 📂 Kilns'));
+  assert.ok(rFind(boxForm, (n) => n.className === 'rich-tools' && n.textContent.includes('📷 Photo')), 'the same toolbar and 📷 Photo');
+  const area = rFind(boxForm, (n) => keyOf(n) === 'newhere-m-rich');
+  assert.equal(area.getAttribute('contenteditable'), 'true');
+  // Esc closes
+  rFind(boxForm, (n) => n.nodeName === 'INPUT' && keyOf(n) === 'newhere-m-name').__on.keydown(ev({ key: 'Escape' }), { value: '' });
+  assert.equal(ui.newHere, null);
+  btn(renderDetail(ctx), '+ New task here').__on.click();
+  page = renderDetail(ctx);
+  const ed = fakeEditor('<table><tr><td>Size</td><td>600x600</td></tr></table>');
+  await withEditor({ 'newhere-m-rich': ed }, async () => {
+    rFind(page, (n) => keyOf(n) === 'newhere-m-rich').__on.paste(ev({ clipboardData: clip({ files: [new File(['b'], 'image.png', { type: 'image/png' })] }) }), ed);
+    await new Promise((r) => setTimeout(r, 30));
+    const d = ui.newTaskDraft['here-m'];
+    const id = d.photos[0].fileId;
+    ed.innerHTML += `<img data-file="${id}" src="blob:x">`;
+    const name = rFind(renderDetail(ctx), (n) => n.nodeName === 'INPUT' && keyOf(n) === 'newhere-m-name');
+    name.__on.input(null, { value: 'Tile trial' });
+    name.__on.keydown(ev({ key: 'Enter' }), { value: 'Tile trial' });
+    assert.ok(!s.data.projects.some((p) => p.name === 'Tile trial'), 'Enter in the name does not create while the notes have something (Create does)');
+    rFind(renderDetail(ctx), (n) => n.className === 'new-task-box').__on.submit(ev());
+    const made = s.data.projects.find((p) => p.name === 'Tile trial');
+    assert.deepEqual(made.parentIds, ['m'], 'made inside the project');
+    const note = made.workNotes[0];
+    assert.equal(note.text, 'Size | 600x600');
+    assert.equal(note.html, `<table><tr><td>Size</td><td>600x600</td></tr></table><img data-file="${id}">`);
+    assert.deepEqual(made.files.map((f) => [f.id, f.sha, f.noteId]), [[id, 'sha-new', note.id]], 'the screenshot is the first update\'s photo');
+    assert.equal(ui.newHere, null, 'closed');
+  });
+  // the normal "+ New task" form uses the same box (no prompt)
+  const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
+  const form = app.slice(app.indexOf('function newProjectForm()'), app.indexOf('function statusText()'));
+  assert.match(form, /newTaskBox\(ctx, d, \{/);
+  assert.match(form, /createTaskWithNote\(ctx, \{ name, groupId: d\.groupId \|\| defaultGroup, d, editor \}\)/);
+  assert.ok(!/prompt\(/.test(form));
+  const mainsSrc = readFileSync(new URL('../docs/ui/mains.js', import.meta.url), 'utf8');
+  assert.ok(!/prompt\(`New task in/.test(mainsSrc), 'no question box for a new task here');
+});
+
+test('new task box: Enter in the name creates the task when the notes are empty (no first update then)', async () => {
+  const s = mainsState();
+  const ctx = liveCtx(s, { selected: 'm', update: {} });
+  const d = {};
+  let made = null;
+  const box = richedit.newTaskBox(ctx, d, { key: 'new', onCancel: () => {}, onCreate: (name, editor) => { made = richedit.createTaskWithNote(ctx, { name, groupId: s.data.groups[0].id, d, editor }); } });
+  await withEditor({ 'new-rich': fakeEditor('') }, () => {
+    const name = rFind(box, (n) => n.nodeName === 'INPUT' && keyOf(n) === 'new-name');
+    name.__on.input(null, { value: 'Glaze check' });
+    name.__on.keydown(ev({ key: 'Enter' }), { value: 'Glaze check' });
+  });
+  const p = s.data.projects.find((x) => x.id === made);
+  assert.equal(p.name, 'Glaze check');
+  assert.equal(p.workNotes.length, 0, 'nothing written: no note');
+  assert.deepEqual(p.parentIds || [], []);
 });

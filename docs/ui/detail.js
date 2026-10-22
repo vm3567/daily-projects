@@ -8,7 +8,9 @@ import { WAIT_RED_DAYS } from '../config.js';
 import { newId, PRIORITIES, cleanUrl, groupHasTimer, MAX_SNOOZE_DAYS, ABOUT_MAX } from '../ops.js';
 
 const STATUS_OLD_DAYS = 7; // a status older than this turns grey and asks for an update
-import { uploadFiles, openFile, uploadBlob } from './files.js';
+import { uploadFiles, openFile, photoThumb } from './files.js';
+import { richArea, richView, addDraftPhotos, readDraft, clearDraft, photoArgs, findEditor, fillEditor, editorPhoto, cursorInBlock, editorIsRich, namePasted } from './richedit.js';
+import { enterAction, richFileIds, textToHtml } from '../rich.js';
 import { projectEmailCards, emailThreadBlock } from './replies.js';
 import { mainBox, mainChip, subProjectsBlock, openMainBox } from './mains.js';
 import { isMainProject } from '../rules.js';
@@ -50,32 +52,52 @@ function updateState(ui, p) {
   return ((ui.update ||= {})[p.id] ||= { note: '', next: '' });
 }
 
-/** Upload photos for the write box. Counts uploads in progress, so Save can wait for them. */
-async function addUpdatePhotos(ctx, p, files) {
-  const u = updateState(ctx.ui, p);
-  u.uploading = (u.uploading || 0) + files.length;
-  ctx.render();
-  for (const f of files) {
-    try {
-      const up = await uploadBlob(ctx, f);
-      if (up) (u.photos ||= []).push(up);
-    } finally {
-      u.uploading = Math.max(0, (u.uploading || 1) - 1);
-      ctx.render();
-    }
-  }
+/** Upload photos for the write box (inline: shown inside the box, like a pasted screenshot). Save waits for them. */
+function addUpdatePhotos(ctx, p, files, opts = {}) {
+  return addDraftPhotos(ctx, updateState(ctx.ui, p), files, 'wn-' + p.id, opts);
 }
 
-/** Ctrl+V on a project: screenshots become photos on today's update (write a line and Save); other files go to its files. */
+/** Ctrl+V on a project: screenshots become photos inside today's update (write a line and Save); other files go to its files. */
 export function pasteIntoProject(ctx, p, files) {
   const images = files.filter((f) => f.type.startsWith('image/'));
   const others = files.filter((f) => !f.type.startsWith('image/'));
   if (images.length && p.state === 'active') {
-    addUpdatePhotos(ctx, p, images.map((f, i) => (f.name && f.name !== 'image.png' ? f : new File([f], `pasted-${new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 16).replace(/[:T]/g, '-')}${i ? '-' + i : ''}.png`, { type: f.type }))));
+    addUpdatePhotos(ctx, p, namePasted(images), { inline: true });
     ctx.toast('📷 Pasted — write a line in "What happened today?" and Save', 4000);
     focusUpdate(p);
   } else if (images.length) others.push(...images);
   if (others.length) uploadFiles(ctx, p.id, others);
+}
+
+/** A work note's words: a rich one (table, list, photos) drawn from its html, else its plain text. */
+export function noteBody(ctx, p, n) {
+  if (!n.html) return n.text;
+  return richView(n.html, (id) => photoThumb(ctx, (p.files || []).find((f) => f.id === id)), 'rn-' + n.id);
+}
+
+/** The photos of a note that are not already shown inside it. */
+function notePhotos(p, n) {
+  const inside = new Set(n.html ? richFileIds(n.html) : []);
+  return (p.files || []).filter((f) => f.noteId === n.id && !inside.has(f.id));
+}
+
+/** ✎ on an update: open it in the write box (rich, with its table and photos), Save changes it. */
+export function startEditNote(ctx, p, n) {
+  const u = updateState(ctx.ui, p);
+  const draft = readDraft(u, findEditor('wn-' + p.id));
+  if (!u.editing && (draft.text || draft.photos.length) && globalThis.confirm && !confirm('Put this update in the box to change it? What you are writing now is cleared.')) return;
+  u.editing = n.id;
+  u.html = n.html || textToHtml(n.text);
+  u.photos = [];
+  u.rich = !!n.html;
+  ctx.render();
+  setTimeout(() => {
+    const ed = findEditor('wn-' + p.id);
+    if (!ed) return;
+    fillEditor(ed, u.html, editorPhoto(u, p.files));
+    if (ed.scrollIntoView) ed.scrollIntoView({ block: 'center' });
+    if (ed.focus) ed.focus();
+  }, 30);
 }
 
 /** New messages from the team on this project: read them and answer here (or mark them seen). */
@@ -395,71 +417,79 @@ function updateBox(ctx, p) {
   const nextDue = p.state === 'active' ? nextStep(p, today, { dueOnly: true }) : null;
   const openSteps = p.state === 'active' ? p.steps.filter((s) => !s.done) : [];
   const u = updateState(ui, p);
+  const key = 'wn-' + p.id;
+  const editing = u.editing ? p.workNotes.find((n) => n.id === u.editing) : null;
+  if (u.editing && !editing) u.editing = null; // deleted meanwhile
   const chosen = u.about && u.about !== 'project' ? openSteps.find((s) => s.id === u.about) : null;
-  const due = u.about === 'project' ? null : chosen || nextDue;
-  // "Save" = note only; "Save + done" (or Ctrl/⌘+Enter) = note and tick the step it is about.
-  const save = (form, done = false) => {
-    const f = form.elements;
-    const text = f.note.value.trim();
-    const next = f.next ? f.next.value.trim() : '';
+  const due = editing || u.about === 'project' ? null : chosen || nextDue;
+  // "Save" = note only; "Save + done" (or Ctrl/⌘+Enter on a quick note) = note and tick the step it is about.
+  const save = (ed, done = false) => {
     const tick = !!(due && done);
-    const photos = u.photos || [];
     if (u.uploading) { ctx.toast('A photo is still uploading — save again in a moment', 2500); return; }
-    if (!text && !tick && !next && !photos.length) return;
+    const r = readDraft(u, ed);
+    if (r.tooBig) { ctx.toast('This update is too big (over 100 KB). Make the table smaller, or add it as a file.', 5000); return; }
+    const html = r.rich ? r.html : undefined;
+    if (editing) { // ✎ changing a saved update
+      const before = (p.files || []).filter((f) => f.noteId === editing.id).length;
+      const text = r.text || (before + r.photos.length ? `📷 ${before + r.photos.length} photo${before + r.photos.length > 1 ? 's' : ''}` : '');
+      if (!text) { ctx.toast('The update is empty — use ✕ to delete it', 2500); return; }
+      const steps = [];
+      if (text !== editing.text || (html || null) !== (editing.html || null)) steps.push(['editWorkNote', { projectId: p.id, noteId: editing.id, text, ...(html ? { html } : {}) }]);
+      for (const ph of r.photos) steps.push(['addFile', { projectId: p.id, ...photoArgs(ph), noteId: editing.id }]);
+      if (steps.length && !ctx.actMany(p.id, steps, 'Update changed')) return;
+      u.editing = null; u.about = null;
+      clearDraft(u, ed);
+      ctx.render();
+      return;
+    }
+    if (!r.text && !tick && !r.photos.length) return;
     const steps = [];
     const noteId = newId();
-    const noteText = text || (photos.length ? `📷 ${photos.length} photo${photos.length > 1 ? 's' : ''}` : '');
-    if (noteText) steps.push(['addWorkNote', { projectId: p.id, noteId, text: noteText, stepId: due ? due.id : null }]);
-    for (const ph of photos) steps.push(['addFile', { projectId: p.id, ...ph, noteId }]);
+    const noteText = r.text || (r.photos.length ? r.photoWord : '');
+    if (noteText) steps.push(['addWorkNote', { projectId: p.id, noteId, text: noteText, ...(html ? { html } : {}), stepId: due ? due.id : null }]);
+    for (const ph of r.photos) steps.push(['addFile', { projectId: p.id, ...photoArgs(ph), noteId }]);
     if (tick) steps.push(['tickStep', { projectId: p.id, stepId: due.id }]);
-    if (next) steps.push(['addStep', { projectId: p.id, stepId: newId(), text: next }]);
-    const bits = [text ? 'note saved' : null, photos.length ? `${photos.length} photo${photos.length > 1 ? 's' : ''}` : null, tick ? `✓ ${due.text}` : null, next ? `next: ${next}` : null].filter(Boolean);
+    const n = r.photos.length;
+    const bits = [r.text ? 'note saved' : null, n ? `${n} photo${n > 1 ? 's' : ''}` : null, tick ? `✓ ${due.text}` : null].filter(Boolean);
     const result = ctx.actMany(p.id, steps, bits.join(' · '));
     if (result) {
-      f.note.value = '';
-      if (f.next) f.next.value = '';
-      u.note = ''; u.next = ''; u.photos = []; u.about = null; // back to the next step
+      clearDraft(u, ed);
+      u.note = ''; u.about = null; // back to the next step
       ctx.render();
-      if (tick && !next) ctx.afterTick(p.id, 'detail', result.undo); // keeps the Undo button
+      if (tick) ctx.afterTick(p.id, 'detail', result.undo); // keeps the Undo button
     }
   };
-  const addPhotos = (files) => addUpdatePhotos(ctx, p, files);
   if (p.state !== 'active') return { stepId: null, box: null };
+  const cancelEdit = () => { u.editing = null; clearDraft(u, findEditor(key)); ctx.render(); };
+  const hint = !HAS_KEYBOARD ? '' : editing ? `${MOD}+Enter = Save the change` : u.rich ? `Enter = new line · ${MOD}+Enter = Save` : due ? `Enter = Save · Shift+Enter = new line · ${MOD}+Enter = Save + done` : 'Enter = Save · Shift+Enter = new line';
   const box = h('form', {
-    class: 'update-form loose', key: 'update-' + p.id,
-    onSubmit: (e) => { e.preventDefault(); save(e.target); },
+    class: 'update-form loose' + (editing ? ' editing' : ''), key: 'update-' + p.id,
+    onSubmit: (e) => { e.preventDefault(); save(findEditor(key)); },
   },
-  openSteps.length && !isMainProject(ctx.store.view.data, p) ? h('div', { class: 'about-row' }, h('span', { class: 'muted small' }, 'About:'), // (a 📂 project has no steps of its own)
+  editing ? h('div', { class: 'edit-banner' }, h('span', null, `✎ Changing your update of ${fmtDay(indiaDate(editing.createdAt))} ${fmtTime(editing.createdAt)}`),
+    h('button', { class: 'link small', type: 'button', onClick: cancelEdit }, '✕ Cancel')) : null,
+  !editing && openSteps.length && !isMainProject(ctx.store.view.data, p) ? h('div', { class: 'about-row' }, h('span', { class: 'muted small' }, 'About:'), // (a 📂 project has no steps of its own)
     openSteps.slice(0, 8).map((st) => h('button', {
       class: 'chip' + (due && due.id === st.id ? ' on' : ''), type: 'button', key: 'ab-' + st.id, title: st.text,
       onClick: () => { u.about = st.id; ctx.render(); focusUpdate(p); },
     }, st.text.length > 28 ? st.text.slice(0, 26) + '…' : st.text)),
     h('button', { class: 'chip' + (due ? '' : ' on'), type: 'button', onClick: () => { u.about = 'project'; ctx.render(); focusUpdate(p); } }, `Whole ${kindWord(ctx, p)}`)) : null,
-  h('input', {
-    name: 'note', key: 'wn-' + p.id, autocomplete: 'off', enterkeyhint: 'done', 'data-mention': '1', value: u.note,
-    placeholder: 'What happened today?', title: HAS_KEYBOARD ? 'Key: W' : null,
-    onInput: (e, el) => { u.note = el.value; }, // half-typed text survives switching projects
-    onKeydown: (e, el) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); save(el.form, true); } },
-    onPaste: (e) => { // a pasted screenshot becomes a photo on this update; another file goes to the project's files
-      const files = [...((e.clipboardData && e.clipboardData.files) || [])];
-      if (!files.length || (e.clipboardData.getData('text/plain') || '').trim()) return; // text (cells from Excel come with a picture): the text
+  ...richArea(ctx, u, {
+    key, placeholder: 'What happened today?', title: HAS_KEYBOARD ? 'Key: W' : null, files: p.files,
+    otherFiles: (others) => uploadFiles(ctx, p.id, others), // a copied file (not a photo) goes to the task's files
+    onKey: (e, el) => {
+      if (e.key === 'Escape' && editing) { e.preventDefault(); cancelEdit(); return; }
+      const act = enterAction({ key: e.key, shift: e.shiftKey, mod: e.metaKey || e.ctrlKey, inBlock: cursorInBlock(el), rich: editorIsRich(el) });
+      if (!act) return;
       e.preventDefault();
-      pasteIntoProject(ctx, p, files);
+      save(el, act === 'saveDone');
     },
   }),
-  u.uploading ? h('div', { class: 'muted small' }, `📷 Uploading ${u.uploading} photo${u.uploading > 1 ? 's' : ''}…`) : null,
-  (u.photos || []).length ? h('div', { class: 'photo-chips' }, u.photos.map((ph, i) => h('span', { class: 'tag photo', key: 'ph-' + ph.fileId },
-    `📷 ${ph.name}`, h('button', { class: 'icon tiny-x', type: 'button', 'aria-label': 'Remove photo', onClick: () => { u.photos.splice(i, 1); ctx.render(); } }, '✕')))) : null,
   h('div', { class: 'row' },
-    h('button', { class: 'btn small', type: 'submit' }, 'Save'),
-    due ? h('button', { class: 'btn primary small', type: 'button', title: `Save the note and tick "${due.text}" (${MOD}+Enter)`, onClick: (e, el) => save(el.form, true) }, '✓ Save + done') : null,
-    h('label', { class: 'btn small photo-btn', title: 'Take a photo or choose one' }, '📷 Photo',
-      h('input', {
-        type: 'file', accept: 'image/*', multiple: true, class: 'visually-hidden',
-        onChange: async (e, el) => { const files = [...el.files]; el.value = ''; addPhotos(files); },
-      })),
-    h('span', { class: 'muted small' }, HAS_KEYBOARD ? (due ? `Enter = Save · ${MOD}+Enter = Save + done` : 'Enter = Save') : ''),
-    null));
+    h('button', { class: 'btn small', type: 'submit' }, editing ? 'Save change' : 'Save'),
+    due ? h('button', { class: 'btn primary small', type: 'button', title: `Save the note and tick "${due.text}" (${MOD}+Enter)`, onClick: () => save(findEditor(key), true) }, '✓ Save + done') : null,
+    editing ? h('button', { class: 'btn small', type: 'button', onClick: cancelEdit }, 'Cancel') : null,
+    h('span', { class: 'muted small' }, hint)));
   return { stepId: due ? due.id : null, box };
 }
 
@@ -472,11 +502,13 @@ function notesLog(ctx, p, notesShown) {
       const st = n.stepId && p.steps.find((x) => x.id === n.stepId);
       return h('li', { key: 'n-' + n.id },
         h('span', { class: 'muted small' }, `${fmtDay(indiaDate(n.createdAt))} ${fmtTime(n.createdAt)}`),
-        autoField('input', { value: n.text, 'aria-label': 'Work note', key: 'nt-' + n.id, 'data-mention': '1' },
-          (v) => { if (v.trim()) store.dispatch('editWorkNote', { projectId: p.id, noteId: n.id, text: v }); }),
+        n.html ? h('div', { class: 'note-rich' }, noteBody(ctx, p, n)) // a table, list or photos: shown, ✎ opens it in the write box
+          : autoField('input', { value: n.text, 'aria-label': 'Work note', key: 'nt-' + n.id, 'data-mention': '1' },
+            (v) => { if (v.trim()) store.dispatch('editWorkNote', { projectId: p.id, noteId: n.id, text: v }); }),
+        n.html && !n.team && p.state === 'active' ? h('button', { class: 'link small', type: 'button', title: 'Change this update', onClick: () => startEditNote(ctx, p, n) }, '✎') : null,
         st ? h('span', { class: 'tag on-step', title: 'This note is about this step' }, `on: ${st.text}`) : null,
         n.mail ? linkChip(n.link) : null, // a reply in an email thread (from Outlook): open that email
-        ...p.files.filter((f) => f.noteId === n.id).map((f) => h('button', { class: 'tag photo', key: 'nf-' + f.id, title: 'Open photo', onClick: () => openFile(ctx, f) }, '📷')),
+        ...notePhotos(p, n).map((f) => h('button', { class: 'tag photo', key: 'nf-' + f.id, title: 'Open photo', onClick: () => openFile(ctx, f) }, '📷')),
         n.team || String(n.id).startsWith('tn') ? null : h('button', {
           class: 'icon', title: 'Delete note',
           onClick: () => ctx.act('deleteWorkNote', { projectId: p.id, noteId: n.id }, 'Note deleted'),
@@ -1100,14 +1132,14 @@ function projectDiary(ctx, p, upd) {
   const about = (stepId) => (stepId && stepText.has(stepId) ? h('span', { class: 'muted small' }, ` · ${stepText.get(stepId)}`) : null);
   const entries = [];
   for (const n of p.workNotes) {
-    const files = (p.files || []).filter((f) => f.noteId === n.id);
+    const files = notePhotos(p, n);
     const team = n.text.startsWith('👥 ');
     entries.push({
       day: indiaDate(n.createdAt), at: n.createdAt, work: !String(n.text).startsWith('👥 Marked done in Work Task'), stepId: n.stepId,
-      node: diaryLine(team ? '👥' : '📝', team ? null : 'You', team ? n.text.slice(3) : n.text, [
+      node: diaryLine(team ? '👥' : '📝', team ? null : 'You', team ? n.text.slice(3) : noteBody(ctx, p, n), [
         about(n.stepId),
         ...files.map((f) => h('button', { class: 'link small', type: 'button', key: 'f-' + f.id, onClick: () => openFile(ctx, f) }, ` 📷 ${f.name}`)),
-        team ? null : h('button', { class: 'link small', type: 'button', title: 'Change this update', onClick: () => { const v = prompt('Change your update:', n.text); if (v && v.trim()) store.dispatch('editWorkNote', { projectId: p.id, noteId: n.id, text: v }); } }, ' ✎'),
+        team ? null : h('button', { class: 'link small', type: 'button', title: 'Change this update', onClick: () => (p.state === 'active' ? startEditNote(ctx, p, n) : (() => { const v = prompt('Change your update:', n.text); if (v && v.trim()) store.dispatch('editWorkNote', { projectId: p.id, noteId: n.id, text: v }); })()) }, ' ✎'),
         team ? null : h('button', { class: 'link small', type: 'button', title: 'Delete this update', onClick: () => { if (confirm('Delete this update?')) ctx.act('deleteWorkNote', { projectId: p.id, noteId: n.id }, 'Update deleted'); } }, ' ✕'),
       ]),
     });

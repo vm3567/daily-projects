@@ -10,7 +10,8 @@ import { renderTimeReport } from './ui/timereport.js';
 import { renderReplies, renderReplyRound, replyArea, readyCount } from './ui/replies.js';
 import { projectChips, renderProjectsHead, openMainBox, listColour } from './ui/mains.js';
 import { projectMatches, diaryEntries, backupPayload, summaryText, personMessageText, personMessageHtml, sentMarkOf, copyNotice, tasksListText } from './reports.js';
-import { closeViewer, uploadBlob } from './ui/files.js';
+import { closeViewer, uploadBlob, photoThumb } from './ui/files.js';
+import { newTaskBox, createTaskWithNote, richView } from './ui/richedit.js';
 import { Store } from './store.js';
 import { GitHubRepo } from './github.js';
 import { ServerRepo, SERVER_TOKEN_KEY } from './serverrepo.js';
@@ -1773,26 +1774,24 @@ function newProjectForm() {
     return h('button', { class: 'btn primary new-project', onClick: () => { ui.adding = true; render(); focusKey('new-name'); } }, '+ New task', keyHint('N'));
   }
   const defaultGroup = ui.view.startsWith('group:') ? ui.view.slice(6) : store.view.data.groups[0]?.id;
-  return h('form', {
-    class: 'new-form',
-    onSubmit: (e) => {
-      e.preventDefault();
-      const f = e.target.elements;
-      const name = f.name.value.trim();
-      if (!name) return;
-      const projectId = newId();
-      if (store.dispatch('createProject', { projectId, name, groupId: f.group.value })) {
-        ui.adding = false;
-        if (ui.view !== 'today' && ui.view !== 'all' && !ui.view.startsWith('group:')) ui.view = 'today';
-        select(projectId);
-        focusKey('add-step-' + projectId);
-      }
+  const d = ((ui.newTaskDraft ||= {}).list ||= {});
+  const close = () => { ui.adding = false; render(); };
+  // a name, then notes you can paste a screenshot, a table or words into (they become the task's first update)
+  return newTaskBox(ctx, d, {
+    key: 'new',
+    extra: h('select', { name: 'group', 'aria-label': 'Group', value: d.groupId || defaultGroup, onChange: (e, el) => { d.groupId = el.value; } },
+      store.view.data.groups.map((g) => h('option', { value: g.id }, g.name))),
+    onCancel: close,
+    onCreate: (name, editor) => {
+      const projectId = createTaskWithNote(ctx, { name, groupId: d.groupId || defaultGroup, d, editor });
+      if (!projectId) return;
+      ui.adding = false;
+      d.groupId = null;
+      if (ui.view !== 'today' && ui.view !== 'all' && !ui.view.startsWith('group:')) ui.view = 'today';
+      select(projectId);
+      focusKey('add-step-' + projectId);
     },
-  },
-  h('input', { name: 'name', placeholder: 'Task name', key: 'new-name', autocomplete: 'off' }),
-  h('select', { name: 'group', value: defaultGroup }, store.view.data.groups.map((g) => h('option', { value: g.id }, g.name))),
-  h('button', { class: 'btn primary', type: 'submit' }, 'Add'),
-  h('button', { class: 'btn', type: 'button', onClick: () => { ui.adding = false; render(); } }, 'Cancel'));
+  });
 }
 
 function statusText() {
@@ -1893,6 +1892,13 @@ function listParts(list, today) {
 
 // ---------------------------------------------------------------- Diary
 
+/** A rich update in the Diary: its table, list and photos (the words of everything else stay plain). */
+function diaryRich(l) {
+  const p = store.view.data.projects.find((x) => x.id === l.projectId);
+  return h('span', { class: 'diary-rich' }, '📝 ', richView(l.html, (id) => photoThumb(ctx, p && (p.files || []).find((f) => f.id === id))),
+    l.onStep ? h('span', { class: 'muted small' }, `(on: ${l.onStep})`) : null);
+}
+
 function renderDiary() {
   const { history } = store.view;
   const byDay = diaryEntries(store.view.data, history);
@@ -1910,7 +1916,7 @@ function renderDiary() {
         l.exists
           ? h('button', { class: 'link', onClick: () => ctx.openProject(l.projectId) }, l.name)
           : h('span', { class: 'muted' }, l.name),
-        ': ', l.text))))),
+        ': ', l.html ? diaryRich(l) : l.text))))),
     days.length > shown.length
       ? h('button', { class: 'btn', onClick: () => { ui.diaryDays += 14; render(); } }, 'Show older days')
       : older ? h('button', { class: 'btn', onClick: () => store.loadMonth(older) }, `Load ${older}`) : null);

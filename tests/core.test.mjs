@@ -1933,3 +1933,110 @@ test('📂 task order in a project: setTaskOrder keeps your order (new tasks aft
   applyOp(s, op('addToProject', { projectId: 'd', parentId: 'm' }, '2026-10-22'));
   assert.equal(orderedTasks(s.data, main(), '2026-10-22').at(-1).id, 'd', 'a new task goes after the arranged ones');
 });
+
+// ---------- Rich updates (owner asked, 22 Oct): tables, lists, bold, photos in "What happened today?" ----------
+const rich = await import('../docs/rich.js');
+
+test('rich sanitizer: keeps p, br, b/strong, i/em, u, lists, tables and safe links; drops every other tag but keeps its words', () => {
+  const out = rich.sanitizeRich('<div class="x"><span style="color:red">Kiln <b>hot</b> <strong>1150</strong></span></div><p><i>a</i><em>b</em><u>c</u><font face=x>d</font></p>'
+    + '<ul><li>one</li></ul><ol><li>two</li></ol><table border="1" width="9"><thead><tr><th>Item</th></tr></thead><tbody><tr><td colspan="2">Clay</td></tr></tbody></table>'
+    + '<a href="https://acton.in/x?a=1&amp;b=2" onclick="x()" class="y">site</a> <a href="mailto:ravi@acton.in">mail</a>');
+  assert.equal(out, '<p>Kiln <b>hot</b> <strong>1150</strong></p><p><i>a</i><em>b</em><u>c</u>d</p><ul><li>one</li></ul><ol><li>two</li></ol>'
+    + '<table><thead><tr><th>Item</th></tr></thead><tbody><tr><td>Clay</td></tr></tbody></table>'
+    + '<a href="https://acton.in/x?a=1&amp;b=2" rel="noopener noreferrer" target="_blank">site</a> <a href="mailto:ravi@acton.in" rel="noopener noreferrer" target="_blank">mail</a>');
+  assert.equal(rich.sanitizeRich(out), out, 'cleaning again changes nothing (it is cleaned on save AND when shown)');
+});
+
+test('rich sanitizer: scripts, styles, iframes, on… / style / class attributes, javascript: and data: links and comments are removed', () => {
+  const bad = '<script>alert(1)</script><style>p{color:red}</style><iframe src="https://evil">x</iframe><!-- secret --><p onclick="alert(1)" style="color:red" class="c" onmouseover=alert(2)>ok</p>'
+    + '<a href="javascript:alert(1)">js</a><a href=" JaVaScRiPt:alert(1)">js2</a><a href="data:text/html,<script>">data</a><a href="vbscript:x">vb</a>'
+    + '<img src="x" onerror="alert(1)"><img src="data:image/png;base64,AAAA"><svg><script>alert(3)</script></svg><object data="x"></object><SCRIPT SRC=//x></SCRIPT>';
+  const out = rich.sanitizeRich(bad);
+  assert.equal(out, '<p>ok</p>jsjs2datavb');
+  for (const word of ['script', 'style', 'iframe', 'onclick', 'onerror', 'javascript', 'data:', 'secret', 'alert', 'class', 'svg']) assert.ok(!out.toLowerCase().includes(word), word);
+});
+
+test('rich sanitizer: <img> only with a data-file id (our own uploaded photo), never its src', () => {
+  assert.equal(rich.sanitizeRich('<img data-file="ab12" src="blob:https://x/1" class="rich-photo" alt="📷" onload="x()">'), '<img data-file="ab12">');
+  assert.equal(rich.sanitizeRich('<img src="https://x/y.png">'), '', 'a picture from the web is not kept');
+  assert.equal(rich.sanitizeRich('<img data-file="a b&quot;><script>">'), '', 'a strange id is not kept');
+  assert.deepEqual(rich.richFileIds('<p>x<img data-file="f1"></p><table><tr><td><img data-file="f2"></td></tr></table>'), ['f1', 'f2']);
+});
+
+test('rich sanitizer: nested tables, broken HTML and Word/Excel extras do not break it', () => {
+  assert.equal(rich.sanitizeRich('<table><tr><td><table><tr><td>in</td></tr></table></td><td>2</td></tr></table>'),
+    '<table><tr><td><table><tr><td>in</td></tr></table></td><td>2</td></tr></table>', 'a table inside a cell');
+  assert.equal(rich.sanitizeRich('<p>a<b>bold<i>both</p>after'), '<p>a<b>bold<i>both</i></b></p>after', 'unclosed tags are closed');
+  assert.equal(rich.sanitizeRich('<ul><li>one<li>two</ul>'), '<ul><li>one</li><li>two</li></ul>', 'list items without an end');
+  assert.equal(rich.sanitizeRich('<table><tr><td>a<td>b<tr><td>c</table>'), '<table><tr><td>a</td><td>b</td></tr><tr><td>c</td></tr></table>', 'rows and cells without an end');
+  assert.equal(rich.sanitizeRich('a < b && c > d <p'), 'a &lt; b &amp;&amp; c &gt; d &lt;p', 'lone < and & are words');
+  assert.equal(rich.sanitizeRich('</b></table>x</p>'), 'x', 'stray end tags');
+  assert.equal(rich.sanitizeRich('<html><head><meta charset=utf-8><style>td{x}</style></head><body><!--StartFragment--><table><tr><td>1150&deg;C&nbsp;ok</td></tr></table><!--EndFragment--><o:p></o:p></body></html>'),
+    '<table><tr><td>1150°C ok</td></tr></table>', 'Excel copy: only the table');
+  assert.equal(rich.sanitizeRich('<p>a<div>b</div></p>'), '<p>a<br>b</p>', 'never a paragraph inside a paragraph');
+  const deep = '<b>'.repeat(5000) + 'x';
+  assert.ok(rich.sanitizeRich(deep).includes('x'), 'very deep HTML does not crash');
+  assert.equal(rich.sanitizeRich(null), '');
+});
+
+test('rich → plain words: tables as "a | b | c" lines, lists as "• item", paragraphs and <br> as new lines', () => {
+  assert.equal(rich.htmlToText('<p>Kiln <b>hot</b></p><table><tr><th>Item</th><th>Qty</th></tr><tr><td>Clay</td><td>20 kg</td></tr></table><ul><li>one</li><li>two</li></ul><ol><li>first</li></ol><p>a<br>b</p>'),
+    'Kiln hot\nItem | Qty\nClay | 20 kg\n• one\n• two\n1. first\na\nb');
+  assert.equal(rich.htmlToText('<p>see <a href="https://acton.in">the site</a></p>'), 'see the site (https://acton.in)', 'a link keeps its address');
+  assert.equal(rich.htmlToText('<p><img data-file="f1"></p>'), '', 'a photo has no words');
+  assert.equal(rich.htmlToText('<p>a</p><br><br><br><p>b</p>'), 'a\n\nb', 'at most one empty line');
+  assert.equal(rich.textToHtml('a <b>\nc'), 'a &lt;b&gt;<br>c', 'old plain update opened in the rich box');
+  assert.equal(rich.isRich('just words'), false);
+  assert.equal(rich.isRich('<p>one line</p>'), false);
+  assert.equal(rich.isRich('<p>a</p><p>b</p>'), true, 'several lines');
+  assert.equal(rich.isRich('<b>x</b>'), true);
+});
+
+test('rich box keys: Enter saves a one-line note; Shift+Enter, a list/table, or rich content = new line; Ctrl/⌘+Enter saves', () => {
+  const e = (x) => rich.enterAction({ key: 'Enter', ...x });
+  assert.equal(e({}), 'save');
+  assert.equal(e({ shift: true }), null);
+  assert.equal(e({ inBlock: true }), null);
+  assert.equal(e({ rich: true }), null);
+  assert.equal(e({ mod: true }), 'saveDone', 'a quick note: Save + done, as before');
+  assert.equal(e({ mod: true, rich: true }), 'saveOnly');
+  assert.equal(e({ mod: true, inBlock: true }), 'saveOnly');
+  assert.equal(rich.enterAction({ key: 'a' }), null);
+});
+
+test('addWorkNote / editWorkNote with html: cleaned, plain text always set from it, html only when rich, size limit', () => {
+  const s = withProject();
+  applyOp(s, op('addWorkNote', { projectId: 'p1', noteId: 'r1', text: 'ignored', html: '<p>Fired <b>12</b></p><table><tr><td>Clay</td><td>OK</td></tr></table><script>x</script><img data-file="f1" src="blob:z">' }, '2026-10-02'));
+  const n = s.data.projects[0].workNotes[0];
+  assert.equal(n.text, 'Fired 12\nClay | OK', 'text made from the html (table cells searchable)');
+  assert.equal(n.html, '<p>Fired <b>12</b></p><table><tr><td>Clay</td><td>OK</td></tr></table><img data-file="f1">');
+  applyOp(s, op('addWorkNote', { projectId: 'p1', noteId: 'r2', text: '📷 1 photo', html: '<img data-file="f2">' }, '2026-10-02'));
+  assert.equal(s.data.projects[0].workNotes[0].text, '📷 1 photo', 'photo only: the given words');
+  applyOp(s, op('addWorkNote', { projectId: 'p1', noteId: 'r3', text: 'x', html: '<p>plain words</p>' }, '2026-10-02'));
+  assert.equal(s.data.projects[0].workNotes[0].text, 'plain words');
+  assert.ok(!('html' in s.data.projects[0].workNotes[0]), 'nothing rich: stays a plain note');
+  const big = '<table>' + '<tr><td>aaaaaaaaaa</td></tr>'.repeat(5000) + '</table>';
+  assert.equal(applyOp(s, op('addWorkNote', { projectId: 'p1', noteId: 'r4', text: 'big', html: big }, '2026-10-02')), false, 'over 100 KB is refused');
+  assert.ok(!s.data.projects[0].workNotes.some((x) => x.id === 'r4'));
+  assert.equal(applyOp(s, op('addWorkNote', { projectId: 'p1', noteId: 'r5', text: '', html: '<script>x</script>' }, '2026-10-02')), false, 'nothing left: no note');
+  // edit
+  applyOp(s, op('editWorkNote', { projectId: 'p1', noteId: 'r1', text: 'x', html: '<ul><li>a</li><li>b</li></ul><iframe></iframe>' }, '2026-10-03'));
+  const e = s.data.projects[0].workNotes.find((x) => x.id === 'r1');
+  assert.equal(e.text, '• a\n• b');
+  assert.equal(e.html, '<ul><li>a</li><li>b</li></ul>');
+  assert.equal(applyOp(s, op('editWorkNote', { projectId: 'p1', noteId: 'r1', text: 'x', html: big }, '2026-10-03')), false, 'too big edit refused');
+  assert.equal(e.html, '<ul><li>a</li><li>b</li></ul>', 'kept as it was');
+  applyOp(s, op('editWorkNote', { projectId: 'p1', noteId: 'r1', text: 'now plain' }, '2026-10-03'));
+  assert.equal(e.text, 'now plain');
+  assert.ok(!('html' in e), 'edited to plain words: the html goes');
+});
+
+test('renaming a person also changes "@Name" inside a rich update (still clean)', () => {
+  const s = withProject();
+  applyOp(s, op('addPerson', { personId: 'r', name: 'Ravi' }, '2026-10-02'));
+  applyOp(s, op('addWorkNote', { projectId: 'p1', noteId: 'r1', text: 'x', html: '<table><tr><td>@Ravi</td><td>ok</td></tr></table>' }, '2026-10-02'));
+  applyOp(s, op('renamePerson', { personId: 'r', name: 'Ravi <K>' }, '2026-10-03'));
+  const n = s.data.projects[0].workNotes[0];
+  assert.equal(n.text, '@Ravi <K> | ok');
+  assert.equal(n.html, '<table><tr><td>@Ravi &lt;K&gt;</td><td>ok</td></tr></table>');
+});

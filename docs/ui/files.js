@@ -126,3 +126,29 @@ export async function openFile(ctx, file) {
       h('div', { class: 'viewer-body' }, h('p', null, `Could not open the file: ${e.message}`)));
   }
 }
+
+const thumbs = new Map(); // sha → picture address (or 'loading' / 'failed')
+
+/** A photo inside a rich update: a small picture (fetched once) that opens the viewer; "📷 name" until it has loaded. */
+export function photoThumb(ctx, file) {
+  if (!file) return h('span', { class: 'muted small rich-photo-missing' }, '📷');
+  const open = () => openFile(ctx, file);
+  const url = thumbs.get(file.sha);
+  if (url && url !== 'loading' && url !== 'failed') {
+    return h('img', { class: 'rich-photo', src: url, alt: file.name, title: `${file.name} — click to open`, key: 'rp-' + file.id, 'data-file': file.id, onClick: open });
+  }
+  const repo = ctx.store && ctx.store.repo;
+  if (!url && repo && typeof repo.blobBytes === 'function' && (viewableType(file.name) || '').startsWith('image/') && typeof URL.createObjectURL === 'function') {
+    thumbs.set(file.sha, 'loading');
+    repo.blobBytes(file.sha)
+      .then((bytes) => { thumbs.set(file.sha, URL.createObjectURL(new Blob([bytes], { type: viewableType(file.name) }))); ctx.render(); })
+      .catch(() => thumbs.set(file.sha, 'failed'));
+  }
+  return h('button', { class: 'tag photo rich-photo-btn', type: 'button', key: 'rp-' + file.id, 'data-file': file.id, title: 'Open photo', onClick: open }, `📷 ${file.name}`);
+}
+
+/** The picture address of a photo already shown once (for the edit box), or ''. */
+export function thumbUrl(file) {
+  const u = file ? thumbs.get(file.sha) : null;
+  return u && u !== 'loading' && u !== 'failed' ? u : '';
+}

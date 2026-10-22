@@ -3,7 +3,7 @@
 // morph() updates the page in place, so a box being typed in keeps its text and focus,
 // and a button being clicked is not swapped out from under the finger.
 
-const EVENTS = ['click', 'change', 'input', 'keydown', 'submit', 'dragover', 'dragleave', 'drop', 'focusout', 'focusin', 'paste', 'contextmenu'];
+const EVENTS = ['click', 'change', 'input', 'keydown', 'submit', 'dragover', 'dragleave', 'drop', 'focusout', 'focusin', 'paste', 'contextmenu', 'mousedown'];
 
 export function h(tag, props, ...children) {
   const el = document.createElement(tag);
@@ -84,6 +84,7 @@ export function morph(from, to) {
     return;
   }
   if (from.nodeName === 'TEXTAREA') return; // its text is its value
+  if (from.getAttribute && from.getAttribute('contenteditable') === 'true') return; // a rich box: what is typed in it is its value
   morphChildren(from, to);
 }
 

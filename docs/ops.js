@@ -11,6 +11,7 @@
 
 import { indiaDate, monthOf, laterDate, addDays, REPEATS, nextRepeatDate, waitingAgain, WEEKDAYS, indiaDateTime, validRemindOnce, remindOnceText, canPutUnder, parentIdsOf, normalizeParents } from './rules.js';
 import { AI_DAILY_LIMIT, BRIEF_CLAIM_MINUTES } from './config.js';
+import { sanitizeRich, htmlToText, isRich, RICH_MAX } from './rich.js';
 
 export const START_GROUPS = ['Acton', 'Personal', 'Ceramic Ninja'];
 export const PRIORITIES = ['high', 'medium', 'low'];
@@ -63,6 +64,20 @@ function findProject(data, id) {
 
 function cleanText(v, max = 5000) {
   return String(v ?? '').slice(0, max);
+}
+
+/**
+ * A work note's words and (optional) rich HTML. The HTML is cleaned (only safe tags) and kept only when it has
+ * more than plain words (a table, list, bold, link, photo or several lines). `text` is always there: the plain words
+ * made from the HTML (tables as "a | b | c", lists as "• item"), or the given text (e.g. "📷 1 photo").
+ * Returns null when the cleaned HTML is bigger than RICH_MAX.
+ */
+function richNote(a) {
+  if (a.html === undefined || a.html === null || a.html === '') return { text: cleanText(a.text, 5000).trim(), html: null };
+  const html = sanitizeRich(String(a.html));
+  if (html.length > RICH_MAX) return null;
+  const text = cleanText(htmlToText(html) || a.text, 5000).trim();
+  return { text, html: isRich(html) ? html : null };
 }
 
 function cleanDate(v) {
@@ -813,13 +828,15 @@ const handlers = {
   // ---------- Work notes ----------
   addWorkNote(state, op, a) {
     const p = findProject(state.data, a.projectId);
-    const text = cleanText(a.text, 5000).trim();
+    const rich = richNote(a);
+    if (!rich) return false; // the table / pasted page is too big
+    const text = rich.text;
     if (!p || !text || p.workNotes.some((n) => n.id === a.noteId)) return false;
     // A note can belong to a step ("what I did on this step"); it stays even if the step is later ticked.
     const stepId = a.stepId && p.steps.some((s) => s.id === a.stepId) ? a.stepId : null;
     // a note for the team's work (their day, not your work today)
     const at = a.team ? teamTime(a.at, op) : op.at;
-    p.workNotes.unshift({ id: a.noteId, text, stepId, createdAt: at, updatedAt: at, ...(a.team ? { team: true } : {}) });
+    p.workNotes.unshift({ id: a.noteId, text, ...(rich.html ? { html: rich.html } : {}), stepId, createdAt: at, updatedAt: at, ...(a.team ? { team: true } : {}) });
     touch(p, op);
     addEvent(state, op, p, a.team ? 'team_note' : 'note_added', text);
     return true;
@@ -828,9 +845,12 @@ const handlers = {
   editWorkNote(state, op, a) {
     const p = findProject(state.data, a.projectId);
     const n = p && p.workNotes.find((x) => x.id === a.noteId);
-    const text = cleanText(a.text, 5000).trim();
-    if (!n || !text || n.text === text) return false;
+    const rich = richNote(a);
+    if (!rich) return false;
+    const { text, html } = rich;
+    if (!n || !text || (n.text === text && (n.html || null) === html)) return false;
     n.text = text;
+    if (html) n.html = html; else delete n.html;
     n.updatedAt = op.at;
     touch(p, op);
     addEvent(state, op, p, 'note_edited', text);
@@ -1175,10 +1195,10 @@ const handlers = {
       && x.name.toLowerCase().startsWith(old.toLowerCase())).map((x) => x.name.toLowerCase());
     const re = new RegExp('@' + old.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(?![\\p{L}\\p{N}_])', 'giu');
     const wordChar = /[\p{L}\p{N}_]/u;
-    const fix = (t) => (typeof t !== 'string' ? t : t.replace(re, (match, offset) => {
+    const fix = (t, nm = name) => (typeof t !== 'string' ? t : t.replace(re, (match, offset) => {
       const rest = t.slice(offset + 1).toLowerCase();
       const isLonger = longer.some((n) => rest.startsWith(n) && !wordChar.test(t.charAt(offset + 1 + n.length)));
-      return isLonger ? match : '@' + name; // function replacer: "$" in a name is kept as typed
+      return isLonger ? match : '@' + nm; // function replacer: "$" in a name is kept as typed
     }));
     for (const p of state.data.projects) {
       p.notes = fix(p.notes);
@@ -1187,7 +1207,7 @@ const handlers = {
         s.note = fix(s.note);
         if (s.waitingOn && s.waitingOn.toLowerCase() === old.toLowerCase()) s.waitingOn = name;
       }
-      for (const n of p.workNotes) n.text = fix(n.text);
+      for (const n of p.workNotes) { n.text = fix(n.text); if (n.html) n.html = sanitizeRich(fix(n.html, name.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'))); }
     }
     person.name = name;
     people.sort((x, y) => x.name.localeCompare(y.name));

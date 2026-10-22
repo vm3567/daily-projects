@@ -1078,3 +1078,32 @@ a.team-line.msg { background: #eef4ff; border-color: #93b4f8; color: #1e40af; fo
 .sub-move { white-space: nowrap; }
 .sub-move .icon.tiny { padding: 2px 5px; visibility: visible; } /* (tiny icons are hidden elsewhere until hover) */
 .sub-move .icon.tiny[disabled] { opacity: .3; }
+.sub-done .sub-name { color: #2e7d32; }
+.tag.done-tag { background: #e8f5e9; color: #2e7d32; border-color: #a5d6a7; }
+
+/* ---------- rich updates: the write box with B / I / lists / table / photo / link, and saved rich notes ---------- */
+.rich-tools { display: flex; flex-wrap: wrap; gap: 4px; }
+.rich-tools .tool { border: 1px solid var(--line); background: #fff; border-radius: 6px; padding: 2px 8px; font-size: 13px; line-height: 1.6; cursor: pointer; color: inherit; }
+.rich-tools .tool:hover { background: #eef3ff; }
+.rich-tools .tool:first-child { font-weight: 700; }
+.rich-tools .tool:nth-child(2) { font-style: italic; }
+.rich-edit { min-height: 2.4em; max-height: 360px; overflow: auto; background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; outline: none; white-space: pre-wrap; word-break: break-word; cursor: text; }
+.rich-edit:focus { border-color: #7aa2f7; box-shadow: 0 0 0 2px #dbe6ff; }
+.rich-edit:empty::before { content: attr(data-placeholder); color: #8a93a3; pointer-events: none; }
+.rich-edit p, .rich-note p { margin: 0 0 4px; }
+.rich-edit ul, .rich-edit ol, .rich-note ul, .rich-note ol { margin: 2px 0 4px; padding-left: 22px; }
+.rich-edit table, .rich-note table { border-collapse: collapse; margin: 4px 0; max-width: 100%; font-size: 13px; }
+.rich-edit td, .rich-edit th, .rich-note td, .rich-note th { border: 1px solid #c9d2e0; padding: 3px 7px; vertical-align: top; text-align: left; min-width: 40px; }
+.rich-edit th, .rich-note th { background: #f1f4f9; font-weight: 600; }
+.rich-note { white-space: normal; overflow-x: auto; max-width: 100%; }
+.rich-note a { word-break: break-all; }
+img.rich-photo { width: 72px; height: 72px; object-fit: cover; border-radius: 6px; margin: 2px 4px 2px 0; vertical-align: top; border: 1px solid var(--line); cursor: pointer; }
+.rich-edit img.rich-photo { cursor: default; }
+.note-rich { flex: 1; min-width: 0; }
+.diary-rich { display: inline-block; vertical-align: top; max-width: 100%; }
+.update-form.editing { border-color: #f0b44c; background: #fffaf0; }
+.edit-banner { display: flex; gap: 8px; align-items: center; font-size: 13px; color: #8a5a00; }
+.new-task-box { display: flex; flex-direction: column; gap: 6px; margin: 10px 14px 4px; padding: 10px; background: #f5f8ff; border: 1.5px solid #c7d7fb; border-radius: 10px; }
+.new-task-box .row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.new-task-box input[name="name"] { flex: 1 1 200px; }
+.list-tools .new-task-box { margin: 0; flex: 1 1 100%; }

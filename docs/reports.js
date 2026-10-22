@@ -38,7 +38,7 @@ export function diaryEntries(data, history) {
   for (const p of data.projects) {
     for (const n of p.workNotes) {
       const st = n.stepId && p.steps.find((s) => s.id === n.stepId);
-      add(indiaDate(n.createdAt), { at: n.createdAt, projectId: p.id, name: p.name, exists: true, text: `📝 ${n.text}${st ? `  (on: ${st.text})` : ''}` });
+      add(indiaDate(n.createdAt), { at: n.createdAt, projectId: p.id, name: p.name, exists: true, text: `📝 ${n.text}${st ? `  (on: ${st.text})` : ''}`, ...(n.html ? { html: n.html, onStep: st ? st.text : null } : {}) });
     }
   }
   for (const e of events) {

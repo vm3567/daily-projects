@@ -5,6 +5,7 @@
 import { h, fmtDay } from './dom.js';
 import { dotColour, nextStep, todayIndia, indiaDate, childrenOf, parentsOf, isMainProject, mainProjects, mainColour, mainSummary, mainChoices, addHereChoices, orderedTasks, movedOrder } from '../rules.js';
 import { newId } from '../ops.js';
+import { newTaskBox, createTaskWithNote, findEditor } from './richedit.js';
 
 const ORDER = { red: 0, yellow: 1, green: 2, grey: 3 };
 const PRIORITY = { high: 0, medium: 1, low: 2 };
@@ -180,11 +181,12 @@ export function subProjectsBlock(ctx, p, today = todayIndia()) {
       h('tbody', null, kids.map((c) => {
         const ns = c.state === 'active' ? nextStep(c, today) : null;
         const lu = lastUpdate(c);
-        return h('tr', { class: 'sub-row', key: 'sub-' + c.id, onClick: () => (ctx.ui.view === 'mains' && ctx.showHere ? ctx.showHere(c.id) : ctx.openProject(c.id)) },
-          h('td', null, h('span', { class: `dot ${dotColour(c, today)}` })),
+        const done = c.state === 'finished'; // a finished task shows in green (owner asked, 22 Oct)
+        return h('tr', { class: 'sub-row' + (done ? ' sub-done' : ''), key: 'sub-' + c.id, onClick: () => (ctx.ui.view === 'mains' && ctx.showHere ? ctx.showHere(c.id) : ctx.openProject(c.id)) },
+          h('td', null, h('span', { class: `dot ${done ? 'green' : dotColour(c, today)}` })),
           h('td', null, h('button', { class: 'link sub-name', type: 'button' }, c.name), c.team ? h('span', { class: 'muted small' }, ` 👥 ${c.team.name}`) : null,
-            c.state !== 'active' ? h('span', { class: 'tag' }, c.state) : null),
-          h('td', { class: ns ? '' : 'warn' }, c.state !== 'active' ? '—' : ns ? short(ns.text) : 'No next step'),
+            c.state !== 'active' ? h('span', { class: done ? 'tag done-tag' : 'tag' }, done ? '✓ finished' : c.state) : null),
+          h('td', { class: c.state !== 'active' ? 'muted' : ns ? '' : 'warn' }, c.state !== 'active' ? '—' : ns ? short(ns.text) : 'No next step'),
           h('td', { class: 'muted small' }, lu ? `${fmtDay(lu.day)} · ${short(lu.text, 50)}` : '—'),
           // takes the task out of this project only (the task itself stays, with Undo)
           h('td', { class: 'sub-move' },
@@ -199,17 +201,33 @@ export function subProjectsBlock(ctx, p, today = todayIndia()) {
       h('button', { class: 'btn small', type: 'button', onClick: () => openAddTasks(ctx, p) }, '+ Add tasks'),
       h('button', { class: 'btn small', type: 'button', onClick: () => newProjectHere(ctx, p) }, '+ New task here'),
       h('button', { class: 'btn small', type: 'button', title: 'Copy this project\'s tasks as a numbered list (for an AI chat or an email)', onClick: () => ctx.copyList && ctx.copyList(orderedTasks(ctx.store.view.data, p).filter((c) => c.state !== 'finished'), { title: `📂 ${p.name}`, about: p.about || '' }) }, '📋 Copy list')),
-    addTasksPicker(ctx, p));
+    addTasksPicker(ctx, p),
+    newHereBox(ctx, p));
 }
 
-/** "+ New task here": asks the name, the new task is made already in this project. */
+/** "+ New task here": opens a box on the page (a name, and notes you can paste a screenshot or a table into). */
 export function newProjectHere(ctx, p) {
-  const name = globalThis.prompt ? prompt(`New task in 📂 ${p.name}:`) : null;
-  if (!name || !name.trim()) return null;
-  const projectId = newId();
-  const op = ctx.store.dispatch('createProject', { projectId, name: name.trim(), groupId: p.groupId, parentId: p.id });
-  if (op) { ctx.toast(`Added to 📂 ${p.name}: ${name.trim()}`); ctx.render(); }
-  return op ? projectId : null;
+  ctx.ui.newHere = p.id;
+  ctx.render();
+  setTimeout(() => { const el = findEditor(`newhere-${p.id}-name`); if (el && el.focus) el.focus(); }, 30);
+}
+
+/** The "+ New task here" box: Create makes the task already in this project (with its first update, if written). */
+function newHereBox(ctx, p) {
+  const { ui } = ctx;
+  if (ui.newHere !== p.id) return null;
+  const d = ((ui.newTaskDraft ||= {})['here-' + p.id] ||= {});
+  const close = () => { ui.newHere = null; ctx.render(); };
+  return newTaskBox(ctx, d, {
+    key: `newhere-${p.id}`, heading: `New task in 📂 ${p.name}`,
+    onCancel: close,
+    onCreate: (name, editor) => {
+      const id = createTaskWithNote(ctx, { name, groupId: p.groupId, parentId: p.id, d, editor });
+      if (!id) return;
+      ctx.toast(`Added to 📂 ${p.name}: ${name}`);
+      close();
+    },
+  });
 }
 
 /** Top of the 📂 Projects list: "3 projects · 8 tasks in them · red first" and "+ New project" (the list itself is like ✅ Tasks). */
