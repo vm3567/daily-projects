@@ -49,6 +49,14 @@ test('new project with group and steps, then add, tick and note', () => {
   assert.match(sh('git', ['log', '--oneline', '-1'], work), /via Claude/);
 });
 
+test('edit-step changes an open step\'s words, and refuses when several steps match', () => {
+  tracker('add-steps', 'kiln', 'Ask for quote A', 'Ask for quote B');
+  tracker('edit-step', 'kiln', 'Order new element', 'Order 2 new elements');
+  const p = data().projects[0];
+  assert.ok(p.steps.some((s) => s.text === 'Order 2 new elements') && !p.steps.some((s) => s.text === 'Order new element'));
+  assert.throws(() => tracker('edit-step', 'kiln', 'quote', 'x'), /Several steps match/);
+});
+
 test('summary, today list and show are readable', () => {
   assert.match(tracker('summary'), /1 active projects/);
   assert.match(tracker('list', '--today'), /All active projects are green today/, 'worked on today = green, so nothing left');

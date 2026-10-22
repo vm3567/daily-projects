@@ -10,6 +10,7 @@
 //   node tools/tracker.mjs show <project>
 //   node tools/tracker.mjs add-steps <project> "<step>" ["<step>" ...]
 //   node tools/tracker.mjs tick <project> "<step text or id>"
+//   node tools/tracker.mjs edit-step <project> "<step text or id>" "<new text>"
 //   node tools/tracker.mjs add-note <project> "<text>"
 //   node tools/tracker.mjs new-project "<name>" [--group "<group>"] [--priority high|medium|low] [--steps "<a>" "<b>" ...]
 //   node tools/tracker.mjs restore <YYYY-MM-DD>          (shows that version; add --yes to restore it)
@@ -32,6 +33,21 @@ const SERVER = !process.env.DP_DATA_DIR && (!!MOVED_TO || !!process.env.DP_SERVE
 const SSH = ['-i', join(process.env.HOME || '', '.ssh', 'hostinger_dp'), '-o', 'IdentitiesOnly=yes', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=20', '-p', '65002', 'u578596396@145.79.25.173'];
 const CLI = 'domains/worktask.in/app/dp-cli.php';
 let server = null; // { head, data, history } from the last export
+
+/** An open step by id, exact text, or a unique part of its text — never a guess when several match. */
+function findOpenStep(p, stepQuery) {
+  const q = String(stepQuery || '').trim().toLowerCase();
+  if (!q) throw new Error('Give the step text or id.');
+  const open = p.steps.filter((x) => !x.done);
+  let s = open.find((x) => x.id === String(stepQuery).trim()) || open.find((x) => x.text.trim().toLowerCase() === q);
+  if (!s) {
+    const hits = open.filter((x) => x.text.toLowerCase().includes(q));
+    if (hits.length > 1) throw new Error(`Several steps match "${stepQuery}": ${hits.map((x) => `${x.text} [${x.id}]`).join(', ')}`);
+    s = hits[0];
+  }
+  if (!s) throw new Error(`No open step matches "${stepQuery}" in ${p.name}.`);
+  return s;
+}
 
 function serverRun(args, input) {
   const opts = { encoding: 'utf8', input, stdio: ['pipe', 'pipe', 'pipe'], maxBuffer: 64 * 1024 * 1024 };
@@ -286,19 +302,20 @@ try {
       const [query, stepQuery] = args;
       commitOps((state) => {
         const p = findProject(state.data, query);
-        const q = String(stepQuery || '').trim().toLowerCase();
-        if (!q) throw new Error('Give the step text or id.');
-        // exact id, then exact text, then "contains" — and never guess when several steps match
-        const open = p.steps.filter((x) => !x.done);
-        let s = open.find((x) => x.id === stepQuery.trim()) || open.find((x) => x.text.trim().toLowerCase() === q);
-        if (!s) {
-          const hits = open.filter((x) => x.text.toLowerCase().includes(q));
-          if (hits.length > 1) throw new Error(`Several steps match "${stepQuery}": ${hits.map((x) => `${x.text} [${x.id}]`).join(', ')}`);
-          s = hits[0];
-        }
-        if (!s) throw new Error(`No open step matches "${stepQuery}" in ${p.name}.`);
+        const s = findOpenStep(p, stepQuery);
         return [makeOp('tickStep', { projectId: p.id, stepId: s.id })];
       }, 'Tick step');
+      break;
+    }
+    case 'edit-step': {
+      const [query, stepQuery, ...words] = args;
+      const text = words.join(' ').trim();
+      if (!text) throw new Error('Give the new step text.');
+      commitOps((state) => {
+        const p = findProject(state.data, query);
+        const s = findOpenStep(p, stepQuery);
+        return [makeOp('setStepField', { projectId: p.id, stepId: s.id, field: 'text', value: text })];
+      }, 'Edit step');
       break;
     }
     case 'add-note': {
