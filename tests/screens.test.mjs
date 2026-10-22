@@ -975,3 +975,16 @@ test('📂 a project name opens the project on the 📂 Projects page (its own p
   const open = app.slice(app.indexOf('  openProject: (id) => {'), app.indexOf('  openProject: (id) => {') + 600);
   assert.match(open, /ui\.view = p\.state !== 'active' \? p\.state : isMainProject\(store\.view\.data, p\) \? 'mains' : 'all';/);
 });
+
+test('📂 Projects page: clicking a project name or a task in a card shows it on the right and stays on the Projects page', async () => {
+  const { readFileSync } = await import('node:fs');
+  const mainsSrc = readFileSync(new URL('../docs/ui/mains.js', import.meta.url), 'utf8');
+  const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
+  assert.match(mainsSrc, /main-card-name', type: 'button', onClick: \(\) => ctx\.showHere\(m\.id\)/, 'project name');
+  assert.match(mainsSrc, /main-card-row', type: 'button', onClick: \(\) => ctx\.showHere\(c\.id\)/, 'a task in a card');
+  assert.match(mainsSrc, /ctx\.ui\.view === 'mains' && ctx\.showHere \? ctx\.showHere\(c\.id\)/, 'a task in the TASKS table while on the Projects page');
+  const here = app.slice(app.indexOf('  showHere: (id) => {'), app.indexOf('  openProject: (id) => {'));
+  assert.match(here, /if \(ui\.view !== 'mains'\) \{ ui\.view = 'mains';/);
+  assert.match(here, /select\(id\);/);
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-5'/, 'phones get the new copy');
+});

@@ -178,7 +178,7 @@ export function subProjectsBlock(ctx, p, today = todayIndia()) {
       h('tbody', null, kids.map((c) => {
         const ns = c.state === 'active' ? nextStep(c, today) : null;
         const lu = lastUpdate(c);
-        return h('tr', { class: 'sub-row', key: 'sub-' + c.id, onClick: () => ctx.openProject(c.id) },
+        return h('tr', { class: 'sub-row', key: 'sub-' + c.id, onClick: () => (ctx.ui.view === 'mains' && ctx.showHere ? ctx.showHere(c.id) : ctx.openProject(c.id)) },
           h('td', null, h('span', { class: `dot ${dotColour(c, today)}` })),
           h('td', null, h('button', { class: 'link sub-name', type: 'button' }, c.name), c.team ? h('span', { class: 'muted small' }, ` 👥 ${c.team.name}`) : null,
             c.state !== 'active' ? h('span', { class: 'tag' }, c.state) : null),
@@ -227,14 +227,14 @@ export function renderMainProjects(ctx) {
       return h('div', { class: 'main-card', key: 'mc-' + m.id },
         h('div', { class: 'main-card-head' },
           h('span', { class: `dot ${mainColour(m, kids, today)}` }),
-          h('button', { class: 'link main-card-name', type: 'button', onClick: () => ctx.openProject(m.id) }, `📂 ${m.name}`),
+          h('button', { class: 'link main-card-name', type: 'button', onClick: () => ctx.showHere(m.id) }, `📂 ${m.name}`),
           h('span', { class: 'muted small main-card-sum' }, mainSummary(kids, today)),
           h('button', { class: 'btn small main-open', type: 'button', onClick: () => openAddTasks(ctx, m) }, '+ Add tasks')), // (the name opens the project)
         addTasksPicker(ctx, m),
         kids.length ? h('ul', { class: 'main-card-list' }, kids.map((c) => {
           const ns = c.state === 'active' ? nextStep(c, today) : null;
           return h('li', { key: 'mcc-' + c.id },
-            h('button', { class: 'main-card-row', type: 'button', onClick: () => ctx.openProject(c.id) },
+            h('button', { class: 'main-card-row', type: 'button', onClick: () => ctx.showHere(c.id) },
               h('span', { class: `dot ${dotColour(c, today)}` }), ` ${c.name}`,
               h('span', { class: 'muted small' }, ` — ${c.state !== 'active' ? c.state : ns ? ns.text : 'No next step'}${c.team ? ` · 👥 ${c.team.name}` : ''}`)));
         })) : null);

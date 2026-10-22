@@ -212,6 +212,13 @@ const ctx = {
   openReplyDraft: (m) => openReplyDraft(m),
   openMail: (m) => openMail(m),
   startReplyRound: () => startReplyRound(),
+  // on the 📂 Projects page: show a project or a task on the right and stay on the page (nothing jumps away)
+  showHere: (id) => {
+    if (!store.view.data.projects.some((x) => x.id === id)) return;
+    pushNav();
+    if (ui.view !== 'mains') { ui.view = 'mains'; ui.search = ''; rememberUi(); }
+    select(id);
+  },
   openProject: (id) => {
     const p = store.view.data.projects.find((x) => x.id === id);
     if (!p) return;
