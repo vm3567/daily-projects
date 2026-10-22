@@ -16,6 +16,8 @@ The user is not a programmer. Use short, plain English.
 2. Show the result as a short list:
    - **Red first** (not looked at today), then yellow (opened, nothing done).
    - For each: project name — next step (add "waiting on X" if waiting, and the deadline if passed or close).
+   - 📂 Main projects: lines starting with "↳" are projects under the main project just above them.
+     Show them indented under that main project (the line says "sub-projects: …" on the main).
 3. End with one line: which project to start with, and why (red, passed deadline, or high priority first).
 
 This command only reads. It never changes anything.

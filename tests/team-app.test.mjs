@@ -274,7 +274,7 @@ test('project description: taken from the project\'s tasks (the first one that h
   assert.equal(projectAboutOf([{ title: 'old server, no field' }]), '');
   assert.match(APP, /class: 'prow-about' }, aboutShort\(p\.projectAbout\)\)/, 'manager\'s Projects list row');
   assert.match(APP, /class: 'project-about' }/, 'under the title of the project and task pages');
-  assert.match(readFileSync(new URL('../team/public_html/sw.js', import.meta.url), 'utf8'), /const CACHE = 'worktask-v22'/, 'new files reach the phones');
+  assert.match(readFileSync(new URL('../team/public_html/sw.js', import.meta.url), 'utf8'), /const CACHE = 'worktask-v23'/, 'new files reach the phones');
 });
 
 // ---------------------------------------------------------------- 📧 morning email (one person's pending work as a table to fill in)
@@ -298,23 +298,23 @@ test('morning email: subject has the day name and date', () => {
   assert.equal(MM([], { today: '2026-11-01' }).subject, 'Your work for Sun 1 Nov – please reply by evening');
 });
 
-test('morning email: the summary line leaves out zero parts; 1 item is singular', () => {
-  assert.match(MM(mmItems).html, /5 items · 1 late · 1 stuck/);
-  assert.match(MM([mmItems[4]]).html, />1 item</, 'one item, nothing late or stuck');
-  assert.ok(!/late|stuck/i.test(MM([mmItems[4]]).html.match(/>1 item[^<]*</)[0]), 'no "0 late"');
-  assert.match(MM([mmItems[1], mmItems[4]]).html, />2 items · 1 stuck</);
-  assert.match(MM(mmItems).text, /5 items · 1 late · 1 stuck/);
+test('morning email: the summary line leaves out zero parts; 1 item is singular (used on the People page; not in the email any more)', () => {
+  assert.ok(!/5 items · 1 late · 1 stuck/.test(MM(mmItems).html), 'no item count in the email (owner asked, to match the Outlook template, 22 Oct)');
+  assert.equal(morningSummary(mmItems), '5 items · 1 late · 1 stuck');
+  assert.equal(morningSummary([mmItems[4]]), '1 item', 'one item, nothing late or stuck');
+  assert.equal(morningSummary([mmItems[1], mmItems[4]]), '2 items · 1 stuck');
+  assert.ok(!/5 items/.test(MM(mmItems).text), 'not in the plain words either');
 });
 
 test('morning email: the table — columns, greeting, inline styles only, the end lines', () => {
   const { html } = MM(mmItems);
   for (const h of ['#', 'Work', 'Last update', 'What I did today', 'Status']) assert.match(html, new RegExp(`<th[^>]*>${h}</th>`), h);
-  assert.match(html, /Hi Suresh, good morning\. Here is your pending work\. Please fill the last two columns and reply by evening\./);
+  assert.match(html, /Dear Mr\. Suresh,<\/p><p[^>]*>Good morning\. Here is your pending work\. Please fill the last two columns and reply by evening\./, 'Dear Mr. <name>, then Good morning on the next line (owner asked, to match the Outlook template, 22 Oct)');
   assert.match(html, /border-collapse:collapse/); assert.match(html, /1px solid #bbb/); assert.match(html, /background:#f2f2f2/); assert.match(html, /Arial/);
   assert.ok(!/<style|var\(--/.test(html), 'Outlook drops <style> and CSS variables');
   assert.match(html, /Status: keep one of Done \/ Going on \/ Stuck\./);
-  assert.match(html, /Any problem or help needed: write below\./);
-  assert.match(html, /Thanks,<br>Boss/);
+  assert.ok(!/Any problem or help needed/.test(html), 'no "Any problem" line (owner asked, to match the Outlook template, 22 Oct)');
+  assert.ok(!/Thanks/.test(html), 'no sign-off: the Outlook template adds it');
   assert.equal((html.match(/Done \/ Going on \/ Stuck<\/td>/g) || []).length, 5, 'each row has the three choices to keep one of');
   assert.match(html, /min-width:\d+px;height:\d+px;">&nbsp;<\/td>/, 'an empty, roomy "What I did today" box');
 });
@@ -335,7 +335,7 @@ test('morning email: names, titles and notes are made safe for HTML', () => {
   const bad = [{ kind: 'task', title: '<script>alert(1)</script>', lateSince: null, stuck: false, lastUpdate: { day: '2026-10-21', note: 'a & b <i>' } }];
   const { html, text } = morningMail({ person: { name: 'Raj <b>' }, manager: 'Boss & Co', items: bad, today: '2026-10-22' });
   assert.ok(!html.includes('<script>') && html.includes('&lt;script&gt;alert(1)&lt;/script&gt;'));
-  assert.ok(html.includes('a &amp; b &lt;i&gt;') && html.includes('Raj &lt;b&gt;') && html.includes('Boss &amp; Co'));
+  assert.ok(html.includes('a &amp; b &lt;i&gt;') && html.includes('Raj &lt;b&gt;'));
   assert.ok(text.includes('<script>alert(1)</script>'), 'the plain words stay as typed');
   assert.equal(escHtml(`"'`), '&quot;&#39;');
 });
@@ -345,16 +345,16 @@ test('morning email: nothing pending — a short friendly line, no table', () =>
   assert.ok(!/<table/.test(html));
   assert.match(html, /No pending work today\./);
   assert.match(text, /No pending work today\./);
-  assert.match(text, /Thanks,\nBoss$/);
+  assert.ok(!/Thanks/.test(text), 'no sign-off');
 });
 
 test('morning email: the plain-words version (for when a table cannot be copied)', () => {
   const { text } = MM(mmItems);
   assert.ok(!/<[a-z]/i.test(text), 'no HTML');
-  assert.match(text, /^Hi Suresh, good morning\./);
+  assert.match(text, /^Dear Mr\. Suresh,\n\nGood morning\./);
   assert.match(text, /3\. 📁 Basin glaze\n   New glaze for line 2\n   Last update: 21 Oct: Mixed 20 kg\n   What I did today: \n   Status: Done \/ Going on \/ Stuck/);
   assert.match(text, /1\. Fix pump\n   Late since 20 Oct\n   Last update: —/);
-  assert.match(text, /Status: keep one of Done \/ Going on \/ Stuck\.\nAny problem or help needed: write below\.\n\nThanks,\nBoss$/);
+  assert.match(text, /Status: keep one of Done \/ Going on \/ Stuck\.$/, 'ends with the Status line (owner asked, to match the Outlook template, 22 Oct)');
 });
 
 test('morning email: the Team today page has the button, copies the table (HTML + plain words) and opens the email', () => {

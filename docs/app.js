@@ -8,6 +8,7 @@ import { installAutocorrect, setAutocorrect, autocorrectOn } from './ui/autocorr
 import { renderDashboard } from './ui/dashboard.js';
 import { renderTimeReport } from './ui/timereport.js';
 import { renderReplies, renderReplyRound, replyArea, readyCount } from './ui/replies.js';
+import { nestedRows, renderMainProjects, openMainBox, listColour } from './ui/mains.js';
 import { projectMatches, diaryEntries, backupPayload, summaryText, personMessageText, personMessageHtml, sentMarkOf, copyNotice } from './reports.js';
 import { closeViewer, uploadBlob } from './ui/files.js';
 import { Store } from './store.js';
@@ -17,6 +18,7 @@ import { MockRepo } from './mockrepo.js';
 import { device } from './device.js';
 import { DATA_OWNER, DATA_REPO, DATA_BRANCH, MOVED_TO, REFRESH_MS, AI_DAILY_LIMIT, BRIEF_CLAIM_MINUTES, WAIT_RED_DAYS, NO_WORK_NOTE_DAYS } from './config.js';
 import { dotColour, greenByTeamOnly, isSnoozed, restUntil, restReason, onlyDaysLabel, openIdFromHash, awakeProjects, activeProjects, nextStep, todayIndia, isSundayIndia, colourCounts, isOverdue, indiaDate, waitingDays, daysWithoutWork, dayScore, greenStreak, addDays, monthOf, fmtMinutes, takeBackWaits, staffStepAction, pasteGoesToProject, singleStepClose, versionRequest, askDiaryAgain, diaryLoadedAt, photoNeedsFetch, teamUndoKey, teamActionUndone, teamProgressOf, projectKeyIgnored, teamMovedTo, serverHolder, keepMovedStep, teamMemberFor, repliesOf, mailThreads, replyMailto, MAILTO_BODY_MAX, emailPath, pasteReason } from './rules.js';
+import { parentOf, mainProjects, nestList, todayWithoutEmptyMains } from './rules.js';
 import { newId, clone, opMonth, groupHasTimer, cleanLink, carriedOps } from './ops.js';
 import * as ai from './ai.js';
 import { parseVoice } from './voice.js';
@@ -48,6 +50,7 @@ const ui = {
   ai: null,
   brief: { busy: false, error: '' },
   diaryDays: 14,
+  folded: saved.folded && typeof saved.folded === 'object' ? saved.folded : {}, // 📂 main projects folded in the list (▸)
 };
 
 let store = null;
@@ -94,13 +97,18 @@ function actMany(projectId, steps, message, undoMark = null) {
  */
 function act(type, args, message, ms = 4000) {
   const list = store.view.data.projects;
-  const index = list.findIndex((x) => x.id === args.projectId);
+  // a new main project with a project under it: Undo puts that project back as it was, and the new main goes
+  const snapId = type === 'createMainProject' ? args.childId : args.projectId;
+  const index = list.findIndex((x) => x.id === snapId);
   const before = index >= 0 ? clone(list[index]) : null;
+  // deleting a main project: its projects stay (no longer under it); Undo puts them back under it
+  const parentIds = type === 'deleteProject' ? Object.fromEntries(list.filter((x) => x.parentId === args.projectId).map((x) => [x.id, args.projectId])) : null;
   const op = store.dispatch(type, args);
   if (!op) return null;
   const undo = before ? () => {
-    // (Make it a project: the new project goes too)
+    // (Make it a project / new main project: the new project goes too)
     const made = type === 'stepToProject' ? { removeProjectId: args.newProjectId } : {};
+    Object.assign(made, type === 'createMainProject' ? { removeProjectId: args.projectId } : parentIds ? { parentIds } : {});
     if (store.dispatch('restoreProject', { project: before, index, undoOpId: op.id, undoMonth: opMonth(op), ...made })) toast('Undone', 1500);
   } : null;
   if (message) toast(message, ms, undo);
@@ -139,7 +147,7 @@ function restoreScrollOnce() {
 
 function rememberUi() {
   device.setUi({
-    scroll: device.ui().scroll, view: ui.view, selected: ui.selected, briefFolded: ui.briefFolded, sort: ui.sort, sortV: 2, showDone: ui.showDone, showMore: ui.showMore });
+    scroll: device.ui().scroll, view: ui.view, selected: ui.selected, briefFolded: ui.briefFolded, sort: ui.sort, sortV: 2, showDone: ui.showDone, showMore: ui.showMore, folded: ui.folded });
 }
 
 const ctx = {
@@ -623,7 +631,7 @@ function visibleProjects() {
   const all = store.view.data.projects;
   const q = ui.search.trim().toLowerCase();
   if (q) return all.filter((p) => projectMatches(p, q));
-  if (ui.view === 'today') return awakeProjects(store.view.data, todayIndia());
+  if (ui.view === 'today') return todayWithoutEmptyMains(awakeProjects(store.view.data, todayIndia()), todayIndia()); // a main with no own step: its projects show instead
   if (ui.view === 'all') return all.filter((p) => p.state === 'active');
   if (ui.view === 'paused') return all.filter((p) => p.state === 'paused');
   if (ui.view === 'finished') return all.filter((p) => p.state === 'finished');
@@ -637,7 +645,7 @@ function visibleProjects() {
 function viewTitle() {
   if (ui.search.trim()) return `Search: "${ui.search.trim()}"`;
   if (ui.view.startsWith('group:')) return groupName(ui.view.slice(6));
-  return { today: 'Today', inbox: 'Inbox', all: 'All projects', paused: 'Paused', finished: 'Finished', diary: 'Diary', settings: 'Settings', people: 'People', dashboard: 'Dashboard', time: 'Time report', replies: '✉ Replies' }[ui.view];
+  return { today: 'Today', inbox: 'Inbox', all: 'All projects', paused: 'Paused', finished: 'Finished', diary: 'Diary', settings: 'Settings', people: 'People', dashboard: 'Dashboard', time: 'Time report', replies: '✉ Replies', mains: '📂 Main projects' }[ui.view];
 }
 
 function go(view) {
@@ -748,7 +756,7 @@ function renderMenu() {
   const { data } = store.view;
   const active = data.projects.filter((p) => p.state === 'active');
   const count = (f) => data.projects.filter(f).length;
-  const MENU_KEYS = { today: 'T', dashboard: 'B', people: 'P', diary: 'D', inbox: 'Q', replies: 'E' };
+  const MENU_KEYS = { today: 'T', dashboard: 'B', people: 'P', diary: 'D', inbox: 'Q', replies: 'E', mains: 'M' };
   const item = (view, label, n, extra) => h('li', { key: 'm-' + view },
     h('button', { class: 'menu-item' + (ui.view === view && !ui.search ? ' current' : ''), onClick: () => go(view) },
       h('span', null, label, MENU_KEYS[view] ? keyHint(MENU_KEYS[view]) : null), n !== undefined ? h('span', { class: 'count' }, String(n)) : null),
@@ -774,6 +782,7 @@ function renderMenu() {
       item('dashboard', 'Dashboard'),
       item('time', 'Time report'),
       item('all', 'All projects', active.length),
+      item('mains', '📂 Main projects', mainProjects(data).length),
       h('li', { class: 'menu-head', key: 'groups-head' }, 'Groups'),
       data.groups.map((g) => item('group:' + g.id, g.name, count((p) => p.groupId === g.id && p.state === 'active'),
         h('button', {
@@ -856,13 +865,14 @@ function renderBrief() {
 
 // ---------------------------------------------------------------- project list
 
-function projectRow(p, today) {
-  const colour = dotColour(p, today);
+function projectRow(p, today, opts = {}) {
+  const colour = opts.colour || dotColour(p, today); // a main project in a nested list: the worst of it and its projects
+  const main = !opts.depth ? parentOf(store.view.data, p) : null; // flat list (Today, search): say which main it is under
   const ns = nextStep(p, today); // shown as "Next:"
   const due = nextStep(p, today, { dueOnly: true }); // what the tick box ticks
   const canTick = due && p.state === 'active';
   return h('li', {
-    key: 'p-' + p.id, 'data-id': p.id, class: 'prow' + (ui.selected === p.id ? ' current' : ''),
+    key: 'p-' + p.id, 'data-id': p.id, class: 'prow' + (ui.selected === p.id ? ' current' : '') + (opts.depth ? ' child' : '') + (opts.fold ? ' main-row' : ''),
     onContextmenu: (e) => { e.preventDefault(); ui.rowMenu = { id: p.id, x: e.clientX, y: e.clientY }; render(); },
   },
     canTick
@@ -877,13 +887,15 @@ function projectRow(p, today) {
           onClick: () => { ui.quickAdd = ui.quickAdd === p.id ? null : p.id; render(); focusKey('qa-' + p.id); },
         }, '+')
         : h('span', { class: 'quick-tick-space', 'aria-hidden': 'true' }),
+    opts.fold || null,
     h('button', { class: 'prow-btn', onClick: () => select(p.id) },
       h('span', { class: `dot ${colour}`, 'aria-label': colour }),
       colour === 'green' && greenByTeamOnly(p, today) ? h('span', { class: 'team-green', title: 'Green today because the team sent an update' }, '👥') : null,
       h('span', { class: 'prow-text' },
         h('span', { class: 'prow-name' }, p.name,
           p.state !== 'active' ? h('span', { class: 'tag' }, p.state) : null,
-          p.priority === 'high' ? h('span', { class: 'tag high' }, 'High') : null),
+          p.priority === 'high' ? h('span', { class: 'tag high' }, 'High') : null,
+          main ? h('span', { class: 'tag main-tag', title: `Under the main project ${main.name}` }, `📂 ${main.name}`) : null),
         h('span', { class: 'prow-next' + (ns ? '' : ' warn') }, ns ? `Next: ${ns.text}` : 'No next step — add one',
           ns && ns.waiting ? waitingTag(ns) : null,
           ns && ns.snoozedUntil && ns.snoozedUntil > today ? h('span', { class: 'tag repeat' }, `↻ from ${fmtDay(ns.snoozedUntil)}`) : null,
@@ -1393,6 +1405,7 @@ function rowMenu() {
       ? item('👥', `Take back from ${p.team.name}`, () => { if (confirm(`Take "${p.name}" back from ${p.team.name}? Their open steps are removed from their list.`)) giveProject(p, null); })
       : item('👥', 'Give project to…', () => { select(p.id); ui.giveOpen = p.id; ui.givePhoto = false; })) : null,
     item('↗', 'Open', () => select(p.id)),
+    !p.isMain && !store.view.data.projects.some((x) => x.parentId === p.id) ? item('📂', 'Put under a main project…', () => { select(p.id); openMainBox(ctx, p, 'parent'); }) : null,
     item('🗑', 'Delete project…', () => {
       if (!confirm(`Delete "${p.name}"?\n\nYou can press Undo for a few seconds after.`)) return;
       act('deleteProject', { projectId: p.id }, `Deleted: ${p.name}`, 10000);
@@ -1402,6 +1415,16 @@ function rowMenu() {
   el.style.left = Math.max(8, Math.min(m.x, window.innerWidth - 270)) + 'px';
   el.style.top = Math.max(8, Math.min(m.y, window.innerHeight - 330)) + 'px';
   return el;
+}
+
+/** Lists where main projects show their projects under them (▾ / ▸). Today and search stay flat. */
+function nestsHere() {
+  return !ui.search && (ui.view === 'all' || ui.view.startsWith('group:') || ui.view === 'paused' || ui.view === 'finished');
+}
+
+/** The rows in the order they are on screen (folded projects left out). */
+function shownOrder(list) {
+  return nestsHere() ? nestList(list, ui.folded || {}).map((x) => x.p) : list;
 }
 
 function canDrag() {
@@ -1536,8 +1559,9 @@ function sortForView(list, today) {
 }
 
 function computeRedFirst(list, today) {
+  const nested = nestsHere(); // a main project sorts by its worst project (mainColour) where the list nests
   return list
-    .map((p, i) => ({ p, i, c: COLOUR_ORDER[dotColour(p, today)], r: PRIORITY_ORDER[p.priority] ?? 1 }))
+    .map((p, i) => ({ p, i, c: COLOUR_ORDER[nested ? listColour(store.view.data, p, today) : dotColour(p, today)], r: PRIORITY_ORDER[p.priority] ?? 1 }))
     .sort((a, b) => a.c - b.c || a.r - b.r || a.i - b.i)
     .map((x) => x.p);
 }
@@ -1712,6 +1736,7 @@ function renderListColumn() {
   if (ui.view === 'dashboard' && !ui.search) return h('div', { class: 'col-inner' }, head, timerStrip(), renderDashboard(ctx));
   if (ui.view === 'time' && !ui.search) return h('div', { class: 'col-inner' }, head, timerStrip(), renderTimeReport(ctx));
   if (ui.view === 'people' && !ui.search) return h('div', { class: 'col-inner' }, head, timerStrip(), renderPeopleList(ctx), rowMenu());
+  if (ui.view === 'mains' && !ui.search) return h('div', { class: 'col-inner' }, head, timerStrip(), renderMainProjects(ctx));
 
   const list = sortForView(visibleProjects(), today);
   const showSort = !ui.search && ui.view !== 'paused' && ui.view !== 'finished' && list.length > 1;
@@ -1745,7 +1770,8 @@ function splitToday(list, today) {
 
 function listParts(list, today) {
   const { open, done } = splitToday(list, today);
-  const parts = [h('ul', { class: 'plist', key: 'plist-' + (ui.search ? 'search' : ui.view) }, open.map((p) => projectRow(p, today)))];
+  const rows = nestsHere() ? nestedRows(ctx, open, today, projectRow) : open.map((p) => projectRow(p, today));
+  const parts = [h('ul', { class: 'plist', key: 'plist-' + (ui.search ? 'search' : ui.view) }, rows)];
   // Today: snoozed projects wait in their own folded list, with the day they come back
   const snoozed = ui.view === 'today' && !ui.search ? store.view.data.projects.filter((p) => isSnoozed(p, today)) : [];
   if (snoozed.length) {
@@ -2450,7 +2476,7 @@ function goProject(step) {
 /** The next project after this one (in the tab you are in) that is not green yet — red first. */
 function nextOpenProject(id) {
   const today = todayIndia();
-  let list = ['diary', 'settings', 'dashboard', 'time', 'people', 'inbox', 'replies'].includes(ui.view) || ui.search
+  let list = ['diary', 'settings', 'dashboard', 'time', 'people', 'inbox', 'replies', 'mains'].includes(ui.view) || ui.search
     ? store.view.data.projects.filter((p) => p.state === 'active') : sortForView(visibleProjects(), today);
   list = list.filter((p) => p.state === 'active' && (p.id === id || !isSnoozed(p, today)));
   const i = Math.max(0, list.findIndex((p) => p.id === id));
@@ -2509,7 +2535,7 @@ function jumpItems() {
   const pages = [
     ['Today', () => go('today')], ['All projects', () => go('all')], ['Dashboard', () => go('dashboard')],
     ['People', () => go('people')], ['Diary', () => go('diary')], ['Paused', () => go('paused')],
-    ['Finished', () => go('finished')], ['Settings', () => go('settings')], ['Time report', () => go('time')], ['✉ Replies', () => go('replies')], ['Daily round', () => { go('today'); startRound(); }],
+    ['Finished', () => go('finished')], ['Settings', () => go('settings')], ['Time report', () => go('time')], ['✉ Replies', () => go('replies')], ['📂 Main projects', () => go('mains')], ['Daily round', () => { go('today'); startRound(); }],
     ["Today's summary", () => openSummary()], ['New project', () => { go('today'); ui.adding = true; render(); focusKey('new-name'); }],
     ...data.groups.map((g) => [`Group: ${g.name}`, () => go('group:' + g.id)]),
   ].map(([label, run]) => ({ kind: 'page', label, run }));
@@ -2581,6 +2607,7 @@ const KEYS = [
   ['r', 'Switch "My order" / "Red first"'],
   ['t  b  d  p', 'Go to Today / Dashboard / Diary / People'],
   ['e', 'Go to ✉ Replies (emails waiting for your reply)'],
+  ['m', 'Go to 📂 Main projects'],
   ['@', 'In a step or note: pick a person'],
   ['Ctrl/⌘ Enter', 'In Today\'s update: save and tick the step'],
   ['Enter', 'In search: open the first project found'],
@@ -2608,7 +2635,7 @@ function currentList() {
   if (!store || !store.view || ['diary', 'settings', 'dashboard', 'time'].includes(ui.view)) return [];
   const today = todayIndia();
   const { open, done } = splitToday(sortForView(visibleProjects(), today), today);
-  return ui.showDoneToday || ui.view !== 'today' ? [...open, ...done] : open;
+  return ui.showDoneToday || ui.view !== 'today' ? shownOrder([...open, ...done]) : open;
 }
 
 /**
@@ -2667,6 +2694,7 @@ function onKey(e) {
     if (!viewer.hidden) { closeSheet(); return; }
     if (ui.showKeys) { ui.showKeys = false; render(); return; }
     if (ui.rowMenu) { ui.rowMenu = null; render(); return; }
+    if (ui.mainBox) { ui.mainBox = null; render(); return; }
     if (ui.projMenu || ui.giveOpen || ui.snoozeOpen) { ui.projMenu = null; ui.giveOpen = null; ui.snoozeOpen = null; render(); return; }
     if (ui.capture) { ui.capture = false; render(); return; }
     if (isTyping(document.activeElement)) { document.activeElement.blur(); return; }
@@ -2685,7 +2713,7 @@ function onKey(e) {
   if (e.repeat && !isArrow && e.key !== 'j' && e.key !== 'k') return; // holding x / o / r must not repeat
   const focused = document.activeElement;
   if (isArrow && focused && (focused.type === 'radio' || focused.nodeName === 'SUMMARY')) return;
-  if (isArrow && ['diary', 'settings', 'dashboard', 'time', 'inbox', 'replies'].includes(ui.view) && !ui.search) return; // let the page scroll
+  if (isArrow && ['diary', 'settings', 'dashboard', 'time', 'inbox', 'replies', 'mains'].includes(ui.view) && !ui.search) return; // let the page scroll
   const k = e.key;
   if (ui.round) {
     const map = { x: 'done', s: 'add', w: 'note', o: 'ok', c: 'chase', n: 'skip', ArrowRight: 'skip' };
@@ -2704,7 +2732,7 @@ function onKey(e) {
   if (k === 'ArrowRight' || k === 'ArrowLeft') {
     const step = k === 'ArrowRight' ? 1 : -1;
     if (ui.view === 'people' && !ui.search) goPerson(step);
-    else if (ui.selected && !['diary', 'settings', 'dashboard', 'time', 'inbox', 'replies'].includes(ui.view)) goProject(step);
+    else if (ui.selected && !['diary', 'settings', 'dashboard', 'time', 'inbox', 'replies', 'mains'].includes(ui.view)) goProject(step);
     else handled = false;
   } else if (k === 'Backspace') {
     if (ui.navStack && ui.navStack.length) goBack(); else handled = false;
@@ -2746,6 +2774,7 @@ function onKey(e) {
   else if (k === 'd') go('diary');
   else if (k === 'p') go('people');
   else if (k === 'e') go('replies');
+  else if (k === 'm') go('mains');
   else if (k === 'b') go('dashboard');
   else if (k === '?') { ui.showKeys = !ui.showKeys; render(); }
   else handled = false;

@@ -218,8 +218,9 @@ export function personMessageHtml(data, person, today, opts = {}) {
     r.waiting ? ['#666', r.waiting] : null,
   ].filter(Boolean);
   const STATUS = 'Done / Going on / Stuck';
-  const end = ['Status: keep one of Done / Going on / Stuck.', 'Any problem or help needed: write below.'];
-  const hello = `Hi ${name}, good morning.${rows.length ? ' Here is your pending work. Please fill the last two columns and reply by evening.' : ''}`;
+  const end = ['Status: keep one of Done / Going on / Stuck.']; // (no 'Any problem…' line and no sign-off: the owner's Outlook template adds them)
+  const dear = `Dear Mr. ${name},`;
+  const hello = `Good morning.${rows.length ? ' Here is your pending work. Please fill the last two columns and reply by evening.' : ''}`;
 
   const font = 'font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#222;';
   const cell = 'border:1px solid #bbb;padding:6px 8px;vertical-align:top;text-align:left;';
@@ -234,25 +235,21 @@ export function personMessageHtml(data, person, today, opts = {}) {
   const head = ['#', 'Work', 'Last update', 'What I did today', 'Status'].map((x) => `<th style="${cell}background:#f2f2f2;font-weight:bold;">${x}</th>`).join('');
   const p = (words, extra = '') => `<p style="margin:0 0 10px 0;${extra}">${words}</p>`;
   const html = `<div style="${font}">`
-    + p(escHtml(hello))
+    + p(escHtml(dear)) + p(escHtml(hello))
     + (rows.length
-      ? p(escHtml(summary), 'color:#666;')
-        + `<table style="border-collapse:collapse;${font}" cellpadding="0" cellspacing="0"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`
-        + `<p style="margin:10px 0 4px 0;">${end[0]}</p>` + p(end[1])
+      ? `<table style="border-collapse:collapse;${font}" cellpadding="0" cellspacing="0"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`
+        + `<p style="margin:10px 0 4px 0;">${end[0]}</p>`
       : p('No pending work today.'))
-    + p(owner ? `Thanks,<br>${escHtml(owner)}` : 'Thanks')
     + '</div>';
 
-  const text = [hello, ''];
+  const text = [dear, '', hello, ''];
   if (rows.length) {
-    text.push(summary, '');
     rows.forEach((r, i) => {
       text.push(`${i + 1}. ${title(r)}`, ...extras(r).map(([, w]) => `   ${w}`));
       text.push(`   Last update: ${last(r)}`, '   What I did today: ', `   Status: ${STATUS}`, '');
     });
-    text.push(...end, '');
-  } else text.push('No pending work today.', '');
-  text.push(owner ? `Thanks,\n${owner}` : 'Thanks');
+    text.push(...end);
+  } else text.push('No pending work today.');
   return { subject, html, text: text.join('\n') };
 }
 

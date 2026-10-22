@@ -752,3 +752,163 @@ test('project page: the description has room above and below (never touching the
   assert.match(rule, /margin: 10px 0 10px -7px;/, 'space above and below; the text starts where the chips start');
   assert.match(rule, /width: calc\(100% \+ 7px\);/);
 });
+
+// ---------------------------------------------------------------- 📂 main projects
+const mains = await import('../docs/ui/mains.js');
+const { h: hh } = await import('../docs/ui/dom.js');
+const { todayIndia: todayIndiaNow } = await import('../docs/rules.js');
+
+function mainsState() {
+  const s = sampleState(); // p1 'Kiln' (has steps)
+  const now = Date.now();
+  const at = (minAgo) => new Date(now - minAgo * 60000).toISOString();
+  const g = s.data.groups[0].id;
+  applyOps(s, [
+    makeOp('createMainProject', { projectId: 'm', name: 'Kilns', groupId: g, childId: 'p1' }, at(90)),
+    makeOp('createProject', { projectId: 'c2', name: 'Kiln 2', groupId: g, parentId: 'm' }, at(80)),
+    makeOp('createProject', { projectId: 'o', name: 'Office move', groupId: g }, at(70)),
+    makeOp('setProjectTeam', { projectId: 'c2', userId: 7, name: 'Ravi' }, at(60)),
+  ]);
+  return s;
+}
+
+/** A ctx whose dispatch / act really change the state, and remember what was asked. */
+function liveCtx(s, ui = {}) {
+  const ctx = fakeCtx(s, ui);
+  ctx.calls = [];
+  ctx.store.dispatch = (type, args) => { ctx.calls.push([type, args]); return applyOps(s, [makeOp(type, args)])[0] || null; };
+  ctx.act = (type, args, message) => { ctx.calls.push(['act:' + type, args, message]); return applyOps(s, [makeOp(type, args)])[0] || null; };
+  ctx.openProject = (id) => ctx.calls.push(['open', id]);
+  ctx.rememberUi = () => ctx.calls.push(['remember']);
+  return ctx;
+}
+
+test('📂 list: a main project shows ▾ with its projects indented under it (red first inside), ▸ folds them and is remembered', () => {
+  const s = mainsState();
+  const ui = {};
+  const ctx = liveCtx(s, ui);
+  const row = (p, today, o) => hh('li', { class: o.depth ? 'child' : 'top', 'data-colour': o.colour || '' }, o.fold, p.name);
+  const list = ['c2', 'o', 'm', 'p1'].map((id) => s.data.projects.find((p) => p.id === id));
+  let rows = mains.nestedRows(ctx, list, todayIndiaNow(), row);
+  assert.deepEqual(rows.map((r) => `${r.className}:${r.textContent}`), ['top:Office move', 'top:▾Kilns', 'child:Kiln 2', 'child:Kiln'], 'children under the main, not again at the top');
+  assert.equal(rows[1].getAttribute('data-colour'), 'red', 'the main shows the worst colour of it and its projects');
+  rFind(rows[1], (n) => n.nodeName === 'BUTTON' && n.className === 'fold').__on.click();
+  assert.deepEqual(ui.folded, { m: true });
+  assert.ok(ctx.calls.some((c) => c[0] === 'remember'), 'fold state is remembered');
+  rows = mains.nestedRows(ctx, list, todayIndiaNow(), row);
+  assert.deepEqual(rows.map((r) => r.textContent), ['Office move', '▸Kilns'], 'folded');
+});
+
+test('📂 smart box: ⋯ menu opens it; typing filters (main first), ↓ / Enter picks, a create line when nothing matches exactly, Esc closes; "Remove from 📂"', () => {
+  const s = mainsState();
+  const ui = { selected: 'o', update: {}, projMenu: 'o' };
+  const ctx = liveCtx(s, ui);
+  btn(renderDetail(ctx), '📂 Put under a main project…').__on.click();
+  assert.equal(ui.mainBox.mode, 'parent');
+  assert.equal(ui.mainBox.id, 'o');
+  let page = renderDetail(ctx);
+  const input = () => rFind(renderDetail(ctx), (n) => n.className === 'main-box-input');
+  const items = (el) => rAll(el, (n) => n.nodeName === 'BUTTON' && /main-box-item/.test(n.className)).map((n) => n.textContent);
+  assert.equal(items(page)[0], '📂 Kilns', 'existing main projects first');
+  input().__on.input(null, { value: 'KIL' });
+  page = renderDetail(ctx);
+  assert.deepEqual(items(page), ['📂 Kilns', "+ Create 'KIL' as a new main project"], 'any case, anywhere; sub-projects are not offered');
+  const key = (k) => input().__on.keydown({ key: k, preventDefault() {}, stopPropagation() {} });
+  key('ArrowDown');
+  assert.equal(ui.mainBox.index, 1);
+  key('ArrowUp');
+  key('Enter');
+  assert.deepEqual(ctx.calls.filter((c) => c[0].startsWith('act:')).pop().slice(0, 2), ['act:setParent', { projectId: 'o', parentId: 'm' }]);
+  assert.equal(ui.mainBox, null, 'closed after picking');
+  assert.equal(s.data.projects.find((p) => p.id === 'o').parentId, 'm');
+  // now it has a main: "Remove from 📂 Kilns"
+  mains.openMainBox(ctx, s.data.projects.find((p) => p.id === 'o'));
+  btn(renderDetail(ctx), 'Remove from 📂 Kilns').__on.click();
+  assert.equal(s.data.projects.find((p) => p.id === 'o').parentId, undefined);
+  // a new name: the create line makes the main project with this one under it (one act = one Undo)
+  mains.openMainBox(ctx, s.data.projects.find((p) => p.id === 'o'));
+  input().__on.input(null, { value: 'Furnaces' });
+  assert.deepEqual(items(renderDetail(ctx)), ["+ Create 'Furnaces' as a new main project"]);
+  key('Enter');
+  const made = ctx.calls.filter((c) => c[0] === 'act:createMainProject').pop();
+  assert.equal(made[1].childId, 'o');
+  assert.equal(made[1].name, 'Furnaces');
+  assert.equal(s.data.projects.find((p) => p.id === 'o').parentId, made[1].projectId);
+  mains.openMainBox(ctx, s.data.projects.find((p) => p.id === 'o'));
+  key('Escape');
+  assert.equal(ui.mainBox, null, 'Esc closes');
+});
+
+test('📂 main project page: SUB-PROJECTS (N) table (dot, name + 👥, Now / "No next step", last update), tap opens; "+ Add a project here" and "+ New project here"', () => {
+  const s = mainsState();
+  const ui = { selected: 'm', update: {} };
+  const ctx = liveCtx(s, ui);
+  const page = renderDetail(ctx);
+  const text = page.textContent;
+  assert.ok(text.includes('SUB-PROJECTS (2)'));
+  for (const bit of ['Kiln 2', '👥 Ravi', 'No next step', 'Fire samples', 'Kiln at 1150', '+ Add a project here', '+ New project here']) assert.ok(text.includes(bit), bit);
+  const rows = rAll(page, (n) => n.className === 'sub-row');
+  assert.equal(rows.length, 2);
+  rows[0].__on.click();
+  assert.equal(ctx.calls.pop()[0], 'open');
+  btn(page, '+ Add a project here').__on.click();
+  assert.equal(ui.mainBox.mode, 'add');
+  const list = rAll(renderDetail(ctx), (n) => n.nodeName === 'BUTTON' && /main-box-item/.test(n.className)).map((n) => n.textContent);
+  assert.deepEqual(list, ['Office move'], 'picks a project to add (not its own, not itself)');
+  btn(renderDetail(ctx), 'Office move').__on.click();
+  assert.equal(s.data.projects.find((p) => p.id === 'o').parentId, 'm');
+  globalThis.prompt = () => 'Kiln 3';
+  try { btn(renderDetail(ctx), '+ New project here').__on.click(); } finally { delete globalThis.prompt; }
+  const made = s.data.projects.find((p) => p.name === 'Kiln 3');
+  assert.equal(made.parentId, 'm', 'made already under it');
+  assert.ok(renderDetail(ctx).textContent.includes('SUB-PROJECTS (4)'));
+});
+
+test('📂 a project under a main shows the chip "📂 Kilns ›" above the steps (opens the main); others do not', () => {
+  const s = mainsState();
+  const ctx = liveCtx(s, { selected: 'p1', update: {} });
+  const page = renderDetail(ctx);
+  const chip = btn(page, '📂 Kilns ›');
+  assert.ok(chip);
+  chip.__on.click();
+  assert.deepEqual(ctx.calls.pop(), ['open', 'm']);
+  assert.ok(!renderDetail(liveCtx(s, { selected: 'o', update: {} })).textContent.includes('📂 Kilns ›'));
+  assert.ok(!renderDetail(liveCtx(s, { selected: 'p1', update: {} })).textContent.includes('SUB-PROJECTS'), 'no table on a sub-project');
+});
+
+test('📂 Main projects page: the line, "+ New main project", one card per main (red first) with its projects and "Open ›"', () => {
+  const s = mainsState();
+  const ctx = liveCtx(s, {});
+  globalThis.prompt = () => 'Furnaces';
+  let page;
+  try {
+    page = mains.renderMainProjects(ctx);
+    assert.ok(page.textContent.includes('1 main project · 2 projects inside · red first'));
+    btn(page, '+ New main project').__on.click();
+  } finally { delete globalThis.prompt; }
+  const fur = s.data.projects.find((p) => p.name === 'Furnaces');
+  assert.ok(fur && fur.isMain, 'made as a main project (shows while empty)');
+  page = mains.renderMainProjects(ctx);
+  const text = page.textContent;
+  assert.ok(text.includes('2 main projects · 2 projects inside · red first'));
+  for (const bit of ['📂 Kilns', '2 projects · 1 red', 'Kiln 2', '— No next step · 👥 Ravi', 'Kiln', 'Fire samples', '📂 Furnaces', 'No projects inside yet', 'Open ›']) assert.ok(text.includes(bit), bit);
+  const cards = rAll(page, (n) => n.className === 'main-card');
+  assert.equal(cards.length, 2);
+  btn(cards[0], 'Open ›').__on.click();
+  assert.equal(ctx.calls.pop()[0], 'open');
+});
+
+test('📂 app wiring (app.js): menu item with count + key m (listed under ?), nested lists, Today without empty mains, Undo of a new main / deleted main; the team sync never sends parentId', async () => {
+  const { readFileSync } = await import('node:fs');
+  const APP = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
+  assert.match(APP, /item\('mains', '📂 Main projects', mainProjects\(data\)\.length\)/);
+  assert.match(APP, /mains: 'M'/);
+  assert.match(APP, /else if \(k === 'm'\) go\('mains'\)/);
+  assert.match(APP, /\['m', 'Go to 📂 Main projects'\]/);
+  assert.match(APP, /mains: '📂 Main projects' \}\[ui\.view\]/, 'page title');
+  assert.match(APP, /nestsHere\(\) \? nestedRows\(ctx, open, today, projectRow\)/);
+  assert.match(APP, /todayWithoutEmptyMains\(awakeProjects/);
+  assert.match(APP, /type === 'createMainProject' \? \{ removeProjectId: args\.projectId \} : parentIds \? \{ parentIds \}/);
+  assert.match(APP, /folded: ui\.folded/, 'fold state saved with the other ui prefs');
+  for (const line of APP.split('\n').filter((l) => l.includes("'project.sync'"))) assert.ok(!line.includes('parent'), 'project.sync never sends parentId');
+});

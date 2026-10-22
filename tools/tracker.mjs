@@ -11,6 +11,7 @@
 //   node tools/tracker.mjs add-steps <project> "<step>" ["<step>" ...]
 //   node tools/tracker.mjs tick <project> "<step text or id>"
 //   node tools/tracker.mjs set-about <project> "<short description>"
+//   node tools/tracker.mjs set-main <project> <main project | none> [--create]   (📂 put it under a main project)
 //   node tools/tracker.mjs only-on <project> <Mon,Thu|every> [--remind HH:MM|off]
 //   node tools/tracker.mjs edit-step <project> "<step text or id>" "<new text>"
 //   node tools/tracker.mjs add-note <project> "<text>"
@@ -27,7 +28,7 @@ import { existsSync, readFileSync, writeFileSync, readdirSync, mkdirSync } from 
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { applyOps, makeOp, newId, emptyData } from '../docs/ops.js';
-import { dotColour, nextStep, todayIndia, isOverdue, colourCounts, isSnoozed, restUntil, onlyDaysOf, onlyDaysLabel, awakeProjects, repliesOf, mailThreads, findMailThread, indiaDate } from '../docs/rules.js';
+import { dotColour, nextStep, todayIndia, isOverdue, colourCounts, isSnoozed, restUntil, onlyDaysOf, onlyDaysLabel, awakeProjects, repliesOf, mailThreads, findMailThread, indiaDate, parentOf, childrenOf, isMainProject, canPutUnder, mainColour, mainSummary } from '../docs/rules.js';
 import { DATA_OWNER, DATA_REPO, MOVED_TO } from '../docs/config.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -208,11 +209,15 @@ function findProject(data, query) {
 
 const ORDER = { red: 0, yellow: 1, green: 2, grey: 3 };
 
-function line(p, today) {
+function line(p, today, data = null) {
   const ns = nextStep(p);
   const c = dotColour(p, today);
+  const main = data && parentOf(data, p);
+  const kids = data && isMainProject(data, p) ? childrenOf(data, p.id) : null;
   const bits = [
     `${(isSnoozed(p, today) ? 'SNOOZE' : c.toUpperCase()).padEnd(6)} ${p.name} [${p.id}]`,
+    main ? `main: ${main.name}` : null,
+    kids ? `sub-projects: ${kids.length ? kids.map((k) => k.name).join(', ') : 'none yet'} (${mainSummary(kids, today)}; worst ${mainColour(p, kids, today)})` : null,
     isSnoozed(p, today) ? `snoozed until ${restUntil(p, today)}` : null,
     onlyDaysOf(p).length ? `only on: ${onlyDaysLabel(p.onlyDays)}` : null,
     p.status ? `status: ${p.status}` : null,
@@ -260,7 +265,7 @@ try {
       console.log(`Today ${today}: ${awake.length} active projects — ${c.red} red (not looked at), ${c.yellow} yellow (opened), ${c.green} green (done for today).${snoozed ? ` ${snoozed} snoozed.` : ''}`);
       console.log(`Paused: ${data.projects.filter((p) => p.state === 'paused').length}. Finished: ${data.projects.filter((p) => p.state === 'finished').length}.`);
       if ((data.inbox || []).length) console.log(`Inbox: ${data.inbox.length} item(s) to sort — ${data.inbox.map((x) => x.text).join(' · ')}`);
-      for (const p of sorted(active, today)) console.log('  ' + line(p, today));
+      for (const p of sorted(active, today)) console.log('  ' + line(p, today, data));
       break;
     }
     case 'list': {
@@ -270,7 +275,14 @@ try {
       let list = data.projects.filter((p) => p.state === 'active');
       if (args.includes('--today')) list = list.filter((p) => ['red', 'yellow'].includes(dotColour(p, today))); // not green, not snoozed
       if (!list.length) console.log(args.includes('--today') ? 'All active projects are green today.' : 'No active projects.');
-      for (const p of sorted(list, today)) console.log(line(p, today));
+      // 📂 a project whose main project is also listed is shown indented under it
+      const ids = new Set(list.map((p) => p.id));
+      const order = sorted(list, today);
+      for (const p of order) {
+        if (p.parentId && ids.has(p.parentId)) continue;
+        console.log(line(p, today, data));
+        for (const c of order.filter((x) => x.parentId === p.id)) console.log('    ↳ ' + line(c, today, data));
+      }
       break;
     }
     case 'show': {
@@ -278,7 +290,7 @@ try {
       const { data, history } = readState();
       withGroups(data);
       const p = findProject(data, args.join(' '));
-      console.log(line(p, today));
+      console.log(line(p, today, data));
       console.log(`State: ${p.state}${isSnoozed(p, today) ? ` (snoozed until ${restUntil(p, today)})` : ''}`);
       if (p.status) console.log(`Status: ${p.status}`);
       if (p.notes) console.log(`Notes: ${p.notes}`);
@@ -321,6 +333,41 @@ try {
         const p = findProject(state.data, query);
         return [makeOp('setProjectField', { projectId: p.id, field: 'about', value: text })];
       }, 'Description');
+      break;
+    }
+    case 'set-main': {
+      // set-main <project> <main project | none> [--create]  (--create: makes the main project when no project matches)
+      const create = args.includes('--create');
+      const [query, ...rest] = args.filter((x) => x !== '--create');
+      const mainQuery = rest.join(' ').trim();
+      if (!mainQuery) throw new Error('Say which main project (id or part of its name), or "none".');
+      let made = '';
+      commitOps((state) => {
+        const p = findProject(state.data, query);
+        if (mainQuery.toLowerCase() === 'none') {
+          if (!p.parentId) throw new Error(`${p.name} is not under a main project.`);
+          made = `${p.name} is no longer under a main project`;
+          return [makeOp('setParent', { projectId: p.id, parentId: null })];
+        }
+        let main = null;
+        try { main = findProject(state.data, mainQuery); } catch (e) {
+          if (!create || !/No project matches/.test(e.message)) throw e;
+        }
+        if (!main) {
+          made = `New main project ${mainQuery}; ${p.name} is under it`;
+          return [makeOp('createMainProject', { projectId: newId(), name: mainQuery, groupId: p.groupId, childId: p.id })];
+        }
+        if (p.parentId === main.id) throw new Error(`${p.name} is already under ${main.name}.`);
+        if (!canPutUnder(state.data, p, main)) {
+          throw new Error(main.parentId ? `${main.name} is itself under a main project (only one level).`
+            : main.id === p.id ? 'A project cannot be under itself.'
+              : main.state === 'finished' ? `${main.name} is finished.`
+                : `${p.name} holds other projects, so it cannot go under another one (only one level).`);
+        }
+        made = `${p.name} is now under ${main.name}`;
+        return [makeOp('setParent', { projectId: p.id, parentId: main.id })];
+      }, 'Main project');
+      if (made) console.log(made);
       break;
     }
     case 'only-on': {
@@ -470,7 +517,7 @@ try {
       break;
     }
     default:
-      console.log(readFileSync(fileURLToPath(import.meta.url), 'utf8').split('\n').slice(1, 21).join('\n').replace(/^\/\/ ?/gm, ''));
+      console.log(readFileSync(fileURLToPath(import.meta.url), 'utf8').split('\n').slice(1, 22).join('\n').replace(/^\/\/ ?/gm, ''));
   }
 } catch (e) {
   console.error(`Error: ${e.message}`);

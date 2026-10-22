@@ -121,3 +121,28 @@ test('"📅 Only on": on a rest day the project is left out of list --today and 
   assert.match(show, /^SNOOZE/);
   assert.match(show, /only on: \w+days/);
 });
+
+test('📂 set-main puts a project under a main project (by name), --create makes the main, "none" takes it out; summary / show / list say it', () => {
+  tracker('new-project', 'Dryer 1', '--group', 'Acton', '--steps', 'Check fan');
+  tracker('new-project', 'Dryer 2', '--group', 'Personal', '--steps', 'Check belt');
+  assert.throws(() => tracker('set-main', 'Dryer 1', 'Dryers'), /No project matches "Dryers"/, 'no --create: never made by guess');
+  assert.match(tracker('set-main', 'Dryer 1', 'Dryers', '--create'), /New main project Dryers; Dryer 1 is under it/);
+  const P = (name) => data().projects.find((p) => p.name === name);
+  const main = P('Dryers');
+  assert.ok(main && main.isMain, 'made as a main project');
+  assert.equal(main.groupId, P('Dryer 1').groupId, 'in the same group as the project');
+  assert.equal(P('Dryer 1').parentId, main.id);
+  tracker('set-main', 'Dryer 2', 'dryers');
+  assert.equal(P('Dryer 2').parentId, main.id, 'an existing main, by a part of its name');
+  assert.throws(() => tracker('set-main', 'Dryers', 'Electric kiln'), /only one level/, 'a main cannot go under another');
+  assert.throws(() => tracker('set-main', 'Electric kiln', 'Dryer 1'), /only one level/, 'nor under a sub-project');
+  assert.match(tracker('show', 'Dryer 1'), /main: Dryers/);
+  assert.match(tracker('summary'), /Dryers \[[^\]]+\] \| sub-projects: Dryer 2, Dryer 1|Dryers \[[^\]]+\] \| sub-projects: Dryer 1, Dryer 2/);
+  const list = tracker('list').split('\n');
+  const at = list.findIndex((l) => /\bDryers \[/.test(l));
+  assert.ok(at >= 0);
+  assert.deepEqual(list.slice(at + 1, at + 3).map((l) => /^ {4}↳ .*Dryer [12]/.test(l)), [true, true], 'its projects indented under it');
+  tracker('set-main', 'Dryer 2', 'none');
+  assert.equal(P('Dryer 2').parentId, undefined);
+  assert.throws(() => tracker('set-main', 'Dryer 2', 'none'), /not under a main project/);
+});

@@ -1074,8 +1074,8 @@ test('pending list as an email table: columns, order, late / waiting / last upda
   assert.ok(heads.every((x, i) => x > 0 && (i === 0 || x > heads[i - 1])), 'five columns in order');
   assert.match(m.html, /^<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;/);
   assert.ok(!/<style|class=/.test(m.html), 'inline styles only');
-  assert.match(m.html, /Hi Ravi, good morning\. Here is your pending work\. Please fill the last two columns and reply by evening\./);
-  assert.match(m.html, /3 items · 2 late/);
+  assert.match(m.html, /Dear Mr\. Ravi,<\/p><p[^>]*>Good morning\. Here is your pending work\. Please fill the last two columns and reply by evening\./, 'Dear Mr. <name>, then Good morning on the next line (owner asked, to match the Outlook template, 22 Oct)');
+  assert.ok(!/3 items · 2 late/.test(m.html), 'no item count above the table (owner asked, to match the Outlook template, 22 Oct)');
   // order: the given project, then waiting on him, then to discuss
   const at = (t) => m.html.indexOf(t);
   assert.ok(at('📁 Basin mould') > 0 && at('📁 Basin mould') < at('Send burner quote') && at('Send burner quote') < at('Check &lt;b&gt;glaze'), 'given, waiting, discuss');
@@ -1088,9 +1088,9 @@ test('pending list as an email table: columns, order, late / waiting / last upda
   assert.match(m.html, /21 Oct: Glaze looked thin on the rim, asked for a new batch[^<]{0,40}…/, 'newest note on the step, cut short');
   assert.ok(m.html.includes('>—</td>'), 'no update: a dash');
   assert.match(m.html, /Done \/ Going on \/ Stuck/);
-  assert.match(m.html, /Status: keep one of Done \/ Going on \/ Stuck\.<\/p>.*Any problem or help needed: write below\./);
-  assert.match(m.html, /Thanks,<br>Venkat<\/p><\/div>$/);
-  assert.match(personMessageHtml(s.data, s.data.people[0], '2026-10-22').html, />Thanks<\/p><\/div>$/, 'no owner name: just Thanks');
+  assert.match(m.html, /Status: keep one of Done \/ Going on \/ Stuck\.<\/p><\/div>$/, 'ends with the Status line: no "Any problem" line, no sign-off (owner asked, to match the Outlook template, 22 Oct)');
+  assert.ok(!/Thanks/.test(m.html), 'no sign-off: the Outlook template adds it');
+  assert.ok(!/Thanks/.test(personMessageHtml(s.data, s.data.people[0], '2026-10-22').html), 'never a sign-off');
   assert.match(m.text, /1\. 📁 Basin mould\n {3}Late since 15 Oct\n {3}Last update: —/);
   // nothing pending
   applyOp(s, op('addPerson', { personId: 'n', name: 'Nobody' }, '2026-10-01'));
@@ -1557,4 +1557,217 @@ test('pending list: steps of a project given to the person are not listed again 
   const m = personMessageHtml(s.data, s.data.people[0], '2026-10-22', { items });
   assert.ok(!/Residue test/.test(m.html), 'not in the email table either');
   assert.ok(!/Residue test/.test(personMessageText(s.data, s.data.people[0], '2026-10-22', items)), 'nor in the plain words');
+});
+
+// ---------- 📂 Main projects ----------
+
+function withMains(date = '2026-10-01') {
+  const s = fresh();
+  applyOp(s, op('createProject', { projectId: 'k1', name: 'Kiln 1', groupId: 'g1' }, date));
+  applyOp(s, op('createProject', { projectId: 'k2', name: 'Kiln 2', groupId: 'g2' }, date));
+  applyOp(s, op('createProject', { projectId: 'm', name: 'Kilns', groupId: 'g1' }, date));
+  applyOp(s, op('createProject', { projectId: 'x', name: 'Other', groupId: 'g1' }, date));
+  return s;
+}
+const allEvents = (s) => Object.values(s.history).flat();
+const P = (s, id) => s.data.projects.find((p) => p.id === id);
+
+test('main projects: setParent puts a project under a main (history on both), takes it out with null, and is not work', () => {
+  const s = withMains();
+  const before = clone(P(s, 'k1'));
+  const o = op('setParent', { projectId: 'k1', parentId: 'm' }, '2026-10-02');
+  assert.equal(applyOp(s, o), true);
+  assert.equal(P(s, 'k1').parentId, 'm');
+  const ev = allEvents(s);
+  assert.ok(ev.some((e) => e.projectId === 'k1' && e.kind === 'main_changed' && e.detail === 'Put under 📂 Kilns'), 'line on the project');
+  assert.ok(ev.some((e) => e.projectId === 'm' && e.kind === 'main_changed' && e.detail === 'Kiln 1 added'), 'line on the main');
+  assert.equal(dotColour(P(s, 'k1'), '2026-10-02'), 'red', 'not work: the dot stays red');
+  assert.equal(P(s, 'k1').workDate, before.workDate);
+  assert.equal(applyOp(s, op('setParent', { projectId: 'k1', parentId: 'm' }, '2026-10-02', '11:00:00')), false, 'already under it');
+  assert.equal(applyOp(s, op('setParent', { projectId: 'k1', parentId: null }, '2026-10-02', '12:00:00')), true);
+  assert.equal(P(s, 'k1').parentId, undefined);
+  assert.ok(allEvents(s).some((e) => e.projectId === 'k1' && e.detail === 'Taken out of 📂 Kilns'));
+  assert.equal(applyOp(s, op('setParent', { projectId: 'k1', parentId: null }, '2026-10-02', '13:00:00')), false, 'nothing to take out');
+});
+
+test('main projects: setParent checks — exists, not itself, one level only (no cycles), main active or paused', () => {
+  const s = withMains();
+  assert.equal(applyOp(s, op('setParent', { projectId: 'k1', parentId: 'nope' }, '2026-10-02')), false, 'main must exist');
+  assert.equal(applyOp(s, op('setParent', { projectId: 'nope', parentId: 'm' }, '2026-10-02')), false, 'project must exist');
+  assert.equal(applyOp(s, op('setParent', { projectId: 'k1', parentId: 'k1' }, '2026-10-02')), false, 'not under itself');
+  applyOp(s, op('setParent', { projectId: 'k1', parentId: 'm' }, '2026-10-02'));
+  assert.equal(applyOp(s, op('setParent', { projectId: 'k2', parentId: 'k1' }, '2026-10-02')), false, 'a sub-project cannot be a main (one level)');
+  assert.equal(applyOp(s, op('setParent', { projectId: 'm', parentId: 'x' }, '2026-10-02')), false, 'a main with projects cannot go under another');
+  assert.equal(applyOp(s, op('setParent', { projectId: 'm', parentId: 'k1' }, '2026-10-02')), false, 'no cycle main → its own child');
+  applyOp(s, op('finish', { projectId: 'x' }, '2026-10-02'));
+  assert.equal(applyOp(s, op('setParent', { projectId: 'k2', parentId: 'x' }, '2026-10-02')), false, 'a finished project cannot be a main');
+  applyOp(s, op('reopen', { projectId: 'x' }, '2026-10-02', '11:00:00'));
+  applyOp(s, op('pause', { projectId: 'x' }, '2026-10-02', '11:01:00'));
+  assert.equal(applyOp(s, op('setParent', { projectId: 'k2', parentId: 'x' }, '2026-10-02', '11:02:00')), true, 'a paused one can');
+  assert.equal(applyOp(s, op('setParent', { projectId: 'k2', parentId: 'm' }, '2026-10-02', '11:03:00')), true, 'moves to another main');
+  assert.ok(allEvents(s).some((e) => e.projectId === 'x' && e.detail === 'Kiln 2 taken out'));
+});
+
+test('main projects: createMainProject makes an active isMain project in the child\'s group, with the child under it; Undo (restoreProject) takes back both', () => {
+  const s = withMains();
+  const before = clone(P(s, 'k2'));
+  const o = op('createMainProject', { projectId: 'nm', name: 'Furnaces', groupId: 'g1', childId: 'k2' }, '2026-10-02');
+  assert.equal(applyOp(s, o), true);
+  const main = P(s, 'nm');
+  assert.equal(main.state, 'active');
+  assert.equal(main.isMain, true);
+  assert.equal(main.groupId, 'g2', 'same group as the child');
+  assert.equal(P(s, 'k2').parentId, 'nm');
+  assert.ok(allEvents(s).some((e) => e.projectId === 'k2' && e.detail === 'Put under 📂 Furnaces'));
+  assert.ok(allEvents(s).some((e) => e.projectId === 'nm' && e.detail === 'Kiln 2 added'));
+  // Undo as the app does it: the child back as it was, the new main removed, every history line of the change gone
+  applyOp(s, op('restoreProject', { project: before, index: s.data.projects.findIndex((p) => p.id === 'k2'), undoOpId: o.id, removeProjectId: 'nm' }, '2026-10-02', '10:01:00'));
+  assert.ok(!P(s, 'nm'), 'main gone');
+  assert.equal(P(s, 'k2').parentId, undefined, 'child no longer under it');
+  assert.ok(!allEvents(s).some((e) => e.kind === 'main_changed' || e.projectId === 'nm'), 'its history lines gone');
+  // an empty main (no child) is still a main project
+  assert.equal(applyOp(s, op('createMainProject', { projectId: 'em', name: 'Empty main', groupId: 'g3' }, '2026-10-02')), true);
+  assert.equal(P(s, 'em').isMain, true);
+  assert.equal(P(s, 'em').groupId, 'g3');
+  // a child that is itself a main cannot go under a new one
+  assert.equal(applyOp(s, op('createMainProject', { projectId: 'zz', name: 'Z', groupId: 'g1', childId: 'em' }, '2026-10-02')), false);
+  assert.ok(!P(s, 'zz'));
+});
+
+test('main projects: Undo of setParent restores the project via restoreProject and removes the lines on both projects', () => {
+  const s = withMains();
+  const before = clone(P(s, 'k1'));
+  const o = op('setParent', { projectId: 'k1', parentId: 'm' }, '2026-10-02');
+  applyOp(s, o);
+  applyOp(s, op('restoreProject', { project: before, index: 0, undoOpId: o.id }, '2026-10-02', '10:01:00'));
+  assert.equal(P(s, 'k1').parentId, undefined);
+  assert.ok(!allEvents(s).some((e) => e.kind === 'main_changed'), 'both lines gone (project and main)');
+});
+
+test('main projects: deleting a main keeps its projects (they just lose parentId); Undo puts them back under it; finishing a main keeps open children', () => {
+  const s = withMains();
+  applyOp(s, op('setParent', { projectId: 'k1', parentId: 'm' }, '2026-10-02'));
+  applyOp(s, op('setParent', { projectId: 'k2', parentId: 'm' }, '2026-10-02', '10:01:00'));
+  const snap = clone(P(s, 'm'));
+  const index = s.data.projects.findIndex((p) => p.id === 'm');
+  const del = op('deleteProject', { projectId: 'm' }, '2026-10-02', '11:00:00');
+  applyOp(s, del);
+  assert.ok(!P(s, 'm'));
+  assert.ok(P(s, 'k1') && P(s, 'k2'), 'children are never deleted');
+  assert.equal(P(s, 'k1').parentId, undefined);
+  assert.equal(P(s, 'k2').parentId, undefined);
+  applyOp(s, op('restoreProject', { project: snap, index, undoOpId: del.id, parentIds: { k1: 'm', k2: 'm', x: 'other' } }, '2026-10-02', '11:01:00'));
+  assert.ok(P(s, 'm'));
+  assert.equal(P(s, 'k1').parentId, 'm');
+  assert.equal(P(s, 'k2').parentId, 'm');
+  assert.equal(P(s, 'x').parentId, undefined, 'only links to the restored project come back');
+  assert.equal(applyOp(s, op('finish', { projectId: 'm' }, '2026-10-02', '12:00:00')), true, 'finishing a main is allowed');
+  assert.equal(P(s, 'k1').state, 'active');
+  assert.equal(P(s, 'k1').parentId, 'm', 'children stay');
+});
+
+test('main projects: "+ New project here" — createProject with parentId makes it already under the main (one level)', () => {
+  const s = withMains();
+  applyOp(s, op('createProject', { projectId: 'n1', name: 'Kiln 3', groupId: 'g1', parentId: 'm' }, '2026-10-02'));
+  assert.equal(P(s, 'n1').parentId, 'm');
+  assert.ok(allEvents(s).some((e) => e.projectId === 'm' && e.detail === 'Kiln 3 added'));
+  applyOp(s, op('createProject', { projectId: 'n2', name: 'Deep', groupId: 'g1', parentId: 'n1' }, '2026-10-02'));
+  assert.ok(P(s, 'n2'), 'still made');
+  assert.equal(P(s, 'n2').parentId, undefined, 'but not under a sub-project');
+});
+
+test('main projects rules: childrenOf, parentOf, isMainProject, mainColour (worst; resting = grey), mainSummary', async () => {
+  const { childrenOf, parentOf, isMainProject, mainColour, mainSummary } = await import('../docs/rules.js');
+  const s = withMains('2026-10-01');
+  applyOp(s, op('setParent', { projectId: 'k1', parentId: 'm' }, '2026-10-01'));
+  applyOp(s, op('setParent', { projectId: 'k2', parentId: 'm' }, '2026-10-01', '10:01:00'));
+  const d = '2026-10-02';
+  assert.deepEqual(childrenOf(s.data, 'm').map((p) => p.id).sort(), ['k1', 'k2']);
+  assert.equal(parentOf(s.data, P(s, 'k1')).id, 'm');
+  assert.equal(parentOf(s.data, P(s, 'x')), null);
+  assert.ok(isMainProject(s.data, P(s, 'm')));
+  assert.ok(!isMainProject(s.data, P(s, 'k1')));
+  assert.ok(!isMainProject(s.data, P(s, 'x')));
+  // main green, children red → red
+  applyOp(s, op('addWorkNote', { projectId: 'm', noteId: 'n1', text: 'Plan' }, d));
+  assert.equal(mainColour(P(s, 'm'), childrenOf(s.data, 'm'), d), 'red');
+  assert.equal(mainSummary(childrenOf(s.data, 'm'), d), '2 projects · 2 red');
+  applyOp(s, op('markOpened', { projectId: 'k1' }, d));
+  applyOp(s, op('addWorkNote', { projectId: 'k2', noteId: 'n2', text: 'Done' }, d));
+  assert.equal(mainColour(P(s, 'm'), childrenOf(s.data, 'm'), d), 'yellow');
+  assert.equal(mainSummary(childrenOf(s.data, 'm'), d), '2 projects · 1 yellow');
+  applyOp(s, op('snooze', { projectId: 'k1', days: 3 }, d));
+  assert.equal(dotColour(P(s, 'k1'), d), 'grey');
+  assert.equal(mainColour(P(s, 'm'), childrenOf(s.data, 'm'), d), 'green', 'a snoozed child counts as grey (better than green)');
+  applyOp(s, op('pause', { projectId: 'k1' }, d));
+  assert.equal(mainSummary(childrenOf(s.data, 'm'), d), '1 project · all green', 'only active ones');
+  assert.equal(mainSummary([], d), 'No projects inside yet');
+});
+
+test('main projects: colour counts and the day score count each project once (never the main\'s roll-up)', async () => {
+  const { colourCounts, dayScore } = await import('../docs/rules.js');
+  const s = withMains('2026-10-01');
+  applyOp(s, op('setParent', { projectId: 'k1', parentId: 'm' }, '2026-10-01'));
+  const d = '2026-10-02';
+  applyOp(s, op('addWorkNote', { projectId: 'm', noteId: 'n1', text: 'Plan' }, d));
+  // m has no step of its own, so like on Today it is left out of the counts (and never counted as its red roll-up)
+  assert.deepEqual(colourCounts(s.data, d), { green: 0, yellow: 0, red: 3 });
+  assert.deepEqual(dayScore(s.data, s.history, d), { green: 1, total: 4 });
+  assert.deepEqual(dayScore(s.data, s.history, '2026-10-01'), { green: 0, total: 4 }, 'putting under a main is not work');
+});
+
+test('main projects: the "Put under" box choices (mains first, then others; any case, anywhere) and the create line; "Add here" choices', async () => {
+  const { mainChoices, addHereChoices } = await import('../docs/rules.js');
+  const s = withMains();
+  applyOp(s, op('setParent', { projectId: 'k1', parentId: 'm' }, '2026-10-02'));
+  const c = mainChoices(s.data, P(s, 'k2'), '');
+  assert.equal(c.items[0].p.id, 'm', 'existing main first');
+  assert.equal(c.items[0].main, true);
+  assert.deepEqual(c.items.slice(1).map((x) => x.p.id), ['x'], 'then others that could become a main (not a sub-project, not itself)');
+  assert.equal(c.create, null, 'nothing typed: no create line');
+  assert.deepEqual(mainChoices(s.data, P(s, 'k2'), 'ILN').items.map((x) => x.p.id), ['m'], 'any case, anywhere in the name');
+  assert.equal(mainChoices(s.data, P(s, 'k2'), 'kil').create, 'kil', 'no exact match: offer to create it');
+  assert.equal(mainChoices(s.data, P(s, 'k2'), 'KILNS').create, null, 'an exact match: no create line');
+  assert.deepEqual(mainChoices(s.data, P(s, 'k1'), '').items.map((x) => x.p.id), ['x', 'k2'], 'its own main is not offered again (others may become one)');
+  assert.deepEqual(addHereChoices(s.data, P(s, 'm'), '').map((x) => x.id).sort(), ['k2', 'x']);
+  assert.deepEqual(addHereChoices(s.data, P(s, 'm'), 'oth').map((x) => x.id), ['x']);
+});
+
+test('main projects: nestList puts projects under their main in the list order, a fold hides them; Today leaves out a main with no own step', async () => {
+  const { nestList, todayWithoutEmptyMains } = await import('../docs/rules.js');
+  const s = withMains();
+  applyOp(s, op('setParent', { projectId: 'k1', parentId: 'm' }, '2026-10-02'));
+  applyOp(s, op('setParent', { projectId: 'k2', parentId: 'm' }, '2026-10-02', '10:01:00'));
+  const list = ['k2', 'x', 'm', 'k1'].map((id) => P(s, id));
+  assert.deepEqual(nestList(list).map((r) => `${r.depth}:${r.p.id}:${r.kids}`), ['0:x:0', '0:m:2', '1:k2:0', '1:k1:0']);
+  assert.deepEqual(nestList(list, { m: true }).map((r) => r.p.id), ['x', 'm'], 'folded');
+  assert.deepEqual(nestList([P(s, 'k1'), P(s, 'x')]).map((r) => `${r.depth}:${r.p.id}`), ['0:k1', '0:x'], 'main not in the list: stays at the top level');
+  assert.deepEqual(todayWithoutEmptyMains(list, '2026-10-02').map((p) => p.id), ['k2', 'x', 'k1'], 'main with no own step: its projects show instead');
+  applyOp(s, op('addStep', { projectId: 'm', stepId: 'ms', text: 'Budget' }, '2026-10-02'));
+  assert.equal(todayWithoutEmptyMains(list, '2026-10-02').length, 4, 'a main with its own next step stays');
+});
+
+test('main projects: a main with no step of its own (left off Today) is not counted in the colour counts, so Today can still reach all green', async () => {
+  const { colourCounts, todayIndia } = await import('../docs/rules.js');
+  const s = { data: emptyData(), history: {} };
+  const day = todayIndia();
+  applyOp(s, op('createProject', { projectId: 'k1', name: 'Kiln 1', groupId: s.data.groups[0].id }, day));
+  applyOp(s, op('addStep', { projectId: 'k1', stepId: 'a', text: 'Check' }, day));
+  applyOp(s, op('createMainProject', { projectId: 'm', name: 'Kilns', groupId: s.data.groups[0].id, childId: 'k1' }, day));
+  const c = colourCounts(s.data, day);
+  assert.equal(c.red + c.yellow + c.green, 1, 'only Kiln 1 is counted; the empty main "Kilns" is not');
+});
+
+test('main projects: a main with no step of its own takes its colour only from its projects (an empty new main is not red)', async () => {
+  const { mainColour, childrenOf, dotColour, todayIndia } = await import('../docs/rules.js');
+  const s = { data: emptyData(), history: {} };
+  const day = todayIndia();
+  applyOp(s, op('createProject', { projectId: 'k1', name: 'MOR test', groupId: s.data.groups[0].id }, day));
+  applyOp(s, op('addStep', { projectId: 'k1', stepId: 'a', text: 'Prepare the mould' }, day));
+  applyOp(s, op('createMainProject', { projectId: 'm', name: 'Material testing', groupId: s.data.groups[0].id, childId: 'k1' }, day));
+  const m = s.data.projects.find((p) => p.id === 'm');
+  const kids = childrenOf(s.data, 'm');
+  assert.equal(mainColour(m, kids, day), dotColour(kids[0], day), 'same colour as its only project');
+  applyOp(s, op('addStep', { projectId: 'm', stepId: 'b', text: 'Plan all tests' }, day));
+  assert.equal(mainColour(s.data.projects.find((p) => p.id === 'm'), kids, day), 'red', 'with a step of its own, its own colour counts again (worst wins)');
 });

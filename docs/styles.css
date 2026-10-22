@@ -1016,3 +1016,38 @@ a.team-line.msg { background: #eef4ff; border-color: #93b4f8; color: #1e40af; fo
 .dot.grey { background: #cbd5e1; }
 .reply-round .round-actions .round-btn.primary { grid-column: 1 / -1; justify-content: center; } /* "Open in Outlook to send" never cut off */
 .reply-round .round-btn { white-space: normal; }
+
+/* 📂 Main projects: nested list, the "Put under" box, the sub-projects table, the Main projects page */
+.prow.child { margin-left: 26px; border-left: 2px solid var(--line); border-radius: 0 var(--radius) var(--radius) 0; }
+.fold { border: 0; background: none; width: 24px; flex: none; padding: 0; cursor: pointer; color: #475569; font-size: 18px; line-height: 1; }
+.fold:hover { color: var(--text); }
+.tag.main-tag { background: var(--panel); color: #475569; }
+.main-chip { display: inline-block; margin: 6px 0 2px; border: 1px solid var(--line); background: var(--brand-soft); color: var(--brand); border-radius: 99px; padding: 2px 12px; font-size: 13px; cursor: pointer; }
+.main-box { border: 1px solid var(--line); border-radius: 10px; background: #fff; padding: 8px; margin: 4px 0 10px auto; width: 340px; max-width: 100%; display: flex; flex-direction: column; gap: 6px; }
+.main-box-head { display: flex; justify-content: space-between; align-items: center; }
+.main-box-input { width: 100%; }
+.main-box-list { display: flex; flex-direction: column; max-height: 260px; overflow-y: auto; }
+.main-box-item { width: 100%; text-align: left; border: 0; background: none; padding: 7px 9px; border-radius: 7px; cursor: pointer; font-size: 14px; }
+.main-box-item.on, .main-box-item:hover { background: var(--brand-soft); }
+.main-box-item.create { color: var(--brand); font-weight: 600; }
+.main-box-remove { text-align: left; border: 0; background: none; color: var(--red); padding: 4px 9px; cursor: pointer; font-size: 14px; }
+.sub-projects h3 { font-size: 12px; letter-spacing: .04em; color: var(--muted); }
+.sub-table { width: 100%; border-collapse: collapse; font-size: 14px; margin: 6px 0; }
+.sub-table th { text-align: left; font-weight: 600; color: var(--muted); font-size: 12.5px; padding: 4px 6px; border-bottom: 1px solid var(--line); }
+.sub-table td { padding: 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.sub-table td.warn { color: var(--red); }
+.sub-row { cursor: pointer; }
+.sub-row:hover { background: var(--panel); }
+.sub-name { font-weight: 600; text-align: left; }
+.sub-buttons { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
+.mains-page { padding: 4px 8px 20px; display: flex; flex-direction: column; gap: 10px; }
+.mains-line { margin: 0; }
+.new-main { align-self: flex-start; }
+.main-card { border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 12px; background: #fff; }
+.main-card-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.main-card-name { font-weight: 700; font-size: 15.5px; }
+.main-card-sum { flex: 1; }
+.main-card-list { margin-top: 6px; }
+.main-card-row { width: 100%; text-align: left; border: 0; background: none; padding: 4px 6px; border-radius: 7px; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.main-card-row:hover { background: var(--panel); }
+@media (max-width: 640px) { .sub-table th:nth-child(4), .sub-table td:nth-child(4) { display: none; } .main-box { width: 100%; } }

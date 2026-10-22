@@ -260,8 +260,116 @@ export function awakeProjects(data, today = todayIndia()) {
 /** Counts of dot colours for active projects. */
 export function colourCounts(data, today = todayIndia()) {
   const counts = { green: 0, yellow: 0, red: 0 };
-  for (const p of awakeProjects(data, today)) counts[dotColour(p, today)]++;
+  // each project once, its OWN dot (never a main's roll-up); a main with no own step is left out, as on Today
+  for (const p of todayWithoutEmptyMains(awakeProjects(data, today), today)) counts[dotColour(p, today)]++;
   return counts;
+}
+
+// ---------- Main projects (📂 one project holds a few others; only one level) ----------
+
+/** The projects put under this main project (any state; a deleted one is gone from the list). */
+export function childrenOf(data, id) {
+  return id ? data.projects.filter((p) => p.parentId === id) : [];
+}
+
+/** The main project this one is under, or null (also when its main no longer exists). */
+export function parentOf(data, p) {
+  return (p && p.parentId && data.projects.find((x) => x.id === p.parentId && !x.parentId)) || null;
+}
+
+/** A main project: it holds at least one project, or was made as one (isMain, so a new empty one still shows). */
+export function isMainProject(data, p) {
+  return !!p && !p.parentId && (!!p.isMain || data.projects.some((x) => x.parentId === p.id));
+}
+
+export function mainProjects(data) {
+  return data.projects.filter((p) => p.state !== 'finished' && isMainProject(data, p));
+}
+
+const WORST = ['red', 'yellow', 'green', 'grey'];
+/** The main project's dot: the worst of its own dot and its active children (resting / snoozed ones count as grey). */
+export function mainColour(main, children, today = todayIndia()) {
+  const live = (children || []).filter((c) => c.state === 'active');
+  // a main with no step of its own is just a holder: only its projects decide its colour
+  let best = live.length && !nextStep(main, today) ? 'grey' : dotColour(main, today);
+  for (const c of children || []) {
+    if (c.state !== 'active') continue;
+    const col = dotColour(c, today);
+    if (WORST.indexOf(col) < WORST.indexOf(best)) best = col;
+  }
+  return best;
+}
+
+/** "3 projects · 1 red · 2 yellow" / "3 projects · all green" (its active projects). */
+export function mainSummary(children, today = todayIndia()) {
+  const active = (children || []).filter((c) => c.state === 'active');
+  if (!active.length) return (children || []).length ? `${children.length} project${children.length === 1 ? '' : 's'} · none active` : 'No projects inside yet';
+  const n = { red: 0, yellow: 0, green: 0, grey: 0 };
+  for (const c of active) n[dotColour(c, today)]++;
+  const head = `${active.length} project${active.length === 1 ? '' : 's'}`;
+  const bits = [n.red ? `${n.red} red` : null, n.yellow ? `${n.yellow} yellow` : null].filter(Boolean);
+  if (bits.length) return [head, ...bits].join(' · ');
+  if (n.green === active.length) return `${head} · all green`;
+  return [head, n.green ? `${n.green} green` : null, n.grey ? `${n.grey} resting` : null].filter(Boolean).join(' · ');
+}
+
+/** Can `child` go under `main`? (one level only, never itself, the main must be active or paused). */
+export function canPutUnder(data, child, main) {
+  if (!child || !main || child.id === main.id) return false;
+  if (main.parentId || main.state === 'finished') return false; // a main cannot itself be under another
+  if (child.isMain || data.projects.some((x) => x.parentId === child.id)) return false; // a main cannot go under another
+  return true;
+}
+
+/**
+ * The "📂 Put under a main project…" box: what to offer for `query` (any case, anywhere in the name).
+ * Main projects first, then other active projects that could become one. `create` = the typed name when
+ * nothing matches it exactly (offered as "+ Create '<typed>' as a new main project").
+ */
+export function mainChoices(data, p, query = '') {
+  const q = String(query || '').trim().toLowerCase();
+  const fits = (x) => x.id !== p.parentId && canPutUnder(data, p, x) && (!q || x.name.toLowerCase().includes(q));
+  const mains = data.projects.filter((x) => isMainProject(data, x) && x.state !== 'finished' && fits(x));
+  const others = data.projects.filter((x) => x.state === 'active' && !isMainProject(data, x) && fits(x));
+  const exact = q && data.projects.some((x) => isMainProject(data, x) && x.name.trim().toLowerCase() === q);
+  return { items: [...mains.map((x) => ({ p: x, main: true })), ...others.map((x) => ({ p: x, main: false }))], create: q && !exact ? String(query).trim() : null };
+}
+
+/** "+ Add a project here" on a main project's page: the projects that can go under it, for `query`. */
+export function addHereChoices(data, main, query = '') {
+  const q = String(query || '').trim().toLowerCase();
+  return data.projects.filter((x) => x.state !== 'finished' && x.parentId !== main.id && canPutUnder(data, x, main)
+    && (!q || x.name.toLowerCase().includes(q)));
+}
+
+/**
+ * A project list with main projects and their projects under them: [{ p, depth, kids }].
+ * `list` is already in order (red first or my order): a project whose main is also in the list goes under it
+ * (in the same order); a folded main (`folded[id]`) hides its rows. Others stay at the top level.
+ */
+export function nestList(list, folded = {}) {
+  const ids = new Set(list.map((p) => p.id));
+  const under = new Map();
+  for (const p of list) {
+    if (p.parentId && ids.has(p.parentId) && p.parentId !== p.id) {
+      if (!under.has(p.parentId)) under.set(p.parentId, []);
+      under.get(p.parentId).push(p);
+    }
+  }
+  const out = [];
+  for (const p of list) {
+    if (p.parentId && ids.has(p.parentId) && p.parentId !== p.id) continue;
+    const kids = under.get(p.id) || [];
+    out.push({ p, depth: 0, kids: kids.length });
+    if (!folded[p.id]) for (const c of kids) out.push({ p: c, depth: 1, kids: 0 });
+  }
+  return out;
+}
+
+/** Today: a main project with no own next step only holds its projects; they show as normal rows (the main is left out). */
+export function todayWithoutEmptyMains(list, today = todayIndia()) {
+  const parents = new Set(list.filter((p) => p.parentId).map((p) => p.parentId));
+  return list.filter((p) => !(parents.has(p.id) && !nextStep(p, today)));
 }
 
 // ---------- People (@mentions) ----------

@@ -230,7 +230,7 @@ export function morningMail({ person, manager, items, today }) {
   const title = morningTitle;
   const lastText = morningLast;
   const STATUS = 'Done / Going on / Stuck';
-  const end = ['Status: keep one of Done / Going on / Stuck.', 'Any problem or help needed: write below.'];
+  const end = ['Status: keep one of Done / Going on / Stuck.']; // (no 'Any problem…' line and no sign-off: the owner's Outlook template adds them)
 
   // the HTML (pasted into Outlook)
   const font = 'font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#222;';
@@ -252,19 +252,17 @@ export function morningMail({ person, manager, items, today }) {
   const head = ['#', 'Work', 'Last update', 'What I did today', 'Status'].map((h) => `<th style="${cell}background:#f2f2f2;font-weight:bold;">${h}</th>`).join('');
   const p = (words, extra = '') => `<p style="margin:0 0 10px 0;${extra}">${words}</p>`;
   const html = `<div style="${font}">`
-    + p(`Hi ${escHtml(name)}, good morning.${list.length ? ' Here is your pending work. Please fill the last two columns and reply by evening.' : ''}`)
+    + p(`Dear Mr. ${escHtml(name)},`)
+    + p(`Good morning.${list.length ? ' Here is your pending work. Please fill the last two columns and reply by evening.' : ''}`)
     + (list.length
-      ? p(escHtml(summary), 'color:#666;')
-        + `<table style="border-collapse:collapse;${font}" cellpadding="0" cellspacing="0"><thead><tr>${head}</tr></thead><tbody>${rows}</tbody></table>`
-        + `<p style="margin:10px 0 4px 0;">${end[0]}</p>` + p(end[1])
+      ? `<table style="border-collapse:collapse;${font}" cellpadding="0" cellspacing="0"><thead><tr>${head}</tr></thead><tbody>${rows}</tbody></table>`
+        + `<p style="margin:10px 0 4px 0;">${end[0]}</p>`
       : p('No pending work today.'))
-    + p(`Thanks,<br>${escHtml(manager || '')}`)
     + '</div>';
 
   // the plain words (when the phone or browser cannot copy a table)
-  const text = [`Hi ${name}, good morning.${list.length ? ' Here is your pending work. Under each item, write what you did today and keep one status, then reply by evening.' : ''}`, ''];
+  const text = [`Dear Mr. ${name},`, '', `Good morning.${list.length ? ' Here is your pending work. Under each item, write what you did today and keep one status, then reply by evening.' : ''}`, ''];
   if (list.length) {
-    text.push(summary, '');
     list.forEach((x, i) => {
       text.push(`${i + 1}. ${title(x)}`);
       if (x.kind === 'project' && x.about) text.push(`   ${x.about}`);
@@ -273,9 +271,8 @@ export function morningMail({ person, manager, items, today }) {
       if (x.repeat) text.push(`   ${x.repeat}`);
       text.push(`   Last update: ${lastText(x)}`, '   What I did today: ', `   Status: ${STATUS}`, '');
     });
-    text.push(...end, '');
-  } else text.push('No pending work today.', '');
-  text.push('Thanks,', manager || '');
+    text.push(...end);
+  } else text.push('No pending work today.');
   return { subject, html, text: text.join('\n') };
 }
 

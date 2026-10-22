@@ -10,6 +10,8 @@ import { newId, PRIORITIES, cleanUrl, groupHasTimer, MAX_SNOOZE_DAYS, ABOUT_MAX 
 const STATUS_OLD_DAYS = 7; // a status older than this turns grey and asks for an update
 import { uploadFiles, openFile, uploadBlob } from './files.js';
 import { projectEmailCards } from './replies.js';
+import { mainBox, mainChip, subProjectsBlock, openMainBox } from './mains.js';
+import { isMainProject, parentOf } from '../rules.js';
 
 const REPEAT_WORD = { daily: 'every day', weekly: 'every week', monthly: 'every month' };
 const COLOUR_WORD = { green: 'Done for today', yellow: 'Opened today', red: 'Not looked at today', grey: 'Paused or finished' };
@@ -24,7 +26,7 @@ const HISTORY_WORDS = {
   team_ticked: 'Done by the team', team_note: 'Team note', team_step_added: 'Step added by the team', team_step_unticked: 'Opened again by the team',
   team_note_deleted: 'Team note removed', team_moved: 'Moved in Work Task', mail_note: 'Email reply',
   reply_prepared: 'Reply prepared', reply_sent: 'Reply sent', mail_replied: 'Reply sent (seen in Outlook)',
-  step_to_project: 'Step made a project',
+  step_to_project: 'Step made a project', main_changed: 'Main project',
 };
 
 /** Text box that saves on its own: after a short pause in typing, and when leaving the box. */
@@ -799,6 +801,8 @@ function projectMenu(ctx, p) {
     p.state === 'active' ? item('⏸ Pause', () => ctx.act('pause', { projectId: p.id }, `Paused: ${p.name}`)) : null,
     timed ? item('⏱ Add time', () => addTimePrompt(ctx, p)) : null,
     item('✎ Group, priority, target date', () => { ui.editMeta = true; }),
+    // 📂 one level only: a main project is not put under another
+    !isMainProject(store.view.data, p) || parentOf(store.view.data, p) ? item('📂 Put under a main project…', () => openMainBox(ctx, p, 'parent')) : null,
     item('🗑 Delete project', () => {
       if (!confirm(`Delete "${p.name}"?\n\nYou can press Undo for a few seconds after.`)) return;
       ctx.act('deleteProject', { projectId: p.id }, `Deleted: ${p.name}`, 10000);
@@ -982,6 +986,7 @@ export function renderDetail(ctx) {
       h('div', { class: 'state-buttons' }, stateButtons(ctx, p))),
     aboutLine(ctx, p),
     projectMenu(ctx, p),
+    mainBox(ctx, p, 'parent'),
     snoozeBar(ctx, p),
     onlyDaysBar(ctx, p),
     remindOnceBar(ctx, p),
@@ -993,6 +998,8 @@ export function renderDetail(ctx) {
     teamMessages(ctx, p),
     statusLine(ctx, p),
     p.state !== 'active' ? h('p', { class: 'banner' }, p.state === 'paused' ? 'This project is paused. It is hidden from Today.' : 'This project is finished.') : null,
+    mainChip(ctx, p), // 📂 Kilns › (this project is under a main project)
+    subProjectsBlock(ctx, p, today), // a main project: its projects
 
     section(stepsTitle(),
       h('ul', { class: 'steps sortable-steps', key: 'steps-' + p.id, 'data-project': p.id },
