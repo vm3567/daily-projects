@@ -274,7 +274,7 @@ test('project description: taken from the project\'s tasks (the first one that h
   assert.equal(projectAboutOf([{ title: 'old server, no field' }]), '');
   assert.match(APP, /class: 'prow-about' }, aboutShort\(p\.projectAbout\)\)/, 'manager\'s Projects list row');
   assert.match(APP, /class: 'project-about' }/, 'under the title of the project and task pages');
-  assert.match(readFileSync(new URL('../team/public_html/sw.js', import.meta.url), 'utf8'), /const CACHE = 'worktask-v24'/, 'new files reach the phones');
+  assert.match(readFileSync(new URL('../team/public_html/sw.js', import.meta.url), 'utf8'), /const CACHE = 'worktask-v25'/, 'new files reach the phones');
 });
 
 // ---------------------------------------------------------------- 📧 morning email (one person's pending work as a table to fill in)
@@ -728,4 +728,88 @@ test('a photo message sent again after a lost answer carries the same clientId (
   assert.match(photo, /if \(!ids\[key\] \|\| ids\[key\]\.sig !== sig\) ids\[key\] = \{ id: newClientId\(\), sig \};/);
   assert.match(photo, /fd\.append\('clientId', ids\[key\]\.id\)/);
   assert.ok(photo.indexOf('delete ids[key]') > photo.indexOf("await api('comment.photo'"), 'forgotten only after it went');
+});
+
+// ---------------------------------------------------------------- review round 13 (Work Task client)
+// Runs the real sw.js with a pretend browser: a cache holding the OLD files and a network that is slow (or gone).
+async function swHarness({ netNever = false, netFail = false } = {}) {
+  const vm = await import('node:vm');
+  const src = readFileSync(new URL('../team/public_html/sw.js', import.meta.url), 'utf8');
+  const ORIGIN = 'https://worktask.in';
+  const key = (r) => new URL(typeof r === 'string' ? r : r.url, ORIGIN + '/').href;
+  const stores = {};
+  const store = (name) => (stores[name] ||= new Map());
+  const cacheObj = (name) => ({
+    match: async (r) => store(name).get(key(r)),
+    put: async (r, res) => { store(name).set(key(r), res); },
+    addAll: async (list) => { for (const r of list) store(name).set(key(r), new Response('new ' + key(r))); },
+  });
+  const handlers = {};
+  const timers = [];
+  const ctx = {
+    self: { addEventListener: (t, f) => { handlers[t] = f; }, clients: { matchAll: async () => [], claim: async () => {} }, skipWaiting: async () => {}, registration: {} },
+    location: { origin: ORIGIN },
+    caches: { open: async (n) => cacheObj(n), match: async (r) => { for (const n of Object.keys(stores)) { const x = store(n).get(key(r)); if (x) return x; } return undefined; }, keys: async () => Object.keys(stores), delete: async (n) => delete stores[n] },
+    fetch: (r) => (netNever ? new Promise(() => {}) : netFail ? Promise.reject(new TypeError('offline')) : Promise.resolve(new Response('net ' + key(r)))),
+    setTimeout: (f) => { timers.push(f); return timers.length; },
+    Request: class { constructor(u, o) { this.url = key(u); this.cache = o && o.cache; } },
+    Response, URL, Promise, console,
+  };
+  ctx.self.location = ctx.location;
+  vm.runInNewContext(src, ctx);
+  const cacheName = /const CACHE = '([^']+)'/.exec(src)[1];
+  return {
+    cacheName, store, handlers,
+    /** One request; resolves to the body text, or 'PENDING' if nothing answered after the 4-second timer fired. */
+    async ask(path, mode = 'no-cors') {
+      let answer;
+      handlers.fetch({ request: { url: ORIGIN + path, method: 'GET', mode }, respondWith: (p) => { answer = p; } });
+      for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r));
+      timers.splice(0).forEach((f) => f()); // the 4 seconds are up
+      const done = await Promise.race([answer.then((r) => r.text()), new Promise((r) => setTimeout(() => r('PENDING'), 30))]);
+      return done;
+    },
+  };
+}
+
+test('r13 sw: on a slow network a .js file (app.js / logic.js) is never answered from the old kept copy, so new app.js never meets old logic.js', async () => {
+  const h = await swHarness({ netNever: true });
+  for (const f of ['/app.js', '/logic.js', '/styles.css']) h.store(h.cacheName).set('https://worktask.in' + f, new Response('old ' + f));
+  h.store(h.cacheName).set('https://worktask.in/', new Response('old page'));
+  assert.equal(await h.ask('/logic.js'), 'PENDING', 'logic.js waits for the network');
+  assert.equal(await h.ask('/app.js'), 'PENDING', 'app.js waits for the network');
+  assert.equal(await h.ask('/styles.css'), 'PENDING');
+  assert.equal(await h.ask('/', 'navigate'), 'old page', 'the page itself still opens from the phone on a weak signal');
+});
+
+test('r13 sw: offline, the code files still come from the kept copy (of this version only)', async () => {
+  const h = await swHarness({ netFail: true });
+  h.store(h.cacheName).set('https://worktask.in/logic.js', new Response('kept logic'));
+  h.store('worktask-v1').set('https://worktask.in/app.js', new Response('very old app'));
+  assert.equal(await h.ask('/logic.js'), 'kept logic');
+  assert.notEqual(await h.ask('/app.js'), 'very old app', 'a copy left in another (old) cache is never used');
+});
+
+test('r13 sw: install keeps all app files at once, fresh from the server, in one named cache', async () => {
+  const h = await swHarness();
+  let wait;
+  h.handlers.install({ waitUntil: (p) => { wait = p; } });
+  await wait;
+  const keys = [...h.store(h.cacheName).keys()];
+  for (const f of ['index.html', 'app.js', 'logic.js', 'styles.css']) assert.ok(keys.includes('https://worktask.in/' + f), f);
+  const sw = readFileSync(new URL('../team/public_html/sw.js', import.meta.url), 'utf8');
+  assert.match(sw, /c\.addAll\(SHELL\.map\(\(u\) => new Request\(u, \{ cache: 'reload' \}\)\)\)/, 'not the browser\'s possibly older copy');
+});
+
+test('r13 Back marker: after a reload the old {wt:1} is dropped at start, so Back / ← / a menu tap never reload the app', async () => {
+  const fn = APP.slice(APP.indexOf('async function start() {'), APP.indexOf('takePrefill();', APP.indexOf('async function start() {')));
+  assert.match(fn, /if \(history\.state && history\.state\.wt\) history\.replaceState\(null, ''\);/, 'cleared before anything opens');
+  // the same lines, run: a page opened with {wt:1} left over, then a menu tap (go → dropBack)
+  const hist = { state: { wt: 1 }, backs: 0, back() { this.backs++; }, replaceState(s) { this.state = s; }, pushState(s) { this.state = s; } };
+  const pushBack = new Function('history', APP.match(/function pushBack\(\) \{[^\n]*\}/)[0] + '; return pushBack;')(hist);
+  const dropBack = new Function('history', 'let ignorePop = false; ' + APP.match(/function dropBack\(\) \{[^\n]*\}/)[0] + '; return dropBack;')(hist);
+  new Function('history', fn.slice(fn.indexOf('if (history.state')))(hist);
+  dropBack();
+  assert.equal(hist.backs, 0, 'a menu tap right after the reload does not go back (that would reload the page)');
+  pushBack(); assert.deepEqual(hist.state, { wt: 1 }, 'opening a task gets its own Back step on this page');
 });

@@ -2200,3 +2200,90 @@ test('Undo of deleting a task made from an email: a new task the server made for
   assert.deepEqual(P(s, 'mt').thread.map((e) => e.messageId), ['e1', 'e2'], 'with the new email in its thread');
   assert.equal(P(s, 'mt').mail.messageId, 'e2');
 });
+
+test('rich: a copy from Google Docs (<b style="font-weight:normal" id="docs-internal-guid-…">) is not saved all bold; real <b> stays', () => {
+  const gd = '<meta charset="utf-8"><b style="font-weight:normal;" id="docs-internal-guid-1a2b"><p>Hello world</p><p><b>Bold</b> word</p></b>';
+  assert.equal(rich.sanitizeRich(gd), '<p>Hello world</p><p><b>Bold</b> word</p>');
+  assert.equal(rich.isRich('<b style="font-weight:normal" id="docs-internal-guid-x">plain</b>'), false, 'one plain line stays a plain note');
+  assert.equal(rich.sanitizeRich('<strong style="font-weight: 400">x</strong>'), 'x');
+  assert.equal(rich.sanitizeRich('<b style="font-weight:700">x</b>'), '<b>x</b>', 'a bold that says bold stays bold');
+  assert.equal(rich.sanitizeRich('<b>x</b>'), '<b>x</b>');
+});
+
+test('rich: remapPhotos — own photos kept, another task\'s photo gets a new id, a photo found nowhere is left out (counted)', () => {
+  const html = '<p>a<img data-file="mine">b<img data-file="other">c<img data-file="gone"><img data-file="other"></p>';
+  const brought = [];
+  const r = rich.remapPhotos(html, (id) => id === 'mine', (id) => (id === 'other' ? (brought.push(id), 'copy1') : null));
+  assert.equal(r.html, '<p>a<img data-file="mine">b<img data-file="copy1">c<img data-file="copy1"></p>');
+  assert.equal(r.dropped, 1);
+  assert.deepEqual(brought, ['other'], 'the same photo twice is brought once');
+  assert.equal(rich.remapPhotos('<p>x</p>', () => false, () => null).html, '<p>x</p>');
+});
+
+test('Undo of "Create … as a new project": a task put into the new project meanwhile is taken out of it too (no link to a project that is gone)', () => {
+  const s = withMains();
+  const before = clone(P(s, 'k1'));
+  const index = s.data.projects.findIndex((p) => p.id === 'k1');
+  const o = op('createMainProject', { projectId: 'nm', name: 'Furnaces', groupId: 'g1', childId: 'k1' }, '2026-10-02', '10:01:00');
+  assert.ok(applyOp(s, o));
+  assert.ok(applyOp(s, op('addToProject', { projectId: 'k2', parentId: 'nm' }, '2026-10-02', '10:01:30')), 'another task goes into it within the Undo time');
+  assert.ok(applyOp(s, op('restoreProject', { project: before, index, undoOpId: o.id, removeProjectId: 'nm' }, '2026-10-02', '10:02:00')));
+  assert.equal(P(s, 'nm'), undefined, 'the new project is gone');
+  assert.equal(P(s, 'k2').parentIds, undefined, 'and nothing points at it any more');
+  assert.equal(P(s, 'k1').parentIds, undefined);
+});
+
+test('email task: a Finish / Delete pressed before a newer email (saved late, e.g. offline) does not hide or delete that email; one pressed after it still works', () => {
+  for (const kind of ['finish', 'deleteProject']) {
+    const s = withMains();
+    const p = mailTask(s);
+    const late = op(kind, { projectId: 'mt' }, '2026-10-02', '10:00:00'); // pressed 10:00 India = 04:30Z, saved later
+    serverEmail(p, 'e2', '2026-10-02T04:35:00.000Z'); // the server added an email at 10:05
+    assert.equal(applyOp(s, late), false, `${kind}: kept for the newer email`);
+    assert.equal(P(s, 'mt').state, 'active');
+    assert.deepEqual(P(s, 'mt').thread.map((e) => e.messageId), ['e1', 'e2']);
+    // replayed again (the other device, or the next load): the same answer
+    assert.equal(applyOp(s, late), false);
+    // your own email newer than the press does not count
+    const s2 = withMains();
+    const p2 = mailTask(s2);
+    p2.thread.push({ at: '2026-10-02T04:35:00.000Z', fromName: 'Me', fromMe: true, preview: 'ok', messageId: 'mine' });
+    assert.equal(applyOp(s2, op(kind, { projectId: 'mt' }, '2026-10-02', '10:00:00')), true, `${kind}: own email is not news`);
+    // pressed after the newest email: done as before
+    const s3 = withMains();
+    serverEmail(mailTask(s3), 'e2', '2026-10-02T04:35:00.000Z');
+    assert.equal(applyOp(s3, op(kind, { projectId: 'mt' }, '2026-10-02', '10:06:00')), true, `${kind}: after the email`);
+  }
+  // a task with no email is never held back
+  const s = withMains();
+  assert.equal(applyOp(s, op('finish', { projectId: 'k1' }, '2026-09-01')), true);
+});
+
+test('replies: Undo of ✓ Sent (undoReplySent) brings the draft back, takes away the "Reply sent" line and the day counted as work', async () => {
+  const { dayScore, lastWorkDate } = await import('../docs/rules.js');
+  const s = withMails();
+  applyOp(s, op('setReply', { projectId: 'p1', stepId: 's3', text: 'Will do', by: 'claude' }, '2026-10-22'));
+  const p = s.data.projects[0];
+  const step = () => p.steps.find((x) => x.id === 's3');
+  const before = { ...step().reply };
+  const workDate = p.workDate || null;
+  const sent = op('markReplySent', { projectId: 'p1', stepId: 's3' }, '2026-10-22', '16:00:00');
+  assert.ok(applyOp(s, sent));
+  assert.equal(applyOp(s, op('undoReplySent', { projectId: 'p1', stepId: 's3', reply: before, workDate, sentAt: 'other', undoOpId: sent.id }, '2026-10-22')), false, 'only that ✓ Sent');
+  const undo = op('undoReplySent', { projectId: 'p1', stepId: 's3', reply: before, workDate, sentAt: sent.at, undoOpId: sent.id }, '2026-10-22', '16:00:03');
+  assert.ok(applyOp(s, undo));
+  assert.deepEqual([step().reply.state, step().reply.text, step().reply.by], ['ready', 'Will do', 'claude'], 'the draft is back');
+  assert.ok(!Object.values(s.history).flat().some((e) => e.kind === 'reply_sent'), 'no "Reply sent" line');
+  assert.equal(lastWorkDate(p), workDate, 'the day is not counted as work');
+  assert.equal(dayScore(s.data, s.history, '2026-10-22').green, 0);
+  assert.equal(applyOp(s, undo), false, 'replayed: nothing more');
+  // other work the same day stays counted
+  const s2 = withMails();
+  applyOp(s2, op('setReply', { projectId: 'p1', stepId: 's3', text: 'Will do', by: 'you' }, '2026-10-22'));
+  applyOp(s2, op('addWorkNote', { projectId: 'p1', noteId: 'n9', text: 'Fired' }, '2026-10-22', '15:00:00'));
+  const sent2 = op('markReplySent', { projectId: 'p1', stepId: 's3' }, '2026-10-22', '16:00:00');
+  applyOp(s2, sent2);
+  assert.ok(applyOp(s2, op('undoReplySent', { projectId: 'p1', stepId: 's3', reply: null, workDate: null, sentAt: sent2.at, undoOpId: sent2.id }, '2026-10-22')));
+  assert.equal(s2.data.projects[0].workDate, '2026-10-22', 'the note still makes it a work day');
+  assert.equal('reply' in s2.data.projects[0].steps.find((x) => x.id === 's3'), false, 'no draft before: waiting again');
+});

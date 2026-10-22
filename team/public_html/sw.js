@@ -1,10 +1,11 @@
 // Work Task app shell: keeps the screens on the phone so the app opens fast and shows something
 // without internet. Data (api/) and the projects app (projects/, it has its own) are never kept here.
-const CACHE = 'worktask-v24';
+const CACHE = 'worktask-v25';
 const SHELL = ['./', 'index.html', 'app.js', 'logic.js', 'styles.css', 'projects/styles.css', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png'];
 
 self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
+  // all app files at once, fresh from the server (not the browser's own store): one version, all or nothing
+  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL.map((u) => new Request(u, { cache: 'reload' })))).then(() => self.skipWaiting()));
 });
 self.addEventListener('activate', (e) => {
   // only our own old copies: the projects app keeps its own cache on the same site
@@ -13,20 +14,25 @@ self.addEventListener('activate', (e) => {
 self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
   if (e.request.method !== 'GET' || url.origin !== location.origin || url.pathname.startsWith('/api/') || url.pathname === '/outlook.php' || (url.pathname === '/version.txt' && url.search) || (url.pathname.startsWith('/projects/') && url.pathname !== '/projects/styles.css')) return; // the shared look is kept here too
+  // only this version's copies (never a leftover from another cache)
+  const fromCache = (req) => caches.open(CACHE).then((c) => c.match(req));
   // online: always the newest copy (and keep it); offline: the kept copy
   const net = fetch(e.request).then((res) => {
     if (res.ok) { const copy = res.clone(); caches.open(CACHE).then((c) => c.put(e.request, copy)).catch(() => {}); return res; }
-    return caches.match(e.request).then((r) => r || res); // the host answered with an error page: the saved copy, if there is one
+    return fromCache(e.request).then((r) => r || res); // the host answered with an error page: the saved copy, if there is one
   });
-  const kept = () => caches.match(e.request).then((r) => r || (e.request.mode === 'navigate' ? caches.match('index.html') : Response.error()));
-  // the kept (old) copy was shown because the network was slow, and a newer file then arrived: tell the page
+  const kept = () => fromCache(e.request).then((r) => r || (e.request.mode === 'navigate' ? fromCache('index.html') : Response.error()));
+  // code (app.js, logic.js, styles): wait for the network, the kept copy only when there is none (offline).
+  // A slow logic.js must never be the old one next to a new app.js: the modules would not fit and the app would not start.
+  if (e.request.mode !== 'navigate' && /\.(js|mjs|css)$/.test(url.pathname)) { e.respondWith(net.catch(() => kept())); return; }
+  // the kept (old) page was shown because the network was slow, and a newer one then arrived: tell the page
   let netDone = false;
   net.then(() => { netDone = true; }, () => { netDone = true; });
   const stamp = (r) => (r && (r.headers.get('etag') || r.headers.get('last-modified'))) || '';
-  // weak signal (connected, but nothing moves): after 4 seconds use the kept copy, if there is one
-  const slow = new Promise((resolve) => setTimeout(() => caches.match(e.request).then(resolve, () => resolve(null)), 4000));
+  // weak signal (connected, but nothing moves): after 4 seconds use the kept page (or picture), if there is one
+  const slow = new Promise((resolve) => setTimeout(() => fromCache(e.request).then(resolve, () => resolve(null)), 4000));
   slow.then((old) => {
-    if (!old || netDone || !/\.(js|css|html)$|\/$/.test(url.pathname)) return;
+    if (!old || netDone || !(e.request.mode === 'navigate' || /\.html$|\/$/.test(url.pathname))) return;
     net.then((res) => { if (res.ok && stamp(res) !== stamp(old)) self.clients.matchAll({ type: 'window' }).then((cs) => cs.forEach((c) => c.postMessage({ type: 'new-version' }))); }).catch(() => {});
   });
   e.respondWith(Promise.race([net, slow.then((r) => r || net)]).catch(() => kept()));

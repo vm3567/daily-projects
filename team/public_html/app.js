@@ -2219,6 +2219,8 @@ function takePrefill() {
 const wantsProjects = new URLSearchParams(location.search).get('next') === 'projects';
 
 async function start() {
+  // a reload (new version, pull to refresh) keeps the old page's Back marker: drop it, or Back / ← / a menu tap would load the whole app again
+  if (history.state && history.state.wt) history.replaceState(null, '');
   takePrefill();
   if (wantsProjects) history.replaceState(null, '', location.pathname + location.hash);
   if (!state.token) { render(); return; }

@@ -115,6 +115,8 @@ function clean(node, depth = 0, inP = false) {
     const kids = clean(c, depth + 1, inP || tag === 'p');
     if (c.tag === 'hr') { out.push({ tag: 'br', attrs: {}, children: [] }); continue; }
     if (!ALLOWED.has(tag) || depth >= MAX_DEPTH) { out.push(...kids); continue; } // other tags: keep their words
+    // Google Docs wraps the whole copy in <b style="font-weight:normal" id="docs-internal-guid-…">: not bold, keep its words only
+    if ((tag === 'b' || tag === 'strong') && (/^docs-internal-guid/i.test(c.attrs.id || '') || /font-weight\s*:\s*(normal|[1-4]00)\b/i.test(c.attrs.style || ''))) { out.push(...kids); continue; }
     if (tag === 'p' && inP) { out.push({ tag: 'br', attrs: {}, children: [] }, ...kids); continue; } // never a paragraph inside a paragraph
     const attrs = {};
     if (tag === 'img') {
@@ -164,6 +166,27 @@ export function richFileIds(html) {
   const walk = (nodes) => { for (const n of nodes) if (typeof n !== 'string') { if (n.tag === 'img') ids.push(n.attrs['data-file']); walk(n.children); } };
   walk(richTree(html));
   return ids;
+}
+
+/**
+ * Photos inside pasted HTML (<img data-file="ID">, e.g. an update copied from another task): `keep(id)` true = this
+ * box's own photo, kept as it is; otherwise `bring(id)` gives a new id for a copy of it here (or null: the photo is
+ * left out, it would only show a grey 📷 that can never open). Returns { html, dropped }.
+ */
+export function remapPhotos(html, keep, bring) {
+  let dropped = 0;
+  const map = new Map();
+  const walk = (nodes) => nodes.flatMap((n) => {
+    if (typeof n === 'string') return [n];
+    if (n.tag !== 'img') return [{ ...n, children: walk(n.children) }];
+    const id = n.attrs['data-file'];
+    if (keep(id)) return [n];
+    if (!map.has(id)) map.set(id, bring(id) || null);
+    const to = map.get(id);
+    if (!to || !FILE_ID.test(to)) { dropped++; return []; }
+    return [{ ...n, attrs: { 'data-file': to } }];
+  });
+  return { html: serialize(walk(richTree(html))).trim(), dropped };
 }
 
 /** True when the HTML has more than plain words and line breaks (a table, list, bold, link or photo). */

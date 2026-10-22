@@ -1876,7 +1876,7 @@ test('connections: Rotate key — the old key stops at once, the new key and a n
   const log = sqlOut("SELECT GROUP_CONCAT(action, ' ', detail SEPARATOR '\\n') FROM wt.audit WHERE action LIKE 'conn\\_%'");
   for (const a of ['conn_create #', 'conn_rotate #', 'conn_delete #', 'conn_update #', 'conn_decide #']) assert.ok(log.includes(a), a);
   assert.ok(!/wt[cs]_[0-9a-f]{20}/.test(log), 'no key or secret in the log');
-  assert.equal(sqlOut("SELECT v FROM wt.settings WHERE k = 'schema'").trim(), '33', 'the tables step (v15) ran');
+  assert.equal(sqlOut("SELECT v FROM wt.settings WHERE k = 'schema'").trim(), '34', 'the tables steps ran (v34: conn_items.callback_since)');
 });
 
 // ---------------------------------------------------------------- review round 12 (connect.php / outlook.php)
@@ -2004,5 +2004,85 @@ test('review r12: a new email from them in the thread of a FINISHED 📧 task (o
   assert.ok(history[istDay(0).slice(0, 7)].some((e) => e.kind === 'reopened' && e.projectId === 'r12a'), 'a "Reopened" history line');
   const { repliesOf } = await import('../docs/rules.js');
   assert.ok(repliesOf(data, istDay(0)).waiting.some((m) => m.id === 'r12a'), 'listed on ✉ Replies');
+  await saveProjects([]);
+});
+
+// ---------------------------------------------------------------- review round 13 (connect.php / jobs.php)
+test('review r13: the app withdraws a task while the 5-minute job is making it — it stays withdrawn and the task gets the "took this back" note', { skip }, async () => {
+  sql(`INSERT INTO wt.conn_items (conn_id, external_id, kind, title, details, fields, status, created_at, updated_at) VALUES (${cn.purchase.id}, 'T-WD1', 'task', 'Withdrawn while made', '', '[]', 'pending', NOW(), NOW())`);
+  const iid = itemId(cn.purchase.id, 'T-WD1');
+  // the withdraw holds the row and writes 'withdrawn' while the task is being made (after the maker read 'pending')
+  const withdraw = promisify(execFile)('mysql', ['-u', 'root', `--socket=${SOCK}`, '-e',
+    `BEGIN; SELECT id FROM wt.conn_items WHERE id = ${iid} FOR UPDATE; DO SLEEP(3); UPDATE wt.conn_items SET status = 'withdrawn' WHERE id = ${iid}; COMMIT;`]);
+  await wait(500);
+  await phpRun(`$it = one('SELECT * FROM conn_items WHERE id = ${iid}'); conn_make_task($it, ['name' => 'Purchase']);`);
+  await withdraw;
+  const task = (await dpNow()).data.projects.find((p) => p.name === 'Withdrawn while made');
+  assert.ok(task, 'the task was made');
+  assert.equal(sqlOut(`SELECT CONCAT(status, ' ', dp_task_id) FROM wt.conn_items WHERE id = ${iid}`).trim(), 'withdrawn ' + task.id, 'stays withdrawn (not done), and points at its task');
+  assert.ok(task.workNotes.some((n) => n.text === '🔌 Purchase took this back (withdrawn).'), 'the task says the app took it back');
+  // a withdrawn task is not made by the job afterwards
+  await phpRun('conn_jobs();');
+  assert.equal((await dpNow()).data.projects.filter((p) => p.name === 'Withdrawn while made').length, 1);
+});
+
+test('review r13: a withdraw that read the task as not made yet, while the job made it meanwhile, still writes the note on the task', { skip }, async () => {
+  sql(`INSERT INTO wt.conn_items (conn_id, external_id, kind, title, details, fields, status, created_at, updated_at) VALUES (${cn.purchase.id}, 'T-WD2', 'task', 'Made before the withdraw', '', '[]', 'pending', NOW(), NOW())`);
+  const iid = itemId(cn.purchase.id, 'T-WD2');
+  const out = await phpRun(`$c = one('SELECT * FROM connections WHERE id = ${cn.purchase.id}'); $stale = one('SELECT * FROM conn_items WHERE id = ${iid}');
+    conn_make_task($stale, $c); echo json_encode(conn_withdraw($c, $stale));`);
+  assert.deepEqual(JSON.parse(out), { id: iid, status: 'withdrawn' });
+  const task = (await dpNow()).data.projects.find((p) => p.name === 'Made before the withdraw');
+  assert.equal(sqlOut(`SELECT CONCAT(status, ' ', dp_task_id) FROM wt.conn_items WHERE id = ${iid}`).trim(), 'withdrawn ' + task.id);
+  assert.equal(task.workNotes.filter((n) => n.text === '🔌 Purchase took this back (withdrawn).').length, 1, 'one note on the task');
+});
+
+test('review r13: a task withdrawn before it was made, sent again, is made (and done)', { skip }, async () => {
+  sql(`INSERT INTO wt.conn_items (conn_id, external_id, kind, title, details, fields, status, created_at, updated_at) VALUES (${cn.purchase.id}, 'T-WD3', 'task', 'Sent again', '', '[]', 'withdrawn', NOW(), NOW())`);
+  const r = await appCall('connect.push', { external_id: 'T-WD3', kind: 'task', title: 'Sent again' }, cn.purchase.key);
+  assert.equal(r.status, 'done', r.error);
+  assert.equal((await dpNow()).data.projects.filter((p) => p.name === 'Sent again').length, 1);
+});
+
+test('review r13: after the owner fixes the decision address, an old decision gets a fresh 24 hours of tries (one failure does not give it up)', { skip }, async () => {
+  await fakeApp();
+  const old = await call('conn.create', { name: 'Old' }, tok.boss);
+  sql(`INSERT INTO wt.conn_items (conn_id, external_id, kind, title, status, decided_at, callback_since, callback_failed, callback_tries, created_at, updated_at)
+    VALUES (${old.connection.id}, 'O-1', 'approval', 'Approve O-1', 'approved', NOW() - INTERVAL 3 DAY, NOW() - INTERVAL 3 DAY, 1, 9, NOW() - INTERVAL 3 DAY, NOW())`);
+  const iid = itemId(old.connection.id, 'O-1');
+  cb.code = 503;
+  try {
+    assert.ok((await call('conn.update', { id: old.connection.id, callback_url: CB }, tok.boss)).ok);
+    await phpRun(`conn_send(${iid});`);
+  } finally { cb.code = 200; }
+  const row = sqlOut(`SELECT CONCAT(callback_failed, ' ', callback_tries, ' ', callback_next_at IS NOT NULL) FROM wt.conn_items WHERE id = ${iid}`).trim();
+  assert.equal(row, '0 1 1', 'one try failed: still queued to try again, not given up');
+  assert.equal((await appItems()).find((i) => i.id === iid).delivery, 'waiting');
+  assert.ok((await call('conn.delete', { id: old.connection.id }, tok.boss)).ok);
+});
+
+test('review r13: connect.decisions never skips a decision saved at the moment the app asked (its time is before that answer\'s until)', { skip }, async () => {
+  const p = await call('conn.create', { name: 'Moment' }, tok.boss);
+  const a = await appCall('connect.decisions', {}, p.key);
+  assert.ok(a.ok, a.error);
+  assert.deepEqual(a.decisions, []);
+  // the owner's ✓ took its time a second before the app asked, but was written just after the answer
+  await phpRun(`q("INSERT INTO conn_items (conn_id, external_id, kind, title, status, decided_at, created_at, updated_at) VALUES (${p.connection.id}, 'MO-1', 'approval', 'x', 'approved', ?, NOW(), NOW())",
+    [date('Y-m-d H:i:s', time() - 1)]);`);
+  const b = await appCall('connect.decisions', { since: a.until }, p.key);
+  assert.deepEqual(b.decisions.map((d) => d.external_id), ['MO-1'], 'the next ask from until still gets it');
+  const c = await appCall('connect.decisions', { since: b.until }, p.key);
+  assert.ok(c.decisions.every((d) => d.external_id === 'MO-1'), 'at most the same one again (the app skips it by item_id)');
+  assert.ok((await call('conn.delete', { id: p.connection.id }, tok.boss)).ok);
+});
+
+test('review r13: changing "🔔 Remind me at" to a later time the same day sends the new reminder once', { skip }, async () => {
+  const p = (at) => ({ id: 'rm13', name: 'Glaze check', state: 'active', remindAt: at, steps: [] });
+  await saveProjects([p('09:00')]);
+  assert.equal(remindersAt('2026-12-14T09:05:00+05:30').length, 1, 'the 09:00 reminder');
+  await saveProjects([p('14:00')]);
+  assert.deepEqual(remindersAt('2026-12-14T13:59:00+05:30'), [], 'not before the new time');
+  assert.equal(remindersAt('2026-12-14T14:01:00+05:30').length, 1, 'the new 14:00 reminder comes');
+  assert.deepEqual(remindersAt('2026-12-14T14:30:00+05:30'), [], 'and never twice');
   await saveProjects([]);
 });

@@ -43,12 +43,14 @@ function focusReply(m) {
 
 /** ✓ Sent (your work, like a note) — with Undo. */
 function markSent(ctx, m) {
-  const before = m.reply ? { ...m.reply } : null;
+  const before = m.reply && m.reply.state !== 'sent' ? { ...m.reply } : null;
+  const workDate = m.project ? m.project.workDate || null : null;
   const op = ctx.store.dispatch('markReplySent', m.ref);
   if (!op) return false;
-  ctx.toast(`✓ Reply to ${m.from} marked sent`, 4000, before && before.text ? () => {
-    ctx.store.dispatch('setReply', { ...m.ref, text: before.text, by: before.by });
-  } : null);
+  // Undo takes it all back: the draft, the "Reply sent" line and the day counted as work
+  ctx.toast(`✓ Reply to ${m.from} marked sent`, 4000, () => {
+    ctx.store.dispatch('undoReplySent', { ...m.ref, reply: before, workDate, sentAt: op.at, undoOpId: op.id });
+  });
   return true;
 }
 

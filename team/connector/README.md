@@ -73,7 +73,7 @@ and two headers:
 - `X-WorkTask-Signature` – `sha256=` + HMAC-SHA256(signing secret, timestamp + "." + body), in hex.
 
 The app should check the signature and that the time is within 5 minutes, then answer `200`.
-Any other answer is tried again by itself (5, 10, 20 … minutes apart) for 24 hours.
+Any other answer is tried again by itself (5, 10, 20 … minutes apart) for 24 hours (counted again from the moment the owner changes the Decision address).
 Work Task never follows a redirect, and waits 5 seconds at most.
 
 **b) The app asks Work Task (no Decision address needed).**
@@ -81,7 +81,7 @@ Work Task never follows a redirect, and waits 5 seconds at most.
 `POST https://worktask.in/api/?a=connect.decisions` with `{"since": "2026-10-22T10:00:00+05:30"}`
 (or `GET …?a=connect.decisions&since=…`). The answer lists `external_id`, `status`, `reason`, `decided_at`, `item_id`.
 Keep the answer's `until` for the next time. If the answer says `"more": true` (500 at a time), ask again at once with `since` = that `until`.
-The same decision may come twice – use `external_id` to skip it.
+`until` is a few seconds before the answer, so a decision saved at that very moment is never missed. So the same decision may come twice – use `item_id` (or `external_id`) to skip it.
 
 ## n8n, Make, Zapier or Power Automate
 

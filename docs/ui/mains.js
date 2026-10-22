@@ -173,7 +173,15 @@ export function subProjectsBlock(ctx, p, today = todayIndia()) {
   const data = store.view.data;
   if (!isMainProject(data, p)) return null;
   const kids = orderedTasks(data, p, today); // your order (▲ ▼), new ones after
-  const move = (c, dir) => { const order = movedOrder(kids, c.id, dir); if (order) { ctx.store.dispatch('setTaskOrder', { projectId: p.id, order }); ctx.render(); } };
+  // the redraw moves the rows, which drops the keyboard focus: put it back on the same button (or its pair at the top / end)
+  const refocus = (c, dir) => {
+    if (typeof document === 'undefined' || typeof document.querySelector !== 'function') return;
+    const find = (d) => document.querySelector(`[data-key="mv-${d}-${c.id}"]`);
+    let el = find(dir < 0 ? 'up' : 'down');
+    if (!el || el.disabled) el = find(dir < 0 ? 'down' : 'up');
+    if (el && typeof el.focus === 'function') el.focus();
+  };
+  const move = (c, dir) => { const order = movedOrder(kids, c.id, dir); if (order) { ctx.store.dispatch('setTaskOrder', { projectId: p.id, order }); ctx.render(); refocus(c, dir); } };
   return h('section', { class: 'block sub-projects', key: 'subs-' + p.id },
     h('h3', null, `TASKS (${kids.length})`),
     kids.length ? h('table', { class: 'sub-table' },
@@ -190,8 +198,8 @@ export function subProjectsBlock(ctx, p, today = todayIndia()) {
           h('td', { class: 'muted small' }, lu ? `${fmtDay(lu.day)} · ${short(lu.text, 50)}` : '—'),
           // takes the task out of this project only (the task itself stays, with Undo)
           h('td', { class: 'sub-move' },
-            h('button', { class: 'icon tiny', type: 'button', title: 'Move up', 'aria-label': `Move ${c.name} up`, disabled: kids[0] === c ? true : undefined, onClick: (e) => { if (e && e.stopPropagation) e.stopPropagation(); move(c, -1); } }, '▲'),
-            h('button', { class: 'icon tiny', type: 'button', title: 'Move down', 'aria-label': `Move ${c.name} down`, disabled: kids[kids.length - 1] === c ? true : undefined, onClick: (e) => { if (e && e.stopPropagation) e.stopPropagation(); move(c, 1); } }, '▼')),
+            h('button', { class: 'icon tiny', type: 'button', key: 'mv-up-' + c.id, title: 'Move up', 'aria-label': `Move ${c.name} up`, disabled: kids[0] === c ? true : undefined, onClick: (e) => { if (e && e.stopPropagation) e.stopPropagation(); move(c, -1); } }, '▲'),
+            h('button', { class: 'icon tiny', type: 'button', key: 'mv-down-' + c.id, title: 'Move down', 'aria-label': `Move ${c.name} down`, disabled: kids[kids.length - 1] === c ? true : undefined, onClick: (e) => { if (e && e.stopPropagation) e.stopPropagation(); move(c, 1); } }, '▼')),
           h('td', null, h('button', {
             class: 'link small sub-remove', type: 'button', title: `Take ${c.name} out of this project (the task is kept)`,
             onClick: (e) => { if (e && e.stopPropagation) e.stopPropagation(); ctx.act('removeFromProject', { projectId: c.id, parentId: p.id }, `${c.name} taken out of 📂 ${p.name} (the task is kept)`); },

@@ -633,10 +633,12 @@ function remindOnceBar(ctx, p) {
   };
   const timeBox = (k, v) => h('input', { type: 'time', value: v, key: `ro-${k}-${p.id}`, 'aria-label': 'Time', onInput: (e, el) => { ui.remindTimes = { ...(ui.remindTimes || {}), [k]: el.value }; } });
   const tt = ui.remindTimes || {};
+  // the time typed is read when the button is pressed (typing does not redraw, so a value kept from drawing would be old)
+  const typed = (k, dflt) => (ui.remindTimes || {})[k] || dflt;
   return h('div', { class: 'only-days remind-once', key: 'ro-' + p.id, role: 'group', 'aria-label': 'Remind me once' },
     h('span', null, '🔔 Remind me once'),
-    h('span', { class: 'remind-at' }, h('button', { class: 'chip', type: 'button', onClick: () => set(`${today} ${tt.today || '16:00'}`) }, 'Today at'), timeBox('today', tt.today || '16:00')),
-    h('span', { class: 'remind-at' }, h('button', { class: 'chip', type: 'button', onClick: () => set(`${addDays(today, 1)} ${tt.tomorrow || '09:30'}`) }, 'Tomorrow at'), timeBox('tomorrow', tt.tomorrow || '09:30')),
+    h('span', { class: 'remind-at' }, h('button', { class: 'chip', type: 'button', onClick: () => set(`${today} ${typed('today', '16:00')}`) }, 'Today at'), timeBox('today', tt.today || '16:00')),
+    h('span', { class: 'remind-at' }, h('button', { class: 'chip', type: 'button', onClick: () => set(`${addDays(today, 1)} ${typed('tomorrow', '09:30')}`) }, 'Tomorrow at'), timeBox('tomorrow', tt.tomorrow || '09:30')),
     h('span', { class: 'remind-at' },
       h('input', { type: 'date', min: today, value: pick.date, key: 'ro-date-' + p.id, 'aria-label': 'Date', onInput: (e, el) => { pick.date = el.value; } }),
       h('input', { type: 'time', value: pick.time, key: 'ro-time-' + p.id, 'aria-label': 'Time', onInput: (e, el) => { pick.time = el.value; } }),
@@ -1136,7 +1138,7 @@ function projectDiary(ctx, p, upd) {
   const td = t && t.data ? t.data : null;
   const fillBy = (td && td.fillBy) || '18:00';
   const created = p.createdAt ? indiaDate(p.createdAt) : today;
-  const shownDays = ui.diaryDays && ui.diaryDays.projectId === p.id ? ui.diaryDays.n : 14;
+  const shownDays = ui.projDiaryDays && ui.projDiaryDays.projectId === p.id ? ui.projDiaryDays.n : 14; // its own setting: the main Diary keeps a number in ui.diaryDays
   const filter = ui.diaryTask && ui.diaryTask.projectId === p.id ? ui.diaryTask.stepId : null;
   const stepText = new Map(p.steps.map((x) => [x.id, x.text]));
   const taskStep = new Map((td ? td.tasks : []).map((x) => [x.id, x.stepRef]));
@@ -1229,7 +1231,7 @@ function projectDiary(ctx, p, upd) {
     start > created ? h('button', {
       class: 'link small', type: 'button',
       onClick: () => {
-        ui.diaryDays = { projectId: p.id, n: shownDays + 14 };
+        ui.projDiaryDays = { projectId: p.id, n: shownDays + 14 };
         if (ctx.moreDaily && td && td.from && addDays(today, -(shownDays + 13)) < td.from) ctx.moreDaily(p); // the team's older updates too
         const loaded = new Set(Object.keys(store.view.history));
         const older = store.availableMonths().find((m) => !loaded.has(m));

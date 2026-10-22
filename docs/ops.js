@@ -9,7 +9,7 @@
 // applyOp(state, op) changes the state in place and returns true, or returns false
 // when the operation must be skipped (for example, its item no longer exists).
 
-import { indiaDate, monthOf, laterDate, addDays, REPEATS, nextRepeatDate, waitingAgain, WEEKDAYS, indiaDateTime, validRemindOnce, remindOnceText, canPutUnder, parentIdsOf, normalizeParents, isMainProject, THREAD_MAX } from './rules.js';
+import { WORK, indiaDate, monthOf, laterDate, addDays, REPEATS, nextRepeatDate, waitingAgain, WEEKDAYS, indiaDateTime, validRemindOnce, remindOnceText, canPutUnder, parentIdsOf, normalizeParents, isMainProject, THREAD_MAX } from './rules.js';
 import { AI_DAILY_LIMIT, BRIEF_CLAIM_MINUTES } from './config.js';
 import { sanitizeRich, htmlToText, isRich, RICH_MAX } from './rich.js';
 
@@ -265,6 +265,20 @@ function removeTickEvent(state, project, step) {
     });
   }
   if (best) state.history[best.m].splice(best.i, 1);
+}
+
+/**
+ * A task made from an email: did an email from someone else come AFTER `at`? (The server adds it to the thread, and
+ * opens a finished task again.) A Finish or Delete pressed before it, and saved only later (offline, or a save that
+ * had to try again), must not hide or delete that email: the server will not bring it in a second time.
+ */
+function newerMailThan(p, at) {
+  const t = Date.parse(at);
+  if (!p || !p.mail || Number.isNaN(t)) return false;
+  const thread = Array.isArray(p.thread) ? p.thread : [];
+  const theirs = thread.filter((e) => e && !e.fromMe && typeof e.at === 'string').map((e) => Date.parse(e.at));
+  if (!thread.length && !p.mail.fromMe && typeof p.mail.at === 'string') theirs.push(Date.parse(p.mail.at));
+  return theirs.some((x) => x > t);
 }
 
 /** Every change to a project counts as activity for the dot colour (green today). */
@@ -643,6 +657,7 @@ const handlers = {
   finish(state, op, a) {
     const p = findProject(state.data, a.projectId);
     if (!p || p.state === 'finished') return false;
+    if (newerMailThan(p, op.at)) return false; // an email came after you pressed Finish (a change saved late): it stays open for it
     return setState(state, op, a, p.state, 'finished', 'finished');
   },
   reopen(state, op, a) { return setState(state, op, a, 'finished', 'active', 'reopened'); },
@@ -651,6 +666,7 @@ const handlers = {
     const { data } = state;
     const i = data.projects.findIndex((p) => p.id === a.projectId);
     if (i < 0) return false;
+    if (newerMailThan(data.projects[i], op.at)) return false; // an email came after you pressed Delete: the task (and that email) stays
     const [p] = data.projects.splice(i, 1);
     for (const c of data.projects) if (parentIdsOf(c).includes(p.id)) setParents(c, parentIdsOf(c).filter((x) => x !== p.id)); // its tasks stay, just no longer in it
     addEvent(state, op, p, 'deleted', p.name);
@@ -684,6 +700,8 @@ const handlers = {
     if (typeof a.removeProjectId === 'string' && a.removeProjectId !== snap.id) { // Undo of "Make it a project": the new one goes
       const k = list.findIndex((x) => x.id === a.removeProjectId);
       if (k >= 0) list.splice(k, 1);
+      // like deleteProject: a task put into the new project meanwhile (this or another device) is no longer in it
+      for (const c of list) if (parentIdsOf(c).includes(a.removeProjectId)) setParents(c, parentIdsOf(c).filter((x) => x !== a.removeProjectId));
     }
     // the saved links are checked against the data as it is now (another device may have deleted a project, or made
     // this task a project): only projects that are still there, never a project inside a project
@@ -1104,6 +1122,37 @@ const handlers = {
       touch(t.project, op);
       markWork(t.project, op);
       addEvent(state, op, t.project, 'reply_sent', `Reply sent: ${t.target.mail.subject || ''}`.trim());
+    }
+    return true;
+  },
+
+  /**
+   * Undo of ✓ Sent: the draft comes back as it was (a.reply; none = waiting again), the "Reply sent" line goes, and the
+   * day is not counted as work any more unless something else was done that day (a.workDate = the date before).
+   * Only for that ✓ Sent (a.sentAt = its time): a reply seen in Outlook since is left alone.
+   */
+  undoReplySent(state, op, a) {
+    const t = mailTarget(state.data, a);
+    const r = t && t.target.reply;
+    if (!r || r.state !== 'sent' || typeof a.sentAt !== 'string' || r.sentAt !== a.sentAt) return false;
+    const b = a.reply && typeof a.reply === 'object' ? a.reply : null;
+    const text = b ? cleanText(b.text, REPLY_MAX).replace(/\s+$/, '') : '';
+    if (text.trim()) {
+      const until = b.state === 'later' ? cleanDate(b.laterUntil) : null;
+      t.target.reply = { text, at: typeof b.at === 'string' ? b.at : op.at, by: b.by === 'claude' ? 'claude' : 'you', forMessageId: r.forMessageId || null, state: until ? 'later' : 'ready', ...(until ? { laterUntil: until } : {}) };
+    } else delete t.target.reply;
+    if (typeof a.undoOpId === 'string' && a.undoOpId) {
+      for (const events of Object.values(state.history)) {
+        const k = events.findIndex((e) => e.id === a.undoOpId && e.kind === 'reply_sent');
+        if (k >= 0) events.splice(k, 1);
+      }
+    }
+    const p = t.project;
+    const day = indiaDate(a.sentAt);
+    if (p && p.workDate === day) {
+      const other = Object.values(state.history).some((list) => list.some((e) => e.projectId === p.id && WORK.has(e.kind) && indiaDate(e.at) === day));
+      const was = cleanDate(a.workDate) || null;
+      if (!other && (!was || was < day)) p.workDate = was;
     }
     return true;
   },

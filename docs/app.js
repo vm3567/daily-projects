@@ -1916,7 +1916,7 @@ function renderDiary() {
   const { history } = store.view;
   const byDay = diaryEntries(store.view.data, history);
   const days = [...byDay.keys()].sort().reverse();
-  const shown = days.slice(0, ui.diaryDays);
+  const shown = days.slice(0, Number(ui.diaryDays) || 14);
   const loaded = new Set(Object.keys(history));
   const older = store.availableMonths().find((m) => !loaded.has(m));
   return h('div', { class: 'diary' },
@@ -1931,7 +1931,7 @@ function renderDiary() {
           : h('span', { class: 'muted' }, l.name),
         ': ', l.html ? diaryRich(l) : l.text))))),
     days.length > shown.length
-      ? h('button', { class: 'btn', onClick: () => { ui.diaryDays += 14; render(); } }, 'Show older days')
+      ? h('button', { class: 'btn', onClick: () => { ui.diaryDays = (Number(ui.diaryDays) || 14) + 14; render(); } }, 'Show older days')
       : older ? h('button', { class: 'btn', onClick: () => store.loadMonth(older) }, `Load ${older}`) : null);
 }
 

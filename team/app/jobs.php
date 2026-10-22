@@ -207,8 +207,9 @@ function project_reminders(): void {
       $from = (int)$m[1] * 60 + (int)$m[2];
       $snoozed = !empty($p['snoozedUntil']) && (string)$p['snoozedUntil'] > $day;
       $key = 'prm:' . md5($id);
-      if ((!$days || in_array($wd, $days, true)) && !$snoozed && $mins >= $from && $mins < $from + 180 && setting($key) !== $day) {
-        set_setting($key, $day);
+      $mark = $day . ' ' . $p['remindAt']; // the day and the time: a new time on the same day still comes once
+      if ((!$days || in_array($wd, $days, true)) && !$snoozed && $mins >= $from && $mins < $from + 180 && setting($key) !== $mark && setting($key) !== $day) {
+        set_setting($key, $mark);
         $send = true;
       }
     }

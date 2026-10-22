@@ -519,7 +519,7 @@ export function personStatus(data, person, today = todayIndia()) {
  * Counts projects that existed and were active that day.
  */
 /** Real work in the history, the same as the dot's rule: your notes, ticks and time (the team's counts through teamDays). */
-const WORK = new Set(['note_added', 'step_ticked', 'time_logged', 'time_added', 'reply_sent']);
+export const WORK = new Set(['note_added', 'step_ticked', 'time_logged', 'time_added', 'reply_sent']);
 const NOT_WORK = new Set(['created', 'snoozed', 'woke', 'step_remind', 'team_ticked', 'team_note', 'team_step_added', 'team_step_unticked', 'team_note_deleted', 'team_moved', 'mail_note', 'mail_task', 'reply_prepared', 'mail_replied', 'app_task', 'app_note']); // (the team's work counts through teamDays)
 
 /** On that day, was every open step of the project waiting for a "remind me" date? */

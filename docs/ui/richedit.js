@@ -2,7 +2,7 @@
 // Saved HTML is cleaned again (rich.js) and drawn with h() — never innerHTML — so nothing in it can run.
 
 import { h, HAS_KEYBOARD } from './dom.js';
-import { richTree, sanitizeRich, isRich, htmlToText, richFileIds, TABLE_HTML, RICH_MAX, RAW_MAX } from '../rich.js';
+import { richTree, sanitizeRich, isRich, htmlToText, richFileIds, remapPhotos, TABLE_HTML, RICH_MAX, RAW_MAX } from '../rich.js';
 import { uploadBlob, thumbUrl } from './files.js';
 import { newId } from '../ops.js';
 
@@ -130,7 +130,7 @@ export async function addDraftPhotos(ctx, d, files, key, { inline = false } = {}
  * ⌘V / Ctrl+V in a rich box: a screenshot (an image with no words) is uploaded and shown in the box;
  * HTML (Excel, Outlook, Word, a web page) is pasted cleaned — tables, bold, lists and links kept; plain words stay plain.
  */
-export function pasteRich(ctx, d, e, el, key, changed, otherFiles = null) {
+export function pasteRich(ctx, d, e, el, key, changed, otherFiles = null, ownFiles = null) {
   const cd = e && e.clipboardData;
   if (!cd) return;
   const files = [...(cd.files || [])];
@@ -146,13 +146,35 @@ export function pasteRich(ctx, d, e, el, key, changed, otherFiles = null) {
   }
   if (!html.trim() && !plain) return;
   e.preventDefault(); // (cells from Excel come with a picture of them too: the cells win)
-  const clean = html.trim() ? sanitizeRich(html) : '';
+  let clean = html.trim() ? sanitizeRich(html) : '';
+  if (clean.includes('<img')) clean = pastedPhotos(ctx, d, clean, ownFiles);
   if (clean.trim()) insertHtml(el, clean);
   else if (plain) { // no HTML, too much of it (a big Excel copy) or nothing left once cleaned: the plain words, never nothing
     if (html.length > RAW_MAX) ctx.toast('Too big to paste as a table: pasted as plain words', 4000);
     editCommand(el, 'insertText', plain);
   } else { ctx.toast('Nothing could be pasted from this', 2500); return; }
   if (changed) changed(el);
+}
+
+/**
+ * Photos in pasted HTML (an update copied from another task): this box's own photos stay; a photo of another task
+ * is brought along as a new photo of this one (the same saved picture, its own id); one that is nowhere is left out, with a note.
+ */
+export function pastedPhotos(ctx, d, html, files = null) {
+  const own = new Set([...(files || []).map((f) => f.id), ...(d.photos || []).map((ph) => ph.fileId)]);
+  const projects = (ctx.store && ctx.store.view && ctx.store.view.data && ctx.store.view.data.projects) || [];
+  const bring = (id) => {
+    let f = null;
+    for (const p of projects) { f = (p.files || []).find((x) => x.id === id && x.sha); if (f) break; }
+    if (!f) return null;
+    const ph = { fileId: newId(), name: f.name || 'photo.jpg', sha: f.sha, size: f.size || 0, type: f.type || '', inline: true, preview: thumbUrl(f) };
+    (d.photos ||= []).push(ph);
+    d.rich = true;
+    return ph.fileId;
+  };
+  const r = remapPhotos(html, (id) => own.has(id), bring);
+  if (r.dropped) ctx.toast(`${r.dropped} copied photo${r.dropped > 1 ? 's' : ''} could not come along — add ${r.dropped > 1 ? 'them' : 'it'} again with 📷`, 4000);
+  return r.html;
 }
 
 const photoWord = (n) => `📷 ${n} photo${n > 1 ? 's' : ''}`;
@@ -235,7 +257,7 @@ export function richArea(ctx, d, { key, placeholder, title = null, files = [], o
       'data-placeholder': placeholder, key, title, spellcheck: 'true',
       onInput: (e, el) => changed(el),
       onKeydown: (e, el) => { if (onKey) onKey(e, el); },
-      onPaste: (e, el) => pasteRich(ctx, d, e, el, key, changed, otherFiles),
+      onPaste: (e, el) => pasteRich(ctx, d, e, el, key, changed, otherFiles, files),
     }, ...(d.html ? richNodes(d.html, (id) => draftPhoto(d, files, id)) : [])),
     d.uploading ? h('div', { class: 'muted small' }, `📷 Uploading ${d.uploading} photo${d.uploading > 1 ? 's' : ''}…`) : null,
     chips.length ? h('div', { class: 'photo-chips' }, chips.map((ph) => h('span', { class: 'tag photo', key: 'ph-' + ph.fileId },

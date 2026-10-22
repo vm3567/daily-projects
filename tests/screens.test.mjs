@@ -447,6 +447,22 @@ test('replies: the "✉ Reply ready" box — who prepared it, editable, and its 
   assert.deepEqual(ctx.calls[1][1], { projectId: 'p1', stepId: 'ms1' });
 });
 
+test('replies: Undo after ✓ Sent takes it all back (undoReplySent with the draft, the date before and that ✓ Sent), not just the draft', () => {
+  const s = mailState();
+  applyOps(s, [makeOp('setReply', { projectId: 'p1', stepId: 'ms1', text: 'Dear Ravi', by: 'claude' })]);
+  const ctx = replyCtx(s, { selected: 'p1' });
+  let undo = null;
+  ctx.toast = (t, ms, u) => { undo = u; };
+  ctx.store.dispatch = (type, args) => { ctx.calls.push([type, args]); return { id: 'op9', at: '2026-10-22T10:30:00.000Z' }; };
+  const wd = s.data.projects[0].workDate || null;
+  btn(rFind(renderDetail(ctx), (n) => n.className === 'mail-card'), '✓ Sent').__on.click();
+  assert.equal(typeof undo, 'function', 'Undo offered');
+  undo();
+  const [type, args] = ctx.calls.at(-1);
+  assert.equal(type, 'undoReplySent');
+  assert.deepEqual([args.projectId, args.stepId, args.reply.text, args.reply.state, args.workDate, args.sentAt, args.undoOpId], ['p1', 'ms1', 'Dear Ravi', 'ready', wd, '2026-10-22T10:30:00.000Z', 'op9']);
+});
+
 test('replies: the ✉ Replies page — counts, ready and waiting lists with days, tap opens, round button', () => {
   const s = mailState();
   assert.equal(readyCount(s.data), 1, 'the menu number');
@@ -732,6 +748,36 @@ test('🔔 Remind me once: the bar (Today at, Tomorrow at, a date + time, Set, C
   assert.match(DETAIL, /ctx\.act\('setRemindOnce', \{ projectId: p\.id, at \}/);
 });
 
+test('🔔 Remind me once: "Today at" / "Tomorrow at" use the time typed (no redraw in between), not the time drawn', async () => {
+  const { addDays, todayIndia } = await import('../docs/rules.js');
+  const s = sampleState();
+  const ctx = fakeCtx(s, { selected: 'p1', update: {}, remindOnceOpen: 'p1' });
+  const calls = [];
+  ctx.act = (type, args) => { calls.push([type, args]); return null; };
+  const el = renderDetail(ctx);
+  const box = (k) => rFind(el, (n) => n.nodeName === 'INPUT' && n.dataset.key === `ro-${k}-p1`);
+  box('today').__on.input(null, { value: '23:59' });
+  box('tomorrow').__on.input(null, { value: '18:30' });
+  btn(el, 'Today at').__on.click();
+  btn(el, 'Tomorrow at').__on.click();
+  assert.deepEqual(calls.map((c) => c[1].at), [`${todayIndia()} 23:59`, `${addDays(todayIndia(), 1)} 18:30`]);
+});
+
+test('📅 a task\'s "Show older days" keeps its own setting: the main Diary\'s number (ui.diaryDays) is not turned into an object', () => {
+  const s = sampleState();
+  s.data.projects[0].createdAt = new Date(Date.now() - 60 * 86400e3).toISOString(); // older than 14 days: the button shows
+  const ui = { selected: 'p1', update: {}, diaryDays: 14 };
+  const el = renderDetail(fakeCtx(s, ui));
+  const more = rFind(el, (n) => n.nodeName === 'BUTTON' && n.textContent === 'Show older days');
+  assert.ok(more, 'the task diary has the button');
+  more.__on.click();
+  assert.equal(ui.diaryDays, 14, 'the main Diary still shows its 14 days');
+  assert.deepEqual(ui.projDiaryDays, { projectId: 'p1', n: 28 });
+  const APP = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
+  assert.match(APP, /days\.slice\(0, Number\(ui\.diaryDays\) \|\| 14\)/, 'the Diary page never slices by a non-number');
+  assert.match(APP, /ui\.diaryDays = \(Number\(ui\.diaryDays\) \|\| 14\) \+ 14/);
+});
+
 test('📅 Only on wiring (app.js): the list row hint says the days on a rest day; "#open=<id>" opens that project; the team sync never asks about rest days', () => {
   const APP = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
   const row = APP.slice(APP.indexOf('function projectRow('), APP.indexOf('function projectRow(') + 4000);
@@ -985,7 +1031,7 @@ test('📂 Projects page: a click on a project row selects it and stays on the p
   assert.match(mainsSrc, /ctx\.ui\.view === 'mains' && ctx\.showHere \? ctx\.showHere\(c\.id\)/, 'a task in the TASKS table while on the Projects page');
   const here = app.slice(app.indexOf('  showHere: (id) => {'), app.indexOf('  openProject: (id) => {'));
   assert.match(here, /select\(id\);/);
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-21'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-22'/, 'phones get the new copy');
 });
 
 test('📂 project page: "✕ Remove" on a task row takes it out of this project only — the task is kept (and stays in its other projects)', () => {
@@ -1122,6 +1168,33 @@ test('📂 project page: ▲ ▼ on each task row move it in the project (saved)
   assert.match(readFileSync(new URL('../docs/ui/mains.js', import.meta.url), 'utf8'), /ctx\.copyList\(orderedTasks\(ctx\.store\.view\.data, p\)/);
 });
 
+test('📂 project page: after ▲ (or ▼) the keyboard focus goes back to the same button (the redraw moved its row); at the top, to its ▼', async () => {
+  const s = mainsState();
+  applyOps(s, [makeOp('createProject', { projectId: 'c3', name: 'Kiln 3', groupId: s.data.groups[0].id, parentId: 'm' })]);
+  const ctx = liveCtx(s, { selected: 'm', update: {} });
+  ctx.store.dispatch = (type, args) => applyOps(s, [makeOp(type, args)]).length > 0;
+  let page = renderDetail(ctx);
+  ctx.render = () => { page = renderDetail(ctx); };
+  const focused = [];
+  const saved = document.querySelector;
+  document.querySelector = (sel) => {
+    const m = /data-key="([^"]+)"/.exec(sel);
+    const el = m && rFind(page, (n) => n.dataset && n.dataset.key === m[1]);
+    if (el) { el.disabled = el.hasAttribute('disabled'); el.focus = () => focused.push(m[1]); }
+    return el || null;
+  };
+  try {
+    const rows = () => rAll(page, (n) => n.className === 'sub-row');
+    const second = rows()[1].dataset.key.replace(/^sub-/, '');
+    assert.ok(rows().length >= 3, 'three tasks in the sample project');
+    const third = rows()[2].dataset.key.replace(/^sub-/, '');
+    rFind(rows()[1], (n) => n.nodeName === 'BUTTON' && n.textContent === '▲').__on.click({ stopPropagation() {} });
+    assert.deepEqual(focused, [`mv-down-${second}`], 'now at the top: ▲ is off, so the focus goes to its ▼');
+    rFind(rows()[2], (n) => n.nodeName === 'BUTTON' && n.textContent === '▲').__on.click({ stopPropagation() {} });
+    assert.equal(focused.at(-1), `mv-up-${third}`, 'the same ▲ again, so Enter moves it once more');
+  } finally { document.querySelector = saved; }
+});
+
 test('📂 project page: the ▲ ▼ buttons are always visible (not hidden like other tiny icons)', async () => {
   const { readFileSync } = await import('node:fs');
   const css = readFileSync(new URL('../docs/styles.css', import.meta.url), 'utf8');
@@ -1163,6 +1236,31 @@ async function withEditor(editors, fn, { focused = null } = {}) {
 const keyOf = (n) => n.dataset && n.dataset.key;
 const ev = (x = {}) => { const e = { preventDefault() { e.prevented = true; }, prevented: false, ...x }; return e; };
 const clip = ({ html = '', text = '', files = [] }) => ({ files, getData: (t) => (t === 'text/html' ? html : t === 'text/plain' ? text : '') });
+
+test('rich box: pasting an update copied from another task brings its photo along (same picture, new id here); a photo found nowhere is left out with a note', async () => {
+  const s = sampleState();
+  applyOps(s, [
+    makeOp('createProject', { projectId: 'pB', name: 'Glaze', groupId: s.data.groups[0].id }),
+    makeOp('addFile', { projectId: 'p1', fileId: 'fA', name: 'kiln.jpg', sha: 'shaA', size: 9, type: 'image/jpeg' }),
+    makeOp('addFile', { projectId: 'pB', fileId: 'fB', name: 'own.jpg', sha: 'shaB', size: 9, type: 'image/jpeg' }),
+  ]);
+  const toasts = [];
+  const ctx = { ...fakeCtx(s), toast: (t) => toasts.push(t) };
+  const d = {};
+  const ed = fakeEditor('');
+  const e = ev({ clipboardData: clip({ html: '<p>Fired<img data-file="fA"><img data-file="fB"><img data-file="lost"></p>', text: 'Fired' }) });
+  await withEditor({}, () => { richedit.pasteRich(ctx, d, e, ed, 'wn-pB', null, null, s.data.projects.find((p) => p.id === 'pB').files); });
+  assert.equal(d.photos.length, 1, 'one photo brought along');
+  const ph = d.photos[0];
+  assert.notEqual(ph.fileId, 'fA', 'its own id in this task');
+  assert.deepEqual([ph.sha, ph.name, ph.inline], ['shaA', 'kiln.jpg', true], 'the same saved picture');
+  const ids = rAll(ed, (n) => n.nodeName === 'IMG').map((n) => n.getAttribute('data-file'));
+  assert.deepEqual(ids, [ph.fileId, 'fB'], 'the box points at the copy and keeps this task\'s own photo; the lost one is gone');
+  assert.ok(toasts.some((t) => t.includes('1 copied photo could not come along')), toasts.join());
+  const r = richedit.readDraft(d, { innerHTML: `<p>Fired<img data-file="${ph.fileId}"><img data-file="fB"></p>` });
+  assert.deepEqual(r.photos.map((x) => x.fileId), [ph.fileId], 'saved as a photo of this task (addFile)');
+  assert.deepEqual(Object.keys(richedit.photoArgs(ph)).sort(), ['fileId', 'name', 'sha', 'size', 'type']);
+});
 
 test('rich update box: toolbar B · I · • List · 1. List · ⊞ Table · 📷 Photo · 🔗 Link over a contenteditable box (kept on redraw)', async () => {
   const s = sampleState();
@@ -1553,7 +1651,7 @@ test('🔌 From apps: waiting approvals grouped by app (newest first) with the f
   assert.ok(cnx.renderFromApps(empty).textContent.includes('Nothing waiting for you ✓'));
 });
 
-test('🔌 app wiring (app.js): "🔌 From apps" after ✉ Replies with the waiting count (worktask.in only), its page, the Settings section, #apps from a phone alert, the key forgotten when leaving Settings; offline copy daily-projects-app-20', async () => {
+test('🔌 app wiring (app.js): "🔌 From apps" after ✉ Replies with the waiting count (worktask.in only), its page, the Settings section, #apps from a phone alert, the key forgotten when leaving Settings; offline copy daily-projects-app-22', async () => {
   const { readFileSync } = await import('node:fs');
   const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
   assert.match(app, /item\('replies', '✉ Replies', readyCount\(data, today\)\),[^\n]*\n\s*onServer \? item\('apps', '🔌 From apps', appsPending\(\)\) : null,/, 'right after ✉ Replies, with the count');
@@ -1565,7 +1663,7 @@ test('🔌 app wiring (app.js): "🔌 From apps" after ✉ Replies with the wait
   assert.match(app, /function go\(view\) \{\n\s*if \(view !== 'settings'\) forgetOnce\(\);/);
   assert.match(app, /if \(onServer\) loadApps\(appsCtx, force \|\| ui\.view === 'apps'\);/);
   assert.match(app, /replies: '✉ Replies', apps: '🔌 From apps', mains: '📂 Projects' \}\[ui\.view\]/, 'its page title');
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-21'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-22'/, 'phones get the new copy');
 });
 
 test('🔌 the PHP connector (team/connector/worktask-connector.php): the same text the app downloads, placeholders only (no real key), valid PHP 7.4+ (php -l), with wt_push / wt_withdraw / wt_decisions / wt_receive_decision', async () => {

@@ -274,6 +274,8 @@ function migrate(PDO $pdo): void {
       UNIQUE KEY conn_ext (conn_id, external_id),
       INDEX (status), INDEX (callback_next_at)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+    // v34: the 24 hours of trying to tell the app count from here (the decision, or a new decision address)
+    "ALTER TABLE conn_items ADD COLUMN callback_since DATETIME NULL",
   ];
   $pdo->exec($steps[0]);
   $done = (int)($pdo->query("SELECT v FROM settings WHERE k = 'schema'")->fetchColumn() ?: 0);
