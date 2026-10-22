@@ -57,6 +57,17 @@ test('edit-step changes an open step\'s words, and refuses when several steps ma
   assert.throws(() => tracker('edit-step', 'kiln', 'quote', 'x'), /Several steps match/);
 });
 
+test('only-on sets the days and the phone reminder; "every" clears; a wrong day is refused', () => {
+  tracker('only-on', 'kiln', 'Mon,Thu', '--remind', '09:30');
+  let p = data().projects[0];
+  assert.deepEqual(p.onlyDays, [1, 4]);
+  assert.equal(p.remindAt, '09:30');
+  tracker('only-on', 'kiln', 'every', '--remind', 'off');
+  p = data().projects[0];
+  assert.ok(!(p.onlyDays || []).length && !p.remindAt, 'cleared');
+  assert.throws(() => tracker('only-on', 'kiln', 'Funday'), /Not a day/);
+});
+
 test('summary, today list and show are readable', () => {
   assert.match(tracker('summary'), /1 active projects/);
   assert.match(tracker('list', '--today'), /All active projects are green today/, 'worked on today = green, so nothing left');

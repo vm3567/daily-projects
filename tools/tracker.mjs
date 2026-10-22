@@ -10,6 +10,7 @@
 //   node tools/tracker.mjs show <project>
 //   node tools/tracker.mjs add-steps <project> "<step>" ["<step>" ...]
 //   node tools/tracker.mjs tick <project> "<step text or id>"
+//   node tools/tracker.mjs only-on <project> <Mon,Thu|every> [--remind HH:MM|off]
 //   node tools/tracker.mjs edit-step <project> "<step text or id>" "<new text>"
 //   node tools/tracker.mjs add-note <project> "<text>"
 //   node tools/tracker.mjs new-project "<name>" [--group "<group>"] [--priority high|medium|low] [--steps "<a>" "<b>" ...]
@@ -309,6 +310,26 @@ try {
         const s = findOpenStep(p, stepQuery);
         return [makeOp('tickStep', { projectId: p.id, stepId: s.id })];
       }, 'Tick step');
+      break;
+    }
+    case 'only-on': {
+      // only-on <project> <Mon,Thu | every> [--remind HH:MM | --remind off]
+      const [query, dayList] = args;
+      const NAMES = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+      const raw = String(dayList || '').toLowerCase();
+      if (!raw) throw new Error('Give the days, like Mon or Mon,Thu, or "every".');
+      const days = raw === 'every' ? [] : raw.split(/[\s,+]+/).filter(Boolean).map((d) => {
+        const i = NAMES.indexOf(d.slice(0, 3));
+        if (i < 0) throw new Error(`Not a day: ${d}`);
+        return i;
+      });
+      const remind = argValue(args, '--remind');
+      commitOps((state) => {
+        const p = findProject(state.data, query);
+        const ops = [makeOp('setOnlyDays', { projectId: p.id, days })];
+        if (remind !== undefined && remind !== null) ops.push(makeOp('setRemindAt', { projectId: p.id, time: remind === 'off' ? null : remind }));
+        return ops;
+      }, 'Only on days');
       break;
     }
     case 'edit-step': {
