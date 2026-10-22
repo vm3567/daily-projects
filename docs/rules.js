@@ -965,3 +965,26 @@ export function deleteQuestion(data, p) {
   }
   return `Delete "${p.name}"?\n\nYou can press Undo for a few seconds after.`;
 }
+
+/** A 📂 project's tasks in the owner's order (p.taskOrder); tasks not placed yet come after, red first. */
+export function orderedTasks(data, main, today = todayIndia()) {
+  const kids = childrenOf(data, main.id);
+  const pos = new Map((main.taskOrder || []).map((id, i) => [id, i]));
+  const rank = { red: 0, yellow: 1, green: 2, grey: 3 };
+  return kids.map((c, i) => ({ c, i })).sort((x, y) => {
+    const a = pos.has(x.c.id) ? pos.get(x.c.id) : Infinity;
+    const b = pos.has(y.c.id) ? pos.get(y.c.id) : Infinity;
+    if (a !== b) return a - b;
+    return (rank[dotColour(x.c, today)] ?? 4) - (rank[dotColour(y.c, today)] ?? 4) || x.i - y.i;
+  }).map((x) => x.c);
+}
+
+/** Move one task up (-1) or down (+1) in its project's order; returns the new full order (ids). */
+export function movedOrder(list, id, dir) {
+  const ids = list.map((x) => x.id);
+  const i = ids.indexOf(id);
+  const j = i + dir;
+  if (i < 0 || j < 0 || j >= ids.length) return null;
+  [ids[i], ids[j]] = [ids[j], ids[i]];
+  return ids;
+}

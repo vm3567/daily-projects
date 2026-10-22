@@ -1075,3 +1075,6 @@ a.team-line.msg { background: #eef4ff; border-color: #93b4f8; color: #1e40af; fo
 .pick-bar { position: relative; z-index: 1; }
 .quick-links { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 8px; }
 .quick-link { cursor: pointer; text-decoration: none; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sub-move { white-space: nowrap; }
+.sub-move .icon.tiny { padding: 2px 5px; visibility: visible; } /* (tiny icons are hidden elsewhere until hover) */
+.sub-move .icon.tiny[disabled] { opacity: .3; }

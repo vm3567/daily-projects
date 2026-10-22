@@ -1911,3 +1911,25 @@ test('📂 "Add tasks" list: tasks in no project come first, then tasks already 
   assert.deepEqual(names.slice(0, 2).sort(), ['Beta loose', 'Gamma loose'], 'loose tasks first');
   assert.equal(names[2], 'Alpha in Kilns', 'the task already in Kilns comes after');
 });
+
+test('📂 task order in a project: setTaskOrder keeps your order (new tasks after, red first), ▲ ▼ swap neighbours; not work', async () => {
+  const { orderedTasks, movedOrder, dayScore } = await import('../docs/rules.js');
+  const s = { data: emptyData(), history: {} };
+  const g = s.data.groups[0].id;
+  for (const [id, name] of [['a', 'A'], ['b', 'B'], ['c', 'C']]) applyOp(s, op('createProject', { projectId: id, name, groupId: g }, '2026-10-22'));
+  applyOp(s, op('createMainProject', { projectId: 'm', name: 'AI class', groupId: g, childId: 'a' }, '2026-10-22'));
+  applyOp(s, op('addToProject', { projectId: 'b', parentId: 'm' }, '2026-10-22'));
+  applyOp(s, op('addToProject', { projectId: 'c', parentId: 'm' }, '2026-10-22'));
+  const main = () => s.data.projects.find((p) => p.id === 'm');
+  const order = movedOrder(orderedTasks(s.data, main(), '2026-10-22'), orderedTasks(s.data, main(), '2026-10-22')[2].id, -1);
+  assert.ok(order && order.length === 3);
+  const before = JSON.stringify(dayScore(s.data, s.history, '2026-10-22'));
+  assert.ok(applyOp(s, op('setTaskOrder', { projectId: 'm', order: ['c', 'a', 'b'] }, '2026-10-22')));
+  assert.deepEqual(orderedTasks(s.data, main(), '2026-10-22').map((x) => x.id), ['c', 'a', 'b']);
+  assert.equal(JSON.stringify(dayScore(s.data, s.history, '2026-10-22')), before, 'arranging is not work');
+  assert.deepEqual(movedOrder(orderedTasks(s.data, main(), '2026-10-22'), 'a', 1), ['c', 'b', 'a']);
+  assert.equal(movedOrder(orderedTasks(s.data, main(), '2026-10-22'), 'c', -1), null, 'the first cannot go up');
+  applyOp(s, op('createProject', { projectId: 'd', name: 'D new', groupId: g }, '2026-10-22'));
+  applyOp(s, op('addToProject', { projectId: 'd', parentId: 'm' }, '2026-10-22'));
+  assert.equal(orderedTasks(s.data, main(), '2026-10-22').at(-1).id, 'd', 'a new task goes after the arranged ones');
+});

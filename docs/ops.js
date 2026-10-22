@@ -289,6 +289,16 @@ const handlers = {
    * 📂 Add a task to a project (a task can be in several projects). A project is never inside another one.
    * Not work (the dot does not change). Undo: restoreProject of the task (both history lines go).
    */
+  /** The order of a 📂 project's tasks, as the owner arranged them (ids not in it keep their place after). Not work. */
+  setTaskOrder(state, op, a) {
+    const p = findProject(state.data, a.projectId);
+    if (!p || !Array.isArray(a.order)) return false;
+    const order = [...new Set(a.order.map(String))].filter((id) => state.data.projects.some((x) => x.id === id)).slice(0, 500);
+    if (JSON.stringify(order) === JSON.stringify(p.taskOrder || [])) return false;
+    p.taskOrder = order;
+    return true;
+  },
+
   addToProject(state, op, a) {
     const { data } = state;
     const p = findProject(data, a.projectId);

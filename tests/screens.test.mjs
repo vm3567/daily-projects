@@ -981,7 +981,7 @@ test('📂 Projects page: a click on a project row selects it and stays on the p
   assert.match(mainsSrc, /ctx\.ui\.view === 'mains' && ctx\.showHere \? ctx\.showHere\(c\.id\)/, 'a task in the TASKS table while on the Projects page');
   const here = app.slice(app.indexOf('  showHere: (id) => {'), app.indexOf('  openProject: (id) => {'));
   assert.match(here, /select\(id\);/);
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-17'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-18'/, 'phones get the new copy');
 });
 
 test('📂 project page: "✕ Remove" on a task row takes it out of this project only — the task is kept (and stays in its other projects)', () => {
@@ -1010,7 +1010,7 @@ test('📋 Copy list buttons: on a project page (its tasks) and on the task list
   const { readFileSync } = await import('node:fs');
   const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
   const mainsSrc = readFileSync(new URL('../docs/ui/mains.js', import.meta.url), 'utf8');
-  assert.match(mainsSrc, /ctx\.copyList\(childrenOf\(ctx\.store\.view\.data, p\.id\)\.filter\(\(c\) => c\.state !== 'finished'\), \{ title: `📂 \$\{p\.name\}`, about: p\.about \|\| '' \}\) \}, '📋 Copy list'\)/);
+  assert.match(mainsSrc, /ctx\.copyList\(orderedTasks\(ctx\.store\.view\.data, p\)\.filter\(\(c\) => c\.state !== 'finished'\), \{ title: `📂 \$\{p\.name\}`, about: p\.about \|\| '' \}\) \}, '📋 Copy list'\)/, 'in the project\'s own order');
   assert.match(app, /onClick: \(\) => copyList\(currentList\(\), \{ title: viewTitle\(\) \}\) \}, '📋 Copy list'\)/);
   assert.match(app, /!ui\.search && list\.length && ui\.view !== 'mains' \? h\('button', \{ class: 'btn small copy-list'/, 'not on the 📂 Projects list (each project page has its own)');
   assert.match(app, /new ClipboardItem\(\{ 'text\/html': new Blob\(\[html\]/, 'rich copy for email, plain for AI');
@@ -1102,4 +1102,24 @@ test('a task or project page shows its links and files as chips near the top (�
   ui.selected = 'o';
   assert.ok(!rAll(renderDetail(ctx), (n) => n.className === 'quick-links').length, 'nothing when there are no links or files');
   assert.ok(quick);
+});
+
+test('📂 project page: ▲ ▼ on each task row move it in the project (saved), Copy list follows that order', async () => {
+  const s = mainsState();
+  const ui = { selected: 'm', update: {} };
+  const ctx = liveCtx(s, ui);
+  ctx.store.dispatch = (type, args) => applyOps(s, [makeOp(type, args)]).length > 0;
+  const names = () => rAll(renderDetail(ctx), (n) => n.className === 'sub-row').map((r) => rAll(r, (x) => /sub-name/.test(x.className || ''))[0].textContent);
+  const first = names();
+  const down = rAll(rAll(renderDetail(ctx), (n) => n.className === 'sub-row')[0], (n) => n.nodeName === 'BUTTON' && n.textContent === '▼')[0];
+  down.__on.click({ stopPropagation() {} });
+  assert.deepEqual(names(), [first[1], first[0], ...first.slice(2)], 'moved down one place');
+  const { readFileSync } = await import('node:fs');
+  assert.match(readFileSync(new URL('../docs/ui/mains.js', import.meta.url), 'utf8'), /ctx\.copyList\(orderedTasks\(ctx\.store\.view\.data, p\)/);
+});
+
+test('📂 project page: the ▲ ▼ buttons are always visible (not hidden like other tiny icons)', async () => {
+  const { readFileSync } = await import('node:fs');
+  const css = readFileSync(new URL('../docs/styles.css', import.meta.url), 'utf8');
+  assert.match(css, /\.sub-move \.icon\.tiny \{[^}]*visibility: visible;/);
 });

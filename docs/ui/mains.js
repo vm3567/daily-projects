@@ -3,7 +3,7 @@
 // on a task, the small project chips under a task's row in the lists, and the "📂 Projects" page.
 
 import { h, fmtDay } from './dom.js';
-import { dotColour, nextStep, todayIndia, indiaDate, childrenOf, parentsOf, isMainProject, mainProjects, mainColour, mainSummary, mainChoices, addHereChoices } from '../rules.js';
+import { dotColour, nextStep, todayIndia, indiaDate, childrenOf, parentsOf, isMainProject, mainProjects, mainColour, mainSummary, mainChoices, addHereChoices, orderedTasks, movedOrder } from '../rules.js';
 import { newId } from '../ops.js';
 
 const ORDER = { red: 0, yellow: 1, green: 2, grey: 3 };
@@ -171,11 +171,12 @@ export function subProjectsBlock(ctx, p, today = todayIndia()) {
   const { store } = ctx;
   const data = store.view.data;
   if (!isMainProject(data, p)) return null;
-  const kids = redFirst(childrenOf(data, p.id), (c) => dotColour(c, today));
+  const kids = orderedTasks(data, p, today); // your order (▲ ▼), new ones after
+  const move = (c, dir) => { const order = movedOrder(kids, c.id, dir); if (order) { ctx.store.dispatch('setTaskOrder', { projectId: p.id, order }); ctx.render(); } };
   return h('section', { class: 'block sub-projects', key: 'subs-' + p.id },
     h('h3', null, `TASKS (${kids.length})`),
     kids.length ? h('table', { class: 'sub-table' },
-      h('thead', null, h('tr', null, h('th', null, ''), h('th', null, 'Task'), h('th', null, 'Now'), h('th', null, 'Last update'), h('th', null, ''))),
+      h('thead', null, h('tr', null, h('th', null, ''), h('th', null, 'Task'), h('th', null, 'Now'), h('th', null, 'Last update'), h('th', null, ''), h('th', null, ''))),
       h('tbody', null, kids.map((c) => {
         const ns = c.state === 'active' ? nextStep(c, today) : null;
         const lu = lastUpdate(c);
@@ -186,6 +187,9 @@ export function subProjectsBlock(ctx, p, today = todayIndia()) {
           h('td', { class: ns ? '' : 'warn' }, c.state !== 'active' ? '—' : ns ? short(ns.text) : 'No next step'),
           h('td', { class: 'muted small' }, lu ? `${fmtDay(lu.day)} · ${short(lu.text, 50)}` : '—'),
           // takes the task out of this project only (the task itself stays, with Undo)
+          h('td', { class: 'sub-move' },
+            h('button', { class: 'icon tiny', type: 'button', title: 'Move up', 'aria-label': `Move ${c.name} up`, disabled: kids[0] === c ? true : undefined, onClick: (e) => { if (e && e.stopPropagation) e.stopPropagation(); move(c, -1); } }, '▲'),
+            h('button', { class: 'icon tiny', type: 'button', title: 'Move down', 'aria-label': `Move ${c.name} down`, disabled: kids[kids.length - 1] === c ? true : undefined, onClick: (e) => { if (e && e.stopPropagation) e.stopPropagation(); move(c, 1); } }, '▼')),
           h('td', null, h('button', {
             class: 'link small sub-remove', type: 'button', title: `Take ${c.name} out of this project (the task is kept)`,
             onClick: (e) => { if (e && e.stopPropagation) e.stopPropagation(); ctx.act('removeFromProject', { projectId: c.id, parentId: p.id }, `${c.name} taken out of 📂 ${p.name} (the task is kept)`); },
@@ -194,7 +198,7 @@ export function subProjectsBlock(ctx, p, today = todayIndia()) {
     h('div', { class: 'sub-buttons' },
       h('button', { class: 'btn small', type: 'button', onClick: () => openAddTasks(ctx, p) }, '+ Add tasks'),
       h('button', { class: 'btn small', type: 'button', onClick: () => newProjectHere(ctx, p) }, '+ New task here'),
-      h('button', { class: 'btn small', type: 'button', title: 'Copy this project\'s tasks as a numbered list (for an AI chat or an email)', onClick: () => ctx.copyList && ctx.copyList(childrenOf(ctx.store.view.data, p.id).filter((c) => c.state !== 'finished'), { title: `📂 ${p.name}`, about: p.about || '' }) }, '📋 Copy list')),
+      h('button', { class: 'btn small', type: 'button', title: 'Copy this project\'s tasks as a numbered list (for an AI chat or an email)', onClick: () => ctx.copyList && ctx.copyList(orderedTasks(ctx.store.view.data, p).filter((c) => c.state !== 'finished'), { title: `📂 ${p.name}`, about: p.about || '' }) }, '📋 Copy list')),
     addTasksPicker(ctx, p));
 }
 
