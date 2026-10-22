@@ -9,6 +9,7 @@ import { newId, PRIORITIES, cleanUrl, groupHasTimer, MAX_SNOOZE_DAYS, ABOUT_MAX 
 
 const STATUS_OLD_DAYS = 7; // a status older than this turns grey and asks for an update
 import { uploadFiles, openFile, uploadBlob } from './files.js';
+import { projectEmailCards } from './replies.js';
 
 const REPEAT_WORD = { daily: 'every day', weekly: 'every week', monthly: 'every month' };
 const COLOUR_WORD = { green: 'Done for today', yellow: 'Opened today', red: 'Not looked at today', grey: 'Paused or finished' };
@@ -22,6 +23,7 @@ const HISTORY_WORDS = {
   group_added: 'Group added', group_renamed: 'Group renamed', group_deleted: 'Group deleted',
   team_ticked: 'Done by the team', team_note: 'Team note', team_step_added: 'Step added by the team', team_step_unticked: 'Opened again by the team',
   team_note_deleted: 'Team note removed', team_moved: 'Moved in Work Task', mail_note: 'Email reply',
+  reply_prepared: 'Reply prepared', reply_sent: 'Reply sent', mail_replied: 'Reply sent (seen in Outlook)',
 };
 
 /** Text box that saves on its own: after a short pause in typing, and when leaving the box. */
@@ -886,6 +888,7 @@ export function renderDetail(ctx) {
     snoozeBar(ctx, p),
     teamBar(ctx, p),
     infoChips(ctx, p, today),
+    projectEmailCards(ctx, p, today), // from an email: who wrote, the newest lines, and the reply (✉ Reply ready)
     ui.editMeta ? metaLine(ctx, p, today) : null,
     ui.showTime === p.id ? timeLine(ctx, p, today) : null,
     teamMessages(ctx, p),

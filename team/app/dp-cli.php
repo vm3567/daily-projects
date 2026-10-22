@@ -6,6 +6,8 @@
 //   php dp-cli.php before <YYYY-MM-DD>    → {"commit", "at"} the last version saved on or before that day
 //   php dp-cli.php tree <commit>          → {path: sha}
 //   php dp-cli.php cat <commit> <path>    → the file's text at that version
+//   php dp-cli.php mail-body <id>         → {"subject", "from", "fromAddress", "received", "body", "cut"}: the newest email of the
+//                                           thread on that Inbox item / step / project, as plain text (for /replies; never sends)
 declare(strict_types=1);
 if (PHP_SAPI !== 'cli') { http_response_code(404); exit; }
 require __DIR__ . '/bootstrap.php';
@@ -70,8 +72,12 @@ try {
       echo dp_get_blob($files[$path]);
       break;
     }
+    case 'mail-body': {
+      try { out(ol_mail_body(trim((string)($argv[2] ?? '')))); } catch (OlError $e) { fail($e->getMessage()); }
+      break;
+    }
     default:
-      fail('Commands: export | commit | before <date> | tree <commit> | cat <commit> <path>');
+      fail('Commands: export | commit | before <date> | tree <commit> | cat <commit> <path> | mail-body <id>');
   }
 } catch (ApiError $e) {
   fail($e->getMessage());

@@ -2,6 +2,7 @@
 // State lives in the JSON file named by FAKE_DP_STATE. FAKE_DP_TROUBLE (one word, used once) can be:
 //   drop-after  — saves, then the line drops (no answer)      drop-before — the line drops, nothing saved
 //   clash       — another device saves first (and the save is refused with exit code 3)
+// 'mail-body <id>' answers from st.bodies (by the Inbox item / step / project id, set by the test).
 // It keeps every version (id, parent, at, tree of path → sha) and the file contents by sha, so
 // 'before', 'tree' and 'cat' (used by /restore) work like dp-cli.php. "at" is India time; a test can
 // set st.now to choose the time of the next save.
@@ -79,6 +80,10 @@ if (cmd === 'export') {
   const sha = c.tree[process.argv[4]];
   if (!sha) fail('No such file in that version.');
   process.stdout.write(st.blobs[sha]);
+} else if (cmd === 'mail-body') { // the newest email's words (st.bodies: id → the answer), like dp-cli.php
+  const b = (st.bodies || {})[process.argv[3]];
+  if (!b) fail('No email with that id in the projects.');
+  process.stdout.write(JSON.stringify(b));
 } else {
   process.stderr.write('unknown command');
   process.exit(1);

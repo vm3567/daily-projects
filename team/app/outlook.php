@@ -82,13 +82,15 @@ function ol_open(string $box): string {
 
 // ---------------------------------------------------------------- talking to Microsoft
 
-/** [status, json]. Never follows redirects; the token is only sent to Microsoft's own address. */
-function ol_http(string $url, ?array $form = null, ?string $bearer = null): array {
+/** [status, json]. Never follows redirects; the token is only sent to Microsoft's own address. $json: a JSON POST body. */
+function ol_http(string $url, ?array $form = null, ?string $bearer = null, ?array $json = null, array $extra = []): array {
   $ch = curl_init($url);
-  $h = ['Accept: application/json'];
+  $h = ['Accept: application/json', ...$extra];
   if ($bearer !== null) $h[] = 'Authorization: Bearer ' . $bearer;
+  if ($json !== null) $h[] = 'Content-Type: application/json';
   curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 20, CURLOPT_CONNECTTIMEOUT => 8, CURLOPT_HTTPHEADER => $h, CURLOPT_FOLLOWLOCATION => false]);
   if ($form !== null) { curl_setopt($ch, CURLOPT_POST, true); curl_setopt($ch, CURLOPT_POSTFIELDS, http_build_query($form, '', '&')); }
+  if ($json !== null) { curl_setopt($ch, CURLOPT_POST, true); curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($json, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE)); }
   $body = curl_exec($ch);
   $code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
   if ($body === false) throw new OlError('Could not reach Microsoft. It will try again.');
@@ -137,14 +139,19 @@ function ol_graph_error(int $code): OlError {
 
 /** New emails in the Inbox since `since` (oldest first), a few pages at most. */
 function ol_fetch(string $token, string $since): array {
-  $q = ['$select' => 'id,subject,from,receivedDateTime,bodyPreview,webLink,conversationId', '$orderby' => 'receivedDateTime asc',
-        '$filter' => 'receivedDateTime gt ' . $since, '$top' => '50'];
-  $url = ol_graph_base() . '/v1.0/me/mailFolders/inbox/messages?' . http_build_query($q, '', '&', PHP_QUERY_RFC3986);
+  $all = ol_list($token, 'inbox', 'id,subject,from,receivedDateTime,bodyPreview,webLink,conversationId', 'receivedDateTime', $since);
+  return array_values(array_filter($all, fn($m) => is_string($m['id'] ?? null) && $m['id'] !== ''));
+}
+
+/** Emails in a folder (inbox, sentitems) whose $field (receivedDateTime, sentDateTime) is after `since`, oldest first. */
+function ol_list(string $token, string $folder, string $select, string $field, string $since): array {
+  $q = ['$select' => $select, '$orderby' => "$field asc", '$filter' => "$field gt " . $since, '$top' => '50'];
+  $url = ol_graph_base() . '/v1.0/me/mailFolders/' . $folder . '/messages?' . http_build_query($q, '', '&', PHP_QUERY_RFC3986);
   $all = [];
   for ($page = 0; $url !== '' && $page < OL_PAGES; $page++) {
     [$code, $j] = ol_http($url, null, $token);
     if ($code !== 200) throw ol_graph_error($code);
-    foreach ((array)($j['value'] ?? []) as $m) if (is_array($m) && is_string($m['id'] ?? null) && $m['id'] !== '') $all[] = $m;
+    foreach ((array)($j['value'] ?? []) as $m) if (is_array($m)) $all[] = $m;
     $next = (string)($j['@odata.nextLink'] ?? '');
     $url = str_starts_with($next, ol_graph_base() . '/') ? $next : ''; // the token never goes anywhere else
   }
@@ -190,7 +197,14 @@ function ol_mail_parts(array $m): array {
     'conv' => mb_substr((string)($m['conversationId'] ?? ''), 0, 400),
     'address' => (string)($from['address'] ?? ''),
     'id' => (string)($m['id'] ?? ''),
+    'at' => ol_iso((string)($m['receivedDateTime'] ?? '')),
   ];
+}
+
+/** "2026-10-22T05:00:00.000Z" for a time Microsoft sends, or '' when it is not a time. */
+function ol_iso(string $t): string {
+  $u = $t !== '' ? strtotime($t) : false;
+  return $u ? gmdate('Y-m-d\TH:i:s', $u) . '.000Z' : '';
 }
 
 /** The newest email of a thread, kept in its `mail` (for a later "draft a reply" in Outlook): the same as cleanMail() in docs/ops.js. */
@@ -200,6 +214,9 @@ function ol_mail_info(object $mail, array $x): void {
   $addr = trim($x['address']);
   if (preg_match('/^[^\s@]+@[^\s@]+$/', $addr) && strlen($addr) <= 200) $mail->fromAddress = $addr; else unset($mail->fromAddress);
   $mail->subject = $x['subject'];
+  if ($x['at'] !== '') $mail->at = $x['at']; // when the newest email came (the ✉ Replies page counts the days from it)
+  $me = strtolower(setting('ol_account'));
+  if ($me !== '' && strtolower($addr) === $me) $mail->fromMe = true; else unset($mail->fromMe); // your own email: nothing to answer
 }
 
 /**
@@ -267,6 +284,183 @@ function ol_json(mixed $v): string {
   return $s . "\n";
 }
 
+/** The owner's saved projects: [head, files (path → sha), data (objects, as in data.json)]. Never a guess. */
+function ol_load(): array {
+  $owner = (int)setting('dp_owner', '0');
+  if (!$owner) throw new OlError('No projects on this server yet.');
+  $head = dp_head($owner);
+  $files = dp_tree_files((string)one('SELECT tree FROM dp_commits WHERE id = ?', [$head])['tree']);
+  if (!isset($files['data.json'])) throw new OlError('Open Daily Projects once first.');
+  $data = json_decode(dp_get_blob($files['data.json']), false);
+  if (!is_object($data)) throw new OlError('The saved projects could not be read.'); // never write over them
+  return [$head, $files, $data];
+}
+
+/**
+ * Change the saved projects as one new version: $change($data, $hist) changes the data (and adds history lines by month);
+ * it returns false when there is nothing to save. Another device saved first: read again, change again (a few tries).
+ */
+function ol_write(callable $change, string $message): bool {
+  $owner = (int)setting('dp_owner', '0');
+  for ($try = 0; ; $try++) {
+    [$head, $files, $data] = ol_load();
+    $hist = [];
+    if (!$change($data, $hist)) return false;
+    $changes = [['path' => 'data.json', 'content' => ol_json($data)]];
+    foreach ($hist as $month => $events) {
+      $path = "history/$month.json";
+      $list = isset($files[$path]) ? json_decode(dp_get_blob($files[$path]), false) : [];
+      if (!is_array($list)) throw new OlError('The saved history could not be read.');
+      $changes[] = ['path' => $path, 'content' => ol_json(array_merge($list, $events))];
+    }
+    try {
+      dp_commit(['id' => $owner], $head, $changes, $message);
+      return true;
+    } catch (ApiError $e) {
+      if ($e->status !== 409 || $try >= 4) throw $e;
+      usleep(200000 * ($try + 1));
+    }
+  }
+}
+
+// ---------------------------------------------------------------- email replies (drafts only: the owner presses Send)
+
+/** Where an email thread lives, by the id the app, the server and Claude use: an Inbox item, a step or a project with `mail`. */
+function ol_find_target(object $data, string $id): ?array {
+  if ($id === '') return null;
+  foreach ((is_array($data->inbox ?? null) ? $data->inbox : []) as $it) {
+    if (is_object($it) && (string)($it->id ?? '') === $id && is_object($it->mail ?? null)) return [$it, null];
+  }
+  foreach ((is_array($data->projects ?? null) ? $data->projects : []) as $p) {
+    if (!is_object($p)) continue;
+    if ((string)($p->id ?? '') === $id) return is_object($p->mail ?? null) ? [$p, $p] : null;
+    foreach ((is_array($p->steps ?? null) ? $p->steps : []) as $s) {
+      if (is_object($s) && (string)($s->id ?? '') === $id) return is_object($s->mail ?? null) ? [$s, $p] : null;
+    }
+  }
+  return null;
+}
+
+function ol_reply_open(mixed $r): bool { return is_object($r) && in_array($r->state ?? '', ['ready', 'later'], true); }
+
+/** A reply was sent, but a newer email came after it (the same as waitingAgain() in docs/rules.js). */
+function ol_waiting_again(object $t): bool {
+  $r = $t->reply ?? null;
+  $at = strtotime((string)($t->mail->at ?? '')) ?: 0;
+  $sent = is_object($r) ? (strtotime((string)($r->sentAt ?? '')) ?: 0) : 0;
+  return is_object($r) && ($r->state ?? '') === 'sent' && $at && $sent && $at > $sent;
+}
+
+/**
+ * Sent Items showed a reply in this thread, sent at $sentAt: each Inbox item / step / project of the thread whose reply is
+ * ready or later, or which waits for a reply, is marked replied (the same as the operation mailReplied in docs/ops.js:
+ * not your work). A reply sent before the thread's newest email does not count. Returns how many were marked.
+ */
+function ol_mark_replied(object $data, array &$hist, string $conv, string $sentAt): int {
+  $sent = strtotime($sentAt);
+  if ($conv === '' || !$sent) return 0;
+  $iso = gmdate('Y-m-d\TH:i:s', $sent) . '.000Z';
+  $places = [];
+  foreach ((is_array($data->inbox ?? null) ? $data->inbox : []) as $it) if (is_object($it)) $places[] = [$it, null];
+  foreach ((is_array($data->projects ?? null) ? $data->projects : []) as $p) {
+    if (!is_object($p)) continue;
+    $places[] = [$p, $p];
+    foreach ((is_array($p->steps ?? null) ? $p->steps : []) as $s) if (is_object($s)) $places[] = [$s, $p];
+  }
+  $n = 0;
+  foreach ($places as [$t, $p]) {
+    if (!is_object($t->mail ?? null) || ($t->mail->conversationId ?? null) !== $conv) continue;
+    $r = $t->reply ?? null;
+    if (!(ol_reply_open($r) || !is_object($r) || ol_waiting_again($t))) continue;
+    $at = strtotime((string)($t->mail->at ?? '')) ?: 0;
+    if ($at && $sent < $at) continue; // sent before the newest email
+    $reply = is_object($r) ? clone $r : (object)['text' => '', 'at' => $iso, 'by' => 'you', 'forMessageId' => $t->mail->messageId ?? null];
+    unset($reply->laterUntil);
+    $reply->state = 'sent';
+    $reply->sentAt = $iso;
+    $t->reply = $reply;
+    if ($p) {
+      $now = ol_iso_now();
+      $hist[date('Y-m', strtotime($now))][] = (object)['id' => ol_rand_id('mr'), 'projectId' => (string)$p->id, 'projectName' => (string)($p->name ?? ''),
+        'kind' => 'mail_replied', 'detail' => mb_substr('Replied in Outlook: ' . (string)($t->mail->subject ?? ''), 0, 2000), 'at' => $now];
+    }
+    $n++;
+  }
+  return $n;
+}
+
+/** Look in Sent Items since the last look: a reply sent in a thread that waits for one ticks it as replied. */
+function ol_check_sent(string $token): void {
+  $since = setting('ol_sent_since') ?: gmdate('Y-m-d\TH:i:s\Z', time() - 86400);
+  $sent = ol_list($token, 'sentitems', 'conversationId,sentDateTime', 'sentDateTime', gmdate('Y-m-d\TH:i:s\Z', (int)strtotime($since) - 300));
+  $last = strtotime($since);
+  $by = []; // the newest reply of each thread
+  foreach ($sent as $m) {
+    $t = (string)($m['sentDateTime'] ?? '');
+    $u = strtotime($t);
+    $conv = mb_substr((string)($m['conversationId'] ?? ''), 0, 400);
+    if (!$u || $conv === '') continue;
+    $last = max($last, $u);
+    if (!isset($by[$conv]) || strtotime($by[$conv]) < $u) $by[$conv] = $t;
+  }
+  if ($by) {
+    ol_write(function (object $data, array &$hist) use ($by): bool {
+      $n = 0;
+      foreach ($by as $conv => $t) $n += ol_mark_replied($data, $hist, (string)$conv, $t);
+      return $n > 0;
+    }, '✉ Replied in Outlook');
+  }
+  set_setting('ol_sent_since', gmdate('Y-m-d\TH:i:s\Z', $last));
+}
+
+/**
+ * "Open in Outlook (same thread)": a draft reply to the thread's newest email, with the saved reply text (read from the saved
+ * projects, never from the browser) above the quoted email. Never sent: the owner presses Send. Returns the draft's link.
+ */
+function ol_draft(string $id): string {
+  if (setting('ol_refresh') === '') throw new OlError('Outlook is not connected, so the reply opens as a new email instead.');
+  [, , $data] = ol_load();
+  $found = ol_find_target($data, $id);
+  if (!$found) throw new OlError('That email is not in your projects any more.');
+  [$t] = $found;
+  $r = $t->reply ?? null;
+  $text = ol_reply_open($r) ? (string)($r->text ?? '') : '';
+  if (trim($text) === '') throw new OlError('There is no reply ready to put in Outlook. Write it first (it saves by itself).');
+  $msg = (string)($t->mail->messageId ?? '');
+  if ($msg === '') throw new OlError('This email has no Outlook id, so the reply opens as a new email instead.');
+  $token = ol_access_token();
+  [$code, $j] = ol_http(ol_graph_base() . '/v1.0/me/messages/' . rawurlencode($msg) . '/createReply', null, $token, ['comment' => $text]);
+  if ($code === 404) throw new OlError('Outlook could not find that email any more (moved or deleted). The reply opens as a new email instead.');
+  if ($code !== 201 && $code !== 200) throw ol_graph_error($code);
+  $link = ol_link((string)($j['webLink'] ?? ''));
+  if (!$link) throw new OlError('Outlook made the draft but sent no link. Look in your Drafts folder.');
+  return $link;
+}
+
+/** The newest email's words as plain text (for Claude writing a reply on the Mac), cut to $max letters. */
+function ol_mail_body(string $id, int $max = 6000): array {
+  if (setting('ol_refresh') === '') throw new OlError('Outlook is not connected.');
+  [, , $data] = ol_load();
+  $found = ol_find_target($data, $id);
+  if (!$found) throw new OlError('No email with that id in the projects.');
+  [$t] = $found;
+  $msg = (string)($t->mail->messageId ?? '');
+  if ($msg === '') throw new OlError('This email has no Outlook id (it came before replies were kept).');
+  $token = ol_access_token();
+  $url = ol_graph_base() . '/v1.0/me/messages/' . rawurlencode($msg) . '?' . http_build_query(['$select' => 'body,from,subject,receivedDateTime'], '', '&', PHP_QUERY_RFC3986);
+  [$code, $j] = ol_http($url, null, $token, null, ['Prefer: outlook.body-content-type="text"']);
+  if ($code !== 200) throw ol_graph_error($code);
+  $body = (string)($j['body']['content'] ?? '');
+  if (strtolower((string)($j['body']['contentType'] ?? 'text')) === 'html') $body = html_entity_decode(strip_tags($body), ENT_QUOTES | ENT_HTML5, 'UTF-8');
+  $body = trim((string)preg_replace("/\n{3,}/", "\n\n", str_replace("\r", '', $body)));
+  $cut = mb_strlen($body) > $max;
+  $from = $j['from']['emailAddress'] ?? [];
+  return [
+    'id' => $id, 'subject' => (string)($j['subject'] ?? ''), 'from' => (string)($from['name'] ?? ''), 'fromAddress' => (string)($from['address'] ?? ''),
+    'received' => (string)($j['receivedDateTime'] ?? ''), 'body' => $cut ? mb_substr($body, 0, $max) . '…' : $body, 'cut' => $cut,
+  ];
+}
+
 /** Put these emails into the owner's saved projects, as one new version (another device first: read again, try again). */
 function ol_add(array $msgs): int {
   $owner = (int)setting('dp_owner', '0');
@@ -280,13 +474,7 @@ function ol_add(array $msgs): int {
     $new[$h] = $m;
   }
   if (!$new) return 0;
-  for ($try = 0; ; $try++) {
-    $head = dp_head($owner);
-    $files = dp_tree_files((string)one('SELECT tree FROM dp_commits WHERE id = ?', [$head])['tree']);
-    if (!isset($files['data.json'])) throw new OlError('Open Daily Projects once first.');
-    $data = json_decode(dp_get_blob($files['data.json']), false);
-    if (!is_object($data)) throw new OlError('The saved projects could not be read.'); // never write over them
-    $hist = [];
+  ol_write(function (object $data, array &$hist) use ($new): bool {
     $threads = [];
     foreach ($new as $m) {
       $conv = (string)($m['conversationId'] ?? '');
@@ -295,21 +483,8 @@ function ol_add(array $msgs): int {
       ol_apply($data, $hist, $m, $seen, ol_iso_now());
       $threads[$ch] = true;
     }
-    $changes = [['path' => 'data.json', 'content' => ol_json($data)]];
-    foreach ($hist as $month => $events) {
-      $path = "history/$month.json";
-      $list = isset($files[$path]) ? json_decode(dp_get_blob($files[$path]), false) : [];
-      if (!is_array($list)) throw new OlError('The saved history could not be read.');
-      $changes[] = ['path' => $path, 'content' => ol_json(array_merge($list, $events))];
-    }
-    try {
-      dp_commit(['id' => $owner], $head, $changes, '📧 ' . count($new) . ' email' . (count($new) === 1 ? '' : 's') . ' from Outlook');
-      break;
-    } catch (ApiError $e) {
-      if ($e->status !== 409 || $try >= 4) throw $e;
-      usleep(200000 * ($try + 1));
-    }
-  }
+    return true;
+  }, '📧 ' . count($new) . ' email' . (count($new) === 1 ? '' : 's') . ' from Outlook');
   foreach ($new as $h => $m) {
     $r = strtotime((string)($m['receivedDateTime'] ?? ''));
     q('INSERT IGNORE INTO ol_seen (msg_hash, conv_hash, received_at, added_at) VALUES (?, ?, ?, ?)',
@@ -333,6 +508,7 @@ function ol_check(bool $now = false): void {
     $last = strtotime($since);
     foreach ($msgs as $m) $last = max($last, (int)strtotime((string)($m['receivedDateTime'] ?? '')));
     set_setting('ol_since', gmdate('Y-m-d\TH:i:s\Z', $last));
+    ol_check_sent($token); // replies you sent in Outlook tick their emails as replied
     set_setting('ol_error', '');
   } catch (OlError $e) {
     set_setting('ol_error', $e->getMessage());
@@ -404,6 +580,10 @@ function ol_handle(string $a, array $in, array $me): ?array {
         if (setting('ol_refresh') === '') throw new ApiError('Outlook is not connected. Press Connect Outlook first.');
         ol_check(true);
         return ['outlook' => ol_status()];
+      case 'outlook.draft': // a draft reply in the same thread (never sent): the text and the email come from the saved projects
+        $link = ol_draft(trim((string)($in['ref'] ?? '')));
+        audit($me['id'], 'outlook_draft', '');
+        return ['webLink' => $link];
       case 'outlook.disconnect':
         ol_forget_signin();
         audit($me['id'], 'outlook_off', '');

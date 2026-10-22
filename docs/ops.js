@@ -9,7 +9,7 @@
 // applyOp(state, op) changes the state in place and returns true, or returns false
 // when the operation must be skipped (for example, its item no longer exists).
 
-import { indiaDate, monthOf, laterDate, addDays, REPEATS, nextRepeatDate } from './rules.js';
+import { indiaDate, monthOf, laterDate, addDays, REPEATS, nextRepeatDate, waitingAgain } from './rules.js';
 import { AI_DAILY_LIMIT, BRIEF_CLAIM_MINUTES } from './config.js';
 
 export const START_GROUPS = ['Acton', 'Personal', 'Ceramic Ninja'];
@@ -121,8 +121,30 @@ export function cleanMail(m, withCount = false) {
   const str = (k, max) => { const v = typeof m[k] === 'string' ? m[k].replace(/\s+/g, ' ').trim().slice(0, max) : ''; if (v) out[k] = v; };
   str('messageId', 400); str('fromName', 120); str('subject', 200);
   if (typeof m.fromAddress === 'string' && /^[^\s@]+@[^\s@]+$/.test(m.fromAddress.trim()) && m.fromAddress.length <= 200) out.fromAddress = m.fromAddress.trim();
+  if (typeof m.at === 'string' && m.at.length <= 40 && !Number.isNaN(Date.parse(m.at))) out.at = m.at; // when the newest email came
+  if (m.fromMe === true) out.fromMe = true; // the newest email is your own (sent to yourself): nothing to answer
   return out;
 }
+
+export const REPLY_MAX = 5000; // a reply draft, in letters
+
+/**
+ * Where an email thread lives: an Inbox item ({ itemId }), a step ({ projectId, stepId }) or a project ({ projectId }).
+ * Returns { target, project } (project = null for an Inbox item), or null when there is none or it has no email.
+ */
+export function mailTarget(data, a) {
+  if (!a) return null;
+  if (a.itemId) {
+    const item = (data.inbox || []).find((x) => x.id === a.itemId);
+    return item && item.mail ? { target: item, project: null } : null;
+  }
+  const p = a.projectId && data.projects.find((x) => x.id === a.projectId);
+  if (!p) return null;
+  const target = a.stepId ? p.steps.find((s) => s.id === a.stepId) : p;
+  return target && target.mail ? { target, project: p } : null;
+}
+
+const replyOpen = (r) => !!r && (r.state === 'ready' || r.state === 'later');
 
 /** Move item `id` in `list` to just after `afterId`, or just before `beforeId`, or to the start. */
 function moveInList(list, id, afterId, beforeId) {
@@ -797,6 +819,80 @@ const handlers = {
     return true;
   },
 
+  // ---- Email replies: a draft kept where the email lives (never sent from here; you press Send in Outlook) ----
+  // reply = { text, at, by: 'claude' | 'you', forMessageId, state: 'ready' | 'later' | 'sent', laterUntil?, sentAt? }
+
+  /** A reply draft (by Claude, or typed by you; it saves by itself). Up to REPLY_MAX letters. */
+  setReply(state, op, a) {
+    const t = mailTarget(state.data, a);
+    const text = cleanText(a.text, REPLY_MAX).replace(/\s+$/, '');
+    if (!t || !text.trim()) return false;
+    const old = t.target.reply;
+    const by = a.by === 'claude' ? 'claude' : 'you';
+    if (replyOpen(old) && old.text === text) return false;
+    const fresh = !replyOpen(old);
+    t.target.reply = {
+      text, at: op.at, by, forMessageId: t.target.mail.messageId || null,
+      state: fresh ? 'ready' : old.state, ...(!fresh && old.laterUntil ? { laterUntil: old.laterUntil } : {}),
+    };
+    if (fresh) addEvent(state, op, t.project, 'reply_prepared', `Reply prepared${by === 'claude' ? ' by Claude' : ''}: ${t.target.mail.subject || ''}`.trim());
+    return true;
+  },
+
+  /** ✕ Clear: the draft is thrown away. */
+  clearReply(state, op, a) {
+    const t = mailTarget(state.data, a);
+    if (!t || !replyOpen(t.target.reply)) return false;
+    delete t.target.reply;
+    return true;
+  },
+
+  /** ⏭ Later: the draft waits until a date (tomorrow when none is given). */
+  replyLater(state, op, a) {
+    const t = mailTarget(state.data, a);
+    if (!t || !replyOpen(t.target.reply)) return false;
+    const today = indiaDate(op.at);
+    const until = cleanDate(a.until) || addDays(today, 1);
+    if (until <= today) return false;
+    t.target.reply = { ...t.target.reply, state: 'later', laterUntil: until };
+    return true;
+  },
+
+  /** ✓ Sent: you sent the reply (in Outlook). Your work, like a note: the project turns green today. */
+  markReplySent(state, op, a) {
+    const t = mailTarget(state.data, a);
+    if (!t || (t.target.reply && t.target.reply.state === 'sent' && !waitingAgain(t.target))) return false;
+    const old = t.target.reply || { text: '', at: op.at, by: 'you', forMessageId: t.target.mail.messageId || null };
+    const { laterUntil, ...rest } = old;
+    void laterUntil;
+    t.target.reply = { ...rest, state: 'sent', sentAt: op.at };
+    if (t.project) {
+      touch(t.project, op);
+      markWork(t.project, op);
+      addEvent(state, op, t.project, 'reply_sent', `Reply sent: ${t.target.mail.subject || ''}`.trim());
+    }
+    return true;
+  },
+
+  /**
+   * Seen in Outlook's Sent Items (worktask.in does this by itself, see team/app/outlook.php): a reply in this thread
+   * was sent after its newest email. Not your work (it does not make the dot green). a.sentAt = when it was sent.
+   */
+  mailReplied(state, op, a) {
+    const t = mailTarget(state.data, a);
+    const sentAt = typeof a.sentAt === 'string' && !Number.isNaN(Date.parse(a.sentAt)) ? new Date(a.sentAt).toISOString() : null;
+    if (!t || !sentAt) return false;
+    const { target } = t;
+    const r = target.reply;
+    if (!(replyOpen(r) || !r || waitingAgain(target))) return false;
+    if (target.mail.at && Date.parse(sentAt) < Date.parse(target.mail.at)) return false; // sent before the newest email
+    const { laterUntil, ...rest } = r || { text: '', at: sentAt, by: 'you', forMessageId: target.mail.messageId || null };
+    void laterUntil;
+    target.reply = { ...rest, state: 'sent', sentAt };
+    if (t.project) addEvent(state, op, t.project, 'mail_replied', `Replied in Outlook: ${target.mail.subject || ''}`.trim());
+    return true;
+  },
+
   removeInbox(state, op, a) {
     const inbox = state.data.inbox || [];
     const i = inbox.findIndex((x) => x.id === a.itemId);
@@ -827,7 +923,7 @@ const handlers = {
     }
     if (!inbox.some((x) => x.id === it.id)) {
       const text = cleanText(it.text, 1000).trim();
-      if (text) inbox.splice(Math.min(Math.max(0, a.index ?? inbox.length), inbox.length), 0, { id: it.id, text, createdAt: it.createdAt || op.at, ...inboxExtras(it) });
+      if (text) inbox.splice(Math.min(Math.max(0, a.index ?? inbox.length), inbox.length), 0, { id: it.id, text, createdAt: it.createdAt || op.at, ...inboxExtras(it), ...(it.mail && it.reply ? { reply: clone(it.reply) } : {}) });
     }
     return true;
   },
@@ -840,6 +936,7 @@ const handlers = {
     const step = findProject(state.data, a.projectId).steps.find((s) => s.id === a.stepId);
     if (item.note) step.note = item.note; // the email's start, kept on the step
     if (item.mail) step.mail = cleanMail(item.mail); // later replies in the thread come here as notes
+    if (item.mail && item.reply) step.reply = clone(item.reply); // a reply draft goes with it
     inbox.splice(inbox.indexOf(item), 1);
     return true;
   },
@@ -856,6 +953,7 @@ const handlers = {
     if (item.link) made.links.push({ id: a.projectId + '-link', ...item.link }); // the mail or page it came from
     if (item.note) made.notes = made.notes ? `${made.notes}\n\n${item.note}` : item.note;
     if (item.mail) made.mail = cleanMail(item.mail); // later replies in the thread come here as notes
+    if (item.mail && item.reply) made.reply = clone(item.reply); // a reply draft goes with it
     inbox.splice(inbox.indexOf(item), 1);
     return true;
   },

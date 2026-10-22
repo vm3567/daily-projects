@@ -3,11 +3,11 @@
 // Offline or very slow: the copy on the device.
 // Your data is NOT handled here (it goes to GitHub directly; the app keeps its own data copy).
 
-const CACHE = 'daily-projects-app-2'; // new name: drops the old copy, which also held data files (../api/)
+const CACHE = 'daily-projects-app-3'; // new name: drops the old copy, which also held data files (../api/)
 const FILES = [
   './', 'index.html', 'styles.css', 'manifest.webmanifest',
   'app.js', 'ai.js', 'config.js', 'device.js', 'github.js', 'mockrepo.js', 'ops.js', 'reports.js', 'rules.js', 'store.js', 'voice.js', 'serverrepo.js',
-  'ui/autocorrect.js', 'ui/dashboard.js', 'ui/detail.js', 'ui/dom.js', 'ui/files.js', 'ui/mention.js', 'ui/people.js', 'ui/timereport.js',
+  'ui/autocorrect.js', 'ui/dashboard.js', 'ui/detail.js', 'ui/dom.js', 'ui/files.js', 'ui/mention.js', 'ui/people.js', 'ui/replies.js', 'ui/timereport.js',
   'vendor/sortable.min.js', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png',
 ];
 const WAIT_MS = 3000; // weak signal: after 3 s use the copy on the device

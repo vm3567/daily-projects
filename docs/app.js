@@ -7,6 +7,7 @@ import { installMentions } from './ui/mention.js';
 import { installAutocorrect, setAutocorrect, autocorrectOn } from './ui/autocorrect.js';
 import { renderDashboard } from './ui/dashboard.js';
 import { renderTimeReport } from './ui/timereport.js';
+import { renderReplies, renderReplyRound, replyArea, readyCount } from './ui/replies.js';
 import { projectMatches, diaryEntries, backupPayload, summaryText, personMessageText, personMessageHtml, sentMarkOf, copyNotice } from './reports.js';
 import { closeViewer, uploadBlob } from './ui/files.js';
 import { Store } from './store.js';
@@ -15,7 +16,7 @@ import { ServerRepo, SERVER_TOKEN_KEY } from './serverrepo.js';
 import { MockRepo } from './mockrepo.js';
 import { device } from './device.js';
 import { DATA_OWNER, DATA_REPO, DATA_BRANCH, MOVED_TO, REFRESH_MS, AI_DAILY_LIMIT, BRIEF_CLAIM_MINUTES, WAIT_RED_DAYS, NO_WORK_NOTE_DAYS } from './config.js';
-import { dotColour, greenByTeamOnly, isSnoozed, restUntil, awakeProjects, activeProjects, nextStep, todayIndia, isSundayIndia, colourCounts, isOverdue, indiaDate, waitingDays, daysWithoutWork, dayScore, greenStreak, addDays, monthOf, fmtMinutes, takeBackWaits, staffStepAction, pasteGoesToProject, singleStepClose, versionRequest, askDiaryAgain, diaryLoadedAt, photoNeedsFetch, teamUndoKey, teamActionUndone, teamProgressOf, projectKeyIgnored, teamMovedTo, serverHolder, teamMemberFor } from './rules.js';
+import { dotColour, greenByTeamOnly, isSnoozed, restUntil, awakeProjects, activeProjects, nextStep, todayIndia, isSundayIndia, colourCounts, isOverdue, indiaDate, waitingDays, daysWithoutWork, dayScore, greenStreak, addDays, monthOf, fmtMinutes, takeBackWaits, staffStepAction, pasteGoesToProject, singleStepClose, versionRequest, askDiaryAgain, diaryLoadedAt, photoNeedsFetch, teamUndoKey, teamActionUndone, teamProgressOf, projectKeyIgnored, teamMovedTo, serverHolder, teamMemberFor, repliesOf, mailThreads, replyMailto, MAILTO_BODY_MAX } from './rules.js';
 import { newId, clone, opMonth, groupHasTimer, cleanLink, carriedOps } from './ops.js';
 import * as ai from './ai.js';
 import { parseVoice } from './voice.js';
@@ -197,6 +198,10 @@ const ctx = {
   afterTick: (id, where, undo) => afterTick(id, where, undo),
   openPersonMenu: (id, e) => openPersonMenu(id, e),
   selectPerson: (id) => { ui.person = id; ui.mobile = 'detail'; render(); const d = document.getElementById('detail'); if (d) d.scrollTop = 0; },
+  giveSteps: (items, user, person) => giveStepsTo(items, user, person),
+  openReplyDraft: (m) => openReplyDraft(m),
+  openMail: (m) => openMail(m),
+  startReplyRound: () => startReplyRound(),
   openProject: (id) => {
     const p = store.view.data.projects.find((x) => x.id === id);
     if (!p) return;
@@ -427,6 +432,38 @@ function personTeamLink(person) {
   return { user, member, loading: m === null, failed: m === false };
 }
 
+/**
+ * People page "→ Give to <Name>" / "→ Give all N" / "<Name> does it": each step becomes that person's Work Task task, the same
+ * as "👥 Give to team" on a step (projectRef + stepRef link it: the step then shows the team task, and is ticked when they finish).
+ * One by one; one summary at the end. No page change.
+ */
+async function giveStepsTo(items, user, person) {
+  const first = person.name.split(/\s+/)[0];
+  const giving = (team.giving ||= new Set());
+  let given = 0;
+  const failed = [];
+  for (const { project, step } of items) {
+    if (giving.has(step.id)) continue; // a second tap while it is on its way
+    giving.add(step.id);
+    try {
+      const out = await teamApi('task.save', {
+        assigneeId: user.id, title: step.text, details: '', project: project.name, projectRef: project.id, stepRef: step.id,
+        repeat: 'daily', skipSunday: true, clientId: 'give-' + newId() + newId(),
+      });
+      if (out.task) team.byStep.set(step.id, out.task); // shows "👥 on …'s list" at once
+      given++;
+    } catch (e) {
+      failed.push(`${step.text.slice(0, 40)}: ${e.message}`);
+    } finally {
+      giving.delete(step.id);
+    }
+  }
+  if (items.length === 1) toast(given ? `Given to ${first} ✓` : `Not given: ${failed[0] || 'already on the way'}`, given ? 2500 : 6000);
+  else toast(`Given ${given} to ${person.name} ✓${failed.length ? ` (${failed.length} failed: ${failed[0]})` : ''}`, failed.length ? 7000 : 3000);
+  if (given) { teamMorning(true); loadTeam(true); } // the Work Task table and the steps' team chips catch up
+  render();
+}
+
 function refreshTeamPeople() { teamAccounts(true); teamMorning(true); }
 
 async function setTeamEmail(account, email) {
@@ -564,13 +601,15 @@ function visibleProjects() {
 function viewTitle() {
   if (ui.search.trim()) return `Search: "${ui.search.trim()}"`;
   if (ui.view.startsWith('group:')) return groupName(ui.view.slice(6));
-  return { today: 'Today', inbox: 'Inbox', all: 'All projects', paused: 'Paused', finished: 'Finished', diary: 'Diary', settings: 'Settings', people: 'People', dashboard: 'Dashboard', time: 'Time report' }[ui.view];
+  return { today: 'Today', inbox: 'Inbox', all: 'All projects', paused: 'Paused', finished: 'Finished', diary: 'Diary', settings: 'Settings', people: 'People', dashboard: 'Dashboard', time: 'Time report', replies: '✉ Replies' }[ui.view];
 }
 
 function go(view) {
   ui.view = view;
   ui.rowMenu = null;
   ui.round = null;
+  ui.replyRound = null;
+  ui.replyOpen = null;
   resetRedOrder();
   ui.search = '';
   ui.menuOpen = false;
@@ -673,7 +712,7 @@ function renderMenu() {
   const { data } = store.view;
   const active = data.projects.filter((p) => p.state === 'active');
   const count = (f) => data.projects.filter(f).length;
-  const MENU_KEYS = { today: 'T', dashboard: 'B', people: 'P', diary: 'D', inbox: 'Q' };
+  const MENU_KEYS = { today: 'T', dashboard: 'B', people: 'P', diary: 'D', inbox: 'Q', replies: 'E' };
   const item = (view, label, n, extra) => h('li', { key: 'm-' + view },
     h('button', { class: 'menu-item' + (ui.view === view && !ui.search ? ' current' : ''), onClick: () => go(view) },
       h('span', null, label, MENU_KEYS[view] ? keyHint(MENU_KEYS[view]) : null), n !== undefined ? h('span', { class: 'count' }, String(n)) : null),
@@ -695,6 +734,7 @@ function renderMenu() {
         h('span', { class: 'dot yellow' }), String(counts.yellow), ' ',
         h('span', { class: 'dot green' }), String(counts.green)),
       item('inbox', '📥 Inbox', (data.inbox || []).length),
+      item('replies', '✉ Replies', readyCount(data, today)), // replies ready to send
       item('dashboard', 'Dashboard'),
       item('time', 'Time report'),
       item('all', 'All projects', active.length),
@@ -1184,6 +1224,62 @@ function inboxAct(type, args, item, message) {
   return { op, undo };
 }
 
+/** The reply box of an Inbox item from an email. */
+function inboxReply(item) {
+  const m = mailThreads(store.view.data).find((x) => x.kind === 'inbox' && x.item.id === item.id);
+  return m ? replyArea(ctx, m) : null;
+}
+
+// ---------------------------------------------------------------- email replies (✉ Replies)
+
+/** One by one through the replies ready to send. */
+function startReplyRound() {
+  const { ready } = repliesOf(store.view.data, todayIndia());
+  if (!ready.length) { toast('No reply ready to send.'); return; }
+  ui.view = 'replies';
+  ui.search = '';
+  ui.replyRound = { ids: ready.map((m) => m.key), pos: 0 };
+  ui.mobile = 'list';
+  render();
+}
+
+/** Tap on a reply: its project (a step's or project's email), or the Inbox (an Inbox item's email). */
+function openMail(m) {
+  ui.replyRound = null;
+  if (m.kind === 'inbox') { pushNav(); go('inbox'); return; }
+  ctx.openProject(m.project.id);
+}
+
+/**
+ * "Open in Outlook (same thread)": the server makes a draft reply to the newest email of the thread, with the SAVED reply
+ * text (so the typed text is saved first), and its link opens in a new tab. Never sent: you press Send in Outlook.
+ * Outlook not connected, no Outlook id, or Outlook says no: a new email (mailto:) to the sender instead.
+ */
+async function openReplyDraft(m) {
+  saveTypedText(); // the reply being typed right now is saved first
+  const fresh = mailThreads(store.view.data).find((x) => x.key === m.key) || m;
+  const text = (fresh.reply && fresh.reply.state !== 'sent' && fresh.reply.text) || '';
+  if (!text.trim()) { toast('Write the reply first.'); return; }
+  const fallback = (why) => {
+    const { url, cut } = replyMailto(fresh.mail, text);
+    toast(`${why ? why + ' — ' : ''}a new email opens instead${cut ? ` (the reply was cut to ${MAILTO_BODY_MAX} letters: paste the rest from here)` : ''}.`, 8000);
+    location.href = url;
+  };
+  if (!onServer || !fresh.mail.messageId) { fallback(onServer ? 'This email has no Outlook id' : ''); return; }
+  const tab = window.open('', '_blank'); // opened now, while the tap counts (a tab opened later is blocked)
+  toast('Making the draft in Outlook…', 6000);
+  try {
+    await store.flush();
+    if (store.pending.length) throw new Error('The reply is not saved yet (no internet?)');
+    const out = await teamApi('outlook.draft', { ref: fresh.id });
+    if (tab) { try { tab.opener = null; } catch { /* fine */ } tab.location.href = out.webLink; } else window.open(out.webLink, '_blank', 'noopener');
+    toast('Draft ready in Outlook ✓ — check it and press Send there. Then tap ✓ Sent.', 7000);
+  } catch (e) {
+    if (tab) tab.close();
+    fallback(e.message);
+  }
+}
+
 function renderInbox() {
   const { data } = store.view;
   const items = data.inbox || [];
@@ -1198,6 +1294,7 @@ function renderInbox() {
       return h('li', { key: 'ib-' + item.id },
         h('div', { class: 'inbox-text' }, item.text, h('span', { class: 'muted small' }, ` · ${fmtDay(indiaDate(item.createdAt))} `), linkChip(item.link, item.mail ? '✉ Open in Outlook' : null)),
         item.note ? h('div', { class: 'inbox-note muted small', key: 'ibn-' + item.id }, item.note) : null, // from an email: when, and how it starts
+        item.mail ? inboxReply(item) : null, // ✉ the reply to this email (a draft; you press Send in Outlook)
         h('div', { class: 'inbox-actions' },
           sugg.map((p) => h('button', { class: 'chip sugg', key: 'sg-' + p.id, title: `Add as a step in ${p.name}`, onClick: () => toStep(item, p) }, `→ ${p.name}`)),
           h('select', {
@@ -1573,6 +1670,7 @@ function renderListColumn() {
 
   if (ui.view === 'diary' && !ui.search) return h('div', { class: 'col-inner' }, head, timerStrip(), renderDiary());
   if (ui.view === 'inbox' && !ui.search) return h('div', { class: 'col-inner' }, head, timerStrip(), renderInbox());
+  if (ui.view === 'replies' && !ui.search) return h('div', { class: 'col-inner' }, head, timerStrip(), ui.replyRound ? renderReplyRound(ctx) : renderReplies(ctx));
   if (ui.view === 'settings' && !ui.search) return h('div', { class: 'col-inner' }, head, timerStrip(), renderSettings());
   if (ui.view === 'dashboard' && !ui.search) return h('div', { class: 'col-inner' }, head, timerStrip(), renderDashboard(ctx));
   if (ui.view === 'time' && !ui.search) return h('div', { class: 'col-inner' }, head, timerStrip(), renderTimeReport(ctx));
@@ -2315,7 +2413,7 @@ function goProject(step) {
 /** The next project after this one (in the tab you are in) that is not green yet — red first. */
 function nextOpenProject(id) {
   const today = todayIndia();
-  let list = ['diary', 'settings', 'dashboard', 'time', 'people', 'inbox'].includes(ui.view) || ui.search
+  let list = ['diary', 'settings', 'dashboard', 'time', 'people', 'inbox', 'replies'].includes(ui.view) || ui.search
     ? store.view.data.projects.filter((p) => p.state === 'active') : sortForView(visibleProjects(), today);
   list = list.filter((p) => p.state === 'active' && (p.id === id || !isSnoozed(p, today)));
   const i = Math.max(0, list.findIndex((p) => p.id === id));
@@ -2374,7 +2472,7 @@ function jumpItems() {
   const pages = [
     ['Today', () => go('today')], ['All projects', () => go('all')], ['Dashboard', () => go('dashboard')],
     ['People', () => go('people')], ['Diary', () => go('diary')], ['Paused', () => go('paused')],
-    ['Finished', () => go('finished')], ['Settings', () => go('settings')], ['Time report', () => go('time')], ['Daily round', () => { go('today'); startRound(); }],
+    ['Finished', () => go('finished')], ['Settings', () => go('settings')], ['Time report', () => go('time')], ['✉ Replies', () => go('replies')], ['Daily round', () => { go('today'); startRound(); }],
     ["Today's summary", () => openSummary()], ['New project', () => { go('today'); ui.adding = true; render(); focusKey('new-name'); }],
     ...data.groups.map((g) => [`Group: ${g.name}`, () => go('group:' + g.id)]),
   ].map(([label, run]) => ({ kind: 'page', label, run }));
@@ -2445,6 +2543,7 @@ const KEYS = [
   ['q', 'Quick capture: write an idea or task into the Inbox'],
   ['r', 'Switch "My order" / "Red first"'],
   ['t  b  d  p', 'Go to Today / Dashboard / Diary / People'],
+  ['e', 'Go to ✉ Replies (emails waiting for your reply)'],
   ['@', 'In a step or note: pick a person'],
   ['Ctrl/⌘ Enter', 'In Today\'s update: save and tick the step'],
   ['Enter', 'In search: open the first project found'],
@@ -2535,6 +2634,7 @@ function onKey(e) {
     if (ui.capture) { ui.capture = false; render(); return; }
     if (isTyping(document.activeElement)) { document.activeElement.blur(); return; }
     if (ui.round) { if (ui.round.mode) { ui.round.mode = null; render(); } else endRound(); return; }
+    if (ui.replyRound) { ui.replyRound = null; render(); return; }
     if (ui.menuOpen) { ui.menuOpen = false; render(); return; }
     if (ui.adding) { ui.adding = false; render(); return; }
     if (ui.search) { ui.search = ''; render(); return; }
@@ -2548,7 +2648,7 @@ function onKey(e) {
   if (e.repeat && !isArrow && e.key !== 'j' && e.key !== 'k') return; // holding x / o / r must not repeat
   const focused = document.activeElement;
   if (isArrow && focused && (focused.type === 'radio' || focused.nodeName === 'SUMMARY')) return;
-  if (isArrow && ['diary', 'settings', 'dashboard', 'time', 'inbox'].includes(ui.view) && !ui.search) return; // let the page scroll
+  if (isArrow && ['diary', 'settings', 'dashboard', 'time', 'inbox', 'replies'].includes(ui.view) && !ui.search) return; // let the page scroll
   const k = e.key;
   if (ui.round) {
     const map = { x: 'done', s: 'add', w: 'note', o: 'ok', c: 'chase', n: 'skip', ArrowRight: 'skip' };
@@ -2567,7 +2667,7 @@ function onKey(e) {
   if (k === 'ArrowRight' || k === 'ArrowLeft') {
     const step = k === 'ArrowRight' ? 1 : -1;
     if (ui.view === 'people' && !ui.search) goPerson(step);
-    else if (ui.selected && !['diary', 'settings', 'dashboard', 'time', 'inbox'].includes(ui.view)) goProject(step);
+    else if (ui.selected && !['diary', 'settings', 'dashboard', 'time', 'inbox', 'replies'].includes(ui.view)) goProject(step);
     else handled = false;
   } else if (k === 'Backspace') {
     if (ui.navStack && ui.navStack.length) goBack(); else handled = false;
@@ -2608,6 +2708,7 @@ function onKey(e) {
   else if (k === 't') go('today');
   else if (k === 'd') go('diary');
   else if (k === 'p') go('people');
+  else if (k === 'e') go('replies');
   else if (k === 'b') go('dashboard');
   else if (k === '?') { ui.showKeys = !ui.showKeys; render(); }
   else handled = false;

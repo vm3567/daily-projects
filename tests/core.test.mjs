@@ -1161,3 +1161,150 @@ test('inbox from email: the thread (mail) keeps the newest email\'s id, sender a
   applyOp(s, op('addMailNote', { projectId: 'p1', noteId: 'ml9', stepId: 'sm', text: 'reply', mail: { messageId: 'AAMk-3', fromName: 'Ravi', fromAddress: 'ravi@acton.test', subject: 'RE: RE: Kiln quote' } }, '2026-10-22'));
   assert.deepEqual([step.mail.conversationId, step.mail.messageId, step.mail.fromAddress], ['conv-CCC', 'AAMk-3', 'ravi@acton.test'], 'a reply note moves it to the newest email');
 });
+
+// ---------------------------------------------------------------- Email replies (✉ Reply ready, ✉ Replies page)
+const rmail = (id, at, extra = {}) => ({ conversationId: 'C-' + id, count: 1, messageId: 'msg-' + id, fromName: 'Ravi Kumar', fromAddress: 'ravi@x.test', subject: 'Kiln quote ' + id, at, ...extra });
+function withMails() {
+  const s = withProject('2026-10-15');
+  applyOp(s, op('addInbox', { itemId: 'i1', text: '📧 Kiln quote i1 — from Ravi', note: '20 Oct · Please send the price', mail: rmail('i1', T('2026-10-20')) }, '2026-10-20'));
+  applyOp(s, op('addInbox', { itemId: 'i2', text: '📧 Glaze — from Anil', mail: rmail('i2', T('2026-10-22', '09:00:00'), { fromName: 'Anil' }) }, '2026-10-22'));
+  applyOp(s, op('addInbox', { itemId: 'i3', text: '📧 Step mail', mail: rmail('i3', T('2026-10-21')) }, '2026-10-21'));
+  applyOp(s, op('inboxToStep', { itemId: 'i3', projectId: 'p1', stepId: 's3' }, '2026-10-21'));
+  return s;
+}
+
+test('replies: setReply saves the draft where the email lives (Inbox item, step, project); limits; not work', async () => {
+  const { dayScore, lastWorkDate } = await import('../docs/rules.js');
+  const { REPLY_MAX } = await import('../docs/ops.js');
+  const s = withMails();
+  assert.equal(applyOp(s, op('setReply', { itemId: 'i1', text: 'Dear Ravi,\n\nNoted.', by: 'claude' }, '2026-10-22', '15:10:00')), true);
+  assert.deepEqual(s.data.inbox[0].reply, { text: 'Dear Ravi,\n\nNoted.', at: T('2026-10-22', '15:10:00'), by: 'claude', forMessageId: 'msg-i1', state: 'ready' });
+  assert.equal(applyOp(s, op('setReply', { itemId: 'i1', text: 'Dear Ravi,\n\nNoted.', by: 'you' }, '2026-10-22')), false, 'same text: no change');
+  assert.equal(applyOp(s, op('setReply', { itemId: 'i1', text: '   ' }, '2026-10-22')), false, 'empty refused');
+  assert.equal(applyOp(s, op('setReply', { projectId: 'p1', stepId: 's1', text: 'x' }, '2026-10-22')), false, 'a step without an email: refused');
+  assert.equal(applyOp(s, op('setReply', { projectId: 'p1', text: 'x' }, '2026-10-22')), false, 'a project without an email: refused');
+  assert.equal(applyOp(s, op('setReply', { itemId: 'nope', text: 'x' }, '2026-10-22')), false);
+  assert.ok(applyOp(s, op('setReply', { projectId: 'p1', stepId: 's3', text: 'y'.repeat(REPLY_MAX + 50), by: 'hacker' }, '2026-10-22')));
+  const st = s.data.projects[0].steps.find((x) => x.id === 's3');
+  assert.equal(st.reply.text.length, REPLY_MAX, 'cut to 5000 letters');
+  assert.equal(st.reply.by, 'you', 'only claude or you');
+  assert.ok(applyOp(s, op('setReply', { projectId: 'p1', stepId: 's3', text: 'Edited by me', by: 'you' }, '2026-10-22')));
+  const ev = s.history['2026-10'].filter((e) => e.kind === 'reply_prepared' && e.projectId === 'p1');
+  assert.equal(ev.length, 1, 'one short history line ("Reply prepared"), not one per edit');
+  assert.equal(dayScore(s.data, s.history, '2026-10-22').green, 0, 'preparing a reply is not work');
+  assert.equal(lastWorkDate(s.data.projects[0]), null);
+});
+
+test('replies: an Inbox item\'s draft goes with it to a step or project', () => {
+  const s = withMails();
+  applyOp(s, op('setReply', { itemId: 'i2', text: 'Thanks Anil', by: 'claude' }, '2026-10-22'));
+  applyOp(s, op('inboxToProject', { itemId: 'i2', projectId: 'p9', groupId: 'g2' }, '2026-10-22'));
+  assert.equal(s.data.projects.find((p) => p.id === 'p9').reply.text, 'Thanks Anil');
+});
+
+test('replies: Later (tomorrow by default, never today or before), Clear, and ✓ Sent is your work', async () => {
+  const { dayScore, lastWorkDate } = await import('../docs/rules.js');
+  const s = withMails();
+  assert.equal(applyOp(s, op('replyLater', { itemId: 'i1' }, '2026-10-22')), false, 'nothing to put off');
+  applyOp(s, op('setReply', { projectId: 'p1', stepId: 's3', text: 'Will do', by: 'claude' }, '2026-10-22'));
+  assert.equal(applyOp(s, op('replyLater', { projectId: 'p1', stepId: 's3', until: '2026-10-22' }, '2026-10-22')), false, 'not today');
+  assert.ok(applyOp(s, op('replyLater', { projectId: 'p1', stepId: 's3' }, '2026-10-22')));
+  const step = () => s.data.projects[0].steps.find((x) => x.id === 's3');
+  assert.deepEqual([step().reply.state, step().reply.laterUntil], ['later', '2026-10-23']);
+  assert.ok(applyOp(s, op('setReply', { projectId: 'p1', stepId: 's3', text: 'Will do soon', by: 'you' }, '2026-10-22')));
+  assert.deepEqual([step().reply.state, step().reply.laterUntil], ['later', '2026-10-23'], 'an edit keeps it for later');
+  assert.ok(applyOp(s, op('markReplySent', { projectId: 'p1', stepId: 's3' }, '2026-10-22', '16:00:00')));
+  assert.deepEqual([step().reply.state, step().reply.sentAt, 'laterUntil' in step().reply], ['sent', T('2026-10-22', '16:00:00'), false]);
+  assert.equal(applyOp(s, op('markReplySent', { projectId: 'p1', stepId: 's3' }, '2026-10-22')), false, 'once');
+  assert.equal(lastWorkDate(s.data.projects[0]), '2026-10-22', '✓ Sent counts like a note');
+  assert.equal(dayScore(s.data, s.history, '2026-10-22').green, 1);
+  assert.ok(s.history['2026-10'].some((e) => e.kind === 'reply_sent' && e.detail === 'Reply sent: Kiln quote i3'));
+  assert.equal(applyOp(s, op('clearReply', { projectId: 'p1', stepId: 's3' }, '2026-10-22')), false, 'a sent reply is not cleared');
+  applyOp(s, op('setReply', { itemId: 'i1', text: 'Hello', by: 'you' }, '2026-10-22'));
+  assert.ok(applyOp(s, op('clearReply', { itemId: 'i1' }, '2026-10-22')));
+  assert.equal('reply' in s.data.inbox[0], false);
+});
+
+test('replies: mailReplied (seen in Sent Items) — not work; never for a reply sent before the newest email', async () => {
+  const { dayScore, lastWorkDate } = await import('../docs/rules.js');
+  const s = withMails();
+  assert.equal(applyOp(s, op('mailReplied', { projectId: 'p1', stepId: 's3', sentAt: T('2026-10-20') }, '2026-10-22')), false, 'sent before the newest email (21 Oct)');
+  assert.equal(applyOp(s, op('mailReplied', { projectId: 'p1', stepId: 's3', sentAt: 'soon' }, '2026-10-22')), false);
+  assert.ok(applyOp(s, op('mailReplied', { projectId: 'p1', stepId: 's3', sentAt: T('2026-10-22', '11:00:00') }, '2026-10-22')));
+  const r = s.data.projects[0].steps.find((x) => x.id === 's3').reply;
+  assert.deepEqual([r.state, r.sentAt, r.text], ['sent', T('2026-10-22', '11:00:00'), '']);
+  assert.equal(applyOp(s, op('mailReplied', { projectId: 'p1', stepId: 's3', sentAt: T('2026-10-22', '12:00:00') }, '2026-10-22')), false, 'already replied');
+  assert.ok(s.history['2026-10'].some((e) => e.kind === 'mail_replied'));
+  assert.equal(lastWorkDate(s.data.projects[0]), null, 'not your work');
+  assert.equal(dayScore(s.data, s.history, '2026-10-22').green, 0);
+});
+
+test('repliesOf: ready / waiting lists, days and colours, later until its day, sent before a newer email = waiting again', async () => {
+  const { repliesOf, replyState } = await import('../docs/rules.js');
+  const s = withMails();
+  // project with its own email, and one from yourself, and a finished project
+  applyOp(s, op('addInbox', { itemId: 'i4', text: 'Me', mail: rmail('i4', T('2026-10-18'), { fromMe: true }) }, '2026-10-18'));
+  applyOp(s, op('addInbox', { itemId: 'i5', text: 'Old', mail: rmail('i5', T('2026-10-10')) }, '2026-10-10'));
+  applyOp(s, op('inboxToProject', { itemId: 'i5', projectId: 'pf', groupId: 'g2' }, '2026-10-10'));
+  applyOp(s, op('finish', { projectId: 'pf' }, '2026-10-11'));
+  let r = repliesOf(s.data, '2026-10-22');
+  assert.deepEqual(r.waiting.map((m) => [m.id, m.days, m.colour]), [['i1', 2, 'orange'], ['s3', 1, 'orange'], ['i2', 0, 'grey']], 'longest first; your own email and finished projects left out');
+  assert.equal(r.ready.length, 0);
+  assert.deepEqual(r.waiting.find((m) => m.id === 's3').ref, { projectId: 'p1', stepId: 's3' });
+  assert.equal(repliesOf(s.data, '2026-10-24').waiting[0].colour, 'red', '3+ days: red');
+  applyOp(s, op('setReply', { itemId: 'i1', text: 'Price attached', by: 'claude' }, '2026-10-22'));
+  applyOp(s, op('setReply', { itemId: 'i2', text: 'OK', by: 'claude' }, '2026-10-22'));
+  applyOp(s, op('replyLater', { itemId: 'i2', until: '2026-10-24' }, '2026-10-22'));
+  r = repliesOf(s.data, '2026-10-22');
+  assert.deepEqual([r.ready.map((m) => m.id), r.waiting.map((m) => m.id), r.later.map((m) => m.id)], [['i1'], ['s3'], ['i2']]);
+  assert.deepEqual(repliesOf(s.data, '2026-10-24').ready.map((m) => m.id), ['i1', 'i2'], 'later comes back on its day');
+  // sent, then a newer email in the thread: waiting again
+  applyOp(s, op('markReplySent', { itemId: 'i1' }, '2026-10-22', '12:00:00'));
+  assert.equal(replyState({ mail: s.data.inbox[0].mail, reply: s.data.inbox[0].reply }, '2026-10-22'), 'done');
+  assert.ok(!repliesOf(s.data, '2026-10-22').waiting.some((m) => m.id === 'i1'), 'replied: not waiting');
+  applyOp(s, op('updateInbox', { itemId: 'i1', mail: { messageId: 'msg-i1b', at: T('2026-10-22', '14:00:00') }, count: 2 }, '2026-10-22'));
+  assert.ok(repliesOf(s.data, '2026-10-22').waiting.some((m) => m.id === 'i1'), 'a newer email after your reply: waiting again');
+  // a draft made for an older email says so
+  applyOp(s, op('setReply', { projectId: 'p1', stepId: 's3', text: 'Draft', by: 'claude' }, '2026-10-22'));
+  s.data.projects.find((p) => p.id === 'p1').steps.find((x) => x.id === 's3').mail.messageId = 'msg-newer';
+  assert.equal(repliesOf(s.data, '2026-10-22').ready.find((m) => m.id === 's3').newer, true);
+});
+
+test('replies round: Reply n of N, passes over replies no longer ready, ends', async () => {
+  const { replyRoundAt } = await import('../docs/rules.js');
+  const ids = ['a', 'b', 'c'];
+  assert.deepEqual(replyRoundAt(ids, 0, new Set(ids)), { pos: 0, done: false, n: 1, of: 3, progress: 0 });
+  assert.deepEqual(replyRoundAt(ids, 1, new Set(['a', 'c'])), { pos: 2, done: false, n: 3, of: 3, progress: 2 / 3 }, 'b was sent elsewhere: skipped');
+  assert.deepEqual(replyRoundAt(ids, 3, new Set(ids)), { pos: 3, done: true, n: 3, of: 3, progress: 1 });
+});
+
+test('replies: mailto fallback (Re: subject, cut long text and say so) and refs (id or unique part, refused when several match)', async () => {
+  const { replyMailto, MAILTO_BODY_MAX, findMailThread } = await import('../docs/rules.js');
+  const a = replyMailto({ fromAddress: 'ravi@x.test', subject: 'RE: Kiln & price' }, 'Dear Ravi,\nOK');
+  assert.equal(a.url, 'mailto:ravi@x.test?subject=Re%3A%20Kiln%20%26%20price&body=Dear%20Ravi%2C%0AOK');
+  assert.equal(a.cut, false);
+  const b = replyMailto({ subject: 'X' }, 'z'.repeat(MAILTO_BODY_MAX + 10));
+  assert.equal(b.cut, true);
+  assert.ok(b.url.startsWith('mailto:?subject='));
+  const s = withMails();
+  assert.equal(findMailThread(s.data, 's3').kind, 'step');
+  assert.equal(findMailThread(s.data, 'quote i2').id, 'i2');
+  assert.throws(() => findMailThread(s.data, 'kiln quote'), /Several emails match/);
+  assert.throws(() => findMailThread(s.data, 'zzz'), /No email matches/);
+});
+
+test('people give: which steps can go to the person\'s Work Task list (linked, open, active project not given whole, not already a team task)', async () => {
+  const { canGiveStep, givableSteps } = await import('../docs/rules.js');
+  const member = { id: 7, name: 'Ravi' };
+  const p = { id: 'p1', state: 'active' };
+  const open = { id: 's1', done: false };
+  assert.equal(canGiveStep(member, p, open, null), true);
+  assert.equal(canGiveStep(null, p, open, null), false, 'not linked to Work Task');
+  assert.equal(canGiveStep(member, p, { ...open, done: true }, null), false, 'done');
+  assert.equal(canGiveStep(member, { ...p, state: 'paused' }, open, null), false, 'paused project');
+  assert.equal(canGiveStep(member, { ...p, team: { name: 'Ravi' } }, open, null), false, 'project given as a whole');
+  assert.equal(canGiveStep(member, p, open, { status: 'open' }), false, 'already an open team task');
+  assert.equal(canGiveStep(member, p, open, { status: 'done' }), true, 'a finished task: can be given again');
+  const items = [{ project: p, step: open }, { project: p, step: { id: 's2', done: false } }, { project: p, step: { id: 's3', done: true } }];
+  assert.deepEqual(givableSteps(items, member, (id) => (id === 's2' ? { status: 'open' } : null)).map((x) => x.step.id), ['s1']);
+});

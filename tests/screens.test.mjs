@@ -383,3 +383,194 @@ test('send sheet wiring: Outlook/Copy copy the table (html + plain), Outlook ope
   assert.match(APP, /teamApi\('tasks\.moveAll', \{ fromId: account\.id, toId: to\.id \}\)/, 'move all tasks');
   assert.match(APP, /teamApi\('user\.save', \{ name: person\.name, username: name, password, role: 'staff', \.\.\.\(email \? \{ email: String\(email\)\.trim\(\) \} : \{\}\) \}\)/, 'new sign-in from + Add a person');
 });
+
+// ---------------------------------------------------------------- email replies
+const { renderReplies, renderReplyRound, replyArea, readyCount } = await import('../docs/ui/replies.js');
+const rFind = (node, f) => (f(node) ? node : (node.childNodes || []).map((c) => rFind(c, f)).find(Boolean));
+const rAll = (node, f, out = []) => { if (f(node)) out.push(node); (node.childNodes || []).forEach((c) => rAll(c, f, out)); return out; };
+const btn = (el, text) => rFind(el, (n) => n.nodeName === 'BUTTON' && n.textContent.includes(text));
+
+function mailState() {
+  const s = sampleState();
+  const ago = (d) => new Date(Date.now() - d * 86400e3).toISOString();
+  const mail = (id, d, from) => ({ conversationId: 'C' + id, count: 1, messageId: 'M' + id, fromName: from, fromAddress: from.toLowerCase() + '@x.test', subject: 'Subject ' + id, at: ago(d) });
+  applyOps(s, [
+    makeOp('addInbox', { itemId: 'i1', text: '📧 Price — from Ravi', note: 'Please send the price', link: { url: 'https://outlook.office365.com/owa/?ItemID=M1', title: 'x' }, mail: mail(1, 4, 'Ravi') }, ago(4)),
+    makeOp('inboxToStep', { itemId: 'i1', projectId: 'p1', stepId: 'ms1' }, ago(4)),
+    makeOp('addInbox', { itemId: 'i2', text: '📧 Glaze — from Anil', note: 'Samples sent', mail: mail(2, 1, 'Anil') }, ago(1)),
+    makeOp('addInbox', { itemId: 'i3', text: '📧 Clay — from Meena', mail: mail(3, 0, 'Meena') }),
+    makeOp('setReply', { itemId: 'i3', text: 'Dear Meena, thanks.', by: 'claude' }),
+  ]);
+  return s;
+}
+function replyCtx(s, ui = {}) {
+  const ctx = fakeCtx(s, { update: {}, ...ui });
+  ctx.calls = [];
+  ctx.store.dispatch = (type, args) => { ctx.calls.push([type, args]); return { id: 'op' }; };
+  ctx.openReplyDraft = (m) => ctx.calls.push(['draft', m.id]);
+  ctx.openMail = (m) => ctx.calls.push(['open', m.id]);
+  ctx.startReplyRound = () => ctx.calls.push(['round']);
+  return ctx;
+}
+
+test('replies: the project page shows the email card; no reply = a hint and ✎ Write reply', () => {
+  const s = mailState();
+  const ctx = replyCtx(s, { selected: 'p1' });
+  const el = renderDetail(ctx);
+  const card = rFind(el, (n) => n.className === 'mail-card');
+  assert.ok(card, 'email card on the project page');
+  const t = card.textContent;
+  for (const bit of ['From Ravi', 'step: 📧 Price — from Ravi', 'Please send the price', '💬 1 email', 'Open email ↗', 'No reply yet — ask Claude "prepare the reply for Kiln"']) assert.ok(t.includes(bit), bit);
+  assert.ok(!t.includes('Reply ready'));
+  btn(card, '✎ Write reply').__on.click();
+  assert.equal(ctx.ui.replyOpen, 'step:p1:ms1', 'opens an empty box');
+  const box = rFind(renderDetail(ctx), (n) => n.nodeName === 'TEXTAREA' && n.className === 'reply-text');
+  assert.ok(box && box.value === '');
+  box.__on.focusout(null, { value: 'Dear Ravi, price attached.' });
+  assert.deepEqual(ctx.calls.at(-1), ['setReply', { projectId: 'p1', stepId: 'ms1', text: 'Dear Ravi, price attached.', by: 'you' }], 'saves by itself, by you');
+  assert.equal(renderDetail(replyCtx(sampleState(), { selected: 'p1' })).textContent.includes('💬'), false, 'no email: no card');
+});
+
+test('replies: the "✉ Reply ready" box — who prepared it, editable, and its four buttons wired', () => {
+  const s = mailState();
+  applyOps(s, [makeOp('setReply', { projectId: 'p1', stepId: 'ms1', text: 'Dear Ravi,\nPrice attached.', by: 'claude' })]);
+  const ctx = replyCtx(s, { selected: 'p1' });
+  const card = rFind(renderDetail(ctx), (n) => n.className === 'mail-card');
+  const t = card.textContent;
+  for (const bit of ['✉ Reply ready', 'prepared by Claude', 'you can edit', 'Open in Outlook (same thread)', '✓ Sent', '⏭ Later', '✕ Clear']) assert.ok(t.includes(bit), bit);
+  assert.equal(rFind(card, (n) => n.nodeName === 'TEXTAREA').value, 'Dear Ravi,\nPrice attached.');
+  btn(card, 'Open in Outlook').__on.click();
+  btn(card, '✓ Sent').__on.click();
+  btn(card, '⏭ Later').__on.click();
+  btn(card, '✕ Clear').__on.click();
+  assert.deepEqual(ctx.calls.map((c) => c[0]), ['draft', 'markReplySent', 'replyLater', 'clearReply']);
+  assert.deepEqual(ctx.calls[1][1], { projectId: 'p1', stepId: 'ms1' });
+});
+
+test('replies: the ✉ Replies page — counts, ready and waiting lists with days, tap opens, round button', () => {
+  const s = mailState();
+  assert.equal(readyCount(s.data), 1, 'the menu number');
+  const ctx = replyCtx(s);
+  const el = renderReplies(ctx);
+  const t = el.textContent;
+  for (const bit of ['1 ready · 2 waiting', '▶ Check and send one by one', 'Ready to send (1)', 'Subject 3 — to Meena · waiting today', 'Waiting for your reply (2)', 'Subject 1 — from Ravi · waiting 4 days', 'Subject 2 — from Anil · waiting 1 day']) assert.ok(t.includes(bit), bit);
+  const rows = rAll(el, (n) => n.nodeName === 'LI' && String(n.className).includes('waiting'));
+  assert.deepEqual(rows.map((r) => r.className.trim()), ['reply-row waiting red', 'reply-row waiting orange'], 'red 3+ days, orange 1+');
+  rFind(rows[0], (n) => n.nodeName === 'BUTTON').__on.click();
+  btn(el, '▶ Check').__on.click();
+  assert.deepEqual(ctx.calls, [['open', 'ms1'], ['round']]);
+});
+
+test('replies: the one-by-one round — Reply 1 of N, the email and draft, buttons, progress, end screen', () => {
+  const s = mailState();
+  applyOps(s, [makeOp('setReply', { itemId: 'i2', text: 'Dear Anil, received.', by: 'claude' })]);
+  const ctx = replyCtx(s, { replyRound: { ids: ['inbox:i2', 'inbox:i3'], pos: 0 } });
+  let el = renderReplyRound(ctx);
+  const t = el.textContent;
+  for (const bit of ['Reply 1 of 2', 'From Anil', 'Subject 2', 'Samples sent', 'Open in Outlook to send', '✎ Edit', '✓ Sent', '⏭ Later']) assert.ok(t.includes(bit), bit);
+  assert.equal(rFind(el, (n) => n.nodeName === 'TEXTAREA').value, 'Dear Anil, received.');
+  assert.ok(rFind(el, (n) => n.className === 'reply-progress'), 'thin progress bar');
+  btn(el, 'Open in Outlook to send').__on.click();
+  btn(el, '✓ Sent').__on.click();
+  assert.deepEqual(ctx.calls.map((c) => c[0]), ['draft', 'markReplySent']);
+  assert.equal(ctx.ui.replyRound.pos, 1, 'next reply');
+  el = renderReplyRound(ctx);
+  assert.ok(el.textContent.includes('Reply 2 of 2'));
+  btn(el, '⏭ Later').__on.click();
+  assert.ok(renderReplyRound(ctx).textContent.includes('All replies checked ✓'));
+});
+
+test('replies: an Inbox item from an email shows its reply box (app wiring: menu, key e, page, Outlook draft call)', async () => {
+  const s = mailState();
+  const m = (await import('../docs/rules.js')).mailThreads(s.data).find((x) => x.id === 'i3');
+  assert.ok(replyArea(replyCtx(s), m).textContent.includes('✉ Reply ready'));
+  const { readFileSync } = await import('node:fs');
+  const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
+  assert.match(app, /item\('replies', '✉ Replies', readyCount\(data, today\)\)/, 'menu item with the ready count');
+  assert.match(app, /k === 'e'\) go\('replies'\)/, 'key e');
+  assert.match(app, /ui\.replyRound \? renderReplyRound\(ctx\) : renderReplies\(ctx\)/);
+  assert.match(app, /teamApi\('outlook\.draft', \{ ref: fresh\.id \}\)/, 'only the ref goes to the server, never the text');
+  assert.match(app, /replyMailto\(fresh\.mail, text\)/, 'falls back to a new email');
+  assert.match(app, /item\.mail \? inboxReply\(item\) : null/);
+});
+
+// ---------------------------------------------------------------- People page: give @mentioned steps to the person's Work Task list
+test('people: "→ Give to Ravi" on each open step (linked person), "→ Give all N", "👥 on Ravi\'s list" when already given; nothing when not linked', () => {
+  const s = sampleState();
+  applyOps(s, [
+    makeOp('addStep', { projectId: 'p1', stepId: 's5', text: 'Check burner with @Ravi' }),
+    makeOp('addStep', { projectId: 'p1', stepId: 's6', text: 'Order bricks @Ravi' }),
+  ]);
+  const user = { id: 7, name: 'Ravi', role: 'staff', active: true };
+  const gave = [];
+  const confirms = [];
+  globalThis.confirm = (q) => { confirms.push(q); return true; };
+  const ctx = fakeCtx(s, { person: 'r' });
+  Object.assign(ctx, { onServer: true, teamLink: () => ({ user, member: { id: 7, name: 'Ravi', items: [] } }), teamAccounts: () => [user],
+    newPasswordFor: () => {}, toggleTeamUser: () => {}, setTeamEmail: () => {}, moveAllTasks: () => {},
+    teamTask: (id) => (id === 's6' ? { id: 99, status: 'open', assignee: { name: 'Ravi' } } : null),
+    giveSteps: (items, u, person) => gave.push([items.map((x) => x.step.id), u.id, person.name]) });
+  const el = renderPerson(ctx);
+  const sec = (title) => rAll(el, (n) => n.nodeName === 'SECTION').find((x) => x.textContent.startsWith(title));
+  const discuss = sec('To discuss with Ravi');
+  assert.ok(discuss.textContent.includes('👥 on Ravi\'s list'), 'already a team task: a tag, no button');
+  const rowBtns = rAll(discuss, (n) => n.nodeName === 'BUTTON' && n.textContent === '→ Give to Ravi');
+  assert.equal(rowBtns.length, 1, 'only the step that is not given yet');
+  rowBtns[0].__on.click();
+  btn(discuss, '→ Give all 1').__on.click();
+  btn(sec('Waiting on Ravi'), '→ Give to Ravi').__on.click();
+  assert.deepEqual(gave, [[['s5'], 7, 'Ravi'], [['s5'], 7, 'Ravi'], [['s2'], 7, 'Ravi']]);
+  assert.equal(confirms.length, 1, 'Give all asks once');
+  // third choice in "Add a task with Ravi"
+  assert.ok(btn(el, 'Ravi does it (their list)'), 'third choice beside I do it / Waiting on');
+  // not linked to Work Task: no give buttons, no third choice
+  const plain = renderPerson(fakeCtx(s, { person: 'r' })).textContent;
+  assert.ok(!plain.includes('→ Give') && !plain.includes('does it (their list)'));
+});
+
+test('people: "Ravi does it" adds the step to the project AND gives it right away', () => {
+  const s = sampleState();
+  const user = { id: 7, name: 'Ravi', role: 'staff', active: true };
+  const gave = [];
+  const ui = { person: 'r' };
+  const ctx = fakeCtx(s, ui);
+  const { applyOp } = { applyOp: (st, o) => applyOps(st, [o]).length > 0 };
+  ctx.store.dispatch = (type, args) => (applyOp(s, makeOp(type, args)) ? { id: 'x' } : null);
+  Object.assign(ctx, { onServer: true, teamLink: () => ({ user, member: { id: 7, name: 'Ravi', items: [] } }), teamAccounts: () => [user],
+    newPasswordFor: () => {}, toggleTeamUser: () => {}, setTeamEmail: () => {}, moveAllTasks: () => {},
+    giveSteps: (items, u) => gave.push([items[0].step.text, u.id]) });
+  let el = renderPerson(ctx);
+  btn(el, 'Ravi does it (their list)').__on.click();
+  assert.equal(ui.personTask.mode, 'give');
+  const realQS = document.querySelector;
+  document.querySelector = (q) => (q === '.person-task [name=task]' ? { value: 'Send burner quote', focus() {} } : null);
+  try {
+    el = renderPerson(ctx);
+    rFind(el, (n) => n.nodeName === 'BUTTON' && n.textContent === 'Kiln').__on.click();
+  } finally { document.querySelector = realQS; }
+  const step = s.data.projects[0].steps.find((x) => x.text.startsWith('Send burner quote'));
+  assert.equal(step.text, 'Send burner quote @Ravi', 'linked to Ravi');
+  assert.deepEqual(gave, [['Send burner quote @Ravi', 7]], 'given at once');
+});
+
+test('people give: the app sends task.save with the step\'s projectRef and stepRef (like 👥 Give to team) and one summary toast', async () => {
+  const { readFileSync } = await import('node:fs');
+  const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
+  const fn = app.slice(app.indexOf('async function giveStepsTo('), app.indexOf('function refreshTeamPeople('));
+  assert.match(fn, /teamApi\('task\.save', \{\s*assigneeId: user\.id, title: step\.text, details: '', project: project\.name, projectRef: project\.id, stepRef: step\.id,\s*repeat: 'daily', skipSunday: true, clientId:/);
+  assert.match(fn, /Given to \$\{first\} ✓/);
+  assert.match(fn, /Given \$\{given\} to \$\{person\.name\} ✓\$\{failed\.length \? ` \(\$\{failed\.length\} failed: \$\{failed\[0\]\}\)` : ''\}/);
+  assert.match(fn, /team\.byStep\.set\(step\.id, out\.task\)/, 'the step shows it is on their list at once');
+  assert.match(app, /giveSteps: \(items, user, person\) => giveStepsTo\(items, user, person\)/);
+});
+
+test('page safety rules: no style="…" attributes in the projects app screens (the browser blocks them; widths go through .style)', async () => {
+  const { readFileSync, readdirSync } = await import('node:fs');
+  const files = ['docs/app.js', ...readdirSync(new URL('../docs/ui/', import.meta.url)).filter((f) => f.endsWith('.js')).map((f) => 'docs/ui/' + f)];
+  for (const f of files) {
+    const src = readFileSync(new URL('../' + f, import.meta.url), 'utf8');
+    assert.ok(!/[{,]\s*style:\s*[`'"]/.test(src), `${f} sets a style attribute`);
+  }
+  const css = readFileSync(new URL('../docs/styles.css', import.meta.url), 'utf8');
+  assert.match(css, /\.reply-round \.round-actions \.round-btn\.primary \{ grid-column: 1 \/ -1;/, 'the Outlook button takes the whole row in the replies round');
+});

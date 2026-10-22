@@ -166,3 +166,50 @@ test('server restore: another device saved first — asks to run it again, nothi
   assert.match(r.out, /Run the restore again/);
   assert.equal(t.read().data.projects.length, 2);
 });
+
+// ---------------------------------------------------------------- /replies: list, read the email, prepare a draft (never send)
+function withMailData(t) {
+  const now = Date.now();
+  const iso = (daysAgo) => new Date(now - daysAgo * 86400e3).toISOString();
+  const d = emptyData();
+  d.inbox = [{ id: 'mi1', text: '📧 Glaze order — from Anil', createdAt: iso(2), note: 'Please confirm the glaze order', mail: { conversationId: 'C1', count: 1, messageId: 'M1', fromName: 'Anil', fromAddress: 'anil@x.test', subject: 'Glaze order', at: iso(2) } }];
+  d.projects = [{ id: 'mp1', name: 'Kiln repair', groupId: d.groups[0].id, priority: 'medium', state: 'active', createdAt: iso(9), notes: '', links: [], files: [],
+    workNotes: [{ id: 'n1', text: 'Called the kiln fitter', stepId: null, createdAt: iso(1), updatedAt: iso(1) }],
+    steps: [{ id: 'ms1', text: 'Answer the fitter', done: false, createdAt: iso(5), note: 'Can we come on Monday?', mail: { conversationId: 'C2', messageId: 'M2', fromName: 'Ravi', subject: 'Kiln repair visit', at: iso(4) } },
+      { id: 'ms2', text: 'Answer about the glaze kiln', done: false, createdAt: iso(5), mail: { conversationId: 'C3', messageId: 'M3', fromName: 'Meena', subject: 'Glaze kiln price', at: iso(0) } }] }];
+  const s = JSON.parse(readFileSync(t.state, 'utf8'));
+  s.files['data.json'] = JSON.stringify(d);
+  s.bodies = { ms1: { subject: 'Kiln repair visit', from: 'Ravi', fromAddress: 'ravi@x.test', received: '2026-10-18T05:00:00Z', body: 'Dear Venkat,\nCan we come on Monday?', cut: false } };
+  writeFileSync(t.state, JSON.stringify(s));
+}
+
+test('replies: lists every email waiting for a reply (oldest first) with its place, notes and newest lines', () => {
+  const t = setup();
+  withMailData(t);
+  const r = t.run('replies');
+  assert.ok(r.ok, r.out);
+  assert.match(r.out, /Replies: 3 waiting for a reply · 0 ready to send\./);
+  assert.ok(r.out.indexOf('[ms1]') < r.out.indexOf('[mi1]') && r.out.indexOf('[mi1]') < r.out.indexOf('[ms2]'), 'longest waiting first');
+  assert.match(r.out, /\[ms1\] Kiln repair visit\n {2}from: Ravi · waiting 4 day\(s\) · in: Kiln repair → Answer the fitter/);
+  assert.match(r.out, /newest email: Can we come on Monday\?/);
+  assert.match(r.out, /recent notes:\n {4}\d{4}-\d\d-\d\d: Called the kiln fitter/);
+});
+
+test('replies: mail-body prints the newest email; set-reply saves a draft by Claude; a ref matching several emails is refused', () => {
+  const t = setup();
+  withMailData(t);
+  const b = t.run('mail-body', 'kiln repair visit');
+  assert.ok(b.ok, b.out);
+  assert.match(b.out, /Subject: Kiln repair visit\nFrom: Ravi <ravi@x\.test>[\s\S]*Can we come on Monday\?/);
+  const bad = t.run('set-reply', 'glaze', 'Dear Anil, confirmed.');
+  assert.equal(bad.ok, false);
+  assert.match(bad.out, /Several emails match "glaze": Glaze order \[mi1\], Glaze kiln price \[ms2\]/);
+  assert.equal(t.read().commits, 0, 'nothing saved');
+  assert.equal(t.run('set-reply', 'mi1').ok, false, 'needs the text');
+  const ok = t.run('set-reply', 'mi1', 'Dear Anil,\nConfirmed.\nRegards, Venkat');
+  assert.ok(ok.ok, ok.out);
+  assert.match(ok.out, /Saved to worktask\.in: Reply prepared/);
+  const reply = t.read().data.inbox[0].reply;
+  assert.deepEqual([reply.text, reply.by, reply.state, reply.forMessageId], ['Dear Anil,\nConfirmed.\nRegards, Venkat', 'claude', 'ready', 'M1']);
+  assert.match(t.run('replies').out, /Replies: 2 waiting for a reply · 1 ready to send[\s\S]*READY TO SEND[\s\S]*draft \(claude, ready\): Dear Anil,/);
+});

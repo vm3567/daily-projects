@@ -273,8 +273,8 @@ export function personStatus(data, person, today = todayIndia()) {
  * Counts projects that existed and were active that day.
  */
 /** Real work in the history, the same as the dot's rule: your notes, ticks and time (the team's counts through teamDays). */
-const WORK = new Set(['note_added', 'step_ticked', 'time_logged', 'time_added']);
-const NOT_WORK = new Set(['created', 'snoozed', 'woke', 'step_remind', 'team_ticked', 'team_note', 'team_step_added', 'team_step_unticked', 'team_note_deleted', 'team_moved', 'mail_note']); // (the team's work counts through teamDays)
+const WORK = new Set(['note_added', 'step_ticked', 'time_logged', 'time_added', 'reply_sent']);
+const NOT_WORK = new Set(['created', 'snoozed', 'woke', 'step_remind', 'team_ticked', 'team_note', 'team_step_added', 'team_step_unticked', 'team_note_deleted', 'team_moved', 'mail_note', 'reply_prepared', 'mail_replied']); // (the team's work counts through teamDays)
 
 /** On that day, was every open step of the project waiting for a "remind me" date? */
 function restingByReminders(p, day) {
@@ -545,4 +545,144 @@ export function teamMemberFor(person, list) {
 /** Projects given to this person through "Give project to…" (active or paused; not finished, not deleted). */
 export function givenProjectsOf(data, person) {
   return (data.projects || []).filter((p) => p.team && (p.state === 'active' || p.state === 'paused') && sameTeamName(person, p.team.name));
+}
+
+// ---------- Email replies ("✉ Replies" page) ----------
+
+export const REPLY_RED_DAYS = 3; // waiting this many days (or more) for your reply: red
+export const MAILTO_BODY_MAX = 1800; // a mailto: link holds only so much: longer replies are cut (and you are told)
+
+/** A reply was sent, but a newer email came in the same thread after it: it waits for your reply again. */
+export function waitingAgain(t) {
+  const r = t && t.reply;
+  return !!(r && r.state === 'sent' && t.mail && t.mail.at && r.sentAt && Date.parse(t.mail.at) > Date.parse(r.sentAt));
+}
+
+/** The key of an email thread's place: 'inbox:<id>', 'step:<projectId>:<stepId>' or 'project:<id>'. */
+export function mailKey(m) {
+  return m.kind === 'inbox' ? `inbox:${m.item.id}` : m.kind === 'step' ? `step:${m.project.id}:${m.step.id}` : `project:${m.project.id}`;
+}
+
+/** The newest email note (from Outlook) on this step / project, or null. */
+function newestMailNote(p, stepId) {
+  return (p.workNotes || []).find((n) => n.mail && (n.stepId || null) === (stepId || null)) || null;
+}
+
+/**
+ * Every email thread kept in Daily Projects (Inbox items, steps and projects with `mail`), with what the pages need:
+ * { kind, key, ref (the op args: {itemId} | {projectId, stepId?}), id (for the server / Claude), mail, reply, item, project,
+ *   step, name (where it is), subject, from, since (India date of the newest email), at, preview, link, count }.
+ * Finished projects, their steps and done steps are left out.
+ */
+export function mailThreads(data) {
+  const out = [];
+  for (const item of data.inbox || []) {
+    if (!item.mail) continue;
+    out.push({ kind: 'inbox', ref: { itemId: item.id }, id: item.id, mail: item.mail, reply: item.reply || null, item, project: null, step: null,
+      name: '📥 Inbox', at: item.mail.at || item.createdAt, preview: item.note || '', link: item.link || null, count: item.mail.count || 1 });
+  }
+  for (const p of data.projects) {
+    if (p.state === 'finished') continue;
+    const mails = (p.workNotes || []).filter((n) => n.mail);
+    if (p.mail) {
+      const n = newestMailNote(p, null);
+      out.push({ kind: 'project', ref: { projectId: p.id }, id: p.id, mail: p.mail, reply: p.reply || null, item: null, project: p, step: null,
+        name: p.name, at: p.mail.at || (n && n.createdAt) || p.createdAt, preview: n ? n.text : String(p.notes || '').slice(-300),
+        link: (n && n.link) || (p.links || []).find((l) => l.id === p.id + '-link') || null, count: 1 + mails.filter((x) => !x.stepId).length });
+    }
+    for (const s of p.steps) {
+      if (!s.mail || s.done) continue;
+      const n = newestMailNote(p, s.id);
+      out.push({ kind: 'step', ref: { projectId: p.id, stepId: s.id }, id: s.id, mail: s.mail, reply: s.reply || null, item: null, project: p, step: s,
+        name: `${p.name} → ${s.text}`, at: s.mail.at || (n && n.createdAt) || s.createdAt || p.createdAt, preview: n ? n.text : s.note || '',
+        link: (n && n.link) || s.link || null, count: 1 + mails.filter((x) => x.stepId === s.id).length });
+    }
+  }
+  for (const m of out) {
+    m.key = mailKey(m);
+    m.subject = m.mail.subject || (m.item ? m.item.text : m.step ? m.step.text : m.project.name);
+    m.from = m.mail.fromName || m.mail.fromAddress || 'someone';
+    m.since = m.at ? indiaDate(m.at) : null;
+  }
+  return out;
+}
+
+/** Where a thread stands: 'ready' (a draft to send), 'later' (waits for its day), 'waiting' (needs your reply), 'done'. */
+export function replyState(m, today = todayIndia()) {
+  const r = m.reply;
+  if (r && r.state === 'ready') return 'ready';
+  if (r && r.state === 'later') return r.laterUntil && r.laterUntil > today ? 'later' : 'ready';
+  if (m.mail.fromMe) return 'done';
+  if (!r || waitingAgain(m)) return 'waiting';
+  return 'done';
+}
+
+/**
+ * The "✉ Replies" page: { ready, waiting, later } — each thread once, with days (waiting since the newest email)
+ * and colour (red REPLY_RED_DAYS+ days, orange 1+, grey today). Longest waiting first.
+ */
+export function repliesOf(data, today = todayIndia()) {
+  const ready = []; const waiting = []; const later = [];
+  for (const m of mailThreads(data)) {
+    const st = replyState(m, today);
+    if (st === 'done') continue;
+    m.days = m.since ? Math.max(0, daysBetween(m.since, today)) : 0;
+    m.colour = m.days >= REPLY_RED_DAYS ? 'red' : m.days >= 1 ? 'orange' : 'grey';
+    m.newer = !!(m.reply && m.reply.forMessageId && m.mail.messageId && m.reply.forMessageId !== m.mail.messageId); // a newer email came after the draft
+    (st === 'ready' ? ready : st === 'later' ? later : waiting).push(m);
+  }
+  const order = (a, b) => b.days - a.days || String(a.at || '').localeCompare(String(b.at || '')) || a.subject.localeCompare(b.subject);
+  ready.sort(order); waiting.sort(order); later.sort(order);
+  return { ready, waiting, later };
+}
+
+/**
+ * The one-by-one round over the ready replies: ids = the keys when it started, pos = where you are.
+ * A reply that is no longer ready (sent, later or cleared elsewhere) is passed over.
+ * Returns { pos, done, n (1-based), of, progress (0..1) }.
+ */
+export function replyRoundAt(ids, pos, readyKeys) {
+  let i = Math.max(0, pos | 0);
+  while (i < ids.length && !readyKeys.has(ids[i])) i++;
+  const of = ids.length;
+  return { pos: i, done: i >= of, n: Math.min(i + 1, of), of, progress: of ? i / of : 1 };
+}
+
+/** The fallback when Outlook cannot make the draft: a mailto: link (the body cut to MAILTO_BODY_MAX letters). */
+export function replyMailto(mail, text) {
+  const subject = String((mail && mail.subject) || '').replace(/^(re:\s*)+/i, '');
+  const full = String(text || '');
+  const cut = full.length > MAILTO_BODY_MAX;
+  const body = cut ? full.slice(0, MAILTO_BODY_MAX) + '…' : full;
+  const to = mail && mail.fromAddress ? encodeURIComponent(mail.fromAddress).replace(/%40/g, '@') : '';
+  return { url: `mailto:${to}?subject=${encodeURIComponent('Re: ' + subject)}&body=${encodeURIComponent(body)}`, cut };
+}
+
+/** A thread by the id Claude and the server use (Inbox item, step or project id), or a unique part of its subject or name. */
+export function findMailThread(data, query, list = mailThreads(data)) {
+  const q = String(query || '').trim();
+  if (!q) throw new Error('Say which email (its id, or part of the subject or project name).');
+  const exact = list.find((m) => m.id === q);
+  if (exact) return exact;
+  const low = q.toLowerCase();
+  const hits = list.filter((m) => m.subject.toLowerCase().includes(low) || m.name.toLowerCase().includes(low));
+  if (hits.length === 1) return hits[0];
+  if (!hits.length) throw new Error(`No email matches "${q}".`);
+  throw new Error(`Several emails match "${q}": ${hits.map((m) => `${m.subject} [${m.id}]`).join(', ')}`);
+}
+
+// ---------- People page: give @mentioned steps to the person's Work Task list ----------
+
+/**
+ * "→ Give to <Name>": can this one step go to the person's Work Task list? Only when the person is linked to a Work Task
+ * account (member), the step is open, its project is active and not given as a whole (that path sends its steps), and the
+ * step is not already an open team task (`task` = the team task linked to the step, if any).
+ */
+export function canGiveStep(member, project, step, task) {
+  return !!(member && member.id) && !step.done && project.state === 'active' && !project.team && !(task && task.status === 'open');
+}
+
+/** The steps of a People-page list that can be given (for "→ Give all N"). items = [{ project, step }]. */
+export function givableSteps(items, member, taskOf) {
+  return items.filter(({ project, step }) => canGiveStep(member, project, step, taskOf ? taskOf(step.id) : null));
 }

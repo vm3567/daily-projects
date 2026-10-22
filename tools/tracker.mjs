@@ -14,15 +14,18 @@
 //   node tools/tracker.mjs add-note <project> "<text>"
 //   node tools/tracker.mjs new-project "<name>" [--group "<group>"] [--priority high|medium|low] [--steps "<a>" "<b>" ...]
 //   node tools/tracker.mjs restore <YYYY-MM-DD>          (shows that version; add --yes to restore it)
+//   node tools/tracker.mjs replies                       (emails waiting for your reply, for /replies)
+//   node tools/tracker.mjs mail-body <email>             (the newest email's words; worktask.in only)
+//   node tools/tracker.mjs set-reply <email> "<text>"    (a reply draft by Claude; it is NEVER sent from here)
 //
-// <project> is a project id, or part of its name.
+// <project> is a project id, or part of its name. <email> is the id shown by `replies`, or a unique part of the subject or name.
 
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync, readdirSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { applyOps, makeOp, newId, emptyData } from '../docs/ops.js';
-import { dotColour, nextStep, todayIndia, isOverdue, colourCounts, isSnoozed, restUntil, awakeProjects } from '../docs/rules.js';
+import { dotColour, nextStep, todayIndia, isOverdue, colourCounts, isSnoozed, restUntil, awakeProjects, repliesOf, mailThreads, findMailThread, indiaDate } from '../docs/rules.js';
 import { DATA_OWNER, DATA_REPO, MOVED_TO } from '../docs/config.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -389,8 +392,52 @@ try {
       console.log(`Restored to the version from ${date} (${commit.slice(0, 7)}). Saved as a new version.`);
       break;
     }
+    case 'replies': {
+      pull();
+      const { data } = readState();
+      const { ready, waiting, later } = repliesOf(data, today);
+      console.log(`Replies: ${waiting.length} waiting for a reply · ${ready.length} ready to send${later.length ? ` · ${later.length} later` : ''}.`);
+      const notesOf = (m) => {
+        if (m.kind === 'inbox') return m.item.note ? [`${indiaDate(m.item.createdAt)}: ${m.item.note}`] : [];
+        const ns = m.project.workNotes.filter((n) => m.kind === 'project' || n.stepId === m.step.id || !n.stepId);
+        return ns.slice(0, 10).map((n) => `${indiaDate(n.createdAt)}: ${n.text.replace(/\s+/g, ' ').slice(0, 300)}`);
+      };
+      const show = (m) => {
+        console.log(`\n[${m.id}] ${m.subject}`);
+        console.log(`  from: ${m.from}${m.mail.fromAddress ? ` <${m.mail.fromAddress}>` : ''} · waiting ${m.days} day(s) · in: ${m.name}${m.mail.messageId ? '' : ' · (no Outlook id: mail-body cannot read it)'}`);
+        if (m.preview) console.log(`  newest email: ${m.preview.replace(/\s+/g, ' ').slice(0, 400)}`);
+        const ns = notesOf(m);
+        if (ns.length) console.log('  recent notes:\n' + ns.map((x) => `    ${x}`).join('\n'));
+        if (m.reply && m.reply.state !== 'sent') console.log(`  draft (${m.reply.by}, ${m.reply.state}${m.newer ? ', a newer email came after it' : ''}): ${m.reply.text.replace(/\s+/g, ' ').slice(0, 300)}`);
+      };
+      if (waiting.length) { console.log('\nWAITING FOR YOUR REPLY'); waiting.forEach(show); }
+      if (ready.length) { console.log('\nREADY TO SEND (already prepared)'); ready.forEach(show); }
+      if (!waiting.length && !ready.length) console.log('Nothing waits for a reply.');
+      break;
+    }
+    case 'mail-body': {
+      if (!SERVER) throw new Error('mail-body works only with worktask.in (it reads the email from Outlook there).');
+      pull();
+      const { data } = readState();
+      const m = findMailThread(data, args.join(' '));
+      const b = JSON.parse(serverRun(['mail-body', m.id]));
+      console.log(`Subject: ${b.subject}\nFrom: ${b.from}${b.fromAddress ? ` <${b.fromAddress}>` : ''}\nReceived: ${b.received}\n`);
+      console.log(b.body);
+      if (b.cut) console.log('\n(cut: the email is longer)');
+      break;
+    }
+    case 'set-reply': {
+      const [query, ...words] = args;
+      const text = words.join(' ').trim();
+      if (!text) throw new Error('Give the reply text.');
+      commitOps((state) => {
+        const m = findMailThread(state.data, query, mailThreads(state.data));
+        return [makeOp('setReply', { ...m.ref, text, by: 'claude' })];
+      }, 'Reply prepared');
+      break;
+    }
     default:
-      console.log(readFileSync(fileURLToPath(import.meta.url), 'utf8').split('\n').slice(1, 17).join('\n').replace(/^\/\/ ?/gm, ''));
+      console.log(readFileSync(fileURLToPath(import.meta.url), 'utf8').split('\n').slice(1, 21).join('\n').replace(/^\/\/ ?/gm, ''));
   }
 } catch (e) {
   console.error(`Error: ${e.message}`);

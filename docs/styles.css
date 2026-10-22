@@ -989,3 +989,27 @@ a.team-line.msg { background: #eef4ff; border-color: #93b4f8; color: #1e40af; fo
 .team-account { display: flex; flex-direction: column; gap: 6px; }
 .people-signin { display: flex; align-items: center; gap: 4px; flex-basis: 100%; }
 .people-add { flex-wrap: wrap; }
+
+/* ---- email replies (✉ Reply ready, ✉ Replies page, one-by-one round) ---- */
+.mail-cards { margin: 12px 0 0; display: grid; gap: 10px; }
+.mail-card { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--panel); }
+.mail-from { font-weight: 600; font-size: 14px; }
+.mail-preview { margin: 4px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.mail-meta { gap: 8px; align-items: center; }
+.reply-box { margin-top: 8px; border-top: 1px dashed var(--line); padding-top: 8px; display: grid; gap: 6px; }
+.reply-box.later { opacity: .85; }
+.reply-text { width: 100%; box-sizing: border-box; font: inherit; font-size: 14px; padding: 8px; border: 1px solid var(--line); border-radius: 8px; resize: vertical; }
+.reply-actions, .reply-none { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 4px; }
+.replies { padding: 8px 16px 24px; }
+.replies-top { justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; margin: 6px 0; }
+.replies-head { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 16px 0 6px; }
+.reply-list { list-style: none; margin: 0; padding: 0; }
+.reply-open { display: flex; gap: 8px; align-items: baseline; width: 100%; text-align: left; background: none; border: 0; border-bottom: 1px solid var(--line); padding: 9px 4px; font: inherit; cursor: pointer; color: inherit; }
+.reply-open:hover { background: var(--panel); }
+.reply-subject { font-weight: 600; overflow-wrap: anywhere; }
+.reply-round { padding: 8px 16px 24px; }
+.reply-progress { height: 4px; background: var(--line); border-radius: 2px; margin: 6px 0 12px; overflow: hidden; }
+.reply-progress > div { height: 100%; background: var(--green, #16a34a); }
+.dot.grey { background: #cbd5e1; }
+.reply-round .round-actions .round-btn.primary { grid-column: 1 / -1; justify-content: center; } /* "Open in Outlook to send" never cut off */
+.reply-round .round-btn { white-space: normal; }

@@ -2,7 +2,7 @@
 // A step is linked to a person when its text or note has "@Name", or "Waiting on" is that person.
 
 import { h, fmtDay, fmtTime } from './dom.js';
-import { mentionedPeople, initials, indiaDate, personSteps, personStatus, waitingDays, todayIndia, stepLinkedTo, awakeProjects, addDays, givenProjectsOf, nextStep } from '../rules.js';
+import { mentionedPeople, initials, indiaDate, personSteps, personStatus, waitingDays, todayIndia, stepLinkedTo, awakeProjects, addDays, givenProjectsOf, nextStep, canGiveStep, givableSteps } from '../rules.js';
 import { sentMarkOf, mailDate, teamOrder } from '../reports.js';
 import { newId } from '../ops.js';
 
@@ -87,8 +87,17 @@ export function renderPeopleList(ctx) {
     })));
 }
 
-function stepItem(ctx, { project, step }) {
+/** The person's Work Task account, when this person is linked to one: { user, first, person }; else null. */
+function giveTo(ctx, person, link) {
+  return link && link.user && link.user.id && link.user.active !== false && ctx.giveSteps ? { user: link.user, first: person.name.split(/\s+/)[0], person } : null;
+}
+
+const teamTaskOf = (ctx) => (id) => (ctx.teamTask ? ctx.teamTask(id) : null);
+
+function stepItem(ctx, { project, step }, give = null) {
   const { store } = ctx;
+  const task = ctx.teamTask ? ctx.teamTask(step.id) : null;
+  const onList = !step.done && task && task.status === 'open'; // already a team task: on their list
   return h('li', { key: 'ps-' + step.id, class: 'person-step' + (step.done ? ' done' : '') },
     h('input', {
       type: 'checkbox', checked: step.done, 'aria-label': step.done ? 'Un-tick step' : 'Tick step',
@@ -99,20 +108,29 @@ function stepItem(ctx, { project, step }) {
       step.dueDate && !step.done ? h('span', { class: 'muted small' }, ` · by ${fmtDay(step.dueDate)}`) : null,
       step.done && step.doneAt ? h('span', { class: 'muted small' }, ` · ${fmtDay(indiaDate(step.doneAt))}`) : null),
     step.waiting && !step.done ? h('button', { class: 'row-act draft', title: 'AI writes a short follow-up message', onClick: () => ctx.draftFollowUp(project, step) }, '✍ Draft') : null,
+    onList ? h('span', { class: 'tag team-tag', title: `A Work Task task for ${task.assignee ? task.assignee.name : 'the team'}` }, `👥 on ${task.assignee ? task.assignee.name.split(/\s+/)[0] : 'their'}'s list`)
+      : give && canGiveStep(give.user, project, step, task)
+        ? h('button', { class: 'row-act give', title: `Put this step on ${give.first}'s Work Task list (daily updates show on the project)`, onClick: () => ctx.giveSteps([{ project, step }], give.user, give.person) }, `→ Give to ${give.first}`)
+        : null,
     h('button', { class: 'tag link-tag', title: 'Open project', onClick: () => ctx.openProject(project.id) }, project.name));
 }
 
-function list(title, items, ctx, empty) {
+function list(title, items, ctx, empty, give = null) {
+  const can = give ? givableSteps(items, give.user, teamTaskOf(ctx)) : [];
   return h('section', { class: 'block' },
-    h('h3', null, `${title} (${items.length})`),
-    items.length ? h('ul', { class: 'person-steps' }, items.map((it) => stepItem(ctx, it))) : h('p', { class: 'muted small' }, empty));
+    h('h3', null, `${title} (${items.length})`,
+      can.length ? h('button', {
+        class: 'btn small give-all', title: `Put these ${can.length} steps on ${give.first}'s Work Task list`,
+        onClick: () => { if (confirm(`Give ${can.length} step${can.length === 1 ? '' : 's'} to ${give.person.name}? They go on ${give.first}'s Work Task list.`)) ctx.giveSteps(can, give.user, give.person); },
+      }, `→ Give all ${can.length}`) : null),
+    items.length ? h('ul', { class: 'person-steps' }, items.map((it) => stepItem(ctx, it, give))) : h('p', { class: 'muted small' }, empty));
 }
 
 /**
  * "Add a task with Ravi": write it, pick "I do it" (@Ravi) or "Waiting on Ravi", optionally when, then tap a project.
  * It is saved as a step in that project, so it shows on the project and on this page.
  */
-function taskBox(ctx, person) {
+function taskBox(ctx, person, give = null) {
   const { store, ui } = ctx;
   const data = store.view.data;
   const people = data.people || [];
@@ -131,7 +149,8 @@ function taskBox(ctx, person) {
   const add = (projectId, projectName) => {
     let text = textNow();
     if (!text) { ctx.toast(`Write the task with ${first} first`); input()?.focus(); return; }
-    if (t.mode === 'me' && !text.toLowerCase().includes('@' + person.name.toLowerCase())) text += ` @${person.name}`;
+    if (t.mode === 'give' && !give) t.mode = 'me'; // not linked to Work Task (any more)
+    if ((t.mode === 'me' || t.mode === 'give') && !text.toLowerCase().includes('@' + person.name.toLowerCase())) text += ` @${person.name}`;
     const stepId = newId();
     if (!store.dispatch('addStep', { projectId, stepId, text })) return;
     if (t.mode === 'wait') {
@@ -139,6 +158,12 @@ function taskBox(ctx, person) {
       store.dispatch('setStepField', { projectId, stepId, field: 'waiting', value: true });
     }
     if (t.when) store.dispatch('remindStep', { projectId, stepId, date: addDays(today, t.when) });
+    if (t.mode === 'give') { // on their Work Task list right away
+      const p = store.view.data.projects.find((x) => x.id === projectId);
+      const st = p && p.steps.find((x) => x.id === stepId);
+      if (p && st && canGiveStep(give.user, p, st, null)) ctx.giveSteps([{ project: p, step: st }], give.user, give.person);
+      else if (p && p.team) ctx.toast(`${p.name} is given as a whole to ${p.team.name}: the step goes with it.`, 4000);
+    }
     ctx.toast(`Added to ${projectName}: ${textNow()}${t.mode === 'wait' ? ` · waiting on ${first}` : ''}${t.when ? ` · comes back ${fmtDay(addDays(today, t.when))}` : ''}`, 3500);
     t.text = ''; t.find = ''; t.when = 0;
     if (input()) input().value = '';
@@ -163,6 +188,7 @@ function taskBox(ctx, person) {
   h('div', { class: 'person-task-row' },
     chip(t.mode === 'me', 'I do it', () => { t.mode = 'me'; }, `Your task; ${first} is @mentioned`),
     chip(t.mode === 'wait', `Waiting on ${first}`, () => { t.mode = 'wait'; }, `${first} has to do it: shows Waiting with a day count`),
+    give ? chip(t.mode === 'give', `${first} does it (their list)`, () => { t.mode = 'give'; }, `Added to the project AND given to ${first} on Work Task right away`) : null,
     h('span', { class: 'muted small' }, '· When:'),
     [[0, 'Today'], [1, 'Tomorrow'], [7, '1 week']].map(([d, label]) => chip(t.when === d, label, () => { t.when = d; },
       d ? `Hide it until ${fmtDay(addDays(today, d))}, then it comes back first` : 'From today'))),
@@ -322,9 +348,9 @@ export function renderPerson(ctx) {
     teamAccountBox(ctx, person, link),
     h('p', { class: 'meta-line static' }, 'Linked by @name in steps, or by "Waiting on".'),
     teamSection(ctx, person, link),
-    taskBox(ctx, person),
-    list(`Waiting on ${first}`, waiting, ctx, `Nothing waiting on ${first}. Tick "Waiting" on a step and pick ${first}.`),
-    list(`To discuss with ${first}`, discuss, ctx, `Nothing to discuss. Type @${first} in any step.`),
+    taskBox(ctx, person, giveTo(ctx, person, link)),
+    list(`Waiting on ${first}`, waiting, ctx, `Nothing waiting on ${first}. Tick "Waiting" on a step and pick ${first}.`, giveTo(ctx, person, link)),
+    list(`To discuss with ${first}`, discuss, ctx, `Nothing to discuss. Type @${first} in any step.`, giveTo(ctx, person, link)),
     notes.length ? h('section', { class: 'block' }, h('h3', null, `Notes about ${first}`),
       h('ul', { class: 'history' }, notes.slice(0, 8).map(({ project, note }) => h('li', { key: 'pn-' + note.id },
         h('span', { class: 'muted small' }, `${fmtDay(indiaDate(note.createdAt))} ${fmtTime(note.createdAt)}`), ' ',

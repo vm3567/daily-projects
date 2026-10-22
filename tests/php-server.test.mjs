@@ -3,7 +3,8 @@
 // Needs php and mysqld on this computer; without them these tests are skipped (the rest still run).
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawn, execFileSync } from 'node:child_process';
+import { spawn, execFileSync, execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { createServer } from 'node:http';
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync, existsSync, readFileSync } from 'node:fs';
 import { randomBytes, createHash } from 'node:crypto';
@@ -1095,7 +1096,7 @@ test('work in one line: giving the same quick task twice (same clientId) makes o
 });
 
 // ---------------------------------------------------------------- Outlook → Daily Projects Inbox (against a fake Microsoft)
-const ms = { reqs: [], token: null, pages: [[]], server: null };
+const ms = { reqs: [], token: null, pages: [[]], sent: [], bodies: {}, draftCode: 201, server: null };
 async function fakeMicrosoft() {
   if (ms.server) return;
   ms.server = createServer((req, res) => {
@@ -1104,7 +1105,7 @@ async function fakeMicrosoft() {
     req.on('end', () => {
       const u = new URL(req.url, MS);
       const form = Object.fromEntries(new URLSearchParams(body));
-      ms.reqs.push({ method: req.method, path: u.pathname, url: req.url, auth: req.headers.authorization || '', form });
+      ms.reqs.push({ method: req.method, path: u.pathname, url: req.url, auth: req.headers.authorization || '', form, body, prefer: req.headers.prefer || '' });
       const send = (code, j) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(j)); };
       if (u.pathname.endsWith('/oauth2/v2.0/token')) { const [code, j] = ms.token(form); return send(code, j); }
       if (u.pathname === '/v1.0/me') return send(200, { mail: 'venkat@acton.test', userPrincipalName: 'venkat@acton.test' });
@@ -1112,6 +1113,14 @@ async function fakeMicrosoft() {
         const n = Number(u.searchParams.get('page') || 0);
         return send(200, { value: ms.pages[n] || [], ...(ms.pages[n + 1] ? { '@odata.nextLink': `${MS}/v1.0/next?page=${n + 1}` } : {}) });
       }
+      if (u.pathname === '/v1.0/me/mailFolders/sentitems/messages') return send(200, { value: ms.sent });
+      let mm = /^\/v1\.0\/me\/messages\/([^/]+)\/createReply$/.exec(u.pathname);
+      if (mm && req.method === 'POST') {
+        if (ms.draftCode !== 201) return send(ms.draftCode, { error: { code: 'x' } });
+        return send(201, { id: 'draft-' + decodeURIComponent(mm[1]), webLink: `https://outlook.office365.com/owa/?ItemID=draft-${mm[1]}&exvsurl=1` });
+      }
+      mm = /^\/v1\.0\/me\/messages\/([^/]+)$/.exec(u.pathname);
+      if (mm && ms.bodies[decodeURIComponent(mm[1])]) return send(200, ms.bodies[decodeURIComponent(mm[1])]);
       send(404, { error: 'not_found' });
     });
   });
@@ -1219,17 +1228,18 @@ test('outlook: each new email → one Daily Projects Inbox item; a thread stays 
   const [i1, i2] = inbox;
   assert.equal(i1.text, '📧 Kiln quote for November — from Ravi', 'the first email names the item');
   assert.match(i1.note, /^💬 2 emails · latest from Sandeep \d{1,2} [A-Z][a-z]{2} \d\d:\d\d\nOK, go ahead with the order\.$/);
-  assert.deepEqual([i1.link.url, i1.mail], ['https://outlook.office365.com/owa/?ItemID=m3&exvsurl=1',
+  const noAt = ({ at: when, ...rest }) => { assert.match(when, /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.000Z$/, 'the newest email\'s time is kept (for the ✉ Replies days)'); return rest; };
+  assert.deepEqual([i1.link.url, noAt(i1.mail)], ['https://outlook.office365.com/owa/?ItemID=m3&exvsurl=1',
     { conversationId: 'C1', count: 2, messageId: 'm3', fromName: 'Sandeep', fromAddress: 'sandeep@x.test', subject: 'RE: Kiln quote for November' }], 'the newest email opens (and is kept for a later reply draft)');
   assert.equal(i2.text, '📧 Glaze samples — from Anil');
   assert.match(i2.note, /^\d{1,2} [A-Z][a-z]{2} \d\d:\d\d · Samples sent today\.$/);
-  assert.deepEqual(i2.mail, { conversationId: 'C2', count: 1, messageId: 'm2', fromName: 'Anil', fromAddress: 'anil@x.test', subject: 'Glaze samples' });
+  assert.deepEqual(noAt(i2.mail), { conversationId: 'C2', count: 1, messageId: 'm2', fromName: 'Anil', fromAddress: 'anil@x.test', subject: 'Glaze samples' });
   const p1 = data.projects.find((p) => p.id === 'olp1'); const p2 = data.projects.find((p) => p.id === 'olp2');
   assert.match(p1.workNotes[0].text, /^📧 New reply from Ravi .* \(step: Reply to Ravi\): Here is the answer you asked for\.$/);
   assert.deepEqual([p1.workNotes[0].stepId, p1.workNotes[0].mail, p1.workNotes[0].link.url], ['ols1', true, 'https://outlook.office365.com/owa/?ItemID=m4&exvsurl=1']);
   assert.match(p2.workNotes[0].text, /^📧 New reply from Meena .*: New glaze recipe attached\.$/);
   assert.equal(p2.state, 'paused', 'the project\'s state is not changed');
-  assert.deepEqual(p1.steps[0].mail, { conversationId: 'C-STEP', messageId: 'm4', fromName: 'Ravi', fromAddress: 'ravi@x.test', subject: 'RE: Reply' }, 'the step keeps the newest email of its thread');
+  assert.deepEqual(noAt(p1.steps[0].mail), { conversationId: 'C-STEP', messageId: 'm4', fromName: 'Ravi', fromAddress: 'ravi@x.test', subject: 'RE: Reply' }, 'the step keeps the newest email of its thread');
   assert.deepEqual([p2.mail.messageId, p2.mail.fromAddress], ['m5', 'meena@x.test'], 'so does the project');
   assert.deepEqual(history[istDay(0).slice(0, 7)].filter((e) => e.kind === 'mail_note').map((e) => e.projectId).sort(), ['olp1', 'olp2']);
   const { dayScore, lastWorkDate } = await import('../docs/rules.js');
@@ -1280,4 +1290,126 @@ test('outlook: an expired sign-in says so in plain words and stops; not connecte
   const d = await call('outlook.disconnect', {}, tok.boss);
   assert.deepEqual([d.outlook.connected, d.outlook.account, d.outlook.secretEnd], [false, '', 'AB12'], 'the sign-in is gone; the setup stays');
   assert.equal(execFileSync('mysql', ['-u', 'root', `--socket=${SOCK}`, '-N', '-e', "SELECT COUNT(*) FROM wt.settings WHERE k = 'ol_refresh'"], { encoding: 'utf8' }).trim(), '0');
+});
+
+// ---------------------------------------------------------------- email replies: drafts in Outlook (never sent), "replied" from Sent Items
+const isoAgo = (mins) => new Date(Date.now() - mins * 60000).toISOString().replace(/\.\d+Z$/, '.000Z');
+const rMail = (id, minsAgo, extra = {}) => ({ conversationId: 'C-' + id, messageId: 'MSG-' + id, fromName: 'Ravi', fromAddress: 'ravi@x.test', subject: 'Price ' + id, at: isoAgo(minsAgo), ...extra });
+async function replyProjects() {
+  const head = (await call('dp.head', {}, tok.boss)).head;
+  const at = new Date(Date.now() - 3 * 86400e3).toISOString();
+  const data = {
+    groups: [{ id: 'g1', name: 'Acton' }], people: [],
+    inbox: [{ id: 'ri1', text: '📧 Price R4 — from Ravi', createdAt: at, mail: { ...rMail('R4', 120), count: 1 } }],
+    projects: [
+      { id: 'rp1', name: 'Kiln price', state: 'active', groupId: 'g1', createdAt: at, workNotes: [], links: [], files: [], notes: '',
+        steps: [
+          { id: 'rs1', text: 'Answer Ravi', done: false, mail: rMail('R1', 120), reply: { text: 'Dear Ravi,\nThe price is fine.\nRegards, Venkat', at: isoAgo(60), by: 'claude', forMessageId: 'MSG-R1', state: 'ready' } },
+          { id: 'rs2', text: 'Answer Anil', done: false, mail: rMail('R2', 120) },
+          { id: 'rs3', text: 'Answer Meena', done: false, mail: rMail('R3', 5) },
+        ] },
+    ],
+  };
+  const r = await call('dp.commit', { parent: head, changes: [{ path: 'data.json', content: JSON.stringify(data) }], message: 'reply test' }, tok.boss);
+  assert.ok(r.ok, r.error);
+}
+async function connectOutlook() {
+  ms.token = (f) => (f.grant_type === 'authorization_code' ? [200, { access_token: 'AT-R', refresh_token: 'RT-R' }] : [200, { access_token: 'AT-R' }]);
+  const c = await call('outlook.connect', {}, tok.boss);
+  assert.equal((await callback({ code: 'CODE-R', state: stateOf(c.url) })).s, 200);
+}
+
+test('replies: outlook.draft is owner-only, uses the SAVED reply text and messageId (never the browser\'s), calls createReply with the comment and returns the draft link; plain errors so the app falls back', { skip }, async () => {
+  await fakeMicrosoft();
+  sql('UPDATE wt.settings SET v = UNIX_TIMESTAMP() + 86400 WHERE k = \'jobs_at\'');
+  await replyProjects();
+  assert.match((await call('outlook.draft', { ref: 'rs1' }, tok.boss)).error, /Outlook is not connected/, 'not connected: a clear error (the app opens a new email instead)');
+  await connectOutlook();
+  assert.equal((await call('outlook.draft', { ref: 'rs1' }, tok.suresh)).s, 403, 'staff cannot');
+  const m2 = (await call('login', { username: 'mgr2', password: 'mgr2-pass-456' })).token;
+  assert.equal((await call('outlook.draft', { ref: 'rs1' }, m2)).s, 403, 'another manager cannot');
+  ms.reqs = [];
+  const r = await call('outlook.draft', { ref: 'rs1', text: 'EVIL TEXT', messageId: 'MSG-OTHER' }, tok.boss);
+  assert.ok(r.ok, r.error);
+  assert.equal(r.webLink, 'https://outlook.office365.com/owa/?ItemID=draft-MSG-R1&exvsurl=1');
+  const cr = ms.reqs.find((x) => x.path.endsWith('/createReply'));
+  assert.equal(cr.path, '/v1.0/me/messages/MSG-R1/createReply', 'a reply in the same thread, to the saved newest email');
+  assert.equal(cr.method, 'POST');
+  assert.deepEqual(JSON.parse(cr.body), { comment: 'Dear Ravi,\nThe price is fine.\nRegards, Venkat' }, 'the saved text, not the browser\'s');
+  assert.ok(!ms.reqs.some((x) => /\/send(Mail)?$/.test(x.path)), 'nothing is ever sent');
+  assert.match((await call('outlook.draft', { ref: 'rs2' }, tok.boss)).error, /no reply ready/, 'no draft saved: refused');
+  assert.match((await call('outlook.draft', { ref: 'nope' }, tok.boss)).error, /not in your projects/);
+  ms.draftCode = 404;
+  assert.match((await call('outlook.draft', { ref: 'rs1' }, tok.boss)).error, /could not find that email/);
+  ms.draftCode = 403;
+  assert.match((await call('outlook.draft', { ref: 'rs1' }, tok.boss)).error, /needs admin approval/, 'outlook.php\'s plain-words errors');
+  ms.draftCode = 201;
+});
+
+test('replies: the Outlook check reads Sent Items and marks replied (not work): a ready draft, a waiting step; not a reply older than the newest email; not other threads', { skip }, async () => {
+  await fakeMicrosoft();
+  sql('UPDATE wt.settings SET v = UNIX_TIMESTAMP() + 86400 WHERE k = \'jobs_at\'');
+  await replyProjects();
+  ms.pages = [[]];
+  ms.reqs = [];
+  ms.sent = [
+    { conversationId: 'C-R1', sentDateTime: isoAgo(30).replace('.000Z', 'Z') },
+    { conversationId: 'C-R2', sentDateTime: isoAgo(20).replace('.000Z', 'Z') },
+    { conversationId: 'C-R3', sentDateTime: isoAgo(10).replace('.000Z', 'Z') }, // before Meena's newest email (5 minutes ago)
+    { conversationId: 'C-ELSE', sentDateTime: isoAgo(10).replace('.000Z', 'Z') },
+  ];
+  const r = await call('outlook.check', {}, tok.boss);
+  assert.equal(r.outlook.error, '', r.outlook.error);
+  const sr = ms.reqs.find((x) => x.path === '/v1.0/me/mailFolders/sentitems/messages');
+  assert.ok(sr, 'Sent Items was read');
+  assert.match(decodeURIComponent(sr.url), /\$select=conversationId,sentDateTime/);
+  assert.match(decodeURIComponent(sr.url), /\$filter=sentDateTime gt \d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ/);
+  const { data, history } = await dpNow();
+  const steps = Object.fromEntries(data.projects.find((p) => p.id === 'rp1').steps.map((s) => [s.id, s]));
+  assert.deepEqual([steps.rs1.reply.state, steps.rs1.reply.text], ['sent', 'Dear Ravi,\nThe price is fine.\nRegards, Venkat'], 'the ready draft is marked sent');
+  assert.match(steps.rs1.reply.sentAt, /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.000Z$/);
+  assert.equal(steps.rs2.reply.state, 'sent', 'a step waiting for a reply is marked too');
+  assert.equal(steps.rs3.reply, undefined, 'sent before the newest email: still waiting');
+  assert.equal(data.inbox[0].reply, undefined, 'another thread is not touched');
+  const month = istDay(0).slice(0, 7);
+  assert.equal(history[month].filter((e) => e.kind === 'mail_replied' && e.projectId === 'rp1').length, 2);
+  const { dayScore, lastWorkDate, repliesOf } = await import('../docs/rules.js');
+  assert.equal(lastWorkDate(data.projects.find((p) => p.id === 'rp1')), null, 'not your work');
+  assert.equal(dayScore(data, history, istDay(0)).green, 0);
+  assert.deepEqual(repliesOf(data, istDay(0)).waiting.map((m) => m.id).sort(), ['ri1', 'rs3']);
+  // again: nothing new to mark = no new version
+  const head = (await dpNow()).head;
+  await call('outlook.check', {}, tok.boss);
+  assert.equal((await dpNow()).head, head);
+  ms.sent = [];
+});
+
+test('replies: dp-cli mail-body, and Claude\'s tracker replies / set-reply / mail-body on the local server copy (ambiguous refused)', { skip }, async () => {
+  await fakeMicrosoft();
+  sql('UPDATE wt.settings SET v = UNIX_TIMESTAMP() + 86400 WHERE k = \'jobs_at\'');
+  await replyProjects();
+  ms.bodies['MSG-R2'] = { subject: 'Price R2', from: { emailAddress: { name: 'Anil', address: 'anil@x.test' } }, receivedDateTime: '2026-10-22T05:00:00Z', body: { contentType: 'text', content: 'Hello Venkat,\r\n' + 'x'.repeat(7000) } };
+  ms.reqs = [];
+  const run = promisify(execFile); // not execFileSync: the fake Microsoft runs in this same process and must answer
+  const cliA = async (args) => (await run('php', [join(ROOT, 'team', 'app', 'dp-cli.php'), ...args], { env: env(), encoding: 'utf8' })).stdout;
+  const b = JSON.parse(await cliA(['mail-body', 'rs2']));
+  assert.deepEqual([b.subject, b.from, b.fromAddress, b.cut], ['Price R2', 'Anil', 'anil@x.test', true]);
+  assert.equal(b.body.length, 6001, 'cut to 6000 letters (and …)');
+  assert.ok(b.body.startsWith('Hello Venkat,\nxxx'));
+  const g = ms.reqs.find((x) => x.path === '/v1.0/me/messages/MSG-R2');
+  assert.equal(g.prefer, 'outlook.body-content-type="text"');
+  assert.match(decodeURIComponent(g.url), /\$select=body,from,subject,receivedDateTime/);
+  await assert.rejects(cliA(['mail-body', 'nope']), (e) => /No email with that id/.test(String(e.stderr)));
+  const tr = async (...args) => (await run(process.execPath, [join(ROOT, 'tools', 'tracker.mjs'), ...args], { env: { ...env(), DP_SERVER_LOCAL: '1', DP_DATA_DIR: '' }, encoding: 'utf8' })).stdout;
+  const list = await tr('replies');
+  assert.match(list, /Replies: 3 waiting for a reply · 1 ready to send/);
+  assert.match(list, /\[rs2\] Price R2\n {2}from: Ravi <ravi@x\.test> · waiting 0 day\(s\) · in: Kiln price → Answer Anil/);
+  assert.match(list, /\[ri1\] Price R4/);
+  assert.match(await tr('mail-body', 'rs2'), /Subject: Price R2\nFrom: Anil <anil@x\.test>[\s\S]*Hello Venkat,[\s\S]*\(cut: the email is longer\)/);
+  await assert.rejects(tr('set-reply', 'Price', 'Hello'), (e) => /Several emails match "Price"/.test(String(e.stderr)), 'never a guess');
+  assert.match(await tr('set-reply', 'Answer Anil', 'Dear Anil,\nNoted.\nRegards, Venkat'), /Saved to worktask\.in: Reply prepared/);
+  const { data } = await dpNow();
+  const r = data.projects.find((p) => p.id === 'rp1').steps.find((s) => s.id === 'rs2').reply;
+  assert.deepEqual([r.text, r.by, r.state, r.forMessageId], ['Dear Anil,\nNoted.\nRegards, Venkat', 'claude', 'ready', 'MSG-R2']);
+  assert.ok(!ms.reqs.some((x) => x.path.endsWith('/createReply') || /send/i.test(x.path)), 'set-reply sends nothing');
 });
