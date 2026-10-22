@@ -210,6 +210,17 @@ function findProject(data, query) {
   throw new Error(`Several match "${query}": ${hits.map((p) => `${p.name} [${p.id}]`).join(', ')}`);
 }
 
+/** A 📂 project (only those: a plain task is never turned into one by add-to), or null when none matches. */
+function findMainProject(data, query) {
+  const q = query.toLowerCase();
+  const mains = data.projects.filter((p) => isMainProject(data, p));
+  const exact = mains.find((p) => p.id === query || p.name.toLowerCase() === q);
+  if (exact) return exact;
+  const hits = mains.filter((p) => p.name.toLowerCase().includes(q));
+  if (hits.length > 1) throw new Error(`Several 📂 projects match "${query}": ${hits.map((p) => `${p.name} [${p.id}]`).join(', ')}`);
+  return hits[0] || null;
+}
+
 const ORDER = { red: 0, yellow: 1, green: 2, grey: 3 };
 
 function line(p, today, data = null) {
@@ -365,9 +376,18 @@ try {
           made = `${p.name} is no longer in ${main.name}`;
           return [makeOp('removeFromProject', { projectId: p.id, parentId: main.id })];
         }
-        let main = null;
-        try { main = findProject(state.data, mainQuery); } catch (e) {
-          if (!create || !/No task or project matches/.test(e.message)) throw e;
+        // only a 📂 project can hold tasks: a plain task that matches is never made into one (the app offers only projects)
+        let main = findMainProject(state.data, mainQuery);
+        if (!main) {
+          const q = mainQuery.toLowerCase();
+          const same = state.data.projects.find((x) => x.id === mainQuery || x.name.toLowerCase() === q);
+          if (same && create) throw new Error(`${same.name} is a task, not a 📂 project. Give the new project another name.`);
+          if (!create) {
+            const other = findProject(state.data, mainQuery); // (none at all: "No task or project matches")
+            throw new Error(other.id === p.id ? 'A task cannot be in itself.'
+              : parentIdsOf(other).length ? `${other.name} is a task in a project, so it cannot hold tasks (a project is never inside another).`
+                : `${other.name} is a task, not a 📂 project. To make a new 📂 project called "${mainQuery}", add --create.`);
+          }
         }
         if (!main) {
           if (isMainProject(state.data, p)) throw new Error(`${p.name} is a project, so it cannot go into another project.`);
@@ -446,6 +466,8 @@ try {
         if (!g) throw new Error(`No group called "${groupName}". Groups: ${state.data.groups.map((x) => x.name).join(', ')}`);
         const main = inProject ? findProject(state.data, inProject) : null;
         if (main && !isMainProject(state.data, main)) throw new Error(`${main.name} is a task, not a 📂 project.`);
+        // a finished 📂 project (or one that cannot hold tasks): say so, never make the task outside any project quietly
+        if (main && !canPutUnder(state.data, { id: '\u0000new' }, main)) throw new Error(main.state === 'finished' ? `${main.name} is finished. Open it again first, or leave out --project.` : `${main.name} cannot hold tasks.`);
         const projectId = newId();
         const ops = [makeOp('createProject', { projectId, name, groupId: main ? main.groupId : g.id, priority, ...(main ? { parentId: main.id } : {}) })];
         for (const text of steps) ops.push(makeOp('addStep', { projectId, stepId: newId(), text }));

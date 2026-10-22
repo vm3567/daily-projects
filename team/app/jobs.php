@@ -36,7 +36,11 @@ function server_steps(array $p, string $today): array {
   $steps = is_array($p['steps'] ?? null) ? $p['steps'] : [];
   $open = [];
   foreach ($steps as $s) {
-    if (!empty($s['done']) || empty($s['id'])) continue;
+    if (empty($s['id'])) continue;
+    // a step made into its own task / project (movedTo) whose team task is still open: kept, so the person's task is
+    // never cancelled by mistake (the same as projectSteps() / keepMovedStep() in the owner's app)
+    if (!empty($s['done']) && !(!empty($s['movedTo']) && one("SELECT id FROM tasks WHERE project_ref = ? AND step_ref = ? AND seq IS NOT NULL AND status = 'open' LIMIT 1",
+        [(string)($p['id'] ?? ''), (string)$s['id']]))) continue;
     if (!empty($s['snoozedUntil']) && $s['snoozedUntil'] > $today) continue;
     $open[] = ['stepRef' => (string)$s['id'], 'title' => (string)($s['text'] ?? ''), 'details' => (string)($s['note'] ?? ''), 'dueDate' => $s['dueDate'] ?? null];
   }

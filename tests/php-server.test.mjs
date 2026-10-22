@@ -1241,7 +1241,8 @@ test('outlook: each new email thread → one task "📧 subject" (mail + email t
   const t2 = tasks.find((p) => p.mail.conversationId === 'C2');
   assert.equal(data.projects[0].id, t2.id, 'new tasks go to the top');
   assert.deepEqual([t1.state, t1.groupId, t1.steps, t1.workNotes, t1.isMain, t1.parentIds], ['active', 'g1', [], [], undefined, undefined], 'a plain active task');
-  const noAt = ({ at: when, ...rest }) => { assert.match(when, /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.000Z$/); return rest; };
+  // (r14: each email also carries addedAt = when the server brought it in; the owner asked for it, so a late Finish never hides it)
+  const noAt = ({ at: when, addedAt, ...rest }) => { assert.match(when, /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.000Z$/); assert.match(addedAt, /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.000Z$/, 'addedAt'); return rest; };
   assert.deepEqual(t1.thread.map(noAt), [
     { fromName: 'Ravi', fromMe: false, preview: 'Please find the price for the new kiln.', link: 'https://outlook.office365.com/owa/?ItemID=m1&exvsurl=1', messageId: 'm1' },
     { fromName: 'Sandeep', fromMe: false, preview: 'OK, go ahead with the order.', link: 'https://outlook.office365.com/owa/?ItemID=m3&exvsurl=1', messageId: 'm3' },
@@ -1472,7 +1473,8 @@ test('replies: your reply in Outlook (Sent Items) joins the task\'s email thread
   let { data, history } = await dpNow();
   let t = data.projects.find((p) => p.id === 'tt1');
   assert.equal(t.thread.length, 2);
-  const { at: sentAt, ...you } = t.thread[1];
+  const { at: sentAt, addedAt: youAdded, ...you } = t.thread[1];
+  assert.match(youAdded, /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.000Z$/, 'r14: addedAt on your reply too');
   assert.deepEqual(you, { fromName: 'You', fromMe: true, preview: 'Dear Ravi, the price list is attached.', link: 'https://outlook.office365.com/owa/?ItemID=S1&exvsurl=1', messageId: 'S1' }, '↩ You, newest last');
   assert.match(sentAt, /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.000Z$/, 'when it was sent');
   assert.ok(Math.abs(Date.parse(sentAt) - Date.parse(isoAgo(30))) < 120000);
@@ -2084,5 +2086,92 @@ test('review r13: changing "🔔 Remind me at" to a later time the same day send
   assert.deepEqual(remindersAt('2026-12-14T13:59:00+05:30'), [], 'not before the new time');
   assert.equal(remindersAt('2026-12-14T14:01:00+05:30').length, 1, 'the new 14:00 reminder comes');
   assert.deepEqual(remindersAt('2026-12-14T14:30:00+05:30'), [], 'and never twice');
+  await saveProjects([]);
+});
+
+// ---------------------------------------------------------------- review round 14 (server)
+test('review r14: an approval sent again while the owner decides it (read as waiting, decided before the write) stays decided', { skip }, async () => {
+  await appCall('connect.push', { external_id: 'PO-RP', kind: 'approval', title: 'Approve PO RP' }, cn.purchase.key);
+  const iid = itemId(cn.purchase.id, 'PO-RP');
+  // the re-push read the item while it waited; the owner pressed ✓ Approve before its UPDATE ran
+  const out = await phpRun(`$old = one('SELECT * FROM conn_items WHERE id = ${iid}'); $c = one('SELECT * FROM connections WHERE id = ${cn.purchase.id}');
+    q("UPDATE conn_items SET status = 'approved', decided_at = NOW() WHERE id = ${iid}");
+    echo json_encode(conn_approval_again($c, $old, 'Approve PO RP (again)', '', '', '[]'));`);
+  assert.deepEqual(JSON.parse(out), { id: iid, status: 'approved' }, 'the app hears the decision');
+  assert.equal(sqlOut(`SELECT status FROM wt.conn_items WHERE id = ${iid}`).trim(), 'approved', 'never put back to pending');
+  // a plain re-push of a waiting one still updates it
+  await appCall('connect.push', { external_id: 'PO-RP2', kind: 'approval', title: 'Approve PO RP2' }, cn.purchase.key);
+  const r = await appCall('connect.push', { external_id: 'PO-RP2', kind: 'approval', title: 'Approve PO RP2 (new words)' }, cn.purchase.key);
+  assert.equal(r.status, 'pending');
+  assert.equal(sqlOut(`SELECT title FROM wt.conn_items WHERE id = ${itemId(cn.purchase.id, 'PO-RP2')}`).trim(), 'Approve PO RP2 (new words)');
+});
+
+test('review r14: GET connect.decisions with since=…+05:30 not URL-encoded (the + arrives as a space) works', { skip }, async () => {
+  const pl = await call('conn.create', { name: 'Plus' }, tok.boss);
+  cn.plus = { id: pl.connection.id, key: pl.key };
+  const ist = new Date(Date.now() + 5.5 * 3600e3 - 3600e3).toISOString().slice(0, 19) + '+05:30'; // an hour ago, India time
+  const g = await appCall(`connect.decisions&since=${ist}`, null, cn.plus.key, 'GET');
+  assert.equal(g.s, 200, g.error);
+  assert.ok(g.ok && Array.isArray(g.decisions));
+  const later = await appCall(`connect.decisions&since=${new Date(Date.now() + 5.5 * 3600e3 + 3600e3).toISOString().slice(0, 19)}+05:30`, null, cn.plus.key, 'GET');
+  assert.deepEqual(later.decisions, [], 'read as +05:30 (an hour from now): nothing after it');
+  assert.match((await appCall('connect.decisions&since=yesterday-ish', null, cn.plus.key, 'GET')).error, /since is not a time/, 'a wrong time is still refused');
+  assert.ok((await call('conn.delete', { id: cn.plus.id }, tok.boss)).ok);
+});
+
+test('review r14: the PHP connector (team/connector) wt_decisions gives the whole answer (decisions, until, more); asking again from until while more gets them all', { skip }, async () => {
+  const pg = await call('conn.create', { name: 'Paged' }, tok.boss);
+  sql(`SET SESSION cte_max_recursion_depth = 2000; INSERT INTO wt.conn_items (conn_id, external_id, kind, title, status, decided_at, created_at, updated_at)
+    WITH RECURSIVE n (i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 501)
+    SELECT ${pg.connection.id}, CONCAT('G-', i), 'approval', 'x', 'approved', NOW() - INTERVAL (600 - i) MINUTE, NOW(), NOW() FROM n`);
+  const file = join(dir, 'connector-r14.php');
+  writeFileSync(file, readFileSync(join(ROOT, 'team', 'connector', 'worktask-connector.php'), 'utf8')
+    .replace("'https://YOUR-WORK-TASK-ADDRESS/api/'", `'${B.replace(/\?a=$/, '')}'`).replace("'PASTE-YOUR-KEY-HERE'", `'${pg.key}'`));
+  const out = execFileSync('php', ['-r', `require $argv[1]; $since = ''; $ids = []; $asks = 0;
+    do { $a = wt_decisions($since); $asks++; foreach ($a['decisions'] as $d) $ids[$d['external_id']] = 1; $since = $a['until']; } while ($a['more'] && $asks < 5);
+    echo json_encode(['n' => count($ids), 'asks' => $asks, 'keys' => array_keys($a), 'until' => $since]);`, file], { encoding: 'utf8' });
+  const r = JSON.parse(out);
+  assert.deepEqual(r.keys, ['decisions', 'until', 'more']);
+  assert.equal(r.n, 501, 'none missed');
+  assert.equal(r.asks, 2, 'asked again once, because more was true');
+  assert.match(r.until, /\+05:30$/);
+  const tpl = readFileSync(join(ROOT, 'team', 'connector', 'worktask-connector.php'), 'utf8');
+  assert.match(tpl, /while \(\$answer\['more'\]\)/, 'the comment says to repeat while more');
+  assert.match(tpl, /\$lastTime = \$answer\['until'\]/, 'and to keep until');
+  assert.ok((await call('conn.delete', { id: pg.connection.id }, tok.boss)).ok);
+});
+
+test('review r14: each email the Outlook check brings in carries addedAt (when it came in), on the thread entry and on the mail; an email seen again keeps it', { skip }, async () => {
+  const out = await phpRun(`$data = (object)['projects' => [], 'groups' => [(object)['id' => 'g1']]]; $hist = [];
+    $m = fn($id, $at) => ['id' => $id, 'subject' => 'Kiln quote', 'from' => ['emailAddress' => ['name' => 'Ravi', 'address' => 'ravi@example.com']],
+      'receivedDateTime' => $at, 'bodyPreview' => 'hello', 'webLink' => 'https://outlook.office.com/x', 'conversationId' => 'conv-r14'];
+    ol_apply($data, $hist, $m('m1', '2026-10-22T04:30:00Z'), false, '2026-10-22T04:40:00.000Z');
+    $one = json_decode(json_encode($data->projects[0]), true);
+    ol_apply($data, $hist, $m('m2', '2026-10-22T04:31:00Z'), true, '2026-10-22T04:50:00.000Z');
+    ol_apply($data, $hist, $m('m2', '2026-10-22T04:31:00Z'), true, '2026-10-22T05:10:00.000Z');
+    echo json_encode(['one' => $one, 'two' => $data->projects[0]]);`);
+  const { one, two } = JSON.parse(out);
+  assert.equal(one.thread[0].at, '2026-10-22T04:30:00.000Z', 'at = when it was received');
+  assert.equal(one.thread[0].addedAt, '2026-10-22T04:40:00.000Z', 'addedAt = when the server brought it in');
+  assert.equal(one.mail.addedAt, '2026-10-22T04:40:00.000Z', 'the new task\'s mail too');
+  assert.deepEqual(two.thread.map((e) => [e.at, e.addedAt]), [['2026-10-22T04:30:00.000Z', '2026-10-22T04:40:00.000Z'], ['2026-10-22T04:31:00.000Z', '2026-10-22T04:50:00.000Z']]);
+  assert.equal(two.mail.addedAt, '2026-10-22T04:50:00.000Z', 'the mail: when the newest email came in (not moved by seeing it again)');
+});
+
+test('review r14: the server sync never cancels the person\'s open task for a step made into its own task (movedTo), like keepMovedStep in the app', { skip }, async () => {
+  const P = (steps) => ({ id: 'mv14', name: 'Moved step P', state: 'active', team: { userId: id.suresh, name: 'Suresh' }, steps });
+  await saveProjects([P([{ id: 'mv14a', text: 'Line kiln', done: false }, { id: 'mv14b', text: 'Paint door', done: false }])]);
+  const before = (await openOf('suresh', 'mv14')).find((t) => t.stepRef === 'mv14a');
+  assert.ok(before, 'given');
+  const doneAt = new Date().toISOString();
+  await saveProjects([P([{ id: 'mv14a', text: 'Line kiln', done: true, doneAt, movedTo: 'np14' }, { id: 'mv14b', text: 'Paint door', done: false }]),
+    { id: 'np14', name: 'Line kiln', state: 'active', steps: [] }]);
+  await phpRun('server_sync_projects();');
+  const after = await openOf('suresh', 'mv14');
+  assert.ok(after.some((t) => t.id === before.id), 'the moved step\'s task stays open on Suresh\'s list');
+  assert.equal(sqlOut(`SELECT status FROM wt.tasks WHERE id = ${before.id}`).trim(), 'open');
+  // a done step without movedTo still closes as before
+  await saveProjects([P([{ id: 'mv14a', text: 'Line kiln', done: true, doneAt, movedTo: 'np14' }, { id: 'mv14b', text: 'Paint door', done: true, doneAt }])]);
+  assert.ok(!(await openOf('suresh', 'mv14')).some((t) => t.stepRef === 'mv14b'), 'a plain ticked step leaves the list');
   await saveProjects([]);
 });

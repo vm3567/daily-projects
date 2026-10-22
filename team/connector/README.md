@@ -98,4 +98,6 @@ Use their **HTTP Request** step:
 Use `worktask-connector.php` (in this folder, or the ready file from **⬇ Download PHP connector**).
 It needs PHP 7.4 or newer with curl. The comments at its top show the 3 steps:
 `wt_push()`, `wt_withdraw()`, `wt_decisions()` and `wt_receive_decision()`.
+`wt_decisions($since)` gives the whole answer: `['decisions' => …, 'until' => …, 'more' => …]`.
+Keep `until` for the next time, and call it again (with `until`) while `more` is true.
 The file in this folder has placeholders only: paste the address, key and secret where it says so.

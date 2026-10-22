@@ -1766,12 +1766,13 @@ function teamToday() {
 
 /**
  * Is the owner's Outlook connected (for the "no paste" morning email)? Asked once per page load (outlook.status, owner
- * only), kept in memory; Settings' Outlook card keeps it up to date. false until the answer comes.
+ * only), kept in memory; Settings' Outlook card keeps it up to date. false until the answer comes. A failed ask (offline,
+ * no answer) is not kept: the next redraw or press asks again.
  */
 let outlookOn = null; // null: not asked; a promise while asking; then true / false
 function outlookConnected() {
   if (outlookOn === null && state.user && state.user.owner) {
-    outlookOn = api('outlook.status').then((d) => { outlookOn = state.user && state.user.owner ? !!(d.outlook && d.outlook.connected) : null; }, () => { outlookOn = false; }); // (signed out meanwhile: asked again for the next owner)
+    outlookOn = api('outlook.status').then((d) => { outlookOn = state.user && state.user.owner ? !!(d.outlook && d.outlook.connected) : null; }, () => { outlookOn = null; }); // (signed out meanwhile: asked again for the next owner; a failed ask: asked again next time)
   }
   return outlookOn === true;
 }
@@ -2453,8 +2454,9 @@ let codeStamp = null;
 async function checkNewVersion() {
   try {
     // version.txt is written by every upload (tools/deploy-worktask.sh): a different one = a new version
-    // the first one comes the same way as the page's code (offline: the copy kept with it); later ones always from the server
-    const r = await fetch(codeStamp === null ? 'version.txt' : `version.txt?check=${Date.now()}`, codeStamp === null ? {} : { cache: 'no-store' });
+    // always from the server, never a kept copy (a kept old stamp next to new code would say "New version ready" wrongly);
+    // the first one goes through sw.js, which then renews its kept code set if the version changed
+    const r = await fetch(codeStamp === null ? 'version.txt' : `version.txt?check=${Date.now()}`, { cache: 'no-store' });
     const stamp = r.ok ? (await r.text()).trim() : '';
     if (!stamp) return;
     if (codeStamp === null) { codeStamp = stamp; return; }

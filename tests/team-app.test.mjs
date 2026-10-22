@@ -274,7 +274,7 @@ test('project description: taken from the project\'s tasks (the first one that h
   assert.equal(projectAboutOf([{ title: 'old server, no field' }]), '');
   assert.match(APP, /class: 'prow-about' }, aboutShort\(p\.projectAbout\)\)/, 'manager\'s Projects list row');
   assert.match(APP, /class: 'project-about' }/, 'under the title of the project and task pages');
-  assert.match(readFileSync(new URL('../team/public_html/sw.js', import.meta.url), 'utf8'), /const CACHE = 'worktask-v25'/, 'new files reach the phones');
+  assert.match(readFileSync(new URL('../team/public_html/sw.js', import.meta.url), 'utf8'), /const CACHE = 'worktask-v26'/, 'new files reach the phones');
 });
 
 // ---------------------------------------------------------------- 📧 morning email (one person's pending work as a table to fill in)
@@ -732,7 +732,7 @@ test('a photo message sent again after a lost answer carries the same clientId (
 
 // ---------------------------------------------------------------- review round 13 (Work Task client)
 // Runs the real sw.js with a pretend browser: a cache holding the OLD files and a network that is slow (or gone).
-async function swHarness({ netNever = false, netFail = false } = {}) {
+async function swHarness({ netNever = false, netFail = false, net = null } = {}) {
   const vm = await import('node:vm');
   const src = readFileSync(new URL('../team/public_html/sw.js', import.meta.url), 'utf8');
   const ORIGIN = 'https://worktask.in';
@@ -740,18 +740,19 @@ async function swHarness({ netNever = false, netFail = false } = {}) {
   const stores = {};
   const store = (name) => (stores[name] ||= new Map());
   const cacheObj = (name) => ({
-    match: async (r) => store(name).get(key(r)),
+    match: async (r) => { const x = store(name).get(key(r)); return x && !x.bodyUsed ? x.clone() : x; }, // like the real Cache API: a fresh copy each time
     put: async (r, res) => { store(name).set(key(r), res); },
     addAll: async (list) => { for (const r of list) store(name).set(key(r), new Response('new ' + key(r))); },
   });
   const handlers = {};
   const timers = [];
+  const fetches = [];
   const ctx = {
     self: { addEventListener: (t, f) => { handlers[t] = f; }, clients: { matchAll: async () => [], claim: async () => {} }, skipWaiting: async () => {}, registration: {} },
     location: { origin: ORIGIN },
     caches: { open: async (n) => cacheObj(n), match: async (r) => { for (const n of Object.keys(stores)) { const x = store(n).get(key(r)); if (x) return x; } return undefined; }, keys: async () => Object.keys(stores), delete: async (n) => delete stores[n] },
-    fetch: (r) => (netNever ? new Promise(() => {}) : netFail ? Promise.reject(new TypeError('offline')) : Promise.resolve(new Response('net ' + key(r)))),
-    setTimeout: (f) => { timers.push(f); return timers.length; },
+    fetch: (r, o) => { fetches.push({ url: key(r), cache: o && o.cache }); return net ? net(key(r)) : netNever ? new Promise(() => {}) : netFail ? Promise.reject(new TypeError('offline')) : Promise.resolve(new Response('net ' + key(r))); },
+    setTimeout: (f, ms = 0) => { timers.push({ f, ms }); return timers.length; },
     Request: class { constructor(u, o) { this.url = key(u); this.cache = o && o.cache; } },
     Response, URL, Promise, console,
   };
@@ -759,13 +760,14 @@ async function swHarness({ netNever = false, netFail = false } = {}) {
   vm.runInNewContext(src, ctx);
   const cacheName = /const CACHE = '([^']+)'/.exec(src)[1];
   return {
-    cacheName, store, handlers,
-    /** One request; resolves to the body text, or 'PENDING' if nothing answered after the 4-second timer fired. */
-    async ask(path, mode = 'no-cors') {
+    cacheName, store, handlers, fetches,
+    /** One request; resolves to the body text, or 'PENDING' if nothing answered after the timers up to `upTo` ms fired. */
+    async ask(path, mode = 'no-cors', { upTo = 4000, clientId = '', waits = [] } = {}) {
       let answer;
-      handlers.fetch({ request: { url: ORIGIN + path, method: 'GET', mode }, respondWith: (p) => { answer = p; } });
+      handlers.fetch({ request: { url: ORIGIN + path, method: 'GET', mode }, clientId, respondWith: (p) => { answer = p; }, waitUntil: (p) => { waits.push(p); } });
+      if (!answer) return 'NOT HANDLED';
       for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r));
-      timers.splice(0).forEach((f) => f()); // the 4 seconds are up
+      timers.splice(0).forEach((t) => { if (t.ms <= upTo) t.f(); }); // the 4 seconds (or upTo) are up
       const done = await Promise.race([answer.then((r) => r.text()), new Promise((r) => setTimeout(() => r('PENDING'), 30))]);
       return done;
     },
@@ -812,4 +814,81 @@ test('r13 Back marker: after a reload the old {wt:1} is dropped at start, so Bac
   dropBack();
   assert.equal(hist.backs, 0, 'a menu tap right after the reload does not go back (that would reload the page)');
   pushBack(); assert.deepEqual(hist.state, { wt: 1 }, 'opening a task gets its own Back step on this page');
+});
+
+// ---------------------------------------------------------------- review round 14 (Work Task client)
+test('r14 sw: on a stalled network a code file waits about 8 s, then uses THIS version\'s kept copy (never an older cache), so the app is not left blank', async () => {
+  const h = await swHarness({ netNever: true });
+  h.store(h.cacheName).set('https://worktask.in/app.js', new Response('kept app'));
+  h.store(h.cacheName).set('https://worktask.in/styles.css', new Response('kept css'));
+  h.store('worktask-v1').set('https://worktask.in/logic.js', new Response('very old logic'));
+  assert.equal(await h.ask('/app.js'), 'PENDING', 'still waits for the network at 4 s');
+  assert.equal(await h.ask('/app.js', 'no-cors', { upTo: 8000 }), 'kept app', 'after ~8 s: the kept copy');
+  assert.equal(await h.ask('/styles.css', 'no-cors', { upTo: 8000 }), 'kept css');
+  assert.equal(await h.ask('/logic.js', 'no-cors', { upTo: 60000 }), 'PENDING', 'a copy in another (old) cache is never used');
+  const sw = readFileSync(new URL('../team/public_html/sw.js', import.meta.url), 'utf8');
+  const wait = Number(/const CODE_WAIT = (\d+);/.exec(sw)[1]);
+  assert.ok(wait >= 5000 && wait <= 20000, 'a few seconds, not minutes');
+});
+
+test('r14 sw: one page never mixes versions: app.js from the network → logic.js waits for the network; app.js from the kept set → logic.js from the kept set', async () => {
+  let slow = false;
+  const h = await swHarness({ net: (u) => (slow ? new Promise(() => {}) : Promise.resolve(new Response('new ' + u.slice(u.lastIndexOf('/') + 1)))) });
+  for (const f of ['app.js', 'logic.js']) h.store(h.cacheName).set('https://worktask.in/' + f, new Response('kept ' + f));
+  assert.equal(await h.ask('/app.js', 'no-cors', { clientId: 'pageA' }), 'new app.js');
+  slow = true;
+  assert.equal(await h.ask('/logic.js', 'no-cors', { clientId: 'pageA', upTo: 60000 }), 'PENDING', 'new app.js never meets the kept (maybe old) logic.js');
+  assert.equal(await h.ask('/app.js', 'no-cors', { clientId: 'pageB', upTo: 8000 }), 'kept app.js');
+  slow = false;
+  assert.equal(await h.ask('/logic.js', 'no-cors', { clientId: 'pageB' }), 'kept logic.js', 'kept app.js gets the kept logic.js, even when the network is back');
+});
+
+test('r14 sw: a code file from the network is not kept on its own (the kept code is one matched set)', async () => {
+  const h = await swHarness();
+  h.store(h.cacheName).set('https://worktask.in/logic.js', new Response('kept logic'));
+  assert.equal(await h.ask('/app.js'), 'net https://worktask.in/app.js');
+  await new Promise((r) => setImmediate(r));
+  assert.equal(h.store(h.cacheName).get('https://worktask.in/app.js'), undefined, 'app.js alone was not put into the kept set');
+  assert.equal(await h.ask('/'), 'net https://worktask.in/', 'other files are still kept as they come');
+  await new Promise((r) => setImmediate(r));
+  assert.ok(h.store(h.cacheName).get('https://worktask.in/'), 'the page is kept');
+});
+
+test('r14 version.txt: never answered from the kept copy (network only, no-store), so "New version ready" is never false; a new version renews the kept set at once', async () => {
+  let ver = 'v1';
+  const h = await swHarness({ net: (u) => Promise.resolve(new Response(u.endsWith('version.txt') ? ver + '\n' : 'fresh ' + u)) });
+  h.store(h.cacheName).set('https://worktask.in/version.txt', new Response('OLD STAMP'));
+  const waits = [];
+  assert.equal(await h.ask('/version.txt', 'no-cors', { waits }), 'v1\n', 'from the server');
+  await Promise.all(waits);
+  assert.ok(h.fetches.some((f) => f.url === 'https://worktask.in/version.txt' && f.cache === 'no-store'), 'no-store');
+  assert.equal(await h.store(h.cacheName).get('https://worktask.in/kept-version.txt').clone().text(), 'v1', 'first stamp noted');
+  assert.equal(h.store(h.cacheName).get('https://worktask.in/app.js'), undefined, 'same as install: nothing downloaded again');
+  ver = 'v2'; waits.length = 0;
+  assert.equal(await h.ask('/version.txt', 'no-cors', { waits }), 'v2\n');
+  await Promise.all(waits);
+  for (const f of ['app.js', 'logic.js', 'styles.css', 'index.html']) assert.equal(await h.store(h.cacheName).get('https://worktask.in/' + f).clone().text(), 'new https://worktask.in/' + f, f + ' renewed with the set');
+  assert.equal(await h.store(h.cacheName).get('https://worktask.in/kept-version.txt').clone().text(), 'v2');
+  const off = await swHarness({ netFail: true });
+  off.store(off.cacheName).set('https://worktask.in/version.txt', new Response('OLD STAMP'));
+  assert.equal(await off.ask('/version.txt').catch(() => 'NETWORK ERROR'), 'NETWORK ERROR', 'offline: no answer (the page tries later), never the kept stamp');
+  const fn = APP.slice(APP.indexOf('async function checkNewVersion()'), APP.indexOf('checkNewVersion();', APP.indexOf('async function checkNewVersion()')));
+  assert.match(fn, /`version\.txt\?check=\$\{Date\.now\(\)\}`, \{ cache: 'no-store' \}\)/, 'the page asks with no-store every time, the first time too');
+});
+
+test('r14 Outlook status: one failed outlook.status answer does not switch the no-paste email off for the whole page load; the next redraw asks again', async () => {
+  const src = APP.slice(APP.indexOf('let outlookOn = null;'), APP.indexOf('/**', APP.indexOf('function outlookConnected()')));
+  let calls = 0, fail = true;
+  const state = { user: { owner: true } };
+  const api = () => { calls++; return fail ? Promise.reject(new Error('offline')) : Promise.resolve({ outlook: { connected: true } }); };
+  const ask = new Function('state', 'api', src + '; return outlookConnected;')(state, api);
+  assert.equal(ask(), false);
+  ask(); assert.equal(calls, 1, 'not asked twice while waiting');
+  await new Promise((r) => setImmediate(r));
+  fail = false;
+  assert.equal(ask(), false, 'still unknown');
+  assert.equal(calls, 2, 'asked again after the failed answer');
+  await new Promise((r) => setImmediate(r));
+  assert.equal(ask(), true, 'connected: the no-paste way works');
+  assert.equal(calls, 2, 'a good answer is kept');
 });

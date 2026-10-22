@@ -276,9 +276,19 @@ function newerMailThan(p, at) {
   const t = Date.parse(at);
   if (!p || !p.mail || Number.isNaN(t)) return false;
   const thread = Array.isArray(p.thread) ? p.thread : [];
-  const theirs = thread.filter((e) => e && !e.fromMe && typeof e.at === 'string').map((e) => Date.parse(e.at));
-  if (!thread.length && !p.mail.fromMe && typeof p.mail.at === 'string') theirs.push(Date.parse(p.mail.at));
+  // addedAt = when the server brought the email in (an email can be received before you pressed, but come in after)
+  const when = (e) => (typeof e.addedAt === 'string' && !Number.isNaN(Date.parse(e.addedAt)) ? e.addedAt : e.at);
+  const theirs = thread.filter((e) => e && !e.fromMe && typeof when(e) === 'string').map((e) => Date.parse(when(e)));
+  if (!thread.length && !p.mail.fromMe && typeof when(p.mail) === 'string') theirs.push(Date.parse(when(p.mail)));
   return theirs.some((x) => x > t);
+}
+
+/** A task leaves 📂 projects: its place in their order (taskOrder) goes too, so added back it comes after the placed ones. */
+function dropFromOrder(data, taskId, mainIds = null) {
+  for (const m of data.projects) {
+    if (!Array.isArray(m.taskOrder) || (mainIds && !mainIds.includes(m.id))) continue;
+    if (m.taskOrder.includes(taskId)) m.taskOrder = m.taskOrder.filter((x) => x !== taskId);
+  }
 }
 
 /** Every change to a project counts as activity for the dot colour (green today). */
@@ -385,6 +395,7 @@ const handlers = {
     const now = parentIdsOf(p);
     if (!now.includes(a.parentId)) return false;
     setParents(p, now.filter((x) => x !== a.parentId));
+    dropFromOrder(data, p.id, [a.parentId]);
     p.updatedAt = op.at;
     const main = findProject(data, a.parentId);
     addEvent(state, op, p, 'main_changed', main ? `Taken out of 📂 ${main.name}` : 'Taken out of a project');
@@ -405,6 +416,7 @@ const handlers = {
     if (a.parentId === null || a.parentId === undefined || a.parentId === '') {
       if (!now.length) return false;
       setParents(p, []);
+      dropFromOrder(data, p.id, now);
       p.updatedAt = op.at;
       addEvent(state, op, p, 'main_changed', old ? `Taken out of 📂 ${old.name}` : 'Taken out of its project');
       if (old) addEvent(state, { ...op, id: op.id + 'm' }, old, 'main_changed', `${p.name} taken out`);
@@ -413,6 +425,7 @@ const handlers = {
     const main = typeof a.parentId === 'string' ? findProject(data, a.parentId) : null;
     if (!main || (now.length === 1 && now[0] === main.id) || !canPutUnder(data, p, main)) return false;
     setParents(p, [main.id]);
+    dropFromOrder(data, p.id, now.filter((x) => x !== main.id));
     main.isMain = true;
     p.updatedAt = op.at;
     addEvent(state, op, p, 'main_changed', `Added to 📂 ${main.name}`);
@@ -669,6 +682,7 @@ const handlers = {
     if (newerMailThan(data.projects[i], op.at)) return false; // an email came after you pressed Delete: the task (and that email) stays
     const [p] = data.projects.splice(i, 1);
     for (const c of data.projects) if (parentIdsOf(c).includes(p.id)) setParents(c, parentIdsOf(c).filter((x) => x !== p.id)); // its tasks stay, just no longer in it
+    dropFromOrder(data, p.id);
     addEvent(state, op, p, 'deleted', p.name);
     return true;
   },
@@ -1186,19 +1200,34 @@ const handlers = {
 
   /**
    * Undo for the Inbox (one change): the item goes back in its place, and the step / project it became is taken back.
-   * a = { item: {id, text, createdAt}, index, undoOpId, project?: snapshot to restore, projectIndex?, removeProjectId? }
+   * a = { item: {id, text, createdAt}, index, undoOpId, projectId? + stepId? (the step inboxToStep added), removeProjectId? }
+   * Only the added step (or the made project) is taken away — never an old copy of the whole task put back, so what
+   * other devices or the server did meanwhile stays. Safe to replay (twice, or on another device). Older saved changes
+   * carry project = a copy from before: only the step(s) not in that copy with the item's words are taken away.
    */
   inboxUndo(state, op, a) {
     const it = a.item;
     if (!it || !it.id) return false;
     const inbox = (state.data.inbox ||= []);
     const list = state.data.projects;
-    if (a.removeProjectId) {
+    if (typeof a.removeProjectId === 'string' && a.removeProjectId) {
       const i = list.findIndex((p) => p.id === a.removeProjectId);
       if (i >= 0) list.splice(i, 1);
-    } else if (a.project && a.project.id) {
-      const i = list.findIndex((p) => p.id === a.project.id);
-      if (i >= 0) list[i] = clone(a.project);
+      for (const c of list) if (parentIdsOf(c).includes(a.removeProjectId)) setParents(c, parentIdsOf(c).filter((x) => x !== a.removeProjectId));
+      dropFromOrder(state.data, a.removeProjectId);
+    } else {
+      const pid = typeof a.projectId === 'string' ? a.projectId : a.project && typeof a.project.id === 'string' ? a.project.id : null;
+      const p = pid ? findProject(state.data, pid) : null;
+      if (p) {
+        let gone;
+        if (typeof a.stepId === 'string') gone = (s) => s.id === a.stepId;
+        else if (a.project && Array.isArray(a.project.steps)) {
+          const had = new Set(a.project.steps.map((s) => s && s.id));
+          const words = cleanText(it.text, 1000).trim();
+          gone = (s) => !had.has(s.id) && s.text === words;
+        }
+        if (gone) p.steps = p.steps.filter((s) => !gone(s));
+      }
     }
     if (a.undoOpId) for (const events of Object.values(state.history)) {
       const k = events.findIndex((e) => e.id === a.undoOpId);

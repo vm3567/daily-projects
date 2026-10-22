@@ -33,8 +33,12 @@
  *
  *    b) Or ask Work Task now and then (for example every 5 minutes):
  *
- *      foreach (wt_decisions($lastTime) as $d) { ... $d['external_id'], $d['status'], $d['reason'], $d['decided_at'] ... }
- *      // keep the answer's newest decided_at as $lastTime for the next time (a decision may come twice: that is fine)
+ *      do {
+ *        $answer = wt_decisions($lastTime);    // $lastTime = '' the very first time
+ *        foreach ($answer['decisions'] as $d) { ... $d['external_id'], $d['status'], $d['reason'], $d['item_id'] ... }
+ *        $lastTime = $answer['until'];         // keep `until` (save it) for the next time
+ *      } while ($answer['more']);              // more than 500 waiting: ask again at once from `until`
+ *      // the same decision may come twice: skip one you already have (by item_id or external_id)
  *
  * Keep the key and the secret private. If they leak, press "Rotate key" in Work Task and put the new ones here.
  * Needs PHP 7.4 or newer, with curl.
@@ -78,10 +82,18 @@ function wt_withdraw(string $externalId): array {
   return wt_call('connect.withdraw', ['external_id' => $externalId]);
 }
 
-/** The decisions made since that time ('' = all). Each: external_id, status, reason, decided_at, item_id. */
+/**
+ * The decisions made since that time ('' = all), 500 at a time. Returns the whole answer:
+ * ['decisions' => [each: external_id, status, reason, decided_at, item_id], 'until' => …, 'more' => true/false].
+ * Keep `until` as the next `since`, and ask again while `more` is true.
+ */
 function wt_decisions(string $since = ''): array {
   $answer = wt_call('connect.decisions', $since === '' ? [] : ['since' => $since]);
-  return isset($answer['decisions']) && is_array($answer['decisions']) ? $answer['decisions'] : [];
+  return [
+    'decisions' => isset($answer['decisions']) && is_array($answer['decisions']) ? $answer['decisions'] : [],
+    'until' => isset($answer['until']) ? (string)$answer['until'] : $since,
+    'more' => !empty($answer['more']),
+  ];
 }
 
 /** Is this really from Work Task? The time must be within 5 minutes, and the signature must match. */

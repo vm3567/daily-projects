@@ -212,7 +212,10 @@ function ol_iso(string $t): string {
 }
 
 /** The newest email of a thread, kept in its `mail` (for a later "draft a reply" in Outlook): the same as cleanMail() in docs/ops.js. */
-function ol_mail_info(object $mail, array $x): void {
+function ol_mail_info(object $mail, array $x, string $addedAt = ''): void {
+  // addedAt = when the server brought this email in (not when it was received): a Finish / Delete pressed earlier but
+  // saved later must not hide it (docs/ops.js newerMailThan compares addedAt || at)
+  if ($addedAt !== '') $mail->addedAt = $addedAt;
   if ($x['id'] !== '' && mb_strlen($x['id']) <= 400) $mail->messageId = $x['id'];
   $mail->fromName = mb_substr($x['from'], 0, 120);
   $addr = trim($x['address']);
@@ -242,7 +245,7 @@ function ol_thread_task(object $data, string $conv): ?object {
 function ol_thread_add(object $p, array $e): bool {
   $list = is_array($p->thread ?? null) ? $p->thread : [];
   foreach ($list as $old) if (is_object($old) && $e['messageId'] !== '' && ($old->messageId ?? '') === $e['messageId']) return false;
-  $entry = ['at' => $e['at'], 'fromName' => mb_substr($e['fromName'], 0, 120), 'fromMe' => $e['fromMe'], 'preview' => mb_substr($e['preview'], 0, OL_THREAD_PREVIEW)];
+  $entry = ['at' => $e['at'], 'addedAt' => (string)($e['addedAt'] ?? '') !== '' ? (string)$e['addedAt'] : ol_iso_now(), 'fromName' => mb_substr($e['fromName'], 0, 120), 'fromMe' => $e['fromMe'], 'preview' => mb_substr($e['preview'], 0, OL_THREAD_PREVIEW)];
   if ($e['link']) $entry['link'] = $e['link'];
   if ($e['messageId'] !== '' && mb_strlen($e['messageId']) <= 400) $entry['messageId'] = $e['messageId'];
   $list[] = (object)$entry;
@@ -257,7 +260,7 @@ function ol_new_task(object $data, array &$hist, array $x, string $at): object {
   $day = date('Y-m-d', strtotime($at));
   $id = ol_rand_id('mt');
   $mail = (object)['conversationId' => $x['conv']];
-  ol_mail_info($mail, $x);
+  ol_mail_info($mail, $x, $at);
   $task = (object)[
     'id' => $id, 'groupId' => (string)(is_object($groups[0] ?? null) ? ($groups[0]->id ?? 'g1') : 'g1'),
     'name' => mb_substr('📧 ' . $x['subject'], 0, 200), 'priority' => 'medium', 'deadline' => null, 'notes' => '',
@@ -265,7 +268,7 @@ function ol_new_task(object $data, array &$hist, array $x, string $at): object {
     'stateChangedAt' => $at, 'createdAt' => $at, 'updatedAt' => $at, 'steps' => [], 'workNotes' => [], 'files' => [],
     'mail' => $mail, 'thread' => [],
   ];
-  ol_thread_add($task, ['at' => $x['at'] ?: $at, 'fromName' => $x['from'], 'fromMe' => ol_is_me($x['address']), 'preview' => $x['long'], 'link' => $x['link'], 'messageId' => $x['id']]);
+  ol_thread_add($task, ['at' => $x['at'] ?: $at, 'addedAt' => $at, 'fromName' => $x['from'], 'fromMe' => ol_is_me($x['address']), 'preview' => $x['long'], 'link' => $x['link'], 'messageId' => $x['id']]);
   if (!isset($data->projects) || !is_array($data->projects)) $data->projects = [];
   array_unshift($data->projects, $task);
   $hist[date('Y-m', strtotime($at))][] = (object)['id' => ol_rand_id('mk'), 'projectId' => $id, 'projectName' => $task->name, 'kind' => 'mail_task',
@@ -308,8 +311,8 @@ function ol_apply(object $data, array &$hist, array $m, bool $threadSeen, string
   if ($conv !== '') {
     $task = ol_thread_task($data, $conv);
     if ($task) {
-      $added = ol_thread_add($task, ['at' => $x['at'] ?: $at, 'fromName' => $x['from'], 'fromMe' => ol_is_me($x['address']), 'preview' => $x['long'], 'link' => $x['link'], 'messageId' => $x['id']]);
-      ol_mail_info($task->mail, $x); // the newest email (for a later reply draft, and the ✉ Replies days)
+      $added = ol_thread_add($task, ['at' => $x['at'] ?: $at, 'addedAt' => $at, 'fromName' => $x['from'], 'fromMe' => ol_is_me($x['address']), 'preview' => $x['long'], 'link' => $x['link'], 'messageId' => $x['id']]);
+      ol_mail_info($task->mail, $x, $added ? $at : ''); // the newest email (for a later reply draft, and the ✉ Replies days)
       if ($added) ol_reopen_for_mail($task, $hist, $x, $at); // a finished task gets a new email from them: open again (else nobody sees it)
       return 'thread';
     }
@@ -317,7 +320,7 @@ function ol_apply(object $data, array &$hist, array $m, bool $threadSeen, string
       if (!is_object($it) || !is_object($it->mail ?? null) || ($it->mail->conversationId ?? null) !== $conv) continue;
       $n = max(1, (int)($it->mail->count ?? 1)) + 1;
       $it->mail->count = $n;
-      ol_mail_info($it->mail, $x);
+      ol_mail_info($it->mail, $x, $at);
       $it->note = mb_substr("💬 $n emails · latest from {$x['from']} {$x['when']}" . ($x['preview'] !== '' ? "\n{$x['preview']}" : ''), 0, 600);
       if ($x['link']) $it->link = (object)['url' => $x['link'], 'title' => $x['subject']];
       return 'joined';
@@ -339,7 +342,7 @@ function ol_apply(object $data, array &$hist, array $m, bool $threadSeen, string
       $note = ['id' => $id, 'text' => $text, 'stepId' => $s ? (string)$s->id : null, 'createdAt' => $at, 'updatedAt' => $at, 'mail' => true];
       if ($x['link']) $note['link'] = (object)['url' => $x['link'], 'title' => $x['subject']];
       if (!isset($p->workNotes) || !is_array($p->workNotes)) $p->workNotes = [];
-      ol_mail_info($s ? $s->mail : $p->mail, $x); // the step / project remembers the newest email of its thread
+      ol_mail_info($s ? $s->mail : $p->mail, $x, $at); // the step / project remembers the newest email of its thread
       array_unshift($p->workNotes, (object)$note);
       $month = date('Y-m', strtotime($at));
       $hist[$month][] = (object)['id' => $id, 'projectId' => (string)$p->id, 'projectName' => (string)($p->name ?? ''), 'kind' => 'mail_note', 'detail' => $text, 'at' => $at];

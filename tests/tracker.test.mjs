@@ -157,6 +157,27 @@ test('📂 add-to puts a task into a project (by name; a task can be in several)
   assert.deepEqual(P('Dryer 3').parentIds, [main.id], 'new-task --project: made in it');
 });
 
+test('review r14: add-to / set-main never turn a plain task into a 📂 project (only projects hold tasks; --create makes a new one); new-task --project into a finished project says so', () => {
+  const P = (name) => data().projects.find((p) => p.name === name);
+  tracker('new-task', 'Kiln repair', '--group', 'Acton', '--steps', 'Order bricks first');
+  tracker('new-task', 'Order bricks', '--group', 'Acton');
+  assert.throws(() => tracker('add-to', 'Order bricks', 'Kiln repair'), /Kiln repair is a task, not a 📂 project/, 'a plain task is refused');
+  assert.throws(() => tracker('set-main', 'Order bricks', 'Kiln rep'), /Kiln repair is a task, not a 📂 project/, 'the older name too');
+  assert.ok(!P('Kiln repair').isMain, 'the plain task stays a task');
+  assert.throws(() => tracker('add-to', 'Order bricks', 'Kiln repair', '--create'), /is a task, not a 📂 project/, 'the same name as a task: not made');
+  assert.match(tracker('add-to', 'Order bricks', 'Kiln', '--create'), /New project Kiln; Order bricks is in it/, '--create makes the new project even when a task name has "Kiln" in it');
+  assert.ok(!P('Kiln repair').isMain && P('Kiln').isMain);
+  assert.deepEqual(P('Order bricks').parentIds, [P('Kiln').id]);
+  // a finished 📂 project: new-task --project errors, the task is not made outside any project quietly
+  const d = data();
+  d.projects.find((p) => p.name === 'Kiln').state = 'finished';
+  writeFileSync(join(work, 'data.json'), JSON.stringify(d, null, 2));
+  sh('git', ['commit', '-qam', 'finish Kiln'], work);
+  sh('git', ['push', '-q', 'origin', 'main'], work);
+  assert.throws(() => tracker('new-task', 'Fix door', '--project', 'Kiln'), /Kiln is finished/);
+  assert.equal(P('Fix door'), undefined, 'nothing made');
+});
+
 test('skills text: /add uses new-task and add-to (a task can be in several 📂 projects); /today reads the new list; no "main project" words left', async () => {
   const { readFileSync } = await import('node:fs');
   const skill = (n) => readFileSync(new URL(`../.claude/skills/${n}/SKILL.md`, import.meta.url), 'utf8');

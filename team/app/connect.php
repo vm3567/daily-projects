@@ -123,6 +123,8 @@ function conn_app_handle(string $a, array $in): ?array {
     }
     case 'connect.decisions': {
       $since = trim((string)($in['since'] ?? ''));
+      // a GET with an unencoded '+' (…T10:00:00+05:30) arrives as a space: put the '+' back
+      $since = (string)preg_replace('/(T\d\d:\d\d(?::\d\d(?:\.\d+)?)?) (\d\d:?\d\d)$/', '$1+$2', $since);
       $t = $since !== '' ? strtotime($since) : false;
       if ($since !== '' && !$t) throw new ApiError('since is not a time. Send it like 2026-10-22T10:00:00+05:30.');
       $from = $t ? date('Y-m-d H:i:s', $t) : '1970-01-02 00:00:00';
@@ -174,13 +176,7 @@ function conn_push(array $c, array $in): array {
   }
 
   $id = (int)$old['id'];
-  if ($kind === 'approval') {
-    if (in_array($old['status'], ['approved', 'rejected'], true)) return ['id' => $id, 'status' => $old['status']]; // decided: stays as it is
-    $again = $old['status'] === 'withdrawn'; // sent again after the app took it back: waits for the owner again
-    q("UPDATE conn_items SET title = ?, details = ?, link = ?, fields = ?, status = 'pending', updated_at = ? WHERE id = ?", [$title, $details, $link ?: null, $fjson, now(), $id]);
-    if ($again) conn_alert($c, $title, $details, $id);
-    return ['id' => $id, 'status' => 'pending'];
-  }
+  if ($kind === 'approval') return conn_approval_again($c, $old, $title, $details, $link, $fjson);
   // a task: what changed goes to that task as a note (never a second task)
   $changes = conn_changes($old, $title, $details, $link, $fields);
   // the note first, the saved words after: a note that could not be written is written when the app sends it again
@@ -192,6 +188,25 @@ function conn_push(array $c, array $in): array {
   if (!$it['dp_task_id']) conn_make_task($it, $c); // not made yet (the projects were not ready): made now, with the newest words
   $it = one('SELECT * FROM conn_items WHERE id = ?', [$id]);
   return ['id' => $id, 'status' => $it['status']];
+}
+
+/**
+ * An approval sent again (same external_id). A decided one stays as it is. The UPDATE checks the status again, so an
+ * owner's ✓ / ✕ made between the read and the write is never turned back into 'pending' (the app hears the decision).
+ */
+function conn_approval_again(array $c, array $old, string $title, string $details, string $link, string $fjson): array {
+  $id = (int)$old['id'];
+  if (in_array($old['status'], ['approved', 'rejected'], true)) return ['id' => $id, 'status' => $old['status']]; // decided: stays as it is
+  $again = $old['status'] === 'withdrawn'; // sent again after the app took it back: waits for the owner again
+  $n = q("UPDATE conn_items SET title = ?, details = ?, link = ?, fields = ?, status = 'pending', updated_at = ? WHERE id = ? AND status IN ('pending', 'withdrawn')",
+    [$title, $details, $link ?: null, $fjson, now(), $id])->rowCount();
+  if ($n === 0) {
+    $now = one('SELECT status FROM conn_items WHERE id = ?', [$id]);
+    if ($now && $now['status'] !== 'pending') return ['id' => $id, 'status' => $now['status']]; // decided meanwhile: kept
+    return ['id' => $id, 'status' => 'pending']; // same words saved again (nothing changed)
+  }
+  if ($again) conn_alert($c, $title, $details, $id);
+  return ['id' => $id, 'status' => 'pending'];
 }
 
 /**

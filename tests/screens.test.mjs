@@ -1031,7 +1031,7 @@ test('📂 Projects page: a click on a project row selects it and stays on the p
   assert.match(mainsSrc, /ctx\.ui\.view === 'mains' && ctx\.showHere \? ctx\.showHere\(c\.id\)/, 'a task in the TASKS table while on the Projects page');
   const here = app.slice(app.indexOf('  showHere: (id) => {'), app.indexOf('  openProject: (id) => {'));
   assert.match(here, /select\(id\);/);
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-22'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-23'/, 'phones get the new copy');
 });
 
 test('📂 project page: "✕ Remove" on a task row takes it out of this project only — the task is kept (and stays in its other projects)', () => {
@@ -1651,7 +1651,7 @@ test('🔌 From apps: waiting approvals grouped by app (newest first) with the f
   assert.ok(cnx.renderFromApps(empty).textContent.includes('Nothing waiting for you ✓'));
 });
 
-test('🔌 app wiring (app.js): "🔌 From apps" after ✉ Replies with the waiting count (worktask.in only), its page, the Settings section, #apps from a phone alert, the key forgotten when leaving Settings; offline copy daily-projects-app-22', async () => {
+test('🔌 app wiring (app.js): "🔌 From apps" after ✉ Replies with the waiting count (worktask.in only), its page, the Settings section, #apps from a phone alert, the key forgotten when leaving Settings; offline copy daily-projects-app-23', async () => {
   const { readFileSync } = await import('node:fs');
   const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
   assert.match(app, /item\('replies', '✉ Replies', readyCount\(data, today\)\),[^\n]*\n\s*onServer \? item\('apps', '🔌 From apps', appsPending\(\)\) : null,/, 'right after ✉ Replies, with the count');
@@ -1663,7 +1663,7 @@ test('🔌 app wiring (app.js): "🔌 From apps" after ✉ Replies with the wait
   assert.match(app, /function go\(view\) \{\n\s*if \(view !== 'settings'\) forgetOnce\(\);/);
   assert.match(app, /if \(onServer\) loadApps\(appsCtx, force \|\| ui\.view === 'apps'\);/);
   assert.match(app, /replies: '✉ Replies', apps: '🔌 From apps', mains: '📂 Projects' \}\[ui\.view\]/, 'its page title');
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-22'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-23'/, 'phones get the new copy');
 });
 
 test('🔌 the PHP connector (team/connector/worktask-connector.php): the same text the app downloads, placeholders only (no real key), valid PHP 7.4+ (php -l), with wt_push / wt_withdraw / wt_decisions / wt_receive_decision', async () => {
@@ -1857,4 +1857,43 @@ test('a screenshot pasted while naming a new task goes into that box, never into
   const APP = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
   const h = APP.slice(APP.indexOf("document.addEventListener('paste'"));
   assert.ok(h.indexOf('if (pasteInForm(e.target)) return;') >= 0 && h.indexOf('if (pasteInForm(e.target)) return;') < h.indexOf('pasteIntoProject(ctx, p, files)'));
+});
+
+// ---------- Review round 14 ----------
+test('a photo dropped on a paused or finished task goes to its Files (no hidden update box); on an active task it goes in the update box', async () => {
+  const findCls = (el, cls) => (String(el.className || '').split(' ').includes(cls) ? el : (el.childNodes || []).map((c) => findCls(c, cls)).find(Boolean));
+  const photo = { name: 'kiln.jpg', type: 'image/jpeg', size: 10 };
+  for (const [state, where] of [['paused', 'file'], ['finished', 'file'], ['active', 'photo']]) {
+    const s = sampleState();
+    const p = s.data.projects.find((x) => x.id === 'p1');
+    p.state = state;
+    const toasts = [];
+    const ctx = fakeCtx(s, { selected: 'p1', update: {} });
+    ctx.store.isOffline = () => true; // stops before any real upload; the toast tells which way it went
+    ctx.toast = (m) => toasts.push(m);
+    const root = findCls(renderDetail(ctx), 'detail-inner');
+    await root.__on.drop({ preventDefault() {}, dataTransfer: { types: ['Files'], files: [photo] } });
+    if (where === 'file') {
+      assert.ok(toasts.includes('No connection — file not added'), `${state}: to Files`);
+      assert.ok(!toasts.includes('No connection — photo not added'), `${state}: not into the hidden update box`);
+      assert.ok(!(ctx.ui.update.p1 && ctx.ui.update.p1.uploading), `${state}: no draft upload`);
+    } else assert.ok(toasts.includes('No connection — photo not added'), 'active: into the update box');
+  }
+});
+
+test('Inbox Undo (app.js) sends only the step to take back (projectId + stepId), never an old copy of the task', async () => {
+  const { readFileSync } = await import('node:fs');
+  const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
+  const part = app.slice(app.indexOf('function inboxAct('), app.indexOf('function inboxReply('));
+  assert.match(part, /type === 'inboxToStep' \? \{ projectId: args\.projectId, stepId: args\.stepId \}/);
+  assert.ok(!/project: snapshot/.test(part), 'no copy of the whole task');
+});
+
+test('🔌 the downloadable PHP connector: wt_decisions gives decisions, until and more; the how-to keeps until and asks again while more', () => {
+  const tpl = cnx.CONNECTOR_TEMPLATE;
+  assert.match(tpl, /'until' => isset\(\$answer\['until'\]\)/);
+  assert.match(tpl, /'more' => !empty\(\$answer\['more'\]\)/);
+  assert.match(tpl, /\$lastTime = \$answer\['until'\];/);
+  assert.match(tpl, /\} while \(\$answer\['more'\]\);/);
+  assert.ok(!/keep the answer's newest decided_at/.test(tpl), 'not the newest decided_at');
 });

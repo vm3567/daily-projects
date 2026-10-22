@@ -1041,8 +1041,9 @@ export function renderDetail(ctx) {
       e.preventDefault();
       ui.dropOver = false;
       const files = [...e.dataTransfer.files];
-      const photos = files.filter((f) => f.type.startsWith('image/'));
-      const others = files.filter((f) => !f.type.startsWith('image/'));
+      // the update box is only there on an active task: on a paused / finished one photos go to Files (as a paste does)
+      const photos = p.state === 'active' ? files.filter((f) => f.type.startsWith('image/')) : [];
+      const others = files.filter((f) => !photos.includes(f));
       ctx.render();
       if (photos.length) {
         focusUpdate(p);

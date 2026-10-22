@@ -1350,14 +1350,13 @@ function inboxAct(type, args, item, message) {
   const inbox = store.view.data.inbox || [];
   const index = inbox.findIndex((x) => x.id === item.id);
   const saved = { id: item.id, text: item.text, createdAt: item.createdAt, ...(item.link ? { link: item.link } : {}) };
-  const before = args.projectId && type === 'inboxToStep' ? store.view.data.projects.find((p) => p.id === args.projectId) : null;
-  const snapshot = before ? clone(before) : null;
   const op = store.dispatch(type, args);
   if (!op) return null;
   const undo = () => {
     const ok = store.dispatch('inboxUndo', {
       item: saved, index, undoOpId: op.id, undoMonth: opMonth(op),
-      ...(type === 'inboxToProject' ? { removeProjectId: args.projectId } : snapshot ? { project: snapshot } : {}),
+      // only the step it added is taken back (by id), never an old copy of the whole task
+      ...(type === 'inboxToProject' ? { removeProjectId: args.projectId } : type === 'inboxToStep' ? { projectId: args.projectId, stepId: args.stepId } : {}),
     });
     if (ok) toast('Undone — back in the Inbox', 1800);
   };

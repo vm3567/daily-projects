@@ -2287,3 +2287,102 @@ test('replies: Undo of ✓ Sent (undoReplySent) brings the draft back, takes awa
   assert.equal(s2.data.projects[0].workDate, '2026-10-22', 'the note still makes it a work day');
   assert.equal('reply' in s2.data.projects[0].steps.find((x) => x.id === 's3'), false, 'no draft before: waiting again');
 });
+
+// ---------- Review round 14 ----------
+test('email task: an email received before you pressed Finish / Delete but brought in (addedAt) after it still holds a late Finish / Delete', () => {
+  for (const kind of ['finish', 'deleteProject']) {
+    const s = withMains();
+    const p = mailTask(s);
+    const late = op(kind, { projectId: 'mt' }, '2026-10-02', '10:00:00'); // pressed 10:00 India = 04:30Z
+    // received 10:25 (before the press) but the server only brought it in at 10:05 + (after the press)
+    p.thread.push({ at: '2026-10-02T04:25:00.000Z', addedAt: '2026-10-02T04:35:00.000Z', fromName: 'Ravi', fromMe: false, preview: 'Any news?', messageId: 'e2' });
+    p.mail = { ...p.mail, messageId: 'e2', at: '2026-10-02T04:25:00.000Z', addedAt: '2026-10-02T04:35:00.000Z' };
+    assert.equal(applyOp(s, late), false, `${kind}: the email came in after the press`);
+    assert.ok(P(s, 'mt'), `${kind}: the task stays`);
+    assert.equal(P(s, 'mt').state, 'active');
+    // brought in before the press: the press still works
+    const s2 = withMains();
+    const p2 = mailTask(s2);
+    p2.thread.push({ at: '2026-10-02T04:25:00.000Z', addedAt: '2026-10-02T04:29:00.000Z', fromName: 'Ravi', fromMe: false, preview: 'Any news?', messageId: 'e2' });
+    assert.equal(applyOp(s2, op(kind, { projectId: 'mt' }, '2026-10-02', '10:00:00')), true, `${kind}: brought in before the press`);
+  }
+  // only the mail object (no thread yet) with addedAt after the press
+  const s = withMains();
+  const p = mailTask(s);
+  p.thread = [];
+  p.mail = { ...p.mail, at: '2026-10-02T04:25:00.000Z', addedAt: '2026-10-02T04:35:00.000Z' };
+  assert.equal(applyOp(s, op('finish', { projectId: 'mt' }, '2026-10-02', '10:00:00')), false, 'mail.addedAt counts too');
+});
+
+test('Inbox Undo takes back only the step it added (by id): another device\'s work on that task meanwhile stays, no project inside a project; safe to replay', () => {
+  const base = () => {
+    const s = withMains();
+    applyOp(s, op('addToProject', { projectId: 'k1', parentId: 'm' }, '2026-10-01'));
+    applyOp(s, op('addInbox', { itemId: 'i1', text: 'Ask Ravi' }, '2026-10-01'));
+    return s;
+  };
+  // phone A (offline): Inbox item → a step in k1, then Undo
+  const move = op('inboxToStep', { itemId: 'i1', projectId: 'k1', stepId: 'sx' }, '2026-10-02', '10:00:00');
+  const undo = op('inboxUndo', { item: { id: 'i1', text: 'Ask Ravi', createdAt: T('2026-10-01') }, index: 0, undoOpId: move.id, projectId: 'k1', stepId: 'sx' }, '2026-10-02', '10:00:05');
+  // laptop B meanwhile: k1 out of m, task k2 put into k1 (k1 is now a project), a work note on k1
+  const b = [
+    op('removeFromProject', { projectId: 'k1', parentId: 'm' }, '2026-10-02', '10:00:01'),
+    op('addToProject', { projectId: 'k2', parentId: 'k1' }, '2026-10-02', '10:00:02'),
+    op('addWorkNote', { projectId: 'k1', noteId: 'nb', text: 'Laptop note' }, '2026-10-02', '10:00:03'),
+  ];
+  const check = (s, label) => {
+    const k1 = P(s, 'k1');
+    assert.ok(!k1.steps.some((x) => x.id === 'sx'), `${label}: the added step is gone`);
+    assert.deepEqual(k1.steps.map((x) => x.id), [], `${label}: nothing else touched`);
+    assert.ok(k1.workNotes.some((n) => n.id === 'nb'), `${label}: B's note stays`);
+    assert.deepEqual(P(s, 'k1').parentIds || [], [], `${label}: k1 stays out of m (no project inside a project)`);
+    assert.deepEqual(P(s, 'k2').parentIds, ['k1'], label);
+    assert.deepEqual(s.data.inbox.map((x) => x.id), ['i1'], `${label}: the item is back once`);
+    assert.ok(!allEvents(s).some((e) => e.id === move.id), `${label}: its history line goes`);
+  };
+  const s = base();
+  applyOps(s, [b[0], move, b[1], b[2], undo]); // A's changes replayed on top of B's
+  check(s, 'replayed');
+  applyOps(s, [move, undo]); // again (the other device, the next load)
+  check(s, 'twice');
+  // an older saved Undo (a copy of the task from before): still only the step goes, B's work stays
+  const s2 = base();
+  const before = clone(P(s2, 'k1'));
+  applyOps(s2, [b[0], move, b[1], b[2], op('inboxUndo', { item: { id: 'i1', text: 'Ask Ravi', createdAt: T('2026-10-01') }, index: 0, undoOpId: move.id, project: before }, '2026-10-02', '10:00:05')]);
+  check(s2, 'older Undo');
+});
+
+test('Inbox Undo of "make it a project": tasks another device put into that project lose the link to it (and its order)', () => {
+  const s = withMains();
+  applyOp(s, op('addInbox', { itemId: 'i1', text: 'New kiln' }, '2026-10-01'));
+  applyOp(s, op('inboxToProject', { itemId: 'i1', projectId: 'pn', groupId: 'g1' }, '2026-10-02'));
+  applyOp(s, op('addToProject', { projectId: 'k1', parentId: 'pn' }, '2026-10-02')); // another device
+  applyOp(s, op('setTaskOrder', { projectId: 'm', order: ['pn'] }, '2026-10-02'));
+  assert.deepEqual(P(s, 'k1').parentIds, ['pn']);
+  assert.ok(applyOp(s, op('inboxUndo', { item: { id: 'i1', text: 'New kiln', createdAt: T('2026-10-01') }, index: 0, removeProjectId: 'pn' }, '2026-10-02')));
+  assert.equal(P(s, 'pn'), undefined);
+  assert.deepEqual(P(s, 'k1').parentIds || [], [], 'no link to a project that is gone');
+  assert.deepEqual(P(s, 'm').taskOrder, [], 'its place in an order goes too');
+});
+
+test('📂 a task taken out of a project (or deleted, or moved by setParent) loses its place in that project\'s order: added back it comes after the placed ones', async () => {
+  const { orderedTasks } = await import('../docs/rules.js');
+  const make = () => {
+    const s = withMains();
+    for (const id of ['k1', 'k2', 'x']) applyOp(s, op('addToProject', { projectId: id, parentId: 'm' }, '2026-10-02'));
+    applyOp(s, op('setTaskOrder', { projectId: 'm', order: ['k1', 'k2', 'x'] }, '2026-10-02'));
+    return s;
+  };
+  const ids = (s) => orderedTasks(s.data, P(s, 'm'), '2026-10-22').map((x) => x.id);
+  let s = make();
+  applyOp(s, op('removeFromProject', { projectId: 'k1', parentId: 'm' }, '2026-10-03'));
+  assert.deepEqual(P(s, 'm').taskOrder, ['k2', 'x']);
+  applyOp(s, op('addToProject', { projectId: 'k1', parentId: 'm' }, '2026-10-04'));
+  assert.deepEqual(ids(s), ['k2', 'x', 'k1'], 'removeFromProject');
+  s = make();
+  applyOp(s, op('setParent', { projectId: 'k1', parentId: null }, '2026-10-03'));
+  assert.deepEqual(P(s, 'm').taskOrder, ['k2', 'x'], 'setParent null');
+  s = make();
+  applyOp(s, op('deleteProject', { projectId: 'k1' }, '2026-10-03'));
+  assert.deepEqual(P(s, 'm').taskOrder, ['k2', 'x'], 'deleteProject');
+});
