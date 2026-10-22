@@ -959,3 +959,98 @@ test('morning email: morning.mail is manager-only and lists late, stuck, a given
   assert.ok(anita.items.some((x) => x.title === 'MM anita job') && !anita.items.some((x) => x.title.startsWith('MM ') && x.title !== 'MM anita job'), 'each person only their own');
   await saveProjects([]);
 });
+
+// ---------------------------------------------------------------- 🔁 Follow-up, 🔔 Chase, work in one line
+test('follow-up: followup.list is manager-only and lists every open task given to staff, with by-date, silent days (Sundays off), stuck, newest update; a project once; never done/cancelled', { skip }, async () => {
+  for (const [u, n] of [['kavi', 'Kavi'], ['nila', 'Nila']]) {
+    const r = await call('user.save', { name: n, username: u, password: 'first-pass-123' }, tok.boss);
+    assert.ok(r.ok, r.error); id[u] = r.user.id;
+    const l = await call('login', { username: u, password: 'first-pass-123' });
+    await call('password', { old: 'first-pass-123', new: `${u}-own-pass` }, l.token);
+    tok[u] = l.token;
+  }
+  assert.equal((await call('followup.list', {}, tok.kavi)).s, 403, 'staff refused');
+  const give = async (title, extra = {}) => (await call('task.save', { assigneeId: id.kavi, title, ...extra }, tok.boss)).task;
+  const silent = await give('FU silent', { repeat: 'daily', skipSunday: true });
+  const every = await give('FU every day', { repeat: 'daily', skipSunday: false });
+  const overdue = await give('FU overdue', { repeat: 'once', skipSunday: true, dueDate: istDay(2) });
+  const stuck = await give('FU stuck', { repeat: 'daily', skipSunday: true });
+  const soon = await give('FU soon', { repeat: 'once', skipSunday: true, dueDate: istDay(-2) });
+  const fresh = await give('FU updated today', { repeat: 'daily', skipSunday: true });
+  const done = await give('FU done', { repeat: 'once' });
+  const gone = await give('FU cancelled', { repeat: 'once' });
+  await call('task.status', { id: done.id, status: 'done' }, tok.boss);
+  await call('task.status', { id: gone.id, status: 'cancelled' }, tok.boss);
+  await call('task.save', { assigneeId: id.boss, title: 'FU boss own', repeat: 'daily' }, tok.boss);
+  // given some days ago: silent counts the due days since the newest update (Mon–Sat work: Sundays are off)
+  sql(`USE wt; UPDATE tasks SET created_at = '${istDay(6)} 09:00:00', start_date = '${istDay(6)}' WHERE id = ${silent.id};
+    UPDATE tasks SET created_at = '${istDay(4)} 09:00:00', start_date = '${istDay(4)}' WHERE id = ${every.id};
+    INSERT INTO updates (task_id, user_id, day, note, state, created_at, updated_at) VALUES (${silent.id}, ${id.kavi}, '${istDay(5)}', 'started', 'progress', NOW(), NOW());`);
+  await call('update.save', { taskId: stuck.id, note: 'Waiting for nozzle', state: 'stuck' }, tok.kavi);
+  await call('update.save', { taskId: fresh.id, note: '42 s, ok', state: 'progress' }, tok.kavi);
+  await saveProjects([{ id: 'fu1', name: 'FU Glaze line', state: 'active', team: { userId: id.kavi, name: 'Kavi' },
+    steps: [{ id: 'fu1a', text: 'Mix glaze', done: false }, { id: 'fu1b', text: 'Fire test', done: false }] }]);
+  const steps = await openOf('kavi', 'fu1');
+  assert.equal(steps.length, 2);
+
+  const r = await call('followup.list', {}, tok.boss);
+  assert.ok(r.ok, r.error); assert.equal(r.today, istDay(0));
+  const mine = r.rows.filter((x) => x.person.id === id.kavi);
+  const by = Object.fromEntries(mine.map((x) => [x.title, x]));
+  assert.deepEqual(Object.keys(by).sort(), ['FU Glaze line', 'FU every day', 'FU overdue', 'FU silent', 'FU soon', 'FU stuck', 'FU updated today'], 'no done or cancelled');
+  assert.ok(!r.rows.some((x) => x.title === 'FU boss own'), 'only work given to staff');
+  const sunday = (d) => new Date(d + 'T00:00:00Z').getUTCDay() === 0;
+  const dueDays = (from, skipSun) => { let n = 0; for (let b = from; b >= 1; b--) if (!(skipSun && sunday(istDay(b)))) n++; return n; };
+  assert.equal(by['FU silent'].silentDays, dueDays(4, true), 'silent: due days after the last update, Sundays off');
+  assert.deepEqual(by['FU silent'].lastUpdate, { day: istDay(5), note: 'started' });
+  assert.equal(by['FU every day'].silentDays, 4, 'every day incl. Sunday: 4 days with no update');
+  assert.equal(by['FU every day'].lastUpdate, null);
+  assert.deepEqual([by['FU overdue'].dueDate, by['FU overdue'].silentDays], [istDay(2), 0], 'overdue (given today: nothing missed yet)');
+  assert.deepEqual([by['FU stuck'].stuck, by['FU stuck'].lastUpdate.note], [true, 'Waiting for nozzle']);
+  assert.equal(by['FU soon'].dueDate, istDay(-2));
+  assert.deepEqual([by['FU updated today'].lastUpdate, by['FU updated today'].silentDays, by['FU updated today'].stuck], [{ day: istDay(0), note: '42 s, ok' }, 0, false]);
+  const p = by['FU Glaze line'];
+  assert.deepEqual([p.kind, p.projectRef, p.step, p.taskId], ['project', 'fu1', 'Mix glaze', steps[0].id], 'the project once, its current step');
+  assert.equal(mine.filter((x) => x.projectRef === 'fu1').length, 1, 'one row, not one per step');
+  assert.deepEqual([by['FU silent'].kind, by['FU silent'].taskId, by['FU silent'].person, by['FU silent'].chasedAt], ['task', silent.id, { id: id.kavi, name: 'Kavi' }, null]);
+  id.fuSilent = silent.id; id.fuStep = steps[0].id;
+});
+
+test('follow-up: task.chase is manager-only, adds the message, sends the alert, and refuses a second chase within an hour', { skip }, async () => {
+  const keys = { p256dh: Buffer.concat([Buffer.from([4]), randomBytes(64)]).toString('base64url'), auth: randomBytes(16).toString('base64url') };
+  assert.ok((await call('push.subscribe', { endpoint: 'https://fcm.googleapis.com/fcm/send/kavi-phone', keys }, tok.kavi)).ok);
+  assert.equal((await call('task.chase', { id: id.fuSilent }, tok.kavi)).s, 403, 'staff cannot chase');
+  const n = pushLen();
+  const c = await call('task.chase', { id: id.fuSilent }, tok.boss);
+  assert.ok(c.ok, c.error);
+  assert.ok(c.comments.some((m) => m.text === '🔔 Boss asks for an update on this.' && m.byId === id.boss), 'a message on the task');
+  const alerts = pushSince(n).split('\n').filter(Boolean).map((l) => JSON.parse(l)).filter((x) => x.user === id.kavi);
+  assert.equal(alerts.length, 1, 'one alert to the person');
+  assert.match(alerts[0].msg.title, /🔔 Boss · FU silent/);
+  const g = await call('task.get', { id: id.fuSilent }, tok.kavi);
+  assert.ok(g.comments.some((m) => m.text === '🔔 Boss asks for an update on this.'), 'the person sees it in the messages');
+  const again = await call('task.chase', { id: id.fuSilent }, tok.boss);
+  assert.match(again.error || '', /^Already chased at \d\d:\d\d\.$/, 'refused within the hour');
+  assert.equal((await call('task.get', { id: id.fuSilent }, tok.boss)).comments.filter((m) => m.text.startsWith('🔔 Boss asks')).length, 1, 'no second message');
+  const row = (await call('followup.list', {}, tok.boss)).rows.find((x) => x.taskId === id.fuSilent);
+  assert.equal(row.chasedAt.slice(0, 10), istDay(0), 'the list knows when it was chased');
+  sql(`USE wt; UPDATE comments SET at = DATE_SUB(at, INTERVAL 61 MINUTE) WHERE task_id = ${id.fuSilent} AND kind = 'chase';`);
+  assert.ok((await call('task.chase', { id: id.fuSilent }, tok.boss)).ok, 'after an hour it can be chased again');
+  assert.ok((await call('task.chase', { id: id.fuStep }, tok.boss)).ok, 'a project step can be chased');
+  // ✓ Done on a project step is the usual Mark done; it leaves the list
+  assert.ok((await call('task.status', { id: id.fuStep, status: 'done' }, tok.boss)).ok);
+  const after = (await call('followup.list', {}, tok.boss)).rows.find((x) => x.projectRef === 'fu1');
+  assert.deepEqual([after.step, after.taskId === id.fuStep], ['Fire test', false], 'the next step is now the project\'s row');
+  assert.match((await call('task.chase', { id: id.fuStep }, tok.boss)).error || '', /closed/, 'a closed task is not chased');
+  await saveProjects([]);
+});
+
+test('work in one line: giving the same quick task twice (same clientId) makes one task, a one-time task with its by-date', { skip }, async () => {
+  const body = { assigneeId: id.nila, title: 'Send kiln photos', details: '', project: '', repeat: 'once', skipSunday: true, dueDate: istDay(-1), clientId: 'quick-0001-abcdef' };
+  const a = await call('task.save', body, tok.boss);
+  const b = await call('task.save', body, tok.boss);
+  assert.ok(a.ok && b.ok, a.error || b.error);
+  assert.equal(a.task.id, b.task.id, 'the second tap gives back the same task');
+  assert.deepEqual([a.task.repeat, a.task.dueDate, a.task.skipSunday], ['once', istDay(-1), true]);
+  assert.equal((await call('followup.list', {}, tok.boss)).rows.filter((x) => x.title === 'Send kiln photos' && x.person.id === id.nila).length, 1, 'one row');
+});

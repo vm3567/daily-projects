@@ -499,6 +499,20 @@ function handle(string $a, array $in): array {
       return ['today' => $day, 'fillBy' => $fillBy, 'late' => date('H:i') >= $fillBy, 'people' => array_map(fn($p) => public_user($p) + ['lastUpdate' => $lastDay[(int)$p['id']] ?? null], $people),
         'tasks' => $out, 'stuckSince' => (object)$since] + $att;
     }
+    case 'followup.list': // every open task given to staff, for the manager's 🔁 Follow-up screen
+      return ['today' => $day, 'rows' => followup_rows($day)];
+    case 'task.chase': { // 🔔 Chase: ask the person for an update (a message on the task, and a phone alert); once an hour at most
+      $t = own_task($me, (int)($in['id'] ?? 0));
+      if ($t['status'] !== 'open') throw new ApiError('This task is closed.');
+      $last = one("SELECT at FROM comments WHERE task_id = ? AND kind = 'chase' ORDER BY id DESC LIMIT 1", [$t['id']]);
+      if ($last && $last['at'] > date('Y-m-d H:i:s', time() - 3600)) throw new ApiError('Already chased at ' . substr($last['at'], 11, 5) . '.');
+      $text = "🔔 {$me['name']} asks for an update on this.";
+      q("INSERT INTO comments (task_id, user_id, text, at, kind) VALUES (?, ?, ?, ?, 'chase')", [$t['id'], $me['id'], $text, now()]);
+      notify([(int)$t['assignee_id']], 'msg', "🔔 {$me['name']} · {$t['title']}", 'Please send an update on this.', '/#open=' . $t['id'], 'm' . $t['id']);
+      mark_read([(int)$t['id']], $me['id']);
+      audit($me['id'], 'task_chase', "#{$t['id']} {$t['title']}");
+      return ['chasedAt' => now(), 'comments' => comments_of((int)$t['id'])];
+    }
     case 'morning.mail': { // one person's pending work (projects given to them and tasks), for the manager's morning email
       $u = one('SELECT * FROM users WHERE id = ?', [(int)($in['userId'] ?? 0)]);
       if (!$u) throw new ApiError('Person not found.', 404);
@@ -842,21 +856,8 @@ function morning_items(int $who, string $day): array {
     if ($t['seq'] !== null && $t['projectRef']) $projects[$t['projectRef']][] = $t;
     elseif ($t['dueToday'] || $late($t) || $t['stuck']) $plain[] = $t;
   }
-  // the newest update: on the task, or on any task of the project (earlier steps too)
-  $newest = [];
-  $refs = array_keys($projects);
-  $byRef = [];
-  if ($refs) foreach (all('SELECT id, project_ref FROM tasks WHERE project_ref IN (' . implode(',', array_fill(0, count($refs), '?')) . ')', array_map('strval', $refs)) as $r) $byRef[(int)$r['id']] = $r['project_ref'];
-  $ids = array_values(array_unique([...array_map(fn($t) => $t['id'], $plain), ...array_keys($byRef)]));
-  if ($ids) foreach (all('SELECT task_id, day, note, updated_at FROM updates WHERE task_id IN (' . implode(',', array_fill(0, count($ids), '?')) . ') ORDER BY day, updated_at', $ids) as $u) {
-    $key = isset($byRef[(int)$u['task_id']]) ? 'p:' . $byRef[(int)$u['task_id']] : 't:' . $u['task_id'];
-    $newest[$key] = $u; // (in day order: the last one is the newest)
-  }
-  $last = function (string $key) use ($newest): ?array {
-    if (!isset($newest[$key])) return null;
-    $note = trim(preg_replace('/\s+/u', ' ', $newest[$key]['note']) ?? '');
-    return ['day' => $newest[$key]['day'], 'note' => mb_strlen($note) > 80 ? rtrim(mb_substr($note, 0, 79)) . '…' : $note];
-  };
+  $ups = last_updates(array_map(fn($t) => $t['id'], $plain), array_keys($projects));
+  $last = fn(string $key): ?array => $ups[$key] ?? null;
   $repeat = fn($t) => $t['repeat'] === 'daily' ? 'Daily' : ($t['repeat'] === 'weekly' ? 'Weekly (' . substr(WEEKDAYS[$t['weekday'] ?? 1], 0, 3) . ')' : '');
   $out = [];
   foreach ($projects as $ref => $list) {
@@ -871,6 +872,76 @@ function morning_items(int $who, string $day): array {
   foreach ($plain as $t) {
     $out[] = ['kind' => 'task', 'title' => $t['title'], 'about' => '', 'now' => '', 'repeat' => $repeat($t),
       'lateSince' => $late($t), 'stuck' => $t['stuck'], 'lastUpdate' => $last('t:' . $t['id'])];
+  }
+  return $out;
+}
+
+/**
+ * The newest update on each plain task ('t:<id>') and on each project, from any of its tasks, earlier steps too ('p:<ref>'):
+ * its day and words (one line, cut to 80 letters).
+ */
+function last_updates(array $taskIds, array $refs): array {
+  $refs = array_values(array_map('strval', $refs)); // (a ref like '123' is a number as an array key)
+  $byRef = [];
+  if ($refs) foreach (all('SELECT id, project_ref FROM tasks WHERE project_ref IN (' . implode(',', array_fill(0, count($refs), '?')) . ')', $refs) as $r) $byRef[(int)$r['id']] = $r['project_ref'];
+  $ids = array_values(array_unique([...array_map('intval', $taskIds), ...array_keys($byRef)]));
+  $newest = [];
+  if ($ids) foreach (all('SELECT task_id, day, note, updated_at FROM updates WHERE task_id IN (' . implode(',', array_fill(0, count($ids), '?')) . ') ORDER BY day, updated_at', $ids) as $u) {
+    $key = isset($byRef[(int)$u['task_id']]) ? 'p:' . $byRef[(int)$u['task_id']] : 't:' . $u['task_id'];
+    $newest[$key] = $u; // (in day order: the last one is the newest)
+  }
+  $out = [];
+  foreach ($newest as $key => $u) {
+    $note = trim(preg_replace('/\s+/u', ' ', $u['note']) ?? '');
+    $out[$key] = ['day' => $u['day'], 'note' => mb_strlen($note) > 80 ? rtrim(mb_substr($note, 0, 79)) . '…' : $note];
+  }
+  return $out;
+}
+
+/**
+ * 🔁 Follow-up: every open task given to staff, each given project once (its current step), with what the manager
+ * needs to judge it: the by-date, the newest update, how many due days went by with no update (silentDays: only days
+ * it was due, so Sundays are off for Mon–Sat work), stuck, and when it was last chased.
+ * The colour, the reason words and the order are worked out on the screen (followupRule in logic.js).
+ */
+function followup_rows(string $day): array {
+  $raw = all(TASK_SELECT . " WHERE t.status = 'open' AND u.role = 'staff' ORDER BY t.seq, t.id");
+  if (!$raw) return [];
+  $rowOf = [];
+  foreach ($raw as $r) $rowOf[(int)$r['id']] = $r;
+  $projects = []; $plain = [];
+  foreach (tasks_out($raw, $day) as $t) {
+    if ($t['seq'] !== null && $t['projectRef']) $projects[(string)$t['projectRef']][] = $t;
+    else $plain[] = $t;
+  }
+  $ups = last_updates(array_map(fn($t) => $t['id'], $plain), array_keys($projects));
+  $items = []; // [the task the buttons work on, kind, title, step, ref, by-date, stuck, update key]
+  foreach ($projects as $ref => $list) {
+    $cur = null;
+    foreach ($list as $t) if (!$t['queued']) { $cur = $t; break; }
+    $cur = $cur ?? $list[0];
+    $dues = array_filter(array_map(fn($t) => $t['dueDate'], $list));
+    $items[] = [$cur, 'project', $cur['project'] ?: $cur['title'], str_ends_with((string)$cur['stepRef'], ':whole') ? '' : $cur['title'], (string)$ref,
+      $dues ? min($dues) : null, (bool)array_filter($list, fn($t) => $t['stuck']), 'p:' . $ref];
+  }
+  foreach ($plain as $t) $items[] = [$t, 'task', $t['title'], '', $t['projectRef'], $t['dueDate'], $t['stuck'], 't:' . $t['id']];
+  $ids = array_map(fn($x) => $x[0]['id'], $items);
+  $in = implode(',', array_fill(0, count($ids), '?'));
+  $chased = [];
+  foreach (all("SELECT task_id, MAX(at) AS at FROM comments WHERE kind = 'chase' AND task_id IN ($in) GROUP BY task_id", $ids) as $r) $chased[(int)$r['task_id']] = $r['at'];
+  $given = []; // when it last came to the person (a move, or given again): days before that are not theirs to have missed
+  foreach (all("SELECT task_id, to_id, MAX(at) AS at FROM task_moves WHERE task_id IN ($in) GROUP BY task_id, to_id", $ids) as $r) $given[(int)$r['task_id'] . '|' . (int)$r['to_id']] = substr($r['at'], 0, 10);
+  $out = [];
+  foreach ($items as [$t, $kind, $title, $step, $ref, $due, $stuck, $key]) {
+    $last = $ups[$key] ?? null;
+    // silent: the due days from the day after the newest update (or from when it started being theirs) up to yesterday
+    $from = max(array_filter([(string)$t['startDate'], substr((string)$t['createdAt'], 0, 10), (string)($t['turnSince'] ?? ''),
+      substr((string)($t['reopenedAt'] ?? ''), 0, 10), $given[$t['id'] . '|' . $t['assignee']['id']] ?? '',
+      $last ? date('Y-m-d', strtotime($last['day'] . ' +1 day')) : '', date('Y-m-d', strtotime($day . ' -60 days'))]));
+    $silent = 0;
+    if (!$t['queued']) for ($d = $from; $d < $day; $d = date('Y-m-d', strtotime($d . ' +1 day'))) if (due_on($rowOf[$t['id']], $d)) $silent++;
+    $out[] = ['taskId' => $t['id'], 'kind' => $kind, 'title' => $title, 'step' => $step, 'projectRef' => $ref, 'person' => $t['assignee'],
+      'repeat' => $t['repeat'], 'dueDate' => $due, 'lastUpdate' => $last, 'silentDays' => $silent, 'stuck' => $stuck, 'chasedAt' => $chased[$t['id']] ?? null];
   }
   return $out;
 }

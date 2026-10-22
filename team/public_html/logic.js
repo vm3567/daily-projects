@@ -250,3 +250,168 @@ export function morningMail({ person, manager, items, today }) {
   text.push('Thanks,', manager || '');
   return { subject, html, text: text.join('\n') };
 }
+
+/** Days from day a to day b ('YYYY-MM-DD'; b later = more than 0). */
+export const daysBetweenDays = (a, b) => Math.round((Date.parse(b + 'T00:00:00Z') - Date.parse(a + 'T00:00:00Z')) / 86400000);
+
+/**
+ * Follow-up: one row's colour, its reason line and how bad it is (0 = worst). r: a row from the server's followup.list
+ * ({ dueDate, lastUpdate {day, note}, silentDays (due days gone by with no update, Sundays off for Mon–Sat work), stuck, chasedAt }).
+ *  red    — stuck, past its by-date, or silent for 2+ due days
+ *  orange — by-date within the next 2 days, or 1 due day with no update
+ *  green  — updated today
+ *  grey   — nothing to chase yet (on track)
+ */
+export function followupRule(r, today) {
+  const last = r.lastUpdate || null;
+  const note = last ? String(last.note || '').trim() : '';
+  const lastText = last ? `last: ${last.day === today ? 'today' : mailDate(last.day)}${note ? ' ' + note : ''}` : 'no update yet';
+  const silent = Number(r.silentDays) || 0;
+  const was = r.dueDate ? `was due ${mailDate(r.dueDate)}` : '';
+  const overdue = !!r.dueDate && r.dueDate < today;
+  const daysLeft = r.dueDate && !overdue ? daysBetweenDays(today, r.dueDate) : null;
+  const sd = (n) => `Silent ${n} day${n === 1 ? '' : 's'}`;
+  let colour, reason;
+  if (r.stuck) { colour = 'red'; reason = ['Stuck', note || 'no words given', overdue ? was : ''].filter(Boolean).join(' · '); }
+  else if (overdue && silent) { colour = 'red'; reason = `${sd(silent)} · ${was}`; }
+  else if (overdue) { colour = 'red'; reason = `Overdue · ${was} · ${lastText}`; }
+  else if (silent >= 2) { colour = 'red'; reason = `${sd(silent)} · ${lastText}`; }
+  else if (daysLeft !== null && daysLeft <= 2) { colour = 'orange'; reason = `${daysLeft === 0 ? 'Due today' : daysLeft === 1 ? 'Due tomorrow' : `Due in ${daysLeft} days`} · ${lastText}`; }
+  else if (silent === 1) { colour = 'orange'; reason = `${sd(1)} · ${lastText}`; }
+  else if (last && last.day === today) { colour = 'green'; reason = `Updated today${note ? ' · ' + note : ''}`; }
+  else { colour = 'grey'; reason = `On track · ${lastText}`; }
+  if (r.chasedAt && String(r.chasedAt).slice(0, 10) === today) reason += ` · 🔔 chased ${String(r.chasedAt).slice(11, 16)}`;
+  return { colour, reason, rank: { red: 0, orange: 1, grey: 2, green: 3 }[colour] };
+}
+
+/** The follow-up rows with their colour and reason, worst first (then the longest silent, the earliest by-date, the title). */
+export function followupRows(rows, today) {
+  const far = '9999-12-31';
+  return (rows || []).map((r) => ({ ...r, ...followupRule(r, today) })).sort((a, b) => a.rank - b.rank
+    || (b.stuck ? 1 : 0) - (a.stuck ? 1 : 0) || (b.silentDays || 0) - (a.silentDays || 0)
+    || (a.dueDate || far).localeCompare(b.dueDate || far) || String(a.title || '').localeCompare(String(b.title || '')));
+}
+
+/** The rows by person (each person's rows in the same order); the person with the worst row first. */
+export function followupGroups(sorted) {
+  const groups = new Map();
+  for (const r of sorted || []) {
+    const k = r.person ? r.person.id : 0;
+    if (!groups.has(k)) groups.set(k, { person: r.person || { id: 0, name: '' }, rows: [] });
+    groups.get(k).rows.push(r);
+  }
+  return [...groups.values()];
+}
+
+/** The top line: "7 given out · 2 silent · 2 due soon" (silent = 2+ due days with no update; due soon = by-date today to 2 days on). */
+export function followupSummary(rows, today) {
+  const list = rows || [];
+  const silent = list.filter((r) => (Number(r.silentDays) || 0) >= 2).length;
+  const soon = list.filter((r) => r.dueDate && r.dueDate >= today && daysBetweenDays(today, r.dueDate) <= 2).length;
+  return `${list.length} given out · ${silent} silent · ${soon} due soon`;
+}
+
+/** The daily follow-up round: what one row is known by (a project once, by its ref). */
+export const roundKey = (r) => (r.kind === 'project' ? 'p:' + r.projectRef : 't:' + r.taskId);
+
+/** The round's saved state for today (a new day starts a new round). saved: what this device kept, or nothing. */
+export function roundSaved(saved, today) {
+  const s = saved && typeof saved === 'object' && saved.day === today ? saved : {};
+  return { day: today, seen: Array.isArray(s.seen) ? s.seen.map(String) : [], chased: Number(s.chased) || 0, changed: Number(s.changed) || 0, closed: Number(s.closed) || 0 };
+}
+
+/**
+ * Where the round is: queue = the rows not looked at yet today (in the order given: worst first),
+ * total = every row of the round (rows looked at and then closed count too), pos = this item's number ("Item 3 of 7").
+ */
+export function roundPlan(sorted, saved, today) {
+  const s = roundSaved(saved, today);
+  const seen = new Set(s.seen);
+  const list = sorted || [];
+  const queue = list.filter((r) => !seen.has(roundKey(r)));
+  const keys = new Set(list.map(roundKey));
+  const gone = s.seen.filter((k) => !keys.has(k)).length; // looked at and since closed or taken back
+  const total = list.length + gone;
+  return { queue, total, pos: total - queue.length + 1, saved: s };
+}
+
+/** One item looked at in the round: what = 'ok' | 'chased' | 'changed' | 'closed'. Returns the new saved state (the old one is not changed). */
+export function roundMark(saved, key, what, today) {
+  const s = roundSaved(saved, today);
+  const out = { ...s, seen: s.seen.includes(key) ? s.seen : [...s.seen, key] };
+  if (['chased', 'changed', 'closed'].includes(what)) out[what] = s[what] + 1;
+  return out;
+}
+
+const QT_MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+const QT_DAYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+const QT_PRE = '(?:\\b(?:by|on|before|till|until|due|this|next|coming)\\s+)?';
+/** 'YYYY-MM-DD' for that day, or '' if there is no such day (30 Feb). */
+const realDay = (y, m, d) => {
+  const x = new Date(Date.UTC(y, m - 1, d));
+  return x.getUTCFullYear() === y && x.getUTCMonth() === m - 1 && x.getUTCDate() === d ? x.toISOString().slice(0, 10) : '';
+};
+/** A day and month with no year: this year, or next year if that day has already gone. */
+const comingDay = (today, m, d, y) => {
+  if (y) return realDay(y < 100 ? 2000 + y : y, m, d);
+  const t = realDay(Number(today.slice(0, 4)), m, d);
+  return t && t < today ? realDay(Number(today.slice(0, 4)) + 1, m, d) : t;
+};
+/** The next such weekday after today (today itself never: that is 'today'). */
+const nextWeekday = (today, name) => addDay(today, (QT_DAYS.indexOf(name.slice(0, 3).toLowerCase()) - weekdayOf(today) + 7) % 7 || 7);
+// the date words, each with the day it means; the first that is found is used (and taken out of the title)
+const QT_DATES = [
+  [/\b(?:by|on|before|till|until|due)?\s*day after tomorrow\b/i, (m, today) => addDay(today, 2)],
+  [/\b(?:by|on|before|till|until|due)?\s*(?:tomorrow|tmrw)\b/i, (m, today) => addDay(today, 1)],
+  [/\b(?:by|on|before|till|until|due)?\s*(?:end of )?today\b/i, (m, today) => today],
+  [/\b(?:by|before|till|until|due)?\s*next week\b/i, (m, today) => addDay(today, (1 - weekdayOf(today) + 7) % 7 || 7)],
+  [/\b(?:by|before|till|until|due)?\s*in (\d{1,2}) days?\b/i, (m, today) => addDay(today, Number(m[1]))],
+  [new RegExp(QT_PRE + '\\b(\\d{1,2})(?:st|nd|rd|th)?\\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\\.?(?:\\s+(\\d{4}))?\\b', 'i'),
+    (m, today) => comingDay(today, QT_MONTHS.indexOf(m[2].toLowerCase()) + 1, Number(m[1]), m[3] ? Number(m[3]) : 0)],
+  [new RegExp(QT_PRE + '\\b(\\d{1,2})[/-](\\d{1,2})(?:[/-](\\d{4}|\\d{2}))?\\b', 'i'), // dd/mm (India)
+    (m, today) => comingDay(today, Number(m[2]), Number(m[1]), m[3] ? Number(m[3]) : 0)],
+  [new RegExp(QT_PRE + '\\b(sunday|monday|tuesday|wednesday|thursday|friday|saturday)\\b', 'i'), (m, today) => nextWeekday(today, m[1])],
+  // short names only after by / on … ("check sun dryer" is not a date)
+  [/\b(?:by|on|before|till|until|due|this|next|coming)\s+(sun|mon|tues|tue|wed|thurs|thur|thu|fri|sat)\b\.?/i, (m, today) => nextWeekday(today, m[1])],
+];
+
+/**
+ * Hand out work in one line: "Valar: send kiln photos by Friday" → { person {id, name}, title, dueDate, error }.
+ * people: the team (only active staff are matched). The name: before ':' (or the first word), whole or a unique start ("val").
+ * Date words are taken out of the title; no date = no by-date. error = what to fix ('' when it is fine).
+ */
+export function parseQuickTask(text, people, today) {
+  const out = { person: null, title: '', dueDate: '', error: '' };
+  const s = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!s) return { ...out, error: "Type the work, like 'Valar: send kiln photos by Friday'." };
+  const colon = s.indexOf(':');
+  const before = colon > 0 ? s.slice(0, colon).trim() : '';
+  let who, rest;
+  if (before && before.split(' ').length <= 3 && !/\d/.test(before)) { who = before; rest = s.slice(colon + 1); } // (a time like 10:30 is not a name)
+  else { const m = s.match(/^(\S+)\s*(.*)$/); who = m[1]; rest = m[2]; }
+  const w = who.toLowerCase().replace(/^@/, '').replace(/[,.;-]+$/, '');
+  const staff = (people || []).filter((p) => p && p.name && p.active !== false && p.role !== 'admin');
+  const words = (p) => p.name.toLowerCase().split(/\s+/);
+  let hits = staff.filter((p) => p.name.toLowerCase() === w);
+  if (!hits.length) hits = staff.filter((p) => words(p)[0] === w);
+  if (!hits.length && w) hits = staff.filter((p) => p.name.toLowerCase().startsWith(w) || words(p).some((x) => x.startsWith(w)));
+  if (hits.length > 1) return { ...out, error: `"${who}" could be ${hits.map((p) => p.name).join(' or ')}. Type more of the name.` };
+  if (!hits.length) return { ...out, error: "Who should do it? Start with their name, like 'Valar: …'" };
+  out.person = { id: hits[0].id, name: hits[0].name };
+  for (const [re, when] of QT_DATES) {
+    const all = [...rest.matchAll(new RegExp(re.source, 'gi'))];
+    const m = all[all.length - 1]; // the last one: the date is usually at the end ("Sunday cleaning by Sunday")
+    if (!m) continue;
+    const day = when(m, today);
+    if (!day) return { ...out, error: `That date is not right: "${m[0].trim()}".` };
+    out.dueDate = day;
+    rest = rest.slice(0, m.index) + ' ' + rest.slice(m.index + m[0].length);
+    break;
+  }
+  let title = rest.replace(/\s+/g, ' ').trim();
+  for (let i = 0; i < 3; i++) title = title.replace(/^[-–,:;.\s]+/, '').replace(/[-–,:;.\s]+$/, '').replace(/\s*\b(?:by|on|before|till|until|due)$/i, '').trim();
+  if (!title) return { ...out, error: 'What should they do? Write it after the name.' };
+  out.title = title[0].toUpperCase() + title.slice(1);
+  return out;
+}
+

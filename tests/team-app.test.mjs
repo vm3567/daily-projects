@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { addDay, weekdayOf, dueOn, itemKey, diaryRows, fieldChanged, lateValue, afterFlush, boxStillThere, updateSaveBody, redrawHow, projectRowState, giveBackShow, keptNotice, noticeHow, pasteWaits, msgBoxSent, redrawAfterSend, taskSaveBody, aboutShort, projectAboutOf, morningMail, escHtml } from '../team/public_html/logic.js';
+import { addDay, weekdayOf, dueOn, itemKey, diaryRows, fieldChanged, lateValue, afterFlush, boxStillThere, updateSaveBody, redrawHow, projectRowState, giveBackShow, keptNotice, noticeHow, pasteWaits, msgBoxSent, redrawAfterSend, taskSaveBody, aboutShort, projectAboutOf, morningMail, escHtml, followupRule, followupRows, followupGroups, followupSummary, roundKey, roundSaved, roundPlan, roundMark, parseQuickTask } from '../team/public_html/logic.js';
 const APP = readFileSync(new URL('../team/public_html/app.js', import.meta.url), 'utf8');
 
 // Wed 21 Oct 2026 is "today" in these checks; 18 Oct is a Sunday.
@@ -274,7 +274,7 @@ test('project description: taken from the project\'s tasks (the first one that h
   assert.equal(projectAboutOf([{ title: 'old server, no field' }]), '');
   assert.match(APP, /class: 'prow-about' }, aboutShort\(p\.projectAbout\)\)/, 'manager\'s Projects list row');
   assert.match(APP, /class: 'project-about' }/, 'under the title of the project and task pages');
-  assert.match(readFileSync(new URL('../team/public_html/sw.js', import.meta.url), 'utf8'), /const CACHE = 'worktask-v15'/, 'new files reach the phones');
+  assert.match(readFileSync(new URL('../team/public_html/sw.js', import.meta.url), 'utf8'), /const CACHE = 'worktask-v16'/, 'new files reach the phones');
 });
 
 // ---------------------------------------------------------------- 📧 morning email (one person's pending work as a table to fill in)
@@ -369,4 +369,182 @@ test('morning email: the Team today page has the button, copies the table (HTML 
   assert.match(fn, /Table copied — press Ctrl\+V in the email, then Send\./);
   assert.match(fn, /add it on the People page/);
   assert.match(APP, /'Email \(optional, for the morning email\)', email/, 'People: an Email box');
+});
+
+// ---------------------------------------------------------------- 🔁 Follow-up, the daily round, work in one line
+// Thu 22 Oct 2026 is "today" here (a Thursday); 25 Oct is a Sunday.
+const FT = '2026-10-22';
+const PEOPLE = [{ id: 1, name: 'Valar', role: 'staff' }, { id: 2, name: 'Vasu Dev', role: 'staff' }, { id: 3, name: 'Suresh Kumar', role: 'staff' },
+  { id: 4, name: 'Boss', role: 'admin' }, { id: 5, name: 'Old Hand', role: 'staff', active: false }];
+const qt = (text, today = FT) => parseQuickTask(text, PEOPLE, today);
+
+test('work in one line: the name before ":" (or the first word), whole or a unique start; managers and switched-off people never', () => {
+  assert.deepEqual(qt('Valar: send kiln photos by Friday'), { person: { id: 1, name: 'Valar' }, title: 'Send kiln photos', dueDate: '2026-10-23', error: '' });
+  assert.equal(qt('valar send kiln photos').person.id, 1, 'no colon: the first word; any capitals');
+  assert.equal(qt('val: send kiln photos').person.id, 1, '"val" → Valar');
+  assert.equal(qt('suresh: fix pump').person.id, 3, 'the first name of a longer name');
+  assert.equal(qt('Suresh Kumar: fix pump').person.id, 3, 'the whole name');
+  assert.equal(qt('kumar: fix pump').person.id, 3, 'the start of any part of the name');
+  assert.match(qt('va: fix pump').error, /could be Valar or Vasu Dev\. Type more of the name\./, 'two people start with "va": refused');
+  assert.equal(qt('va: fix pump').person, null);
+  assert.equal(qt('Ramesh: fix pump').error, "Who should do it? Start with their name, like 'Valar: …'");
+  assert.equal(qt('Boss: fix pump').error, "Who should do it? Start with their name, like 'Valar: …'", 'a manager is not given work here');
+  assert.equal(qt('Old: fix pump').person, null, 'a switched-off person is not matched');
+  assert.match(qt('').error, /Type the work/);
+  assert.equal(qt('Valar check kiln at 10:30').person.id, 1, 'a time like 10:30 is not taken for the name');
+  assert.equal(qt('Valar check kiln at 10:30').title, 'Check kiln at 10:30');
+});
+
+test('work in one line: each date phrase (taken out of the title)', () => {
+  const due = (t, today) => qt('Valar: check kiln ' + t, today).dueDate;
+  assert.equal(due('today'), FT);
+  assert.equal(due('by tomorrow'), '2026-10-23');
+  assert.equal(due('day after tomorrow'), '2026-10-24');
+  assert.equal(due('by Friday'), '2026-10-23');
+  assert.equal(due('on Fri'), '2026-10-23');
+  assert.equal(due('by Thursday'), '2026-10-29', 'today is Thursday: "by Thursday" is next week (only "today" means today)');
+  assert.equal(due('by Monday'), '2026-10-26');
+  assert.equal(due('in 3 days'), '2026-10-25');
+  assert.equal(due('by 24 Oct'), '2026-10-24');
+  assert.equal(due('24 October'), '2026-10-24');
+  assert.equal(due('24/10'), '2026-10-24', 'dd/mm (India)');
+  assert.equal(due('24-10'), '2026-10-24');
+  assert.equal(due('by 5/1'), '2027-01-05', 'a day already gone this year: next year');
+  assert.equal(due('by 20 Oct'), '2027-10-20');
+  assert.equal(due('next week'), '2026-10-26', 'next Monday');
+  assert.equal(due(''), '', 'no date: no by-date');
+  assert.match(qt('Valar: check kiln by 31/02').error, /That date is not right/);
+  assert.equal(qt('Valar: check sun dryer').dueDate, '', 'a short day name is a date only after by / on');
+});
+
+test('work in one line: Sunday and next-day edges (a fixed today)', () => {
+  const sat = '2026-10-24', sun = '2026-10-25';
+  assert.equal(qt('Valar: clean dryer tomorrow', sat).dueDate, sun, 'Saturday + 1 = Sunday (as said)');
+  assert.equal(qt('Valar: clean dryer by Sunday', sun).dueDate, '2026-11-01', 'on a Sunday, "by Sunday" is the next one');
+  assert.equal(qt('Valar: clean dryer by Monday', sun).dueDate, '2026-10-26');
+  assert.equal(qt('Valar: clean dryer next week', sun).dueDate, '2026-10-26', 'on Sunday, next week = tomorrow, Monday');
+  assert.equal(qt('Valar: clean dryer next week', '2026-10-26').dueDate, '2026-11-02', 'on a Monday: the Monday after');
+  assert.equal(qt('Valar: report 1/1', '2026-12-31').dueDate, '2027-01-01', 'across the year end');
+});
+
+test('work in one line: the title is cleaned (first letter capital, trailing by / on gone, the date only once)', () => {
+  assert.equal(qt('Valar:   send kiln photos   by friday.').title, 'Send kiln photos');
+  assert.equal(qt('Valar: send kiln photos by').title, 'Send kiln photos', 'a trailing "by"');
+  assert.equal(qt('Valar: send kiln photos on').title, 'Send kiln photos', 'a trailing "on"');
+  assert.deepEqual([qt('Valar: Sunday cleaning by sunday').title, qt('Valar: Sunday cleaning by sunday').dueDate], ['Sunday cleaning', '2026-10-25'], 'the last date words are the date');
+  assert.match(qt('Valar: by friday').error, /What should they do\?/, 'nothing left to do');
+});
+
+const frow = (extra) => ({ taskId: 1, kind: 'task', title: 'T', person: { id: 1, name: 'Valar' }, dueDate: null, lastUpdate: null, silentDays: 0, stuck: false, chasedAt: null, ...extra });
+test('follow-up: the colour and the reason line for each case', () => {
+  const r = (x) => followupRule(frow(x), FT);
+  assert.deepEqual(r({ silentDays: 3, dueDate: '2026-10-20' }), { colour: 'red', reason: 'Silent 3 days · was due 20 Oct', rank: 0 });
+  assert.deepEqual(r({ stuck: true, lastUpdate: { day: FT, note: 'Waiting for nozzle' } }).reason, 'Stuck · Waiting for nozzle');
+  assert.equal(r({ stuck: true, lastUpdate: { day: FT, note: 'x' } }).colour, 'red', 'stuck is red even when written today');
+  assert.deepEqual(r({ dueDate: '2026-10-21', lastUpdate: { day: FT, note: 'half done' } }), { colour: 'red', reason: 'Overdue · was due 21 Oct · last: today half done', rank: 0 });
+  assert.deepEqual(r({ silentDays: 2, lastUpdate: { day: '2026-10-19', note: 'ok' } }), { colour: 'red', reason: 'Silent 2 days · last: 19 Oct ok', rank: 0 });
+  assert.equal(r({ silentDays: 2 }).reason, 'Silent 2 days · no update yet');
+  assert.deepEqual(r({ dueDate: '2026-10-24', lastUpdate: { day: '2026-10-21', note: 'waiting for clamp meter' } }),
+    { colour: 'orange', reason: 'Due in 2 days · last: 21 Oct waiting for clamp meter', rank: 1 });
+  assert.equal(r({ dueDate: FT }).reason, 'Due today · no update yet');
+  assert.equal(r({ dueDate: '2026-10-23' }).reason, 'Due tomorrow · no update yet');
+  assert.deepEqual(r({ silentDays: 1, lastUpdate: { day: '2026-10-20', note: 'ok' } }), { colour: 'orange', reason: 'Silent 1 day · last: 20 Oct ok', rank: 1 });
+  assert.deepEqual(r({ lastUpdate: { day: FT, note: '42 s, ok' } }), { colour: 'green', reason: 'Updated today · 42 s, ok', rank: 3 });
+  assert.deepEqual(r({ dueDate: '2026-10-30', lastUpdate: { day: '2026-10-21', note: 'ok' } }), { colour: 'grey', reason: 'On track · last: 21 Oct ok', rank: 2 }, 'nothing to chase yet');
+  assert.equal(r({ silentDays: 2, chasedAt: `${FT} 10:15:00` }).reason, 'Silent 2 days · no update yet · 🔔 chased 10:15', 'chased today shows');
+  assert.equal(r({ silentDays: 2, chasedAt: '2026-10-21 10:15:00' }).reason, 'Silent 2 days · no update yet', 'an older chase does not');
+});
+
+test('follow-up: worst first, by person, and the top line', () => {
+  const rows = [
+    frow({ taskId: 1, title: 'Green', lastUpdate: { day: FT, note: 'ok' } }),
+    frow({ taskId: 2, title: 'Silent 2', silentDays: 2, person: { id: 2, name: 'Vasu' } }),
+    frow({ taskId: 3, title: 'Soon', dueDate: '2026-10-23' }),
+    frow({ taskId: 4, title: 'Silent 5', silentDays: 5 }),
+    frow({ taskId: 5, title: 'Stuck', stuck: true, person: { id: 2, name: 'Vasu' } }),
+    frow({ taskId: 6, title: 'Grey', dueDate: '2026-11-30' }),
+  ];
+  const sorted = followupRows(rows, FT);
+  assert.deepEqual(sorted.map((r) => r.title), ['Stuck', 'Silent 5', 'Silent 2', 'Soon', 'Grey', 'Green']);
+  assert.ok(sorted.every((r) => r.colour && r.reason), 'each row gets its colour and reason');
+  assert.deepEqual(followupGroups(sorted).map((g) => [g.person.name, g.rows.map((r) => r.taskId)]), [['Vasu', [5, 2]], ['Valar', [4, 3, 6, 1]]], 'the person with the worst row first');
+  assert.equal(followupSummary(rows, FT), '6 given out · 2 silent · 1 due soon');
+  assert.equal(followupSummary([], FT), '0 given out · 0 silent · 0 due soon');
+});
+
+test('follow-up round: worst first, resumes on the same day, starts again the next day, counts what was done', () => {
+  const sorted = followupRows([frow({ taskId: 1, title: 'A', silentDays: 3 }), frow({ taskId: 2, title: 'B', dueDate: FT }),
+    frow({ taskId: 3, kind: 'project', projectRef: 'p9', title: 'P', lastUpdate: { day: FT, note: '' } })], FT);
+  assert.equal(roundKey(sorted[2]), 'p:p9', 'a project is known by its ref');
+  assert.equal(roundKey(sorted[0]), 't:1');
+  let plan = roundPlan(sorted, null, FT);
+  assert.deepEqual([plan.queue.map((r) => r.title), plan.pos, plan.total], [['A', 'B', 'P'], 1, 3]);
+  let s = roundMark(null, 't:1', 'ok', FT);
+  s = roundMark(s, 't:2', 'chased', FT);
+  plan = roundPlan(sorted, s, FT);
+  assert.deepEqual([plan.queue.map((r) => r.title), plan.pos, plan.total], [['P'], 3, 3], 'resumes at the item not looked at');
+  assert.deepEqual(roundPlan(sorted.filter((r) => r.taskId !== 2), s, FT).total, 3, 'an item closed since still counts in the total');
+  s = roundMark(s, 'p:p9', 'closed', FT);
+  assert.deepEqual([s.chased, s.changed, s.closed], [1, 0, 1]);
+  assert.equal(roundPlan(sorted, s, FT).queue.length, 0, 'all followed up');
+  assert.deepEqual(roundMark(s, 'p:p9', 'ok', FT).seen, ['t:1', 't:2', 'p:p9'], 'never twice');
+  assert.deepEqual(roundPlan(sorted, s, '2026-10-23').queue.length, 3, 'a new day: a new round');
+  assert.deepEqual(roundSaved({ day: FT, seen: 'bad' }, FT).seen, [], 'a broken saved copy is not trusted');
+});
+
+test('follow-up: the menu item, the screen and its buttons are wired', () => {
+  assert.match(APP, /item\('🔁 Follow-up', state\.view === 'followup', \(\) => go\('followup'\)\)/, 'manager menu item');
+  assert.match(APP, /const LIST_VIEWS = \[[^\]]*'followup'\]/, 'a list view');
+  assert.match(APP, /api\('followup\.list'\)/);
+  assert.match(APP, /else if \(state\.view === 'followup'\) body = followupList\(\);/);
+  const row = APP.slice(APP.indexOf('function followRow('), APP.indexOf('async function chaseTask('));
+  assert.match(row, /chaseTask\(r\)[^\n]*'🔔 Chase'/);
+  assert.match(row, /closeFollow\(r\)[^\n]*'✓ Done'/);
+  assert.match(row, /takeBack\(r\) \}, '↩ Take back'/);
+  assert.match(row, /r\.kind === 'project'[^]*openDetail\('project:' \+ r\.projectRef\) \}, '📁 Open project'\)[^]*'Take back on your projects page'/, 'a project is taken back on the projects page');
+  const fns = APP.slice(APP.indexOf('async function chaseTask('), APP.indexOf('// the round:'));
+  assert.match(fns, /api\('task\.chase', \{ id: r\.taskId \}\)/);
+  assert.match(fns, /api\('task\.status', \{ id: r\.taskId, status: 'done' \}\)/, 'Done: the same close as Mark done');
+  assert.match(fns, /confirm\(`Take "\$\{r\.title\}" back[^]*api\('task\.status', \{ id: r\.taskId, status: 'cancelled' \}\)/, 'Take back asks first, then the usual cancel');
+  assert.match(APP.slice(APP.indexOf('function followupList('), APP.indexOf('function followRow(')), /onClick: startRound \}, '▶ Start round \(2 min\)'/);
+});
+
+test('follow-up round: the screen uses the rule, keeps its place on this device and has OK / Chase / Change person / Close', () => {
+  const fn = APP.slice(APP.indexOf('function roundScreen('), APP.indexOf('function quickBox('));
+  assert.match(fn, /roundPlan\(R\.rows, R\.saved, today\)/);
+  assert.match(fn, /`Item \$\{plan\.pos\} of \$\{plan\.total\}`/);
+  assert.match(fn, /class: 'progress'/, 'a thin progress bar');
+  assert.match(fn, /R\.saved = roundMark\(R\.saved, roundKey\(r\), what, today\); roundStore\(R\.saved\)/, 'each item looked at is kept on the device');
+  assert.match(fn, /mark\('ok'\) \}, '👍 OK'/);
+  assert.match(fn, /chaseTask\(r\)\) mark\('chased'\)/);
+  assert.match(fn, /api\('task\.move', \{ id: r\.taskId, toId: p\.id \}\)[^\n]*mark\('changed'\)/, 'Change person: the usual move');
+  assert.match(fn, /closeFollow\(r\)\) mark\('closed'\); \} \}, '✕ Close'/);
+  assert.match(fn, /'All followed up ✓'[^]*\$\{s\.chased\} chased · \$\{s\.changed\} changed · \$\{s\.closed\} closed/);
+  assert.match(APP, /function roundLoad\(\) \{ try \{ return JSON\.parse\(load\(roundStoreKey\(\)\)/, 'read back safely');
+});
+
+test('work in one line: the box on Follow-up and on Give a task, 🎤 only where it works, one task for a double tap, ✎ Change fills the form', () => {
+  assert.match(APP.slice(APP.indexOf('function followupList('), APP.indexOf('function followRow(')), /quickBox\(d\.people \|\| \[\]\)/, 'at the top of Follow-up');
+  assert.match(APP, /if \(sel === 'give'\) \{ title = 'Give a task'; body = state\.people\.length \? \[quickBox\(state\.people\), taskForm\(\)\]/, 'on Give a task');
+  const fn = APP.slice(APP.indexOf('function quickBox('), APP.indexOf('// ---------- manager: team today'));
+  assert.match(fn, /parseQuickTask\(box\.value, people, today\)/);
+  assert.match(fn, /window\.SpeechRecognition \|\| window\.webkitSpeechRecognition/);
+  assert.match(fn, /if \(Listen\) \{/, 'the 🎤 only if the browser can listen');
+  assert.match(fn, /rec\.lang = 'en-IN'/);
+  assert.match(fn, /rec\.onend = [^\n]*box\.value = heard; show\(\)/, 'when it stops, its words go into the box');
+  assert.match(fn, /if \(q\.sig !== sig\) \{ q\.sig = sig; q\.cid = newClientId\(\); \}/, 'one id per preview');
+  assert.match(fn, /api\('task\.save', taskSaveBody\(\{ assigneeId: r\.person\.id, title: r\.title, [^}]*repeat: 'once'[^}]*dueDate: r\.dueDate \}, q\.cid\)\)/, 'a one-time task with its by-date and the preview\'s id');
+  assert.match(fn, /notice\('update', `Given to \$\{out\.task\.assignee\.name\} ✓`/);
+  assert.ok(!/Email it too|oneTaskMail/.test(APP), 'no one-task email (only the morning email)');
+  assert.match(fn, /state\.prefill = \{ title: r\.title, assigneeId: r\.person\.id, repeat: 'once', dueDate: r\.dueDate \};[^]*openDetail\('give'\)[^]*'✎ Change'/);
+  const form = APP.slice(APP.indexOf('function taskForm()'), APP.indexOf("'Give task');"));
+  assert.match(form, /pre\.assigneeId/); assert.match(form, /pre\.repeat === 'once'/); assert.match(form, /pre\.dueDate/);
+});
+
+test('follow-up: the buttons sit on their own line under the words (the words are never squeezed to one letter a line)', async () => {
+  const { readFileSync } = await import('node:fs');
+  const css = readFileSync(new URL('../team/public_html/styles.css', import.meta.url), 'utf8');
+  assert.match(css, /\.fu-row\s*\{[^}]*flex-wrap:\s*wrap/, 'the row wraps');
+  assert.match(css, /\.fu-row\s*>\s*\.prow-btn\s*\{[^}]*flex:\s*1 1 100%/, 'the words take the whole width');
+  assert.match(css, /\.fu-row\s*>\s*\.fu-btns\s*\{[^}]*flex:\s*1 1 100%/, 'the buttons go on the next line');
 });

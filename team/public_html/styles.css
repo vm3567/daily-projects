@@ -173,3 +173,18 @@ table.report td.ok { color: var(--green); font-weight: 600; }
 /* a given project's short description: grey, under its name */
 .prow-about { display: block; font-size: 13px; color: var(--muted); }
 .project-about { margin: -4px 0 10px; font-size: 14px; line-height: 1.45; color: var(--muted); overflow-wrap: anywhere; }
+
+/* 🔁 Follow-up: the one-line box, the top line, the buttons under each row, the round */
+.fu-quick { padding: 10px 14px 0; }
+.fu-box { margin-bottom: 10px; }
+.fu-line { display: flex; gap: 6px; align-items: center; }
+.fu-in { flex: 1; min-width: 0; }
+.fu-preview .card { margin: 8px 0 0; }
+.fu-preview .err { margin: 6px 0 0; }
+.fu-top { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; padding: 4px 14px 8px; font-size: 14px; }
+.fu-btns { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 0 14px 10px 34px; }
+.fu-row { flex-wrap: wrap; } /* the buttons go on their own line under the words */
+.fu-row > .prow-btn { flex: 1 1 100%; min-width: 0; }
+.fu-row > .fu-btns { flex: 1 1 100%; }
+.fu-round { margin: 10px 14px; }
+.fu-round h2 { margin: 4px 0; }

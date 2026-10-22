@@ -1,7 +1,7 @@
 // Work Task: the team app. Staff see and fill their own tasks; the manager gives tasks and sees everything.
 // No outside libraries. All text from the server is put on screen as text (never as HTML).
 
-import { addDay, weekdayOf, dueOn, itemKey, diaryRows, fieldChanged, lateValue, afterFlush, boxStillThere, updateSaveBody, redrawHow, projectRowState, aboutShort, projectAboutOf, giveBackShow, keptNotice, noticeHow, pasteWaits, msgBoxSent, redrawAfterSend, taskSaveBody, morningMail } from './logic.js'; // the rules (checked in tests/team-app.test.mjs)
+import { addDay, weekdayOf, dueOn, itemKey, diaryRows, fieldChanged, lateValue, afterFlush, boxStillThere, updateSaveBody, redrawHow, projectRowState, aboutShort, projectAboutOf, giveBackShow, keptNotice, noticeHow, pasteWaits, msgBoxSent, redrawAfterSend, taskSaveBody, morningMail, followupRows, followupGroups, followupSummary, roundKey, roundPlan, roundMark, parseQuickTask } from './logic.js'; // the rules (checked in tests/team-app.test.mjs)
 
 const TOKEN_KEY = 'wt.token';
 const state = {
@@ -98,7 +98,7 @@ const stateTag = (s) => el('span', { class: 'tag ' + (s === 'stuck' ? 'red' : s 
 class OfflineError extends Error {}
 class AuthError extends Error {} // signed out (password reset, sign-in too old)
 class RetryError extends Error {} // the server had a hiccup: try again later
-const READS = new Set(['me', 'my.today', 'team.today', 'tasks.list', 'users.list', 'task.get', 'projects.overview', 'project.team', 'project.mine', 'report.week']);
+const READS = new Set(['me', 'my.today', 'team.today', 'tasks.list', 'users.list', 'task.get', 'projects.overview', 'project.team', 'project.mine', 'report.week', 'followup.list']);
 const cacheKey = (a, body) => 'wt.c.' + a + ':' + JSON.stringify(body || {});
 function readCache(a, body) { try { return JSON.parse(localStorage.getItem(cacheKey(a, body)) || 'null'); } catch { return null; } }
 function writeCache(a, body, out) { try { localStorage.setItem(cacheKey(a, body), JSON.stringify(out)); } catch { /* phone storage full: still works online */ } }
@@ -428,6 +428,10 @@ async function loadList() {
     else if (view === 'projects') data = await api('projects.overview');
     else if (view === 'report') data = await api('report.week', state.reportEnd ? { end: state.reportEnd } : {});
     else if (view === 'search') data = { search: true }; // the results come as you type
+    else if (view === 'followup') { // (the people: for "Valar: …" in the one-line box and Change person)
+      const [f, u] = await Promise.all([api('followup.list'), api('users.list')]);
+      data = { ...f, people: u.users.filter((x) => x.active) };
+    }
     else data = null;
   } catch (e) { failed = e; }
   if (state.user !== me) { state.busy = false; return; } // signed out meanwhile
@@ -480,7 +484,7 @@ function loadView() {
   if (state.sel) loadDetail();
 }
 
-const LIST_VIEWS = ['today', 'tasks', 'people', 'settings', 'projects', 'report', 'search'];
+const LIST_VIEWS = ['today', 'tasks', 'people', 'settings', 'projects', 'report', 'search', 'followup'];
 
 /** go('today' | 'tasks' | 'people' | 'settings') changes the list; anything else ('task:5', 'give', 'edit:5', 'suggest', 'password') opens on the right. */
 function go(view) {
@@ -488,6 +492,7 @@ function go(view) {
   dropBack(); // the open task closes: its Back step goes too
   state.fromProjects = false; // (only the task opened from the projects page goes back there)
   state.view = view;
+  state.round = null; // (the follow-up round ends when another list is opened)
   state.data = null; state.loadFailed = false;
   state.sel = null; state.detail = null; state.mobileDetail = false; state.menuOpen = false; state.moving = 0;
   render();
@@ -610,6 +615,7 @@ function menuColumn() {
     parts.push(el('ul', { class: 'menu-list' },
       me.owner ? item('📋 My projects', false, () => toProjects()) : null,
       item('Team today', state.view === 'today' && !state.personFilter, () => { state.personFilter = 0; go('today'); }, needs || null),
+      item('🔁 Follow-up', state.view === 'followup', () => go('followup')),
       item('Tasks', state.view === 'tasks' && !state.closed, () => { state.closed = false; go('tasks'); }),
       item('Done / cancelled', state.view === 'tasks' && state.closed, () => { state.closed = true; go('tasks'); }),
       item('📁 Projects', state.view === 'projects', () => go('projects')),
@@ -674,7 +680,7 @@ function taskRow(t, sub, dot, warn = false) {
 /** Middle column: the list (or, for People and Settings, the whole page). */
 function listColumn(wide) {
   const me = state.user, admin = me.role === 'admin';
-  const titles = { today: admin ? 'Team today' : { today: 'My tasks today', next: 'Coming next', sugg: 'My suggestions' }[state.section], tasks: state.closed ? 'Done / cancelled' : 'Tasks', people: 'People', settings: 'Settings', projects: 'Projects', report: 'Weekly report', search: 'Search' };
+  const titles = { today: admin ? 'Team today' : { today: 'My tasks today', next: 'Coming next', sugg: 'My suggestions' }[state.section], tasks: state.closed ? 'Done / cancelled' : 'Tasks', people: 'People', settings: 'Settings', projects: 'Projects', report: 'Weekly report', search: 'Search', followup: '🔁 Follow-up' };
   let title = titles[state.view];
   if (admin && state.view === 'today' && state.personFilter && state.team) { const p = state.team.people.find((x) => x.id === state.personFilter); if (p) title = p.name; }
   const head = el('div', { class: 'list-head' },
@@ -691,6 +697,7 @@ function listColumn(wide) {
   if (state.view === 'search') body = searchList();
   else if (state.view === 'projects') body = projectsList();
   else if (state.view === 'tasks') body = tasksList();
+  else if (state.view === 'followup') body = followupList();
   else body = admin ? teamList() : myList();
   return el('div', { class: 'col-inner' }, head, bar, body);
 }
@@ -1009,7 +1016,7 @@ function detailColumn() {
       state.user.role === 'admin' ? el('p', null, el('button', { class: 'link', onClick: () => openDetail('give') }, '+ Give a task')) : null);
   }
   let title = '', body, about = ''; // about: the project's short description, in grey under the title
-  if (sel === 'give') { title = 'Give a task'; body = state.people.length ? taskForm() : el('p', { class: 'muted' }, 'Loading…'); }
+  if (sel === 'give') { title = 'Give a task'; body = state.people.length ? [quickBox(state.people), taskForm()] : el('p', { class: 'muted' }, 'Loading…'); }
   else if (sel.startsWith('edit:')) { title = 'Edit task'; body = state.detail && state.people.length ? taskForm() : el('p', { class: 'muted' }, 'Loading…'); }
   else if (sel === 'suggest') { title = '💡 Suggest a task'; body = suggestForm(); }
   else if (sel === 'password') { title = 'Change password'; body = passwordScreen(); }
@@ -1558,6 +1565,161 @@ async function uploadPhotos(updateId, files, cid) {
   return [];
 }
 
+// ---------- manager: 🔁 Follow-up (every task given out, worst first), the daily round, and work in one line
+
+/** The Follow-up list: the one-line box, the top line, then each person's tasks (red, orange, grey, green). The rule: logic.js. */
+function followupList() {
+  const d = state.data;
+  const rows = followupRows(d.rows, d.today);
+  if (state.round) return roundScreen(d);
+  return [
+    el('div', { class: 'fu-quick' }, quickBox(d.people || [])),
+    el('div', { class: 'fu-top' }, el('span', { class: 'muted' }, followupSummary(rows, d.today)),
+      rows.length ? el('button', { class: 'primary', onClick: startRound }, '▶ Start round (2 min)') : null),
+    rows.length ? followupGroups(rows).map((g) => [sec(g.person.name), el('ul', { class: 'list-body' }, g.rows.map(followRow))])
+      : el('p', { class: 'list-note' }, 'Nothing given out right now.'),
+  ];
+}
+
+/** One row: dot · title · the reason, and the buttons under it. */
+function followRow(r) {
+  const open = r.kind === 'project' ? 'project:' + r.projectRef : 'task:' + r.taskId;
+  return el('li', { class: 'prow fu-row' + (state.sel === open ? ' current' : '') },
+    el('button', { class: 'prow-btn', onClick: () => openDetail(open) },
+      el('span', { class: 'dot ' + r.colour }),
+      el('span', { class: 'prow-text' },
+        el('span', { class: 'prow-name' }, (r.kind === 'project' ? '📁 ' : '') + r.title, r.stuck ? el('span', { class: 'tag red new-tag' }, 'Stuck') : null),
+        r.step ? el('span', { class: 'prow-about' }, 'Now: ' + r.step) : null,
+        el('span', { class: 'prow-next' + (r.colour === 'red' ? ' warn' : '') }, r.reason))),
+    el('div', { class: 'fu-btns' },
+      el('button', { class: 'chip', onClick: async () => { if (await chaseTask(r)) loadList(); } }, '🔔 Chase'),
+      el('button', { class: 'chip', onClick: async () => { if (await closeFollow(r)) loadList(); } }, '✓ Done'),
+      r.kind === 'project' // (the projects page hands out projects: never taken back here)
+        ? [el('button', { class: 'chip', onClick: () => openDetail('project:' + r.projectRef) }, '📁 Open project'), el('span', { class: 'muted small' }, 'Take back on your projects page')]
+        : el('button', { class: 'chip', onClick: () => takeBack(r) }, '↩ Take back')));
+}
+
+/** 🔔 Chase: the person gets a phone alert and a message on the task. true = done. */
+async function chaseTask(r) {
+  try {
+    await api('task.chase', { id: r.taskId });
+    toast(`🔔 Chased — ${r.person.name} gets an alert`);
+    return true;
+  } catch (ex) { toast(ex.message, 5000); return false; }
+}
+
+/** ✓ Done: the manager's Mark done (a project step: the same close as on the task page, so Daily Projects follows). true = done. */
+async function closeFollow(r) {
+  if (!confirm(r.kind === 'project' ? `Mark the step "${r.step || r.title}" done?` : `Mark "${r.title}" done?`)) return false;
+  try { await api('task.status', { id: r.taskId, status: 'done' }); toast('Marked done ✓'); return true; } catch (ex) { toast(ex.message, 5000); return false; }
+}
+
+/** ↩ Take back: a plain task is cancelled from their list (the same cancel as the task's ⋯ menu). */
+async function takeBack(r) {
+  if (!confirm(`Take "${r.title}" back from ${r.person.name}'s list? It will be cancelled.`)) return;
+  try { await api('task.status', { id: r.taskId, status: 'cancelled' }); toast('Taken back ✓'); loadList(); } catch (ex) { toast(ex.message, 5000); }
+}
+
+// the round: what was looked at today is kept on this device, so a round stopped half way goes on from there
+const roundStoreKey = () => 'wt.round.' + state.user.id;
+function roundLoad() { try { return JSON.parse(load(roundStoreKey()) || 'null'); } catch { return null; } }
+const roundStore = (s) => save(roundStoreKey(), JSON.stringify(s));
+
+function startRound() {
+  state.round = { rows: followupRows(state.data.rows, state.data.today), saved: roundLoad(), changing: false }; // (the order stays as it was at the start)
+  render();
+}
+
+/** ▶ The round: one item at a time, worst first, with a thin progress bar; at the end what was done. */
+function roundScreen(d) {
+  const R = state.round, today = d.today;
+  const plan = roundPlan(R.rows, R.saved, today); // (the rule: logic.js)
+  const s = plan.saved;
+  const bar = (part) => el('div', { class: 'progress' }, (() => { const b = el('span'); b.style.width = `${Math.round(part * 100)}%`; return b; })());
+  const stop = () => { state.round = null; loadList(); };
+  const head = el('div', { class: 'row spread' }, el('strong', null, '🔁 Daily follow-up round'), el('button', { class: 'link', onClick: stop }, 'Stop'));
+  if (!plan.queue.length) {
+    return el('div', { class: 'card stack fu-round' }, head, bar(1), el('h2', null, 'All followed up ✓'),
+      el('p', { class: 'muted' }, `${s.chased} chased · ${s.changed} changed · ${s.closed} closed`),
+      el('button', { class: 'primary', onClick: stop }, 'Back to the list'));
+  }
+  const r = plan.queue[0];
+  const mark = (what) => { R.saved = roundMark(R.saved, roundKey(r), what, today); roundStore(R.saved); R.changing = false; render(); };
+  const others = (d.people || []).filter((p) => p.role !== 'admin' && p.id !== r.person.id);
+  return el('div', { class: 'card stack fu-round' }, head,
+    bar((plan.pos - 1) / plan.total),
+    el('p', { class: 'muted small' }, `Item ${plan.pos} of ${plan.total}`),
+    el('h2', null, (r.kind === 'project' ? '📁 ' : '') + r.title),
+    r.step ? el('p', { class: 'muted small' }, 'Now: ' + r.step) : null,
+    el('p', null, el('span', { class: 'dot ' + r.colour }), ` ${r.person.name} · ${r.reason}`),
+    el('p', { class: 'muted small' }, r.lastUpdate ? `Last update: ${fmtDay(r.lastUpdate.day)} — ${r.lastUpdate.note || ''}` : 'No update yet'),
+    R.changing ? el('div', { class: 'stack' },
+      el('strong', null, r.kind === 'project' ? 'Move the whole project (all its open steps) to:' : 'Give it to:'),
+      el('div', { class: 'row' }, others.length ? others.map((p) => el('button', { class: 'chip', onClick: async () => {
+        try { await api('task.move', { id: r.taskId, toId: p.id }); toast(`Moved to ${p.name} ✓`); mark('changed'); } catch (ex) { toast(ex.message, 5000); }
+      } }, p.name)) : el('span', { class: 'muted' }, 'Add another person first (People).'))) : null,
+    el('div', { class: 'fu-btns' },
+      el('button', { class: 'primary', onClick: () => mark('ok') }, '👍 OK'),
+      el('button', { class: 'chip', onClick: async () => { if (await chaseTask(r)) mark('chased'); } }, '🔔 Chase'),
+      el('button', { class: 'chip' + (R.changing ? ' on' : ''), onClick: () => { R.changing = !R.changing; render(); } }, '👤 Change person'),
+      el('button', { class: 'chip', onClick: async () => { if (await closeFollow(r)) mark('closed'); } }, '✕ Close')));
+}
+
+/**
+ * Hand out work in one line: "Valar: send kiln photos by Friday" (or 🎤 say it). A preview card, then ✓ Give it
+ * (a one-time task with that by-date) or ✎ Change (the full Give a task form, filled in). The rule: parseQuickTask in logic.js.
+ */
+function quickBox(people) {
+  const q = state.quick || (state.quick = { text: '', sig: '', cid: '' });
+  const today = (state.data && state.data.today) || istDay(new Date());
+  const box = el('input', { type: 'text', class: 'fu-in', value: q.text, placeholder: 'Valar: send kiln photos by Friday', 'aria-label': 'Hand out work in one line', enterkeyhint: 'done' });
+  const card = el('div', { class: 'fu-preview' });
+  const show = () => {
+    q.text = box.value;
+    if (!box.value.trim()) { card.replaceChildren(); return; }
+    const r = parseQuickTask(box.value, people, today);
+    if (r.error) { card.replaceChildren(el('p', { class: 'err' }, r.error)); return; }
+    const sig = JSON.stringify([r.person.id, r.title, r.dueDate]);
+    if (q.sig !== sig) { q.sig = sig; q.cid = newClientId(); } // one id per preview: a second tap gives the task once
+    const give = el('button', { class: 'primary', onClick: async () => {
+      give.disabled = true;
+      try {
+        const out = await api('task.save', taskSaveBody({ assigneeId: r.person.id, title: r.title, details: '', project: '', repeat: 'once', skipSunday: true, dueDate: r.dueDate }, q.cid));
+        state.quick = null; box.value = ''; box.dataset.init = ''; card.replaceChildren(); // (an empty box is not "typing")
+        notice('update', `Given to ${out.task.assignee.name} ✓`, r.title + (r.dueDate ? ` · by ${fmtDay(r.dueDate)}` : ''), () => openDetail('task:' + out.task.id));
+        if (state.view === 'followup' || state.view === 'today' || state.view === 'tasks') loadList();
+      } catch (ex) { toast(ex.message, 5000); give.disabled = false; }
+    } }, '✓ Give it');
+    card.replaceChildren(el('div', { class: 'card stack' },
+      el('div', null, el('span', { class: 'muted small' }, 'Task: '), el('strong', null, r.title)),
+      el('div', null, el('span', { class: 'muted small' }, 'Person: '), r.person.name),
+      el('div', null, el('span', { class: 'muted small' }, 'By: '), r.dueDate ? fmtDay(r.dueDate) : 'No by-date (one time)'),
+      el('div', { class: 'row' }, give, el('button', { type: 'button', onClick: () => {
+        state.prefill = { title: r.title, assigneeId: r.person.id, repeat: 'once', dueDate: r.dueDate };
+        state.quick = null;
+        openDetail('give');
+      } }, '✎ Change'))));
+  };
+  box.addEventListener('input', show);
+  box.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); show(); } });
+  // 🎤 only where the browser can listen; when it stops, its words go into the box
+  const Listen = window.SpeechRecognition || window.webkitSpeechRecognition;
+  let mic = null;
+  if (Listen) {
+    mic = el('button', { type: 'button', class: 'chip', title: 'Say it', 'aria-label': 'Say it', onClick: () => {
+      const rec = new Listen();
+      rec.lang = 'en-IN'; rec.interimResults = false; rec.maxAlternatives = 1;
+      let heard = '';
+      rec.onresult = (e) => { heard = [...e.results].map((x) => x[0].transcript).join(' ').trim(); };
+      rec.onerror = (e) => { if (e.error === 'not-allowed') toast('Allow the microphone to speak the task', 5000); };
+      rec.onend = () => { mic.classList.remove('on'); if (heard) { box.value = heard; show(); box.focus(); } };
+      try { rec.start(); mic.classList.add('on'); } catch { /* already listening */ }
+    } }, '🎤');
+  }
+  show();
+  return el('div', { class: 'fu-box' }, el('div', { class: 'fu-line' }, box, mic), card);
+}
+
 // ---------- manager: team today
 
 function teamToday() {
@@ -1723,18 +1885,19 @@ function taskForm() {
   // a person who was switched off: keep them, so a small change does not force choosing someone else
   if (t && !state.people.some((p) => p.id === t.assignee.id)) person.append(el('option', { value: String(t.assignee.id) }, t.assignee.name + ' (switched off)'));
   if (t) person.value = String(t.assignee.id);
+  else if (pre.assigneeId && state.people.some((p) => p.id === pre.assigneeId)) person.value = String(pre.assigneeId); // (✎ Change from the one-line box)
   else if (state.people.filter((p) => p.role === 'staff').length === 1) person.value = String(state.people.find((p) => p.role === 'staff').id);
   const title = el('input', { value: t ? t.title : pre.title || '', required: true, placeholder: 'Record kiln 3 temperature' });
   const details = el('textarea', { value: t ? t.details : pre.details || '', placeholder: 'Anything they need to know (optional)' });
   const project = el('input', { value: t ? t.project : pre.project || '', placeholder: 'Kiln trial (optional)' });
-  const kind = t ? (t.repeat === 'daily' ? (t.skipSunday ? 'daily' : 'daily7') : t.repeat) : 'daily';
+  const kind = t ? (t.repeat === 'daily' ? (t.skipSunday ? 'daily' : 'daily7') : t.repeat) : pre.repeat === 'once' ? 'once' : 'daily';
   const how = el('select', null,
     el('option', { value: 'daily' }, 'Every day (Mon–Sat)'), el('option', { value: 'daily7' }, 'Every day, Sunday too'),
     el('option', { value: 'weekly' }, 'Once a week'), el('option', { value: 'once' }, 'One time'));
   how.value = kind;
   const weekday = el('select', null, LONG_DAYS.map((n, i) => el('option', { value: String(i) }, n)));
   weekday.value = String(t && t.weekday !== null ? t.weekday : 1);
-  const due = el('input', { type: 'date', value: t && t.dueDate ? t.dueDate : '' });
+  const due = el('input', { type: 'date', value: t && t.dueDate ? t.dueDate : pre.dueDate || '' });
   const todayIs = (state.data && state.data.today) || istDay(new Date());
   const start = el('input', { type: 'date', min: todayIs, value: t && t.startDate && t.startDate > todayIs ? t.startDate : '' });
   const needsPhoto = el('input', { type: 'checkbox', checked: t ? t.needsPhoto : false });
