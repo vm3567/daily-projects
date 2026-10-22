@@ -852,16 +852,19 @@ test('📂 project page: TASKS (N) table (dot, name + 👥, Now / "No next step"
   const text = page.textContent;
   assert.ok(text.includes('TASKS (2)'));
   assert.ok(!text.includes('SUB-PROJECTS'));
-  for (const bit of ['Kiln 2', '👥 Ravi', 'No next step', 'Fire samples', 'Kiln at 1150', '+ Add a task here', '+ New task here']) assert.ok(text.includes(bit), bit);
+  for (const bit of ['Kiln 2', '👥 Ravi', 'No next step', 'Fire samples', 'Kiln at 1150', '+ Add tasks', '+ New task here']) assert.ok(text.includes(bit), bit);
   const rows = rAll(page, (n) => n.className === 'sub-row');
   assert.equal(rows.length, 2);
   rows[0].__on.click();
   assert.equal(ctx.calls.pop()[0], 'open');
-  btn(page, '+ Add a task here').__on.click();
-  assert.equal(ui.mainBox.mode, 'add');
-  const list = rAll(renderDetail(ctx), (n) => n.nodeName === 'BUTTON' && /main-box-item/.test(n.className)).map((n) => n.textContent);
-  assert.deepEqual(list, ['Office move'], 'picks a task to add (not one already in it, not itself)');
-  btn(renderDetail(ctx), 'Office move').__on.click();
+  // "+ Add tasks" (owner asked, 22 Oct): a list with tick boxes, one or several tasks at once
+  btn(page, '+ Add tasks').__on.click();
+  const boxes = () => rAll(renderDetail(ctx), (n) => n.nodeName === 'INPUT' && n.getAttribute && n.getAttribute('type') === 'checkbox');
+  const names = rAll(renderDetail(ctx), (n) => n.className === 'add-tasks-row').map((n) => n.textContent.trim());
+  assert.deepEqual(names, ['Office move'], 'only tasks not already in it, never itself');
+  boxes()[0].__on.change(null, { checked: true });
+  assert.ok(renderDetail(ctx).textContent.includes('Add 1 task'), 'the button counts the ticks');
+  btn(renderDetail(ctx), 'Add 1 task').__on.click();
   assert.deepEqual(s.data.projects.find((p) => p.id === 'o').parentIds, ['m']);
   globalThis.prompt = () => 'Kiln 3';
   try { btn(renderDetail(ctx), '+ New task here').__on.click(); } finally { delete globalThis.prompt; }
@@ -900,12 +903,13 @@ test('📂 Projects page: the line (each task counted once), "+ New project", on
   page = mains.renderMainProjects(ctx);
   const text = page.textContent;
   assert.ok(text.includes('2 projects · 2 tasks in them · red first'), 'Kiln is in both, counted once');
-  for (const bit of ['📂 Kilns', '2 tasks · 1 red', 'Kiln 2', '— No next step · 👥 Ravi', 'Kiln', 'Fire samples', '📂 Furnaces', '1 task · ', 'Open ›']) assert.ok(text.includes(bit), bit);
+  for (const bit of ['📂 Kilns', '2 tasks · 1 red', 'Kiln 2', '— No next step · 👥 Ravi', 'Kiln', 'Fire samples', '📂 Furnaces', '1 task · ', '+ Add tasks']) assert.ok(text.includes(bit), bit);
+  assert.ok(!text.includes('Open ›'), 'no "Open" button: the name opens the project (owner asked, 22 Oct)');
   const cards = rAll(page, (n) => n.className === 'main-card');
   assert.equal(cards.length, 2);
   for (const c of cards) assert.ok(c.textContent.includes('Kiln'), 'the task in two projects shows under both');
-  btn(cards[0], 'Open ›').__on.click();
-  assert.equal(ctx.calls.pop()[0], 'open');
+  btn(cards[0], '+ Add tasks').__on.click();
+  assert.ok(rAll(mains.renderMainProjects(ctx), (n) => n.className === 'add-tasks').length === 1, '"+ Add tasks" opens the tick list under that card');
   // an empty project
   applyOps(s, [makeOp('removeFromProject', { projectId: 'p1', parentId: fur.id })]);
   assert.ok(mains.renderMainProjects(ctx).textContent.includes('No tasks in it yet'));
@@ -963,4 +967,11 @@ test('📧 a task made from an email: EMAIL THREAD under the steps (📧 them / 
   assert.ok(!renderDetail(fakeCtx(s, { selected: 'p1', update: {} })).textContent.includes('EMAIL THREAD'), 'not on a task without emails');
   const replies = renderReplies(fakeCtx(s, {})).textContent;
   assert.ok(replies.includes('Price list — from Ravi'), 'on the ✉ Replies page (waiting for your reply)');
+});
+
+test('📂 a project name opens the project on the 📂 Projects page (its own page with its tasks), never the task list', async () => {
+  const { readFileSync } = await import('node:fs');
+  const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
+  const open = app.slice(app.indexOf('  openProject: (id) => {'), app.indexOf('  openProject: (id) => {') + 600);
+  assert.match(open, /ui\.view = p\.state !== 'active' \? p\.state : isMainProject\(store\.view\.data, p\) \? 'mains' : 'all';/);
 });

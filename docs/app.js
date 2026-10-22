@@ -216,7 +216,8 @@ const ctx = {
     const p = store.view.data.projects.find((x) => x.id === id);
     if (!p) return;
     pushNav();
-    ui.view = p.state === 'active' ? 'all' : p.state; // 'paused' or 'finished'
+    // a 📂 project opens on the Projects page (its own page: description, tasks); a task on the Tasks list
+    ui.view = p.state !== 'active' ? p.state : isMainProject(store.view.data, p) ? 'mains' : 'all'; // ('paused' or 'finished')
     ui.search = '';
     rememberUi();
     select(id);

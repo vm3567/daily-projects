@@ -99,6 +99,48 @@ export function mainBox(ctx, p, mode = 'parent') {
     h('div', { class: 'row' }, h('button', { class: 'btn small', type: 'button', onClick: close }, 'Done')));
 }
 
+/** "+ Add tasks": the task list with tick boxes, to put one or several tasks into the project m at once. */
+export function addTasksPicker(ctx, m) {
+  const { store, ui } = ctx;
+  const pk = ui.addTasks;
+  if (!pk || pk.id !== m.id) return null;
+  const data = store.view.data;
+  const list = addHereChoices(data, m, pk.q);
+  const close = () => { ui.addTasks = null; ctx.render(); };
+  const add = () => {
+    const ids = [...pk.picked].filter((id) => data.projects.some((x) => x.id === id));
+    let n = 0;
+    for (const id of ids) if (store.dispatch('addToProject', { projectId: id, parentId: m.id })) n++;
+    ui.addTasks = null;
+    ctx.toast(n ? `${n} task${n === 1 ? '' : 's'} added to 📂 ${m.name}` : 'Nothing added');
+    ctx.render();
+  };
+  return h('div', { class: 'add-tasks', key: 'addtasks-' + m.id, role: 'dialog', 'aria-label': `Add tasks to ${m.name}` },
+    h('div', { class: 'main-box-head' }, h('strong', null, `Add tasks to 📂 ${m.name}`),
+      h('button', { class: 'icon', type: 'button', 'aria-label': 'Close', onClick: close }, '✕')),
+    h('input', {
+      class: 'main-box-input', key: 'addtasks-q-' + m.id, value: pk.q, autocomplete: 'off', placeholder: 'Find a task…', 'aria-label': 'Find a task',
+      onInput: (e, el) => { pk.q = el.value; ctx.render(); },
+      onKeydown: (e) => { if (e.key === 'Escape') { e.preventDefault(); close(); } },
+    }),
+    list.length ? h('ul', { class: 'add-tasks-list' }, list.map((x) => h('li', { key: 'at-' + x.id },
+      h('label', { class: 'add-tasks-row' },
+        h('input', { type: 'checkbox', checked: pk.picked.has(x.id) ? true : undefined, onChange: (e, el) => { if (el.checked) pk.picked.add(x.id); else pk.picked.delete(x.id); ctx.render(); } }),
+        h('span', { class: `dot ${dotColour(x, todayIndia())}` }), ` ${x.name}`))))
+      : h('p', { class: 'muted small' }, pk.q ? 'No task matches.' : 'Every task is in it already.'),
+    h('div', { class: 'row' },
+      h('button', { class: 'btn primary small', type: 'button', disabled: pk.picked.size ? undefined : true, onClick: add },
+        pk.picked.size ? `Add ${pk.picked.size} task${pk.picked.size === 1 ? '' : 's'}` : 'Add tasks'),
+      h('button', { class: 'btn small', type: 'button', onClick: close }, 'Cancel')));
+}
+
+export function openAddTasks(ctx, m) {
+  ctx.ui.addTasks = { id: m.id, q: '', picked: new Set() };
+  ctx.ui.mainBox = null;
+  ctx.render();
+  focusBox('addtasks-q-' + m.id);
+}
+
 /** On a task that is in projects: "📂 Kilns ›" for each (opens that project). */
 export function mainChip(ctx, p) {
   const mains = parentsOf(ctx.store.view.data, p);
@@ -144,9 +186,9 @@ export function subProjectsBlock(ctx, p, today = todayIndia()) {
           h('td', { class: 'muted small' }, lu ? `${fmtDay(lu.day)} · ${short(lu.text, 50)}` : '—'));
       }))) : h('p', { class: 'muted small' }, 'No tasks in it yet.'),
     h('div', { class: 'sub-buttons' },
-      h('button', { class: 'btn small', type: 'button', onClick: () => openMainBox(ctx, p, 'add') }, '+ Add a task here'),
+      h('button', { class: 'btn small', type: 'button', onClick: () => openAddTasks(ctx, p) }, '+ Add tasks'),
       h('button', { class: 'btn small', type: 'button', onClick: () => newProjectHere(ctx, p) }, '+ New task here')),
-    mainBox(ctx, p, 'add'));
+    addTasksPicker(ctx, p));
 }
 
 /** "+ New task here": asks the name, the new task is made already in this project. */
@@ -187,7 +229,8 @@ export function renderMainProjects(ctx) {
           h('span', { class: `dot ${mainColour(m, kids, today)}` }),
           h('button', { class: 'link main-card-name', type: 'button', onClick: () => ctx.openProject(m.id) }, `📂 ${m.name}`),
           h('span', { class: 'muted small main-card-sum' }, mainSummary(kids, today)),
-          h('button', { class: 'btn small main-open', type: 'button', onClick: () => ctx.openProject(m.id) }, 'Open ›')),
+          h('button', { class: 'btn small main-open', type: 'button', onClick: () => openAddTasks(ctx, m) }, '+ Add tasks')), // (the name opens the project)
+        addTasksPicker(ctx, m),
         kids.length ? h('ul', { class: 'main-card-list' }, kids.map((c) => {
           const ns = c.state === 'active' ? nextStep(c, today) : null;
           return h('li', { key: 'mcc-' + c.id },
