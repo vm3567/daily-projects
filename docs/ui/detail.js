@@ -429,7 +429,7 @@ function updateBox(ctx, p) {
     class: 'update-form loose', key: 'update-' + p.id,
     onSubmit: (e) => { e.preventDefault(); save(e.target); },
   },
-  openSteps.length ? h('div', { class: 'about-row' }, h('span', { class: 'muted small' }, 'About:'),
+  openSteps.length && !isMainProject(ctx.store.view.data, p) ? h('div', { class: 'about-row' }, h('span', { class: 'muted small' }, 'About:'), // (a 📂 project has no steps of its own)
     openSteps.slice(0, 8).map((st) => h('button', {
       class: 'chip' + (due && due.id === st.id ? ' on' : ''), type: 'button', key: 'ab-' + st.id, title: st.text,
       onClick: () => { u.about = st.id; ctx.render(); focusUpdate(p); },
@@ -813,6 +813,24 @@ function projectMenu(ctx, p) {
     }, ' danger'));
 }
 
+/** A 📂 project has tasks, not steps (steps live in its tasks). Steps it had from before show here, each can become a task in it. */
+function oldStepsBlock(ctx, p, openSteps) {
+  if (!openSteps.length) return null;
+  const { store } = ctx;
+  const makeTask = (st) => {
+    const id = newId();
+    if (!store.dispatch('stepToProject', { projectId: p.id, stepId: st.id, newProjectId: id })) return;
+    store.dispatch('addToProject', { projectId: id, parentId: p.id });
+    ctx.toast(`New task in 📂 ${p.name}: ${st.text}`);
+    ctx.render();
+  };
+  return section(`Steps from before (${openSteps.length})`,
+    h('p', { class: 'muted small' }, 'A project holds tasks; steps belong in its tasks. Make each of these a task in this project:'),
+    h('ul', { class: 'old-steps', key: 'oldsteps-' + p.id }, openSteps.map((st) => h('li', { key: 'os-' + st.id, class: 'old-step' },
+      h('span', null, st.text),
+      h('button', { class: 'btn small', type: 'button', onClick: () => makeTask(st) }, '↗ Make it a task')))));
+}
+
 /** One line of small chips: who has it, group, priority, target, steps done, time, people. Tap one to change it. */
 function infoChips(ctx, p, today) {
   const { store, ui } = ctx;
@@ -841,7 +859,7 @@ function infoChips(ctx, p, today) {
   if (tagName(g, p)) out.push(chip(`🏷 ${tagName(g, p)}`, 'Tag — tap to change', editMeta));
   out.push(chip(p.priority[0].toUpperCase() + p.priority.slice(1), 'Priority — tap to change', editMeta, p.priority === 'high' ? ' bad' : ''));
   out.push(chip(p.deadline ? `${overdue ? 'Overdue' : 'Target'} ${fmtDay(p.deadline)}` : '+ Target date', 'Target date — tap to change', editMeta, overdue ? ' bad' : ''));
-  if (p.steps.length) out.push(chip(`✓ ${p.steps.filter((x) => x.done).length} of ${p.steps.length} steps done`, 'Steps done', null));
+  if (p.steps.length && !isMainProject(ctx.store.view.data, p)) out.push(chip(`✓ ${p.steps.filter((x) => x.done).length} of ${p.steps.length} steps done`, 'Steps done', null));
   const timer = store.view.data.timer;
   const logs = p.timeLogs || [];
   const timed = groupHasTimer(g);
@@ -1004,7 +1022,7 @@ export function renderDetail(ctx) {
     mainChip(ctx, p), // 📂 Kilns › 📂 Supplier approval › (the projects this task is in)
     subProjectsBlock(ctx, p, today), // a 📂 project: TASKS (N)
 
-    section(stepsTitle(),
+    isMainProject(store.view.data, p) ? oldStepsBlock(ctx, p, openSteps) : section(stepsTitle(),
       h('ul', { class: 'steps sortable-steps', key: 'steps-' + p.id, 'data-project': p.id },
         openSteps.map((s) => stepRow(ctx, p, s))),
       h('form', {

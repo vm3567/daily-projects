@@ -981,7 +981,7 @@ test('📂 Projects page: a click on a project row selects it and stays on the p
   assert.match(mainsSrc, /ctx\.ui\.view === 'mains' && ctx\.showHere \? ctx\.showHere\(c\.id\)/, 'a task in the TASKS table while on the Projects page');
   const here = app.slice(app.indexOf('  showHere: (id) => {'), app.indexOf('  openProject: (id) => {'));
   assert.match(here, /select\(id\);/);
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-9'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-10'/, 'phones get the new copy');
 });
 
 test('📂 project page: "✕ Remove" on a task row takes it out of this project only — the task is kept (and stays in its other projects)', () => {
@@ -1024,4 +1024,25 @@ test('✅ Tasks: "All tasks N" | "No project N" switch (both red first, remember
   assert.match(app, /ui\.view === 'all' && !ui\.search && !ui\.adding \? taskFilterSwitch\(\) : showSort/, 'the switch replaces My order / Red first on Tasks');
   assert.match(app, /if \(\(ui\.sort !== 'red' && ui\.view !== 'all'\) \|\| ui\.search\) return list;/, 'Tasks is always red first');
   assert.match(app, /taskFilter: ui\.taskFilter,/, 'remembered');
+});
+
+test('📂 project page: no STEPS section and no step box (steps live in its tasks); old steps show under "Steps from before" and "↗ Make it a task" makes a task in this project', () => {
+  const s = mainsState();
+  applyOps(s, [makeOp('addStep', { projectId: 'm', stepId: 'os1', text: 'Order spare coil' })]);
+  const ui = { selected: 'm', update: {} };
+  const ctx = liveCtx(s, ui);
+  const page = renderDetail(ctx);
+  const text = page.textContent;
+  assert.ok(!rAll(page, (n) => n.nodeName === 'FORM' && /add-step/.test(n.className || '')).length, 'no add-step box on a project');
+  assert.ok(!/steps done/.test(text), 'no "x of y steps done" chip');
+  assert.ok(text.includes('Steps from before (1)') && text.includes('Order spare coil'));
+  const before = s.data.projects.length;
+  btn(page, '↗ Make it a task').__on.click();
+  assert.equal(s.data.projects.length, before + 1, 'a new task');
+  const made = s.data.projects.find((p) => p.name === 'Order spare coil');
+  assert.ok(made && (made.parentIds || []).includes('m'), 'the new task is in this project');
+  assert.ok(!renderDetail(ctx).textContent.includes('Steps from before'), 'the old step is gone from the project page');
+  // a task still has its steps section
+  ui.selected = 'p1';
+  assert.ok(rAll(renderDetail(ctx), (n) => n.nodeName === 'FORM' && /add-step/.test(n.className || '')).length === 1, 'tasks keep their steps');
 });
