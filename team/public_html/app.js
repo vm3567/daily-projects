@@ -1,7 +1,7 @@
 // Work Task: the team app. Staff see and fill their own tasks; the manager gives tasks and sees everything.
 // No outside libraries. All text from the server is put on screen as text (never as HTML).
 
-import { addDay, weekdayOf, dueOn, itemKey, diaryRows, fieldChanged, lateValue, afterFlush, boxStillThere, updateSaveBody, redrawHow, projectRowState, giveBackShow, keptNotice, noticeHow, pasteWaits, msgBoxSent, redrawAfterSend, taskSaveBody } from './logic.js'; // the rules (checked in tests/team-app.test.mjs)
+import { addDay, weekdayOf, dueOn, itemKey, diaryRows, fieldChanged, lateValue, afterFlush, boxStillThere, updateSaveBody, redrawHow, projectRowState, aboutShort, projectAboutOf, giveBackShow, keptNotice, noticeHow, pasteWaits, msgBoxSent, redrawAfterSend, taskSaveBody } from './logic.js'; // the rules (checked in tests/team-app.test.mjs)
 
 const TOKEN_KEY = 'wt.token';
 const state = {
@@ -845,7 +845,8 @@ function projectsList() {
     return el('li', { class: 'prow' + (state.sel === 'project:' + p.ref ? ' current' : '') },
       el('button', { class: 'prow-btn', onClick: () => openDetail('project:' + p.ref) },
         el('span', { class: 'dot ' + dot }),
-        el('span', { class: 'prow-text' }, el('span', { class: 'prow-name' }, '📁 ' + p.name, p.stuck ? el('span', { class: 'tag red new-tag' }, 'Stuck') : null), el('span', { class: 'prow-next' }, sub))));
+        el('span', { class: 'prow-text' }, el('span', { class: 'prow-name' }, '📁 ' + p.name, p.stuck ? el('span', { class: 'tag red new-tag' }, 'Stuck') : null),
+          p.projectAbout ? el('span', { class: 'prow-about' }, aboutShort(p.projectAbout)) : null, el('span', { class: 'prow-next' }, sub))));
   }));
 }
 
@@ -1006,7 +1007,7 @@ function detailColumn() {
     return el('div', { class: 'empty' }, el('p', null, 'Pick a task on the left.'),
       state.user.role === 'admin' ? el('p', null, el('button', { class: 'link', onClick: () => openDetail('give') }, '+ Give a task')) : null);
   }
-  let title = '', body;
+  let title = '', body, about = ''; // about: the project's short description, in grey under the title
   if (sel === 'give') { title = 'Give a task'; body = state.people.length ? taskForm() : el('p', { class: 'muted' }, 'Loading…'); }
   else if (sel.startsWith('edit:')) { title = 'Edit task'; body = state.detail && state.people.length ? taskForm() : el('p', { class: 'muted' }, 'Loading…'); }
   else if (sel === 'suggest') { title = '💡 Suggest a task'; body = suggestForm(); }
@@ -1015,10 +1016,12 @@ function detailColumn() {
   else if (sel.startsWith('project:')) {
     const pr = myProjects().find((x) => x.ref === sel.slice(8)), all = (state.detail && state.detail.tasks) || [];
     title = '📁 ' + (pr ? pr.name : (all[all.length - 1] && all[all.length - 1].project) || 'Project');
+    about = projectAboutOf([...(pr ? pr.steps : []), ...[...all].reverse()]);
     body = state.user.role === 'admin' ? adminProjectPage(all) : projectPage(pr, all.filter((t) => t.status === 'done' && !t.stepRef.endsWith(':whole')));
   }
   else if (sel.startsWith('task:')) {
     title = state.detail && state.detail.task ? state.detail.task.title : '';
+    about = state.detail && state.detail.task ? projectAboutOf([state.detail.task]) : '';
     body = state.detail ? (state.user.role === 'admin' ? taskDetail() : myTaskDetail())
       : state.detailFailed ? el('p', { class: 'muted' }, 'Could not open this task. ', el('button', { class: 'link', onClick: () => loadDetail() }, 'Try again'))
         : el('p', { class: 'muted' }, 'Loading…');
@@ -1028,6 +1031,7 @@ function detailColumn() {
       el('button', { class: 'icon back', 'aria-label': 'Back', onClick: () => closeDetail() }, '←'),
       el('h2', { class: 'detail-title' }, title),
       sel.startsWith('task:') && state.user.role === 'admin' && state.detail && state.detail.task ? taskActions(state.detail.task) : null),
+    about ? el('p', { class: 'project-about' }, (sel.startsWith('task:') ? '📁 ' : '') + about) : null,
     body);
 }
 

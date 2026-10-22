@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { addDay, weekdayOf, dueOn, itemKey, diaryRows, fieldChanged, lateValue, afterFlush, boxStillThere, updateSaveBody, redrawHow, projectRowState, giveBackShow, keptNotice, noticeHow, pasteWaits, msgBoxSent, redrawAfterSend, taskSaveBody } from '../team/public_html/logic.js';
+import { addDay, weekdayOf, dueOn, itemKey, diaryRows, fieldChanged, lateValue, afterFlush, boxStillThere, updateSaveBody, redrawHow, projectRowState, giveBackShow, keptNotice, noticeHow, pasteWaits, msgBoxSent, redrawAfterSend, taskSaveBody, aboutShort, projectAboutOf } from '../team/public_html/logic.js';
 const APP = readFileSync(new URL('../team/public_html/app.js', import.meta.url), 'utf8');
 
 // Wed 21 Oct 2026 is "today" in these checks; 18 Oct is a Sunday.
@@ -255,4 +255,24 @@ test('team: a refused update Send redraws its greyed Send button on any list the
   assert.ok(redrawAfterSend({ view: 'tasks', sel: 'task:5', taskId: 5 }), 'opened from Tasks');
   assert.ok(redrawAfterSend({ view: 'today', sel: '', taskId: 5 }), 'Today as before');
   assert.ok(!redrawAfterSend({ view: 'search', sel: 'task:6', taskId: 5 }), 'another task open: left alone');
+});
+
+test('project description: the list shows it cut to 90 letters with …; empty shows nothing', () => {
+  assert.equal(aboutShort(''), '');
+  assert.equal(aboutShort(undefined), '');
+  assert.equal(aboutShort('  Glaze  for\nthe basin line '), 'Glaze for the basin line');
+  assert.equal(aboutShort('x'.repeat(90)), 'x'.repeat(90), 'exactly 90: whole');
+  const cut = aboutShort('word '.repeat(40));
+  assert.ok(cut.length <= 90 && cut.endsWith('…') && !cut.includes(' …'), cut);
+  assert.equal(aboutShort('abcdefghij', 5), 'abcd…');
+});
+
+test('project description: taken from the project\'s tasks (the first one that has it); shown on the project and task pages and the list', () => {
+  assert.equal(projectAboutOf([]), '');
+  assert.equal(projectAboutOf(undefined), '');
+  assert.equal(projectAboutOf([{ projectAbout: '' }, { projectAbout: 'Kiln rebuild' }]), 'Kiln rebuild');
+  assert.equal(projectAboutOf([{ title: 'old server, no field' }]), '');
+  assert.match(APP, /class: 'prow-about' }, aboutShort\(p\.projectAbout\)\)/, 'manager\'s Projects list row');
+  assert.match(APP, /class: 'project-about' }/, 'under the title of the project and task pages');
+  assert.match(readFileSync(new URL('../team/public_html/sw.js', import.meta.url), 'utf8'), /const CACHE = 'worktask-v14'/, 'new files reach the phones');
 });

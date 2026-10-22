@@ -928,3 +928,29 @@ test('after project.sync the app follows the person the server names (a Work Tas
   assert.equal(serverHolder({}, 3, people), null, 'an older server without the field: nothing changes');
   assert.equal(serverHolder({ assigneeId: 9 }, 3, people).id, 9, 'followed even when the name is not loaded yet');
 });
+
+test('project description (about): saves trimmed, one line, at most 300; empty clears; no history line', () => {
+  const s = withProject('2026-10-01');
+  const p = s.data.projects[0];
+  assert.equal(p.about, undefined, 'a new project has no description yet (older saved data has none either)');
+  const before = (s.history['2026-10'] || []).length;
+  assert.ok(applyOp(s, op('setProjectField', { projectId: 'p1', field: 'about', value: '  New  glaze\n for the\t basin line  ' }, '2026-10-02')));
+  assert.equal(p.about, 'New glaze for the basin line', 'spaces collapsed, trimmed');
+  assert.equal((s.history['2026-10'] || []).length, before, 'no history line (it saves while typing)');
+  assert.equal(applyOp(s, op('setProjectField', { projectId: 'p1', field: 'about', value: 'New glaze for the basin line ' }, '2026-10-02')), false, 'the same words: not a change');
+  assert.ok(applyOp(s, op('setProjectField', { projectId: 'p1', field: 'about', value: 'x'.repeat(400) }, '2026-10-02')));
+  assert.equal(p.about.length, 300, 'cut to 300');
+  assert.ok(applyOp(s, op('setProjectField', { projectId: 'p1', field: 'about', value: '   ' }, '2026-10-02')));
+  assert.equal(p.about, '', 'empty clears it');
+  assert.equal(applyOp(s, op('setProjectField', { projectId: 'nope', field: 'about', value: 'Hi' }, '2026-10-02')), false, 'unknown project refused');
+});
+
+test('project description: older saved data without about still loads and works', () => {
+  const s = withProject('2026-10-01');
+  const old = clone(s);
+  delete old.data.projects[0].about; // saved before the description existed
+  assert.equal(applyOp(old, op('setProjectField', { projectId: 'p1', field: 'about', value: '' }, '2026-10-02')), false, 'missing counts as empty');
+  assert.ok(applyOp(old, op('setProjectField', { projectId: 'p1', field: 'name', value: 'Kiln trial 2' }, '2026-10-02')));
+  assert.ok(applyOp(old, op('setProjectField', { projectId: 'p1', field: 'about', value: 'Test firing' }, '2026-10-02')));
+  assert.equal(old.data.projects[0].about, 'Test firing');
+});

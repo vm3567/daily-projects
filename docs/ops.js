@@ -15,7 +15,8 @@ import { AI_DAILY_LIMIT, BRIEF_CLAIM_MINUTES } from './config.js';
 export const START_GROUPS = ['Acton', 'Personal', 'Ceramic Ninja'];
 export const PRIORITIES = ['high', 'medium', 'low'];
 export const DEFAULT_TARGET_DAYS = 30; // new projects get a target date 30 days ahead
-const PROJECT_FIELDS = ['name', 'groupId', 'priority', 'deadline', 'notes', 'tagId', 'status'];
+const PROJECT_FIELDS = ['name', 'groupId', 'priority', 'deadline', 'notes', 'tagId', 'status', 'about'];
+export const ABOUT_MAX = 300; // the project's short description (one line)
 export const MAX_SNOOZE_DAYS = 365;
 const STEP_FIELDS = ['text', 'dueDate', 'note', 'waiting', 'waitingOn', 'repeat'];
 
@@ -227,6 +228,10 @@ const handlers = {
     let value = a.value;
     if (a.field === 'name') value = cleanText(value, 200).trim() || p.name;
     if (a.field === 'notes') value = cleanText(value, 50000);
+    if (a.field === 'about') {
+      value = cleanText(value, 5000).replace(/\s+/g, ' ').trim().slice(0, ABOUT_MAX);
+      if ((p.about || '') === value) return false; // older projects have no about: the same as ''
+    }
     if (a.field === 'status') {
       value = cleanText(value, 200).replace(/\s+/g, ' ').trim();
       if ((p.status || '') === value) return false; // leaving the empty box is not a change (and not work)
@@ -259,6 +264,7 @@ const handlers = {
     else if (a.field === 'deadline') addEvent(state, op, p, 'edited', value ? `Target date: ${value}` : 'Target date removed');
     // status: no history event (it saves while typing)
     // notes: no history event (it would add a line for every few words typed)
+    // about: no history event (it saves while typing, like status)
     return true;
   },
 

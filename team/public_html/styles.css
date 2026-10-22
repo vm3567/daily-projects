@@ -169,3 +169,7 @@ table.report td.ok { color: var(--green); font-weight: 600; }
 #detail label.menu-row { display: block; cursor: pointer; }
 #detail .diary-days { list-style: none; padding: 0; margin: 4px 0; }
 .card.sent .row.spread, .card .row.spread { margin-bottom: 6px; }
+
+/* a given project's short description: grey, under its name */
+.prow-about { display: block; font-size: 13px; color: var(--muted); }
+.project-about { margin: -4px 0 10px; font-size: 14px; line-height: 1.45; color: var(--muted); overflow-wrap: anywhere; }

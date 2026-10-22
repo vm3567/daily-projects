@@ -2664,14 +2664,14 @@ async function giveProject(p, person, needsPhoto = !!ui.givePhoto) {
     await withSyncLock(async () => {
       const steps = person ? projectSteps(p) : [];
       // (the change of person is saved right after this: the server must not act on the older saved copy meanwhile)
-      const out = await teamApi('project.sync', { projectRef: p.id, project: p.name, assigneeId: person ? person.id : 0, steps, needsPhoto, reason: person ? '' : 'taken', baseCommit: store.base && store.base.commit, pending: true });
+      const out = await teamApi('project.sync', { projectRef: p.id, project: p.name, about: p.about || '', assigneeId: person ? person.id : 0, steps, needsPhoto, reason: person ? '' : 'taken', baseCommit: store.base && store.base.commit, pending: true });
       team.gen++; // a list fetched before this change is old now: it must not move the project back
       store.dispatch('setProjectTeam', { projectId: p.id, userId: person ? person.id : null, name: person ? person.name : '', needsPhoto });
       ui.giveOpen = null;
       ui.givePhoto = false;
       toast(person ? `👥 ${p.name} given to ${person.name} ✓` : `Taken back: ${p.name}`);
       // a step the server did not make yet (just finished): sent again later
-      rememberSync(p.id, !person ? null : notSent(out, steps).length ? SYNC_RETRY : JSON.stringify([person.id, p.name, steps, needsPhoto]));
+      rememberSync(p.id, !person ? null : notSent(out, steps).length ? SYNC_RETRY : syncSig(person.id, p, steps, needsPhoto));
     });
     loadTeam(true);
   } catch (e) { toast(e.message, 5000); } finally { team.busy.delete(p.id); render(); }
@@ -2682,6 +2682,11 @@ function notSent(out, steps) {
   if (Array.isArray(out.skipped)) return out.skipped;
   const on = new Set((out.tasks || []).map((t) => t.stepRef));
   return steps.filter((x) => x.title && !on.has(x.stepRef)).map((x) => x.stepRef);
+}
+
+/** What was sent for a given project: a change in any part (the short description too) sends it again. */
+function syncSig(userId, p, steps, needsPhoto) {
+  return JSON.stringify([userId, p.name, steps, !!needsPhoto, p.about || '']);
 }
 
 function rememberSync(id, sig) {
@@ -2714,11 +2719,11 @@ async function syncGivenNow(gen) {
       if (!p || !p.team) continue;
     }
     const steps = p.state === 'active' ? projectSteps(p) : [];
-    const sig = JSON.stringify([p.team.userId, p.name, steps, !!p.team.needsPhoto]);
+    const sig = syncSig(p.team.userId, p, steps, !!p.team.needsPhoto);
     if (m[p.id] === sig) continue;
-    const name = p.name, who = p.team.name;
+    const name = p.name, about = p.about || '', who = p.team.name;
     try {
-      const out = await teamApi('project.sync', { projectRef: p.id, project: name, assigneeId: p.state === 'active' ? p.team.userId : 0, steps, needsPhoto: !!p.team.needsPhoto, reason: p.state,
+      const out = await teamApi('project.sync', { projectRef: p.id, project: name, about, assigneeId: p.state === 'active' ? p.team.userId : 0, steps, needsPhoto: !!p.team.needsPhoto, reason: p.state,
         baseCommit: store.base && store.base.commit, pending: store.pending.length > 0 });
       // a re-opened step that was just finished is not made yet: sent again next time
       rememberSync(id, notSent(out, steps).length ? SYNC_RETRY : sig);

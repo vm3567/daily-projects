@@ -5,7 +5,7 @@ import { h, fmtDay, fmtTime, fmtSize, HAS_KEYBOARD } from './dom.js';
 const MOD = /Mac|iPhone|iPad/.test(globalThis.navigator ? navigator.platform || navigator.userAgent || '' : '') ? '⌘' : 'Ctrl';
 import { dotColour, isSnoozed, restUntil, stepWaitsForReminder, daysBetween, addDays, todayIndia, isOverdue, indiaDate, waitingDays, lastWorkDate, nextStep, stepLinkedTo, personStatus, minutesBetween, fmtMinutes, weekStart, seenUpTo } from '../rules.js';
 import { WAIT_RED_DAYS } from '../config.js';
-import { newId, PRIORITIES, cleanUrl, groupHasTimer, MAX_SNOOZE_DAYS } from '../ops.js';
+import { newId, PRIORITIES, cleanUrl, groupHasTimer, MAX_SNOOZE_DAYS, ABOUT_MAX } from '../ops.js';
 
 const STATUS_OLD_DAYS = 7; // a status older than this turns grey and asks for an update
 import { uploadFiles, openFile, uploadBlob } from './files.js';
@@ -28,12 +28,13 @@ const HISTORY_WORDS = {
 function autoField(tag, props, onSave, onEnter = null) {
   let timer = null;
   const save = (el) => { clearTimeout(timer); onSave(el.value); };
+  const { oneLine, ...rest } = props; // oneLine: a textarea that wraps, but Enter ends it like an input
   return h(tag, {
-    ...props,
+    ...rest,
     onInput: (e, el) => { clearTimeout(timer); timer = setTimeout(() => save(el), 900); },
     onChange: (e, el) => save(el),
     onFocusout: (e, el) => save(el),
-    onKeydown: tag === 'input' ? (e, el) => { if (e.key === 'Enter') { e.preventDefault(); el.blur(); if (onEnter) onEnter(); } } : undefined,
+    onKeydown: tag === 'input' || oneLine ? (e, el) => { if (e.key === 'Enter') { e.preventDefault(); el.blur(); if (onEnter) onEnter(); } } : undefined,
   });
 }
 
@@ -452,6 +453,14 @@ function notesLog(ctx, p, notesShown) {
 }
 
 /** "Status: one line on where it stands" under the project name. Grey and asks for an update after 7 days. */
+/** The project's short description, in grey under the name. Click to change it; it saves by itself. */
+function aboutLine(ctx, p) {
+  return autoField('textarea', {
+    class: 'about-input' + (p.about ? '' : ' empty'), value: p.about || '', key: 'about-' + p.id, rows: Math.min(4, Math.max(1, Math.ceil((p.about || '').length / 80))), maxlength: ABOUT_MAX, oneLine: true,
+    placeholder: '+ Add a short description', 'aria-label': 'Short description of this project', title: 'Click to change the short description',
+  }, (v) => ctx.store.dispatch('setProjectField', { projectId: p.id, field: 'about', value: v }));
+}
+
 function statusLine(ctx, p) {
   const { store } = ctx;
   const today = todayIndia();
@@ -871,6 +880,7 @@ export function renderDetail(ctx) {
         onClick: () => { const n = document.querySelector(`[data-key="name-${p.id}"]`); if (n) { n.focus(); n.select(); } },
       }, '✎'),
       h('div', { class: 'state-buttons' }, stateButtons(ctx, p))),
+    aboutLine(ctx, p),
     projectMenu(ctx, p),
     snoozeBar(ctx, p),
     teamBar(ctx, p),

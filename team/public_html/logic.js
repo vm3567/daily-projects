@@ -126,6 +126,18 @@ export function projectRowState(p) {
   return { dot, now };
 }
 
+/** A project's short description for a list row: one line, cut to `max` letters with … ('' = nothing to show). */
+export function aboutShort(text, max = 90) {
+  const s = String(text || '').replace(/\s+/g, ' ').trim();
+  return s.length > max ? s.slice(0, max - 1).trimEnd() + '…' : s;
+}
+
+/** The short description of a given project, from its tasks (the first one that has it). */
+export function projectAboutOf(tasks) {
+  for (const t of tasks || []) if (t && t.projectAbout) return t.projectAbout;
+  return '';
+}
+
 /**
  * A waiting item the server refused: what to show. { sticky: true, title, body } = the notice that stays (words to copy),
  * or { sticky: false, text, ms } = a short toast. boxThere = the box the words went back to can still be opened.

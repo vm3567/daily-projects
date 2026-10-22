@@ -116,7 +116,7 @@ function server_sync_projects(): void {
           && strtotime($mv['at']) > (int)setting('psc:' . md5($ref), '0')) $who = (int)$mv['to_id']; // moved after the owner last gave it
       }
       $in = $p
-        ? ['project' => (string)($p['name'] ?? ''), 'assigneeId' => $who, 'steps' => $active ? server_steps($p, $today) : [],
+        ? ['project' => (string)($p['name'] ?? ''), 'about' => (string)($p['about'] ?? ''), 'assigneeId' => $who, 'steps' => $active ? server_steps($p, $today) : [],
            'needsPhoto' => !empty($p['team']['needsPhoto']), 'reason' => $p['state'] ?? '', '_server' => true, 'doneAt' => server_done_at($p), '_since' => $since]
         : ['project' => '', 'assigneeId' => 0, 'steps' => [], '_server' => true, '_since' => $since, 'reason' => in_array($ref, array_column($data['projects'], 'id'), true) ? 'taken' : 'deleted'];
       try { locked_project_sync($owner, $in, $ref, $today); }

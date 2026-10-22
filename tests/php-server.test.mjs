@@ -852,3 +852,40 @@ test('regression: the projects app naming the old person after a Work Task move 
   assert.deepEqual((await openOf('suresh', 'rg23')).map((t) => t.stepRef), ['rg23b']);
   await call('project.sync', { projectRef: 'rg23', project: '', assigneeId: 0, steps: [] }, tok.boss);
 });
+
+test('project description: project.sync stores about; the team sees it as projectAbout (overview, project pages, tasks); cut to 300', { skip }, async () => {
+  const pab = () => String(sql(`USE wt; SELECT COUNT(*) FROM wt.settings WHERE k = '${'pab:' + md5('ab1')}'`)).trim().split('\n').pop();
+  const sync = (about) => call('project.sync', { projectRef: 'ab1', project: 'About P', about, assigneeId: id.suresh, steps: [{ stepRef: 'ab1a', title: 'A one' }, { stepRef: 'ab1b', title: 'A two' }] }, tok.boss);
+  const r = await sync('  Glaze  for the\nnew basin line ');
+  assert.equal(r.tasks[0].projectAbout, 'Glaze for the new basin line', 'one line, trimmed');
+  const row = (await call('projects.overview', {}, tok.boss)).projects.find((p) => p.ref === 'ab1');
+  assert.equal(row.projectAbout, 'Glaze for the new basin line', 'the manager\'s Projects list');
+  assert.equal((await call('project.team', { projectRef: 'ab1' }, tok.boss)).tasks[0].projectAbout, 'Glaze for the new basin line');
+  assert.ok((await call('project.mine', { projectRef: 'ab1' }, tok.suresh)).tasks.every((t) => t.projectAbout === 'Glaze for the new basin line'), 'the person\'s project page');
+  const mine = await openOf('suresh', 'ab1');
+  assert.ok(mine.length === 2 && mine.every((t) => t.projectAbout === 'Glaze for the new basin line'), 'my.today tasks');
+  assert.equal((await call('task.get', { id: mine[0].id }, tok.suresh)).task.projectAbout, 'Glaze for the new basin line', 'the task page');
+  await sync('y'.repeat(400));
+  assert.equal((await openOf('suresh', 'ab1'))[0].projectAbout.length, 300, 'cut to 300');
+  await sync('Changed words');
+  assert.equal((await openOf('suresh', 'ab1'))[0].projectAbout, 'Changed words', 'a change is sent again');
+  await call('project.sync', { projectRef: 'ab1', project: 'About P', assigneeId: id.suresh, steps: [{ stepRef: 'ab1a', title: 'A one' }, { stepRef: 'ab1b', title: 'A two' }] }, tok.boss);
+  assert.equal((await openOf('suresh', 'ab1'))[0].projectAbout, 'Changed words', 'a sync without about (an older app) keeps it');
+  await sync('');
+  assert.equal((await openOf('suresh', 'ab1'))[0].projectAbout, '', 'emptied');
+  assert.equal(pab(), '0', 'no empty row kept');
+  const plain = await call('task.save', { assigneeId: id.anita, title: 'Not a project step' }, tok.boss);
+  assert.equal(plain.task.projectAbout, '', 'a task that is not a project step has none');
+  await call('project.sync', { projectRef: 'ab1', project: '', assigneeId: 0, steps: [] }, tok.boss);
+});
+
+test('project description: the server-side sync from saved projects carries about, and a change updates it', { skip }, async () => {
+  const P = (about) => ({ id: 'ab2', name: 'Saved About P', state: 'active', about, team: { userId: id.suresh, name: 'S' }, steps: [{ id: 'ab2a', text: 'S one', done: false }] });
+  await saveProjects([P('Kiln rebuild for line 2')]);
+  assert.equal((await openOf('suresh', 'ab2'))[0].projectAbout, 'Kiln rebuild for line 2');
+  await saveProjects([P('Kiln rebuild, now line 3')]);
+  assert.equal((await openOf('suresh', 'ab2'))[0].projectAbout, 'Kiln rebuild, now line 3', 'changed');
+  await saveProjects([{ ...P(''), about: undefined }]);
+  assert.equal((await openOf('suresh', 'ab2'))[0].projectAbout, '', 'saved data without about: none');
+  await saveProjects([]);
+});

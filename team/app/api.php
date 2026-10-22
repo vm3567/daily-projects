@@ -76,6 +76,16 @@ function move_tasks(array $me, array $tasks, int $toId, bool $tell = true): int 
   return $n;
 }
 
+/** ref => the given project's short description (sent with project.sync), for the refs that have one. */
+function project_abouts(array $refs): array {
+  if (!$refs) return [];
+  $keys = [];
+  foreach ($refs as $r) $keys['pab:' . md5((string)$r)] = (string)$r;
+  $out = [];
+  foreach (all('SELECT k, v FROM settings WHERE k IN (' . implode(',', array_fill(0, count($keys), '?')) . ')', array_keys($keys)) as $r) $out[$keys[$r['k']]] = $r['v'];
+  return $out;
+}
+
 /** Tasks with their update for today and the one before, ready for the screen. */
 function tasks_out(array $tasks, string $day): array {
   if (!$tasks) return [];
@@ -112,6 +122,7 @@ function tasks_out(array $tasks, string $day): array {
   $files = [];
   foreach (all("SELECT id, task_id, name, mime FROM task_files WHERE task_id IN ($in) ORDER BY id", $ids) as $f) $files[$f['task_id']][] = ['id' => (int)$f['id'], 'name' => $f['name'], 'image' => str_starts_with($f['mime'], 'image/')];
   $queued = fn($t) => $t['seq'] !== null && $t['status'] === 'open' && (int)$t['seq'] > ($firstSeq[$t['project_ref'] . '|' . $t['assignee_id']] ?? PHP_INT_MAX);
+  $about = project_abouts($refs);
   $turnSince = [];
   foreach ($tasks as $t) {
     if ($t['seq'] === null || !$t['project_ref']) continue;
@@ -123,6 +134,7 @@ function tasks_out(array $tasks, string $day): array {
     'assignee' => ['id' => (int)$t['assignee_id'], 'name' => $t['assignee_name'] ?? ''],
     'repeat' => $t['repeat_kind'], 'skipSunday' => (bool)$t['skip_sunday'], 'weekday' => $t['weekday'] === null ? null : (int)$t['weekday'],
     'dueDate' => $t['due_date'], 'startDate' => $t['start_date'], 'project' => $t['project'] ?? '', 'projectRef' => $t['project_ref'], 'stepRef' => $t['step_ref'],
+    'projectAbout' => $t['seq'] !== null && $t['project_ref'] ? ($about[$t['project_ref']] ?? '') : '',
     'status' => $t['status'], 'createdAt' => $t['created_at'], 'doneAt' => $t['done_at'],
     'dueToday' => $t['status'] === 'open' && due_on($t, $day) && !$queued($t),
     'today' => update_out($todays[$t['id']] ?? null, $photos), 'last' => update_out($lasts[$t['id']] ?? null, $photos),
@@ -578,7 +590,7 @@ function handle(string $a, array $in): array {
         $ids = array_map(fn($t) => $t['id'], $list);
         $last = one('SELECT MAX(day) AS d FROM updates WHERE task_id IN (' . implode(',', array_fill(0, count($ids), '?')) . ')', $ids)['d'] ?? null;
         $names = array_values(array_unique(array_map(fn($t) => $t['assignee']['name'], $openAll ?: $list)));
-        $out[] = ['ref' => $ref, 'name' => end($list)['project'] ?: 'Project', 'people' => $names, 'open' => count($open) ?: count($openAll), 'done' => count($done),
+        $out[] = ['ref' => $ref, 'name' => end($list)['project'] ?: 'Project', 'projectAbout' => end($list)['projectAbout'], 'people' => $names, 'open' => count($open) ?: count($openAll), 'done' => count($done),
           'current' => $cur ? ['id' => $cur['id'], 'title' => $cur['title'], 'sentToday' => (bool)$cur['today']] : null, 'lastUpdate' => $last,
           'stuck' => (bool)array_filter($openAll, fn($t) => $t['stuck']), 'staffSteps' => count(array_filter($list, fn($t) => $t['createdBy'] === $t['assignee']['id']))];
       }
@@ -856,6 +868,11 @@ function add_staff_step(array $me, string $ref, string $title, array $mine, stri
 /** The work of project.sync (see there). Runs inside one transaction, one call per project at a time. */
 function project_sync(array $me, array $in, string $ref, string $day): array {
   $name = txt($in['project'] ?? '', 200);
+  // the project's short description (one line, at most 300): the team sees it under the project name
+  if (array_key_exists('about', $in)) {
+    $about = txt(preg_replace('/\s+/u', ' ', (string)$in['about']) ?? '', 300);
+    if ($about === '') q('DELETE FROM settings WHERE k = ?', ['pab:' . md5($ref)]); else set_setting('pab:' . md5($ref), $about);
+  }
   $who = (int)($in['assigneeId'] ?? 0);
   // moved in Work Task (Move to…) after the owner's app last sent it, and the app still names the old person
   // (it did not see the move, say the new person finished every step first): the project stays with the new person

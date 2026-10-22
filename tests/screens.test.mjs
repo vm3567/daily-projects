@@ -224,3 +224,41 @@ test('worktask.in: "Seen" and "Send" mark team messages read only up to the newe
   assert.deepEqual(calls[0], ['seen', [8, 7], 41], 'Seen: up to the newest shown (41), not whatever came later');
   assert.deepEqual(calls[1], ['reply', [8, 7], 41], 'Send: the same');
 });
+
+test('project page: the short description shows in grey under the name, or a faint "+ Add a short description"', () => {
+  const s = sampleState();
+  const find = (node, f) => (f(node) ? node : (node.childNodes || []).map((c) => find(c, f)).find(Boolean));
+  const box = (el) => find(el, (n) => (n.className || '').split(' ').includes('about-input'));
+  const empty = box(renderDetail(fakeCtx(s, { selected: 'p1', update: {} })));
+  assert.ok(empty, 'the description box is there');
+  assert.equal(empty.getAttribute('placeholder'), '+ Add a short description');
+  assert.ok(empty.className.includes('empty'));
+  assert.equal(empty.value, '');
+  applyOps(s, [makeOp('setProjectField', { projectId: 'p1', field: 'about', value: 'Glaze for the new basin line' })]);
+  const el = renderDetail(fakeCtx(s, { selected: 'p1', update: {} }));
+  const full = box(el);
+  assert.equal(full.value, 'Glaze for the new basin line');
+  assert.ok(!full.className.includes('empty'));
+  assert.equal(full.getAttribute('maxlength'), '300');
+  assert.equal(full.getAttribute('oneLine'), null, 'oneLine is not put on the page');
+  // right under the title row
+  const kids = el.childNodes.filter((c) => c.nodeType === 1);
+  const top = kids.findIndex((c) => c.className === 'detail-top');
+  assert.ok(top >= 0 && kids[top + 1] === full, 'just under the title row');
+  // it saves by itself, like the name
+  const sent = [];
+  const ctx = fakeCtx(s, { selected: 'p1', update: {} });
+  ctx.store.dispatch = (type, a) => { sent.push([type, a]); return true; };
+  box(renderDetail(ctx)).__on.focusout(null, { value: 'Changed' });
+  assert.deepEqual(sent, [['setProjectField', { projectId: 'p1', field: 'about', value: 'Changed' }]]);
+});
+
+test('project description goes to the team: both project.sync calls send about, and a change of it sends the project again', async () => {
+  const { readFileSync } = await import('node:fs');
+  const APP = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
+  const sends = APP.match(/teamApi\('project\.sync', \{ projectRef: p\.id, [^}]*\}/g) || [];
+  assert.equal(sends.length, 2, 'giveProject and syncGivenNow');
+  for (const s of sends) assert.match(s, /\babout\b/, s);
+  assert.match(APP, /function syncSig\(userId, p, steps, needsPhoto\) \{\n\s*return JSON\.stringify\(\[[^\]]*p\.about \|\| ''\]\);/, 'the description is in the change signature');
+  assert.ok(!/JSON\.stringify\(\[(p\.team\.userId|person\.id), p\.name/.test(APP), 'no signature made without it');
+});
