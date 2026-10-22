@@ -981,7 +981,7 @@ test('📂 Projects page: a click on a project row selects it and stays on the p
   assert.match(mainsSrc, /ctx\.ui\.view === 'mains' && ctx\.showHere \? ctx\.showHere\(c\.id\)/, 'a task in the TASKS table while on the Projects page');
   const here = app.slice(app.indexOf('  showHere: (id) => {'), app.indexOf('  openProject: (id) => {'));
   assert.match(here, /select\(id\);/);
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-10'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-11'/, 'phones get the new copy');
 });
 
 test('📂 project page: "✕ Remove" on a task row takes it out of this project only — the task is kept (and stays in its other projects)', () => {
@@ -1045,4 +1045,12 @@ test('📂 project page: no STEPS section and no step box (steps live in its tas
   // a task still has its steps section
   ui.selected = 'p1';
   assert.ok(rAll(renderDetail(ctx), (n) => n.nodeName === 'FORM' && /add-step/.test(n.className || '')).length === 1, 'tasks keep their steps');
+});
+
+test('task lists: a task with no next step shows no red "No next step — add one" line (the + on the left adds one)', async () => {
+  const { readFileSync } = await import('node:fs');
+  const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
+  const row = app.slice(app.indexOf('function projectRow('), app.indexOf('function rowAction('));
+  assert.ok(!row.includes('No next step — add one'), 'the red line is gone from list rows (owner asked, 22 Oct)');
+  assert.match(row, /class: 'quick-add', title: 'Add the first step'/, 'the + to add a step stays');
 });

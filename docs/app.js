@@ -923,7 +923,7 @@ function projectRow(p, today, opts = {}) {
           p.state !== 'active' ? h('span', { class: 'tag' }, p.state) : null,
           p.priority === 'high' ? h('span', { class: 'tag high' }, 'High') : null),
         asProject ? h('span', { class: 'prow-next' }, mainSummary(childrenOf(store.view.data, p.id).filter((c) => c.state !== 'finished'), today)) : null,
-        asProject ? null : h('span', { class: 'prow-next' + (ns ? '' : ' warn') }, ns ? `Next: ${ns.text}` : 'No next step — add one',
+        asProject ? null : h('span', { class: 'prow-next' }, ns ? `Next: ${ns.text}` : '', // (no next step: nothing said — the + on the left adds one)
           ns && ns.waiting ? waitingTag(ns) : null,
           ns && ns.snoozedUntil && ns.snoozedUntil > today ? h('span', { class: 'tag repeat' }, `↻ from ${fmtDay(ns.snoozedUntil)}`) : null,
           isOverdue(p, today) ? h('span', { class: 'tag late' }, `Overdue · ${fmtDay(p.deadline)}`) : null,
