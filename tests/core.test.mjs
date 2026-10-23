@@ -3037,3 +3037,18 @@ test('📂 Review round 2: an inner project\'s own late step turns the outer pro
   assert.equal(listColour(s.data, P(s, 'big'), late), 'red', 'so the outer one is red too');
 });
 
+test('📂 Review round 3: projectParts finds the tasks and the projects inside, every level, in one pass (no full scan for each one)', async () => {
+  const { projectParts } = await import('../docs/rules.js');
+  const { readFileSync } = await import('node:fs');
+  const s = withMains();
+  applyOp(s, op('createMainProject', { projectId: 'big', name: 'Plant upgrade' }, '2026-10-01'));
+  applyOp(s, op('addToProject', { projectId: 'k1', parentId: 'm' }, '2026-10-01'));
+  applyOp(s, op('addToProject', { projectId: 'm', parentId: 'big' }, '2026-10-01'));
+  applyOp(s, op('addToProject', { projectId: 'k2', parentId: 'big' }, '2026-10-01'));
+  const parts = projectParts(s.data, 'big');
+  assert.deepEqual(parts.tasks.map((p) => p.id).sort(), ['k1', 'k2']);
+  assert.deepEqual(parts.projects.map((p) => p.id), ['m']);
+  const src = readFileSync(new URL('../docs/ui/mains.js', import.meta.url), 'utf8');
+  assert.ok(!src.includes('subProjectsDeep'), 'the colour uses projectParts');
+});
+

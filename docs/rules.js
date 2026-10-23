@@ -464,9 +464,16 @@ export function descendantIds(data, id) {
 /** The tasks inside the project `id` at any depth (the ones in its projects too), each once; 📂 Misc: its loose tasks. */
 export function projectTasks(data, id) {
   if (id === MISC_ID && hasMisc(data)) return childrenOf(data, id);
+  return projectParts(data, id).tasks;
+}
+
+/** Everything inside the project `id` at any depth, in one pass: { tasks, projects } (isMainProject for each, without a scan each). */
+export function projectParts(data, id) {
   const ids = descendantIds(data, id);
-  const holders = new Set(data.projects.flatMap((p) => parentIdsOf(p))); // (isMainProject for each, in one pass)
-  return data.projects.filter((p) => ids.has(p.id) && !p.isMain && !holders.has(p.id));
+  const holders = new Set(data.projects.flatMap((p) => parentIdsOf(p)));
+  const tasks = [], projects = [];
+  for (const p of data.projects) if (ids.has(p.id)) (p.isMain || holders.has(p.id) ? projects : tasks).push(p);
+  return { tasks, projects };
 }
 
 /** The 📂 projects right inside the project `id` (one level down). */

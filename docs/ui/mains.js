@@ -4,7 +4,7 @@
 // on a task, the small project chips under a task's row in the lists, and the "📂 Projects" page.
 
 import { h, fmtDay } from './dom.js';
-import { dotColour, nextStep, todayIndia, indiaDate, childrenOf, parentsOf, isMainProject, mainProjects, mainColour, mainSummary, projectTasks, projectLine, subProjectsOf, descendantIds, mainChoices, moveChoices, moveSteps, addHereChoices, orderedTasks, movedOrder, dropSlot, droppedOrder } from '../rules.js';
+import { dotColour, nextStep, todayIndia, indiaDate, childrenOf, parentsOf, isMainProject, mainProjects, mainColour, mainSummary, projectTasks, projectLine, subProjectsOf, projectParts, mainChoices, moveChoices, moveSteps, addHereChoices, orderedTasks, movedOrder, dropSlot, droppedOrder } from '../rules.js';
 import { newId } from '../ops.js';
 import { stageCounts, byStage } from '../rules.js';
 import { stageChip, stageFilterBar, ownerStage } from './stage.js';
@@ -19,18 +19,12 @@ function redFirst(list, colour) {
     .sort((a, b) => a.c - b.c || a.r - b.r || a.i - b.i).map((x) => x.p);
 }
 
-/** Every 📂 project inside the project `id`, at any depth. */
-function subProjectsDeep(data, id) {
-  const ids = descendantIds(data, id);
-  return data.projects.filter((x) => ids.has(x.id) && isMainProject(data, x));
-}
-
 /** The dot in a list: a 📂 project shows the worst of itself and its tasks; a task its own dot. */
 export function listColour(data, p, today = todayIndia()) {
   if (!isMainProject(data, p)) return dotColour(p, today);
   // its tasks at any depth, and the projects inside it that have a step of their own (their own dot counts too)
-  const inner = subProjectsDeep(data, p.id).filter((c) => nextStep(c, today));
-  return mainColour(p, [...projectTasks(data, p.id), ...inner], today);
+  const { tasks, projects } = projectParts(data, p.id);
+  return mainColour(p, [...tasks, ...projects.filter((c) => nextStep(c, today))], today);
 }
 
 function focusBox(key) {
