@@ -23,15 +23,10 @@ The user is not a programmer. Use short, plain English.
    node tools/tracker.mjs mail-body <id>
    ```
 
-3. Write a short, polite reply in the owner's voice:
-   - Plain English, Indian business email tone (courteous, direct, no fancy words).
+3. Write a short reply in the owner's own voice: load and follow the **my-writing-style** skill (the owner's tone for seniors, team and vendors, greetings, dos and don'ts).
    - Use the task's notes for facts. Never invent prices, dates or promises. If a fact is missing, write `[fill in: …]`.
-   - Start with "Dear <first name>," and end with:
-
-     ```
-     Regards,
-     Venkat
-     ```
+   - Greeting as the skill says ("Dear Sir," / "Dear Mr. <Name>," / "Dear Ms. <Name>,").
+   - End with a short closing line such as "Thank you." and stop. Do NOT add "Regards" or a name: Outlook adds "Thanks & Regards," and the signature by itself.
 
 4. Show ALL the drafts to the owner in chat first (id, subject, to whom, the draft). Ask: "Save these as drafts? (yes / change …)". Do nothing until he says yes. Change any draft he asks for.
 

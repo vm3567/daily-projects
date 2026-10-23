@@ -23,3 +23,5 @@ The owner asked for this so a later update never breaks what already works.
 - Never print or paste passwords, keys or tokens. Run the secret scan before every commit.
 - Deploy with `sh tools/deploy-worktask.sh` (it never deletes files on the server).
 - Test only on 127.0.0.1 with the throwaway data, never on the live site's data.
+- Any email drafted for the owner (/replies, follow-ups, any mail the owner asks for) must follow the my-writing-style skill
+  (~/.claude/skills/my-writing-style). No "Regards"/signature at the end: Outlook adds "Thanks & Regards," and the signature itself.
