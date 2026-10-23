@@ -17,6 +17,7 @@
 //   node tools/tracker.mjs only-on <project> <Mon,Thu|every> [--remind HH:MM|off]
 //   node tools/tracker.mjs edit-step <project> "<step text or id>" "<new text>"
 //   node tools/tracker.mjs add-note <project> "<text>"
+//   node tools/tracker.mjs add-inbox "<text>" [--note "<up to 600 letters>"]   (📥 Inbox: you decide later; the same one twice is skipped)
 //   node tools/tracker.mjs new-task "<name>" [--group "<group>"] [--priority high|medium|low] [--steps "<a>" "<b>" ...] [--project "<project>"]
 //                         (new-project: the older name, the same)
 //   node tools/tracker.mjs restore <YYYY-MM-DD>          (shows that version; add --yes to restore it)
@@ -446,6 +447,17 @@ try {
         const p = findProject(state.data, query);
         return [makeOp('addWorkNote', { projectId: p.id, noteId: newId(), text })];
       }, 'Work note');
+      break;
+    }
+    case 'add-inbox': { // e.g. an email read in the browser: lands in 📥 Inbox, the owner decides later
+      const text = (args[0] || '').trim();
+      if (!text || text.startsWith('--')) throw new Error('Give the Inbox text first.');
+      const note = (argValue(args, '--note') || '').trim();
+      commitOps((state) => {
+        const same = (state.data.inbox || []).find((x) => x.text === text && (x.note || '') === note.slice(0, 600));
+        if (same) { console.log(`Already in the Inbox: ${text}`); return []; }
+        return [makeOp('addInbox', { itemId: newId(), text, ...(note ? { note } : {}) })];
+      }, 'Inbox');
       break;
     }
     case 'new-task':

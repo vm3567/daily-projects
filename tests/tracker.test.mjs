@@ -75,6 +75,18 @@ test('set-about saves the project\'s short description (cut to 1000 letters)', (
   assert.equal(data().projects[0].about.length, 1000);
 });
 
+test('add-inbox puts an email (or idea) into the 📥 Inbox with a note; the same one twice is skipped', () => {
+  tracker('add-inbox', 'RE: Media Testing – Sample Details', '--note', 'From Sandeep <s@example.com>. Results by 26.10.');
+  let inbox = data().inbox;
+  assert.equal(inbox.length, 1);
+  assert.equal(inbox[0].text, 'RE: Media Testing – Sample Details');
+  assert.equal(inbox[0].note, 'From Sandeep <s@example.com>. Results by 26.10.');
+  assert.match(tracker('add-inbox', 'RE: Media Testing – Sample Details', '--note', 'From Sandeep <s@example.com>. Results by 26.10.'), /Already in the Inbox/);
+  assert.equal(data().inbox.length, 1, 'not added twice');
+  assert.throws(() => tracker('add-inbox', '--note', 'x'), /Give the Inbox text first/);
+  assert.equal(data().projects.filter((p) => /Media Testing/.test(p.name)).length, 0, 'no task is made');
+});
+
 test('summary, today list and show are readable', () => {
   assert.match(tracker('summary'), /1 active tasks/);
   assert.match(tracker('list', '--today'), /All active tasks are green today/, 'worked on today = green, so nothing left');
