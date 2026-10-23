@@ -67,24 +67,49 @@ async function startStaff(user) {
     document.head.appendChild(link);
   }
   root.replaceChildren(h('div', { class: 'loading' }, 'Loading…'));
-  const [{ createStaff, staffApi }, rules] = await Promise.all([import('./ui/staff.js'), import('../logic.js')]);
-  const api = staffApi(serverToken(), '../api/');
-  if (!user) { try { user = (await api('me')).user; } catch (e) { if (e.auth) { toSignIn(); return; } root.replaceChildren(h('div', { class: 'loading' }, e.message)); return; } }
+  const [{ createStaff, staffApi, shrinkPhoto, browserPush }, { idbOutbox }, rules] = await Promise.all([import('./ui/staff.js'), import('./ui/staffbox.js'), import('../logic.js')]);
+  let staff = null;
+  const api = staffApi(serverToken(), '../api/', { onNet: (on) => { if (staff) staff.setOffline(!on); } });
+  if (!user) {
+    try { user = (await api('me')).user; } // (offline: the saved copy)
+    catch (e) { if (e.auth) { location.href = '../'; return; } root.replaceChildren(h('div', { class: 'loading' }, e.message)); return; }
+  }
   const photos = new Map();
   const photo = (kind, id) => {
     const k = kind + ':' + id;
-    if (!photos.has(k)) photos.set(k, fetch(`../api/?a=${kind}&id=${id}`, { headers: { Authorization: 'Bearer ' + serverToken() } }).then((r) => (r.ok ? r.blob() : Promise.reject(new Error('photo')))).then((b) => URL.createObjectURL(b)));
+    if (!photos.has(k)) {
+      const p = fetch(`../api/?a=${kind}&id=${id}`, { headers: { Authorization: 'Bearer ' + serverToken() } }).then((r) => (r.ok ? r.blob() : Promise.reject(new Error('photo')))).then((b) => URL.createObjectURL(b));
+      p.catch(() => photos.delete(k)); // a failed one is tried again next time
+      photos.set(k, p);
+    }
     return photos.get(k);
   };
   const signOut = async () => {
     try { await api('logout'); } catch { /* signed out on this phone anyway */ }
-    try { localStorage.removeItem(SERVER_TOKEN_KEY); localStorage.removeItem(WHO_KEY); } catch { /* blocked */ }
+    try { // nothing of this person stays for the next one on this phone (what waits to send stays, sent after they sign in again)
+      localStorage.removeItem(SERVER_TOKEN_KEY); localStorage.removeItem(WHO_KEY);
+      for (const k of Object.keys(localStorage)) if (k.startsWith('wt.c.')) localStorage.removeItem(k);
+    } catch { /* blocked */ }
     location.href = '../';
   };
-  const staff = createStaff({ root, api, rules, user, toast, signOut, photo });
-  staff.render();
-  staff.load();
+  /** A photo or PDF on top of the page (the same viewer as the owner's files). */
+  const viewer = (url, name, image) => {
+    const v = document.getElementById('viewer');
+    const close = () => { v.hidden = true; v.replaceChildren(); };
+    v.replaceChildren(h('div', { class: 'viewer-bar' }, h('strong', { class: 'viewer-name' }, name), h('a', { class: 'btn', href: url, download: name }, 'Download'), h('button', { class: 'btn', onClick: close }, 'Close')),
+      h('div', { class: 'viewer-body' }, image ? h('img', { src: url, alt: name }) : h('iframe', { src: url, title: name })));
+    v.hidden = false;
+  };
+  // signed out (or their first password still to choose): Work Task's sign-in; what waits on the phone stays and is sent after
+  const onAuth = () => { location.href = '../'; };
+  staff = createStaff({ root, api, rules, user, toast, signOut, onAuth, photo, viewer, box: idbOutbox(), shrink: shrinkPhoto, push: browserPush(api, user.id) });
+  const opened = /^#open=(\d+)$/.exec(location.hash); // a phone notification: that task
+  if (opened) { history.replaceState(null, '', location.pathname + location.search); staff.open('task:' + opened[1]); }
+  staff.start();
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') staff.act.reload(); });
+  window.addEventListener('online', () => { staff.setOffline(false); staff.act.flush(); });
+  window.addEventListener('offline', () => staff.setOffline(true));
+  setInterval(() => { if (staff.state.outbox.length) staff.act.flush(); }, 30000); // weak signal: keep trying
 }
 
 const saved = device.ui();
