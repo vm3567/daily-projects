@@ -2941,6 +2941,24 @@ test('🔔 in the app (23 Oct): every notification is also kept in the person\'s
   assert.equal(out.trim(), '0');
 });
 
+test('✓✓ seen ticks (23 Oct): my message shows who has read it (like WhatsApp) — only on my own messages; read = they opened the task or pressed Seen', { skip }, async () => {
+  const t = (await call('task.save', { assigneeId: id.suresh, title: 'Ticks check', repeat: 'once' }, tok.boss)).task;
+  const mine = (await call('comment.add', { taskId: t.id, text: 'Did the clay come?' }, tok.boss)).comments.at(-1);
+  assert.deepEqual(mine.seenBy, [], '✓ sent, not seen yet');
+  let s = await call('task.get', { id: t.id }, tok.suresh); // Suresh opens it: read
+  assert.equal(s.comments.find((c) => c.id === mine.id).seenBy, null, 'not shown on someone else\'s message');
+  let b = await call('task.get', { id: t.id }, tok.boss);
+  assert.deepEqual(b.comments.find((c) => c.id === mine.id).seenBy, ['Suresh'], '✓✓ seen by Suresh');
+  // his answer: seen by the manager once the manager opens the task again
+  const his = (await call('comment.add', { taskId: t.id, text: 'Yes, today' }, tok.suresh)).comments.at(-1);
+  assert.deepEqual(his.seenBy, []);
+  const later = (await call('comment.add', { taskId: t.id, text: 'One more thing' }, tok.boss)).comments.at(-1);
+  s = await call('task.get', { id: t.id }, tok.suresh);
+  assert.deepEqual(s.comments.find((c) => c.id === his.id).seenBy, ['Boss'], 'the manager answered after it: read');
+  b = await call('task.get', { id: t.id }, tok.boss);
+  assert.deepEqual(b.comments.find((c) => c.id === later.id).seenBy, ['Suresh']);
+});
+
 test('review round 1 (whole code): importing a data folder with more than 500 files works (it goes in parts of 500; data.json last), every file is there', { skip }, async () => {
   const src = join(dir, 'import-big'); mkdirSync(join(src, 'files', 'x1'), { recursive: true });
   const n = 520;

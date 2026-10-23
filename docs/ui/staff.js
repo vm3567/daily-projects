@@ -524,7 +524,13 @@ export function createStaff(opts) {
   }
 
   /** Every 20 seconds while the app is open (and when coming back to it): anything new? */
+  // my messages on the open task not seen yet: look at it again, so their ticks turn blue once read (✓✓)
+  function seenCheck() {
+    const d = state.detail;
+    if (d && d.task && state.sel === 'task:' + d.task.id && (d.comments || []).some((c) => c.mine && Array.isArray(c.seenBy) && !c.seenBy.length && c.kind !== 'move' && c.kind !== 'chase')) loadDetail();
+  }
   async function liveCheck() {
+    seenCheck();
     if (liveBusy || !state.data) return;
     liveBusy = true;
     try {

@@ -122,6 +122,16 @@ export function diaryBlock({ rules, t, updates, td, staff, meId, n, fillBy, phot
  * what waits on the phone, the box and Send, and 📷 a photo with the words in the box.
  * onSend / onPhoto resolve to '' or the words to show under the box.
  */
+/**
+ * The ticks on my own message, like WhatsApp: ✓ sent (grey), ✓✓ seen (blue) once someone else on the task has read it;
+ * null on someone else's message and on the server's own notes. Pure: tested.
+ */
+export function msgTicks(c) {
+  if (!c || !c.mine || c.kind === 'move' || c.kind === 'chase') return null;
+  const by = Array.isArray(c.seenBy) ? c.seenBy : [];
+  return by.length ? { cls: 'ticks seen', text: '✓✓', title: 'Seen by ' + by.join(', ') } : { cls: 'ticks', text: '✓', title: 'Sent — not seen yet' };
+}
+
 export function messagesBlock({ taskId, comments, waiting = [], draft, sending, placeholder, onInput, onSend, onPhoto, onEdit, onDelete, photos }) {
   const err = errLine('merr-' + taskId);
   const say = (m) => err.say(m);
@@ -129,6 +139,7 @@ export function messagesBlock({ taskId, comments, waiting = [], draft, sending, 
   return block('💬 Messages', h('div', { class: 'banner team-msgs' },
     comments.length ? comments.map((c) => h('div', { class: 'team-msg' + (c.mine ? ' mine' : ''), key: 'c-' + c.id },
       h('div', { class: 'row small' }, h('strong', null, c.mine ? 'You' : c.by), h('span', { class: 'muted' }, `${fmtDay(c.at)} ${fmtTime(c.at)}${c.editedAt ? ' · edited' : ''}`),
+        ((t) => (t ? h('span', { class: t.cls, title: t.title, 'aria-label': t.title }, t.text) : null))(msgTicks(c)),
         c.mine && !String(c.text || '').startsWith('↔ Moved') && c.kind !== 'move' && c.kind !== 'chase' ? h('span', { class: 'msg-acts' }, // (the server's own notes stay as they are)
           h('button', { class: 'link small', title: 'Change', 'aria-label': 'Change this message', onClick: () => onEdit(c) }, '✎'),
           h('button', { class: 'link small', title: 'Delete', 'aria-label': 'Delete this message', onClick: () => onDelete(c) }, '✕')) : null),

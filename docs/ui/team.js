@@ -429,7 +429,13 @@ export function createTeam(opts) {
   }
 
   /** Every 20 s while open: new suggestions or tasks, and the team's new updates, as a bar to open. */
+  // my messages on the open task not seen yet: look at it again, so their ticks turn blue once read (✓✓)
+  function seenCheck() {
+    const d = state.detail;
+    if (d && d.task && state.sel === 'task:' + d.task.id && (d.comments || []).some((c) => c.mine && Array.isArray(c.seenBy) && !c.seenBy.length && c.kind !== 'move' && c.kind !== 'chase')) loadDetail();
+  }
   async function liveCheck() {
+    seenCheck();
     if (liveBusy || !state.data || (state.view !== 'today' && state.view !== 'tasks')) return;
     liveBusy = true;
     const view = state.view, closed = state.closed;

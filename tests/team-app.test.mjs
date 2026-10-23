@@ -1313,3 +1313,23 @@ test('review r4-5 (whole code): "Give task" tapped twice while it is being given
   assert.ok(release, 'once done, the next one goes');
   release(); await again;
 });
+
+test('✓✓ seen ticks (23 Oct): ✓ sent, blue ✓✓ seen (who read it in the tip); none on others\' messages or the server\'s notes; while mine wait to be seen the open task is looked at again', async () => {
+  const { msgTicks } = await import('../docs/ui/workparts.js');
+  assert.deepEqual(msgTicks({ mine: true, seenBy: [] }), { cls: 'ticks', text: '✓', title: 'Sent — not seen yet' });
+  assert.deepEqual(msgTicks({ mine: true, seenBy: ['Valar'] }), { cls: 'ticks seen', text: '✓✓', title: 'Seen by Valar' });
+  assert.equal(msgTicks({ mine: false, seenBy: null }), null);
+  assert.equal(msgTicks({ mine: true, kind: 'chase', seenBy: [] }), null);
+  assert.deepEqual(msgTicks({ mine: true }).text, '✓', 'an older saved copy: sent');
+  for (const [name, make] of [['team pages', async (answers) => (await teamPages(answers)).t], ['staff view', async (answers) => (await staffView(answers)).s]]) {
+    let gets = 0;
+    const v = await make({ 'task.get': () => { gets++; return { task: { id: 5, title: 'X' }, updates: [], comments: [{ id: 1, mine: true, seenBy: [] }] }; } });
+    v.state.sel = 'task:5'; v.state.detail = { task: { id: 5 }, comments: [{ id: 1, mine: true, seenBy: [] }] };
+    await v.act.liveCheck(); await new Promise((r) => setTimeout(r, 0));
+    assert.ok(gets >= 1, name + ': not seen yet → looked at again');
+    gets = 0; v.state.detail = { task: { id: 5 }, comments: [{ id: 1, mine: true, seenBy: ['Boss'] }] };
+    await v.act.liveCheck(); await new Promise((r) => setTimeout(r, 0));
+    assert.equal(gets, 0, name + ': all seen → no extra call');
+  }
+  assert.match(readFileSync(new URL('../docs/styles.css', import.meta.url), 'utf8'), /\.ticks\.seen \{ color: #0ea5e9; \}/, 'blue when seen');
+});

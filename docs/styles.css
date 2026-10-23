@@ -935,6 +935,8 @@ a.tag.me:hover { color: var(--brand); border-color: var(--brand); }
 /* new messages from the team, on the project and on Today */
 .team-msgs { display: flex; flex-direction: column; gap: 8px; background: #eef4ff; border-color: #c7d7fb; }
 .team-msg { padding: 6px 10px; border-radius: 8px; background: #fff; border: 1px solid var(--line); }
+.ticks { font-size: 12px; font-weight: 700; letter-spacing: -2px; color: var(--muted); }
+.ticks.seen { color: #0ea5e9; } /* ✓✓ read, like WhatsApp */
 .team-msgs form { display: flex; gap: 8px; align-items: center; }
 .team-msgs form input { flex: 1; min-width: 0; }
 a.team-line.msg { background: #eef4ff; border-color: #93b4f8; color: #1e40af; font-weight: 600; }

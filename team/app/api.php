@@ -170,8 +170,12 @@ function mark_read(array $taskIds, int $userId, int $upTo = 0): void {
 
 function comments_of(int $taskId): array {
   $meId = (int)($GLOBALS['me']['id'] ?? 0);
+  // ✓✓ seen (like WhatsApp): on my own messages, who else has read the task up to it (task_reads.last_id)
+  $reads = all('SELECT r.user_id, r.last_id, u.name FROM task_reads r JOIN users u ON u.id = r.user_id WHERE r.task_id = ? AND r.user_id <> ? ORDER BY r.at', [$taskId, $meId]);
+  $seenBy = fn(int $cid) => array_values(array_map(fn($r) => $r['name'], array_filter($reads, fn($r) => (int)$r['last_id'] >= $cid)));
   return array_map(fn($c) => ['id' => (int)$c['id'], 'by' => $c['name'], 'byId' => (int)$c['user_id'], 'text' => $c['text'], 'at' => $c['at'], 'mine' => (int)$c['user_id'] === $meId,
-    'photo' => !empty($c['photo']), 'editedAt' => $c['edited_at'] ?? null, 'kind' => $c['kind'] ?? null],
+    'photo' => !empty($c['photo']), 'editedAt' => $c['edited_at'] ?? null, 'kind' => $c['kind'] ?? null,
+    'seenBy' => (int)$c['user_id'] === $meId ? $seenBy((int)$c['id']) : null],
     all('SELECT c.*, u.name FROM comments c JOIN users u ON u.id = c.user_id WHERE c.task_id = ? ORDER BY c.id', [$taskId]));
 }
 
