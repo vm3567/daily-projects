@@ -2959,6 +2959,20 @@ test('✓✓ seen ticks (23 Oct): my message shows who has read it (like WhatsAp
   assert.deepEqual(b.comments.find((c) => c.id === later.id).seenBy, ['Suresh']);
 });
 
+test('staff 📂 Projects (23 Oct): project.sync keeps the owner\'s 📂 project name of a given task (folder) and the person\'s list shows it; "" takes it away; left out = unchanged', { skip }, async () => {
+  const sync = (x) => call('project.sync', { projectRef: 'fold1', project: 'Feldspar testing', assigneeId: id.suresh, steps: [{ stepRef: 'fold1:whole', title: 'Feldspar testing' }], ...x }, tok.boss);
+  const mine = async () => [...(await call('my.today', {}, tok.suresh)).tasks, ...(await call('my.today', {}, tok.suresh)).other].find((t) => t.projectRef === 'fold1');
+  assert.ok((await sync({ folder: 'Ceramic   Media Meeting' })).ok);
+  assert.equal((await mine()).folder, 'Ceramic Media Meeting', 'kept (one line)');
+  assert.ok((await sync({})).ok);
+  assert.equal((await mine()).folder, 'Ceramic Media Meeting', 'not sent: unchanged (the server\'s own sync sends none)');
+  assert.ok((await sync({ folder: '' })).ok);
+  assert.equal((await mine()).folder, '', 'in no 📂 any more');
+  const t = (await call('tasks.list', { status: 'open' }, tok.boss)).tasks.find((x) => x.projectRef === 'fold1');
+  assert.equal(t.folder, '');
+  assert.ok((await call('project.sync', { projectRef: 'fold1', project: 'Feldspar testing', assigneeId: 0, steps: [] }, tok.boss)).ok);
+});
+
 test('review round 1 (whole code): importing a data folder with more than 500 files works (it goes in parts of 500; data.json last), every file is there', { skip }, async () => {
   const src = join(dir, 'import-big'); mkdirSync(join(src, 'files', 'x1'), { recursive: true });
   const n = 520;

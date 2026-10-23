@@ -79,10 +79,10 @@ function move_tasks(array $me, array $tasks, int $toId, bool $tell = true): int 
 }
 
 /** ref => the given project's short description (sent with project.sync), for the refs that have one. */
-function project_abouts(array $refs): array {
+function project_abouts(array $refs, string $prefix = 'pab:'): array {
   if (!$refs) return [];
   $keys = [];
-  foreach ($refs as $r) $keys['pab:' . md5((string)$r)] = (string)$r;
+  foreach ($refs as $r) $keys[$prefix . md5((string)$r)] = (string)$r;
   $out = [];
   foreach (all('SELECT k, v FROM settings WHERE k IN (' . implode(',', array_fill(0, count($keys), '?')) . ')', array_keys($keys)) as $r) $out[$keys[$r['k']]] = $r['v'];
   return $out;
@@ -125,6 +125,7 @@ function tasks_out(array $tasks, string $day): array {
   foreach (all("SELECT id, task_id, name, mime FROM task_files WHERE task_id IN ($in) ORDER BY id", $ids) as $f) $files[$f['task_id']][] = ['id' => (int)$f['id'], 'name' => $f['name'], 'image' => str_starts_with($f['mime'], 'image/')];
   $queued = fn($t) => $t['seq'] !== null && $t['status'] === 'open' && (int)$t['seq'] > ($firstSeq[$t['project_ref'] . '|' . $t['assignee_id']] ?? PHP_INT_MAX);
   $about = project_abouts($refs);
+  $folder = project_abouts($refs, 'pfo:'); // the owner's 📂 project the given task is in ('' = none): the team sees the same folders
   $turnSince = [];
   foreach ($tasks as $t) {
     if ($t['seq'] === null || !$t['project_ref']) continue;
@@ -137,6 +138,7 @@ function tasks_out(array $tasks, string $day): array {
     'repeat' => $t['repeat_kind'], 'skipSunday' => (bool)$t['skip_sunday'], 'weekday' => $t['weekday'] === null ? null : (int)$t['weekday'],
     'dueDate' => $t['due_date'], 'startDate' => $t['start_date'], 'project' => $t['project'] ?? '', 'projectRef' => $t['project_ref'], 'stepRef' => $t['step_ref'],
     'projectAbout' => $t['seq'] !== null && $t['project_ref'] ? ($about[$t['project_ref']] ?? '') : '',
+    'folder' => $t['seq'] !== null && $t['project_ref'] ? ($folder[$t['project_ref']] ?? '') : '',
     'status' => $t['status'], 'createdAt' => $t['created_at'], 'doneAt' => $t['done_at'],
     'dueToday' => $t['status'] === 'open' && due_on($t, $day) && !$queued($t),
     'today' => update_out($todays[$t['id']] ?? null, $photos), 'last' => update_out($lasts[$t['id']] ?? null, $photos),
@@ -1056,6 +1058,11 @@ function project_sync(array $me, array $in, string $ref, string $day): array {
   if (array_key_exists('about', $in)) {
     $about = txt(preg_replace('/\s+/u', ' ', (string)$in['about']) ?? '', 1000); // (same limit as ABOUT_MAX in docs/ops.js)
     if ($about === '') q('DELETE FROM settings WHERE k = ?', ['pab:' . md5($ref)]); else set_setting('pab:' . md5($ref), $about);
+  }
+  // the owner's 📂 project this task is in (its name; '' = in none): kept like the description, shown to the team as its folder
+  if (array_key_exists('folder', $in)) {
+    $folder = txt(preg_replace('/\s+/u', ' ', (string)$in['folder']) ?? '', 200);
+    if ($folder === '') q('DELETE FROM settings WHERE k = ?', ['pfo:' . md5($ref)]); else set_setting('pfo:' . md5($ref), $folder);
   }
   $who = (int)($in['assigneeId'] ?? 0);
   // moved in Work Task (Move to…) after the owner's app last sent it, and the app still names the old person

@@ -2282,13 +2282,17 @@ test('one app — staff view: the same layout as Daily Projects (menu, list, pag
   const tree = s.view();
   assert.match(tree.className, /\blayout\b/, 'the same layout classes as the owner\'s app');
   const text = tree.textContent;
-  for (const bit of ['Today', 'Coming next', 'My suggestions', '📂 Kiln trial', '💡 Suggest a task', '👤 Valar', 'Sign out', 'Check kiln temperature', 'Pack the samples', '1 of 3 sent', 'by 18:00', '✓ Sent 10:30 am']) assert.ok(text.includes(bit), bit);
+  for (const bit of ['Today', '✅ Tasks', '📂 Projects', 'Coming next', 'My suggestions', '💡 Suggest a task', '👤 Valar', 'Sign out', 'Check kiln temperature', 'Pack the samples', '1 of 3 sent', 'by 18:00', '✓ Sent 10:30 am']) assert.ok(text.includes(bit), bit);
   for (const gone of ['📥 Inbox', '✉ Replies', 'Settings', 'People', 'Groups', '🔌 From apps', 'Dashboard', 'Time report', '+ Give a task']) assert.ok(!text.includes(gone), 'no owner screen: ' + gone);
   // dots as on the owner's Today: green = sent today, red = not yet
   const kilnRow = rFind(tree, (n) => n.nodeName === 'LI' && n.textContent.includes('Check kiln temperature'));
   assert.ok(rFind(kilnRow, (n) => /\bdot red\b/.test(n.className || '')), 'not sent yet: red');
   assert.ok(kilnRow.textContent.includes('💬 New'), 'a new message shows on the row');
   assert.ok(calls.every((c) => staffMod.STAFF_CALLS.includes(c.a)));
+  // (owner, 23 Oct: projects are on 📂 Projects, as on the owner's pages — not listed in the menu or on Today any more)
+  assert.ok(!text.includes('📂 Kiln trial'), 'projects are on the 📂 Projects page');
+  s.act.show('projects');
+  assert.ok(s.view().textContent.includes('📂 Kiln trial'), 'there they are');
 });
 
 test('one app — staff view: the staff server calls never include the owner\'s projects (dp.*), Outlook or connections; staffApi refuses them before asking', async () => {
@@ -3366,4 +3370,40 @@ test('staff view looks like the owner\'s projects page (owner, 23 Oct): search b
   assert.match(S, /block\('Steps', h\('ul', \{ class: 'plist' \}/);
   assert.match(S, /h\('form', \{ class: 'row add-step'/, 'the add-step box takes the line, as the owner\'s');
   assert.doesNotMatch(S, /'📁 '|sec\('📁/, 'projects are 📂, as on the owner\'s page');
+});
+
+test('staff ✅ Tasks / 📂 Projects pages: the menu as the owner\'s, ✅ Tasks lists each task with its 📂, ‹ › go one by one, a 📂 project lists its tasks; the owner\'s app sends the 📂 name with each given task', async () => {
+  const task = (id, x = {}) => ({ id, title: 'Task ' + id, status: 'open', seq: null, repeat: 'once', dueToday: true, today: null, ...x });
+  const data = { today: '2026-10-23', fillBy: '18:00', tasks: [task(11, { folder: 'Ceramic Media', projectRef: 'a', seq: 1, project: 'A' }), task(12)], other: [task(13, { dueToday: false })], suggestions: [] };
+  const { s } = fakeStaff2({ 'my.today': () => data, 'task.get': (b) => ({ task: { ...[...data.tasks, ...data.other].find((t) => t.id === b.id) }, updates: [], comments: [] }) });
+  await s.load();
+  const text = () => s.view().textContent;
+  assert.match(text(), /✅ Tasks3/, 'menu: ✅ Tasks with its count');
+  assert.match(text(), /📂 Projects2/, 'menu: 📂 Projects with its count');
+  s.act.show('tasks');
+  assert.match(text(), /3 open tasks · red first/);
+  assert.match(text(), /Task 11📂 Ceramic Media/, 'each task with its 📂');
+  assert.match(text(), /Task 13📂 Misc/);
+  s.act.open('task:11'); await new Promise((r) => setTimeout(r, 0));
+  const nav = (label) => { let f = null; (function w(n) { if (!f && n.nodeName === 'BUTTON' && n.getAttribute && n.getAttribute('aria-label') === label) f = n; (n.childNodes || []).forEach(w); })(s.view()); return f; };
+  assert.ok(nav('Previous task').hasAttribute('disabled'), 'first: no previous');
+  nav('Next task').__on.click(); await new Promise((r) => setTimeout(r, 0));
+  assert.equal(s.state.sel, 'task:12', '› the next one');
+  assert.match(text(), /📂 Misc ›/, 'its 📂 on the task, as on the owner\'s task');
+  s.act.show('projects');
+  assert.match(text(), /📂 Ceramic Media1 task · 1 red/);
+  s.act.open('folder:f:Ceramic Media');
+  assert.match(text(), /Tasks \(1\).*Task 11/, 'a 📂 project lists its tasks');
+  const { readFileSync } = await import('node:fs');
+  const DP = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
+  assert.equal((DP.match(/teamApi\('project\.sync', \{ projectRef: p\.id, [^}]*folder: folderOf\(p\)/g) || []).length, 2, 'both sends carry the 📂 name');
+  assert.match(DP, /JSON\.stringify\(\[userId, p\.name, steps, !!needsPhoto, folderOf\(p\), p\.about \|\| ''\]\)/, 'a new 📂 sends it again');
+  assert.match(DP, /\.find\(\(x\) => x && !x\.misc\)/, '📂 Misc is no folder for the team');
+});
+
+test('a task\'s chips never repeat its own name as its project (one task given alone)', async () => {
+  const { chipsFor } = await import('../docs/ui/workparts.js');
+  const base = { status: 'open', repeat: 'once', seq: 1, today: null };
+  assert.ok(!chipsFor({ ...base, title: 'Feldspar testing', project: 'Feldspar testing' }, '2026-10-23').textContent.includes('📁'));
+  assert.ok(chipsFor({ ...base, title: 'Shoot the tiles', project: 'Glaze photos' }, '2026-10-23').textContent.includes('📁 Glaze photos'));
 });

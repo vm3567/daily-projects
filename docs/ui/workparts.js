@@ -55,7 +55,7 @@ export function chipsFor(t, td, { who = false } = {}) {
   const late = t.status === 'open' && t.dueDate && t.dueDate < td;
   return h('div', { class: 'info-chips' },
     who && t.assignee ? c(`👤 ${t.assignee.name}`, ' team') : null,
-    t.project ? c(`📁 ${t.project}`) : null,
+    t.project && t.project !== t.title ? c(`📁 ${t.project}`) : null, // (not when it only says the task's own name again)
     c(repeatLabel({ ...t, dueDate: null }, td)),
     t.dueDate ? c(late ? `⏰ Late — was by ${fmtDay(t.dueDate)}` : `By ${fmtDay(t.dueDate)}`, late ? ' bad' : '') : null,
     t.needsPhoto ? c('📷 Photo to finish') : null,

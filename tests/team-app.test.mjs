@@ -1333,3 +1333,26 @@ test('✓✓ seen ticks (23 Oct): ✓ sent, blue ✓✓ seen (who read it in the
   }
   assert.match(readFileSync(new URL('../docs/styles.css', import.meta.url), 'utf8'), /\.ticks\.seen \{ color: #0ea5e9; \}/, 'blue when seen');
 });
+
+test('staff ✅ Tasks and 📂 Projects (owner, 23 Oct): every open task once, red first; its 📂 = the owner\'s 📂 project, else a given project with 2+ steps, else 📂 Misc — one task given from the owner\'s project is never also a project', async () => {
+  const { staffFolders } = await import('../docs/ui/staff.js');
+  const T = (id, x = {}) => ({ id, title: 't' + id, status: 'open', seq: null, projectRef: null, project: '', folder: '', dueToday: true, today: null, ...x });
+  const d = {
+    tasks: [
+      T(1, { today: { at: '2026-10-23 10:00:00' } }), // sent: green
+      T(2, { projectRef: 'fs1', seq: 1, stepRef: 'fs1:whole', project: 'Feldspar', title: 'Feldspar', folder: 'Ceramic Media' }), // one task from the owner's 📂
+      T(3, { projectRef: 'gl1', seq: 1, stepRef: 'g1', project: 'Glaze photos', folder: 'Ceramic Media' }),
+      T(4, { projectRef: 'k1', seq: 1, stepRef: 'k1a', project: 'Kiln trial' }),
+      T(5, { projectRef: 'w1', seq: 1, stepRef: 'w1:whole', project: 'Paint door', title: 'Paint door' }), // one task, no 📂: just a task (Misc)
+    ],
+    other: [T(6, { projectRef: 'k1', seq: 2, stepRef: 'k1b', project: 'Kiln trial', dueToday: false, queued: true }), T(7, { dueToday: false }), T(3)], // (3 again: once)
+  };
+  const { tasks, folders } = staffFolders(d, (id) => id === 4);
+  assert.deepEqual(tasks.map((x) => x.t.id), [2, 3, 5, 4, 1, 6, 7], 'each once; red, then yellow (waiting to send), green, grey');
+  assert.deepEqual(tasks.map((x) => x.dot), ['red', 'red', 'red', 'yellow', 'green', 'grey', 'grey']);
+  const where = Object.fromEntries(tasks.map((x) => [x.t.id, x.folder.name]));
+  assert.deepEqual(where, { 1: 'Misc', 2: 'Ceramic Media', 3: 'Ceramic Media', 4: 'Kiln trial', 5: 'Misc', 6: 'Kiln trial', 7: 'Misc' });
+  assert.deepEqual(folders.map((f) => [f.name, f.tasks.length, f.dot, f.red]), [['Ceramic Media', 2, 'red', 2], ['Kiln trial', 2, 'yellow', 0], ['Misc', 3, 'red', 1]], 'worst first; 📂 Misc last');
+  assert.equal(folders.find((f) => f.name === 'Kiln trial').ref, 'k1', 'a given project with steps opens its own page (steps in order, add a step)');
+  assert.ok(!folders.some((f) => f.name === 'Feldspar' || f.name === 'Paint door'), 'one given task is never also a project');
+});
