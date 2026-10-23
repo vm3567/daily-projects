@@ -27,7 +27,7 @@ function replyText(ctx, m, extra = {}) {
   };
   return h('textarea', {
     class: 'reply-text', rows: 7, maxlength: REPLY_MAX, key: 'reply-' + m.key, 'aria-label': `Reply to ${m.from}`,
-    placeholder: `Dear ${m.from.split(/\s+/)[0]},\n\n…\n\nRegards,\nVenkat`,
+    placeholder: `Dear Mr. ${m.from.split(/\s+/)[0]},\n\n…\n\nThank you.`, // the owner's style; Outlook adds "Thanks & Regards," and the signature
     value: m.reply && m.reply.state !== 'sent' ? m.reply.text : '',
     onInput: (e, el) => { clearTimeout(timer); timer = setTimeout(() => save(el), 900); },
     onChange: (e, el) => save(el),
