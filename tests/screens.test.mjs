@@ -3111,3 +3111,45 @@ test('one app — signing out (staff view and team pages): asks first while item
     assert.equal(localStorage.getItem('wt.pushOff.7'), '1', 'Turn off still stays off');
   } finally { delete globalThis.window; delete globalThis.Notification; if (nav) Object.defineProperty(globalThis, 'navigator', nav); else delete globalThis.navigator; localStorage.removeItem('wt.pushOff.7'); }
 });
+
+test('giving a 📂 project (owner, 23 Oct): the give box lists its tasks — ticked ones go, untick the ones you do yourself, ones given to someone else stay with them; the app sends them and keeps them in step', async () => {
+  const s = sampleState();
+  applyOps(s, [
+    makeOp('createMainProject', { projectId: 'm', name: 'Kilns' }),
+    makeOp('createProject', { projectId: 't1', name: 'Fix fan', parentId: 'm' }),
+    makeOp('createProject', { projectId: 't2', name: 'Order bricks', parentId: 'm' }),
+    makeOp('createProject', { projectId: 't3', name: 'Call the fitter', parentId: 'm' }),
+    makeOp('setProjectTeam', { projectId: 't2', userId: 8, name: 'Ravi' }),
+    makeOp('setProjectTeam', { projectId: 't3', userId: null, keepOff: true }),
+  ]);
+  const ui = { selected: 'm', update: {}, giveOpen: 'm' };
+  const ctx = { ...fakeCtx(s, ui), onServer: true, teamPeople: () => [{ id: 7, name: 'Valar' }], teamBusy: () => false, giveProject: () => {}, setGivePhoto: () => {} };
+  const el = renderDetail(ctx);
+  const box = rFind(el, (n) => /\bgive-tasks\b/.test(n.className || ''));
+  assert.ok(box, 'the list of its tasks');
+  const row = (name) => rFind(box, (n) => n.nodeName === 'LABEL' && n.textContent.includes(name));
+  const tick = (name) => rFind(row(name), (n) => n.nodeName === 'INPUT');
+  assert.ok(tick('Fix fan') && tick('Fix fan').hasAttribute('checked'), 'a free task: ticked, it goes');
+  assert.ok(!tick('Order bricks') && row('Order bricks').textContent.includes('stays with Ravi'), 'given to Ravi on its own: stays, no box');
+  assert.ok(tick('Call the fitter') && !tick('Call the fitter').hasAttribute('checked') && row('Call the fitter').textContent.includes('stays with you'), 'kept before: unticked, stays with you');
+  tick('Fix fan').__on.change({}, { checked: false });
+  assert.ok(ui.giveKeep.has('t1'), 'unticked: you keep it');
+  assert.match(box.textContent, /Tasks you add to it later go to the same person/);
+  const { readFileSync } = await import('node:fs');
+  const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
+  const give = app.slice(app.indexOf('async function giveProject('), app.indexOf('/** "4 tasks go with it'));
+  assert.match(give, /\.\.\.\(main && person \? \{ giveTasks: true \} : \{\}\)/, 'giving a 📂 project gives its tasks again');
+  assert.match(give, /if \(main && person && keep\) for \(const id of keep\) store\.dispatch\('setProjectTeam', \{ projectId: id, userId: null, keepOff: true \}\);/, 'the ones you keep');
+  assert.match(give, /\.\.\.\(!main && !person \? \{ keepOff: true \} : \{\}\)/, 'a task taken back on its own stays off');
+  assert.match(give, /if \(main\) syncGivenProjects\(\);/, 'its tasks reach the person now');
+  assert.match(app, /followProjects\(\); \/\/ a task added to \(or taken out of\) a given 📂 project follows it/, 'kept in step by the sync');
+  assert.match(app, /if \(still\) \{ \/\/ no longer given[^\n]*\n\s*try \{ await teamApi\('project\.sync', \{ projectRef: ref, project: still\.name, assigneeId: 0, steps: \[\], reason: 'taken' \}\)/, 'taken back: off the person\'s list');
+  assert.match(app, /if \(isMainProject\(store\.view\.data, p\)\) return \[\]; \/\/ a 📂 project: its tasks go/, 'a 📂 project is never one task with its name');
+  // the take back question
+  const { takeBackQuestion } = await import('../docs/ui/detail.js');
+  applyOps(s, [makeOp('setProjectTeam', { projectId: 'm', userId: 7, name: 'Valar' }), makeOp('setProjectTeam', { projectId: 't1', userId: 7, name: 'Valar', viaProject: 'm' })]);
+  assert.match(takeBackQuestion(s.data, s.data.projects.find((x) => x.id === 'm')), /The 1 task that went with it comes back too\. Tasks given to someone on their own stay with them\./);
+  // the chip on a task that went with its project
+  const t1 = renderDetail({ ...ctx, ui: { selected: 't1', update: {} } }).textContent;
+  assert.ok(t1.includes('👥 Valar (with 📂 Kilns)'));
+});

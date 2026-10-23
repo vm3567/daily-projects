@@ -13,7 +13,7 @@ import { richArea, richView, addDraftPhotos, readDraft, clearDraft, photoArgs, f
 import { enterAction, richFileIds, textToHtml } from '../rich.js';
 import { projectEmailCards, emailThreadBlock } from './replies.js';
 import { mainBox, mainChip, subProjectsBlock, openMainBox } from './mains.js';
-import { isMainProject, timerOn } from '../rules.js';
+import { isMainProject, timerOn, childrenOf } from '../rules.js';
 
 /** 'project' for a 📂 project, 'task' for everything else (what the app once called a project). */
 const kindWord = (ctx, p) => (isMainProject(ctx.store.view.data, p) ? 'project' : 'task');
@@ -647,6 +647,28 @@ function remindOnceBar(ctx, p) {
     h('button', { class: 'link small', type: 'button', onClick: () => { ui.remindOnceOpen = null; ctx.render(); } }, 'Cancel'));
 }
 
+/**
+ * Giving a 📂 project: its tasks go with it. Ticked = goes; untick the ones you do yourself (they stay with you, also
+ * later). A task given to someone else on its own stays with them (shown, no box).
+ */
+function giveTaskList(ctx, p) {
+  const { ui } = ctx;
+  const kids = childrenOf(ctx.store.view.data, p.id).filter((c) => c.state !== 'finished');
+  if (!kids.length) return h('p', { class: 'muted small' }, 'No tasks in it yet. Tasks you add later go to the same person.');
+  if (!ui.giveKeep || ui.giveKeepFor !== p.id) { ui.giveKeep = new Set(kids.filter((c) => c.teamOff).map((c) => c.id)); ui.giveKeepFor = p.id; }
+  const keep = ui.giveKeep;
+  return h('div', { class: 'give-tasks' },
+    h('span', { class: 'muted small' }, 'Its tasks go too. Untick the ones you do yourself:'),
+    kids.map((c) => {
+      const other = c.team && !(c.team.viaProject === p.id);
+      return h('label', { class: 'check small give-task', key: 'gt-' + c.id },
+        other ? h('span', { class: 'quick-tick-space', 'aria-hidden': 'true' })
+          : h('input', { type: 'checkbox', checked: keep.has(c.id) ? undefined : true, onChange: (e, el) => { if (el.checked) keep.delete(c.id); else keep.add(c.id); ctx.render(); } }),
+        ' ', c.name, other ? h('span', { class: 'muted' }, ` — stays with ${c.team.name}`) : keep.has(c.id) ? h('span', { class: 'muted' }, ' — stays with you') : null);
+    }),
+    h('span', { class: 'muted small' }, 'Tasks you add to it later go to the same person.'));
+}
+
 /** worktask.in: "Given to Valar" (with Change / Take back), or the people to choose from after "👥 Give project". */
 function teamBar(ctx, p) {
   const { ui } = ctx;
@@ -657,13 +679,21 @@ function teamBar(ctx, p) {
   const busy = ctx.teamBusy && ctx.teamBusy(p.id); // sending: a second tap must not give it twice
   return h('div', { class: 'banner team-banner', key: 'tg-' + p.id },
     h('span', null, p.team ? `👥 Change person (now ${p.team.name}):` : `👥 Give "${p.name}" to:`),
+    isMainProject(ctx.store.view.data, p) ? giveTaskList(ctx, p) : null,
     h('label', { class: 'check small', title: 'They must add a photo before tapping Finished on each step' },
       h('input', { type: 'checkbox', checked: !!ui.givePhoto, onChange: (e, el) => ctx.setGivePhoto(el.checked) }), ' 📷 Photo needed to finish'),
     people === null ? h('span', { class: 'muted small' }, 'Loading…')
       : people.length ? people.map((u) => h('button', { class: 'chip', key: 'tp-' + u.id, disabled: busy ? true : undefined, onClick: () => ctx.giveProject(p, u) }, u.name))
         : h('a', { class: 'small', href: '#team' }, 'Add a person first (Team → People)'),
-    p.team ? h('button', { class: 'btn small', onClick: () => { if (confirm(`Take "${p.name}" back from ${p.team.name}? Their open steps are removed from their list.`)) { ui.giveOpen = null; ctx.takeBackProject(p); } } }, 'Take back') : null,
+    p.team ? h('button', { class: 'btn small', onClick: () => { if (confirm(takeBackQuestion(ctx.store.view.data, p))) { ui.giveOpen = null; ctx.takeBackProject(p); } } }, 'Take back') : null,
     h('button', { class: 'link small', onClick: () => { ui.giveOpen = null; ui.givePhoto = false; ctx.render(); } }, 'Cancel'));
+}
+
+/** Take back: a 📂 project brings back the tasks that went with it (tasks given on their own stay). */
+export function takeBackQuestion(data, p) {
+  if (!isMainProject(data, p)) return `Take "${p.name}" back from ${p.team.name}? Their open steps are removed from their list.`;
+  const n = childrenOf(data, p.id).filter((c) => c.team && c.team.viaProject === p.id).length;
+  return `Take "${p.name}" back from ${p.team.name}?${n ? ` The ${n} task${n > 1 ? 's' : ''} that went with it come${n > 1 ? '' : 's'} back too.` : ''} Tasks given to someone on their own stay with them.`;
 }
 
 const notesTimers = {}; // one save timer per project, kept across screen updates
@@ -843,7 +873,7 @@ function projectMenu(ctx, p) {
   return h('div', { class: 'proj-menu', key: 'pm-' + p.id, role: 'menu' },
     p.state === 'active' && (!isSnoozed(p, today) || restReason(p, today) === 'onlyDays') ? item('💤 Snooze…', () => { ui.snoozeOpen = p.id; setTimeout(() => { const n = document.querySelector(`[data-key="snooze-${p.id}"]`); if (n) { n.focus(); n.select(); } }, 30); }) : null,
     p.state === 'active' && ctx.onServer ? item(p.team ? `👥 Change person (now ${p.team.name})` : `👥 Give ${kindWord(ctx, p)} to…`, () => { ui.giveOpen = p.id; ui.givePhoto = p.team ? !!p.team.needsPhoto : false; }) : null,
-    p.state === 'active' && ctx.onServer && p.team ? item('↩ Take back from ' + p.team.name, () => { if (confirm(`Take "${p.name}" back from ${p.team.name}? Their open steps are removed from their list.`)) ctx.takeBackProject(p); }) : null,
+    p.state === 'active' && ctx.onServer && p.team ? item('↩ Take back from ' + p.team.name, () => { if (confirm(takeBackQuestion(ctx.store.view.data, p))) ctx.takeBackProject(p); }) : null,
     p.state === 'active' ? item('📅 Only on…', () => { ui.onlyDaysOpen = p.id; }) : null,
     p.state === 'active' ? item('🔔 Remind me once…', () => { ui.remindOnceOpen = p.id; }) : null,
     p.state === 'active' ? item('⏸ Pause', () => ctx.act('pause', { projectId: p.id }, `Paused: ${p.name}`)) : null,
@@ -887,7 +917,8 @@ function infoChips(ctx, p, today) {
     : h('span', { class: 'info-chip static' + cls, title }, text);
   const out = [];
   if (p.team) {
-    out.push(chip(`👥 ${p.team.name}`, p.state === 'active' ? 'Given to the team — tap to change person or take back' : 'Given to the team (off their list while not active)',
+    const via = p.team.viaProject && store.view.data.projects.find((x) => x.id === p.team.viaProject);
+    out.push(chip(`👥 ${p.team.name}${via ? ` (with 📂 ${via.name})` : ''}`, p.state === 'active' ? (via ? `Went with 📂 ${via.name} — tap to change person or take back` : 'Given to the team — tap to change person or take back') : 'Given to the team (off their list while not active)',
       p.state === 'active' ? () => { ui.giveOpen = ui.giveOpen === p.id ? null : p.id; ui.givePhoto = !!p.team.needsPhoto; ctx.render(); } : null, ' team'));
     const tp = ctx.teamProgress ? ctx.teamProgress(p.id) : null;
     if (tp && (tp.lastUpdate || tp.stuck)) {

@@ -815,12 +815,28 @@ const handlers = {
     const userId = Number.isInteger(a.userId) && a.userId > 0 ? a.userId : null;
     const name = cleanText(a.name || '', 80).trim();
     const needsPhoto = !!a.needsPhoto;
-    if (userId ? (p.team && p.team.userId === userId && p.team.name === name && !!p.team.needsPhoto === needsPhoto) : !p.team) return false;
+    // given through a 📂 project (its tasks go with it): which one (rules.js projectGiveChanges)
+    const via = userId && typeof a.viaProject === 'string' && findProject(state.data, a.viaProject) ? a.viaProject : null;
+    const main = isMainProject(state.data, p);
+    if (!userId && !p.team) { // not given: "I keep this one" (a task in a 📂 project you give; it does not go with it)
+      if (!a.keepOff || main || p.teamOff) return false;
+      p.teamOff = true; touch(p, op);
+      return true;
+    }
+    if (userId && p.team && p.team.userId === userId && p.team.name === name && !!p.team.needsPhoto === needsPhoto && (p.team.viaProject || null) === via && !(main && a.giveTasks)) return false;
     const old = p.team;
-    if (userId) p.team = { userId, name, since: old && old.userId === userId ? old.since : indiaDate(op.at), ...(needsPhoto ? { needsPhoto: true } : {}) };
-    else delete p.team;
+    if (userId) {
+      p.team = { userId, name, since: old && old.userId === userId ? old.since : indiaDate(op.at), ...(needsPhoto ? { needsPhoto: true } : {}), ...(via ? { viaProject: via } : {}) };
+      delete p.teamOff;
+      // giving a 📂 project gives all its tasks again, also one taken back on its own before
+      if (main && a.giveTasks) for (const c of state.data.projects) if (parentIdsOf(c).includes(p.id)) delete c.teamOff;
+    } else {
+      delete p.team;
+      if (a.keepOff && !main) p.teamOff = true; // taken back on its own: does not come back with its 📂 project
+    }
     touch(p, op);
-    addEvent(state, op, p, a.byTeam ? 'team_moved' : 'edited', userId ? `Given to ${name}` : `Taken back from ${old.name}`);
+    const viaName = via ? findProject(state.data, via).name : '';
+    addEvent(state, op, p, a.byTeam ? 'team_moved' : 'edited', userId ? `Given to ${name}${viaName ? ` (with 📂 ${viaName})` : ''}` : `Taken back from ${old.name}`);
     return true;
   },
 

@@ -2696,3 +2696,52 @@ test('groups are gone (owner, 23 Oct): an older data file is brought up to date 
   assert.equal((tracker.match(/dropGroups\(normalizeParents\(/g) || []).length, 2, 'the tracker too');
 });
 
+
+test('giving a 📂 project gives its tasks (owner, 23 Oct): free ones go (with viaProject), ones given to others stay, ones you keep stay with you (also later), new ones follow, a new person and take back follow; finished ones never go', async () => {
+  const { projectGiveChanges } = await import('../docs/rules.js');
+  const s = fresh();
+  applyOp(s, op('createMainProject', { projectId: 'm', name: 'Kilns' }, '2026-10-01'));
+  for (const id of ['a', 'b', 'c', 'd', 'e', 'mine', 'old']) applyOp(s, op('createProject', { projectId: id, name: 'Task ' + id, parentId: 'm' }, '2026-10-01'));
+  applyOp(s, op('finish', { projectId: 'old' }, '2026-10-01'));
+  applyOp(s, op('setProjectTeam', { projectId: 'd', userId: 8, name: 'Ravi' }, '2026-10-01')); // given on its own before
+  applyOp(s, op('setProjectTeam', { projectId: 'e', userId: 8, name: 'Ravi' }, '2026-10-01'));
+  const P = (id) => s.data.projects.find((x) => x.id === id);
+  const follow = () => { for (const c of projectGiveChanges(s.data)) applyOp(s, op('setProjectTeam', c.team ? { projectId: c.projectId, ...c.team } : { projectId: c.projectId, userId: null }, '2026-10-02')); };
+  // give the project to Valar, keeping "mine"
+  assert.equal(applyOp(s, op('setProjectTeam', { projectId: 'm', userId: 7, name: 'Valar', giveTasks: true }, '2026-10-02')), true);
+  assert.equal(applyOp(s, op('setProjectTeam', { projectId: 'mine', userId: null, keepOff: true }, '2026-10-02')), true, 'kept: marked as yours');
+  follow();
+  for (const id of ['a', 'b', 'c']) assert.deepEqual([P(id).team.userId, P(id).team.viaProject], [7, 'm'], id + ' went with it');
+  assert.deepEqual([P('d').team.name, P('e').team.name], ['Ravi', 'Ravi'], 'given to someone else on their own: stay');
+  assert.equal(P('mine').team, undefined, 'yours stays with you');
+  assert.equal(P('old').team, undefined, 'a finished task does not go');
+  assert.ok(allEvents(s).some((e) => e.projectId === 'a' && e.detail === 'Given to Valar (with 📂 Kilns)'));
+  assert.deepEqual(projectGiveChanges(s.data), [], 'nothing more to do');
+  // a new task added later follows; one taken out of the project comes back
+  applyOp(s, op('createProject', { projectId: 'f', name: 'Task f', parentId: 'm' }, '2026-10-03'));
+  applyOp(s, op('removeFromProject', { projectId: 'a', parentId: 'm' }, '2026-10-03'));
+  follow();
+  assert.equal(P('f').team.name, 'Valar', 'new task: to the same person');
+  assert.equal(P('a').team, undefined, 'taken out of the project: back with you');
+  assert.equal(P('mine').team, undefined, 'still yours');
+  // one taken back on its own stays off
+  applyOp(s, op('setProjectTeam', { projectId: 'b', userId: null, keepOff: true }, '2026-10-03'));
+  follow();
+  assert.equal(P('b').team, undefined, 'taken back on its own: does not come back');
+  // a new person: what went with it follows; Ravi's stay
+  applyOp(s, op('setProjectTeam', { projectId: 'm', userId: 9, name: 'Meena' }, '2026-10-04'));
+  follow();
+  assert.deepEqual(['c', 'f'].map((id) => P(id).team.name), ['Meena', 'Meena']);
+  assert.equal(P('d').team.name, 'Ravi');
+  // give it again (giveTasks): every task goes again unless kept again
+  applyOp(s, op('setProjectTeam', { projectId: 'm', userId: 9, name: 'Meena', giveTasks: true }, '2026-10-04'));
+  follow();
+  assert.equal(P('b').team.name, 'Meena', 'giving the project again gives the one taken back before');
+  assert.equal(P('mine').team.name, 'Meena', '… and yours, unless kept again (the give box keeps it ticked off)');
+  // take the project back: what went with it comes back; Ravi's stay
+  applyOp(s, op('setProjectTeam', { projectId: 'm', userId: null }, '2026-10-05'));
+  follow();
+  assert.ok(['b', 'c', 'f', 'mine'].every((id) => !P(id).team), 'all that went with it are back');
+  assert.deepEqual([P('d').team.name, P('e').team.name], ['Ravi', 'Ravi']);
+  assert.equal(applyOp(s, op('setProjectTeam', { projectId: 'm', userId: null, keepOff: true }, '2026-10-05')), false, 'a 📂 project itself is never "kept"');
+});

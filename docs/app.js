@@ -1,7 +1,7 @@
 // Daily Projects — main app: start-up, menu, project list, Today box, Diary, Settings, key screen.
 
 import { h, morph, installEvents, fmtDay, fmtLongDay, fmtTime, keyHint, withKey } from './ui/dom.js';
-import { renderDetail, linkChip, isMailLink, pasteIntoProject } from './ui/detail.js';
+import { renderDetail, linkChip, isMailLink, pasteIntoProject, takeBackQuestion } from './ui/detail.js';
 import { renderPeopleList, renderPerson, peopleByFollowUp } from './ui/people.js';
 import { installMentions } from './ui/mention.js';
 import { installAutocorrect, setAutocorrect, autocorrectOn } from './ui/autocorrect.js';
@@ -20,7 +20,7 @@ import { MockRepo } from './mockrepo.js';
 import { device } from './device.js';
 import { DATA_OWNER, DATA_REPO, DATA_BRANCH, MOVED_TO, REFRESH_MS, AI_DAILY_LIMIT, BRIEF_CLAIM_MINUTES, WAIT_RED_DAYS, NO_WORK_NOTE_DAYS } from './config.js';
 import { dotColour, greenByTeamOnly, isSnoozed, restUntil, restReason, onlyDaysLabel, openIdFromHash, awakeProjects, activeProjects, nextStep, todayIndia, isSundayIndia, colourCounts, isOverdue, indiaDate, waitingDays, daysWithoutWork, dayScore, greenStreak, addDays, monthOf, fmtMinutes, takeBackWaits, staffStepAction, pasteGoesToProject, singleStepClose, versionRequest, askDiaryAgain, pasteInForm, diaryLoadedAt, photoNeedsFetch, teamUndoKey, teamActionUndone, teamProgressOf, projectKeyIgnored, teamMovedTo, serverHolder, keepMovedStep, teamMemberFor, repliesOf, mailThreads, replyMailto, MAILTO_BODY_MAX, emailPath, pasteReason } from './rules.js';
-import { whoFromUser, signInTag, timerOn } from './rules.js';
+import { whoFromUser, signInTag, timerOn, projectGiveChanges } from './rules.js';
 import { signInCard, firstPasswordCard } from './ui/signin.js';
 import { parentIdsOf, isMainProject, mainProjects, activeTasks, todayWithoutEmptyMains, todayList, stepTargets, mainSummary, childrenOf, deleteQuestion, pickEnterTarget } from './rules.js';
 import { newId, clone, opMonth, cleanLink, carriedOps, orderPosOf } from './ops.js';
@@ -1708,7 +1708,7 @@ function rowMenu() {
     p.state === 'active' ? item('⏸', `Pause ${kindWord(p)}`, () => act('pause', { projectId: p.id }, `Paused: ${p.name}`))
       : p.state === 'paused' ? item('▶', `Unpause ${kindWord(p)}`, () => act('unpause', { projectId: p.id }, `Back on Today: ${p.name}`)) : null,
     onServer && p.state === 'active' ? (p.team
-      ? item('👥', `Take back from ${p.team.name}`, () => { if (confirm(`Take "${p.name}" back from ${p.team.name}? Their open steps are removed from their list.`)) giveProject(p, null); })
+      ? item('👥', `Take back from ${p.team.name}`, () => { if (confirm(takeBackQuestion(store.view.data, p))) giveProject(p, null); })
       : item('👥', `Give ${kindWord(p)} to…`, () => { select(p.id); ui.giveOpen = p.id; ui.givePhoto = false; })) : null,
     item('↗', 'Open', () => select(p.id)),
     !isMainProject(store.view.data, p) ? item('📂', 'Add to a project…', () => { select(p.id); openMainBox(ctx, p, 'parent'); }) : null,
@@ -3257,6 +3257,7 @@ const projectSteps = (p) => {
   // (moved: the server only keeps the task it already has for it, never makes a new one)
   const open = p.steps.filter((x) => (!x.done || movedButGiven(x)) && !(x.snoozedUntil && x.snoozedUntil > today)).map((x) => ({ stepRef: x.id, title: x.text, details: x.note || '', dueDate: x.dueDate || null, ...(x.done && x.movedTo ? { moved: true } : {}) }));
   if (open.length || p.steps.length) return open; // (steps all done or snoozed: nothing to do; the whole-project task is only for no steps at all)
+  if (isMainProject(store.view.data, p)) return []; // a 📂 project: its tasks go to the person themselves (projectGiveChanges), never one task with its name
   // no steps at all: the person still gets the project, as one task with its name, until steps are added
   return [{ stepRef: wholeRef(p.id), title: p.name, details: p.status || '' }];
 };
@@ -3265,26 +3266,56 @@ let dataFreshAt = 0; // when the projects were last checked against the server (
 const SYNC_KEY = 'dp.teamSync'; // last steps sent per given project, so unchanged projects are not sent again
 const SYNC_RETRY = 'retry'; // never matches: sent again next time, but a deleted project is still taken back
 
-/** Give the whole project to a person (or take it back with person = null). */
-async function giveProject(p, person, needsPhoto = !!ui.givePhoto) {
+/**
+ * Give the whole project to a person (or take it back with person = null). A 📂 project: its tasks go with it, except
+ * those given to someone else on their own and those you keep (`keep`: the task ids you unticked in the give box).
+ */
+async function giveProject(p, person, needsPhoto = !!ui.givePhoto, keep = ui.giveKeep || null) {
   if (team.busy.has(p.id)) return; // a double tap must not send it twice
   team.busy.add(p.id);
   render();
+  const main = isMainProject(store.view.data, p);
   try {
     await withSyncLock(async () => {
       const steps = person ? projectSteps(p) : [];
       // (the change of person is saved right after this: the server must not act on the older saved copy meanwhile)
       const out = await teamApi('project.sync', { projectRef: p.id, project: p.name, about: p.about || '', assigneeId: person ? person.id : 0, steps, needsPhoto, reason: person ? '' : 'taken', baseCommit: store.base && store.base.commit, pending: true });
       team.gen++; // a list fetched before this change is old now: it must not move the project back
-      store.dispatch('setProjectTeam', { projectId: p.id, userId: person ? person.id : null, name: person ? person.name : '', needsPhoto });
+      store.dispatch('setProjectTeam', { projectId: p.id, userId: person ? person.id : null, name: person ? person.name : '', needsPhoto, ...(main && person ? { giveTasks: true } : {}), ...(!main && !person ? { keepOff: true } : {}) });
+      if (main && person && keep) for (const id of keep) store.dispatch('setProjectTeam', { projectId: id, userId: null, keepOff: true }); // the ones you keep
       ui.giveOpen = null;
       ui.givePhoto = false;
-      toast(person ? `👥 ${p.name} given to ${person.name} ✓` : `Taken back: ${p.name}`);
+      ui.giveKeep = null;
+      const moved = main ? followProjects() : null;
+      toast(!person ? `Taken back: ${p.name}${moved && moved.back ? ` (and ${moved.back} task${moved.back > 1 ? 's' : ''} that went with it)` : ''}`
+        : main ? `👥 ${p.name} given to ${person.name} ✓ — ${giveSummary(p, person)}` : `👥 ${p.name} given to ${person.name} ✓`, main ? 8000 : 3000);
       // a step the server did not make yet (just finished): sent again later
       rememberSync(p.id, !person ? null : notSent(out, steps).length ? SYNC_RETRY : syncSig(person.id, p, steps, needsPhoto));
     });
+    if (main) syncGivenProjects(); // its tasks reach the person's list now
     loadTeam(true);
   } catch (e) { toast(e.message, 5000); } finally { team.busy.delete(p.id); render(); }
+}
+
+/** The tasks of given 📂 projects follow them (rules.js projectGiveChanges). Returns { given, back } counts. */
+function followProjects() {
+  const out = { given: 0, back: 0 };
+  if (!store || !store.view || !store.canEdit()) return out;
+  for (const c of projectGiveChanges(store.view.data)) {
+    if (store.dispatch('setProjectTeam', c.team ? { projectId: c.projectId, ...c.team } : { projectId: c.projectId, userId: null })) out[c.team ? 'given' : 'back']++;
+  }
+  return out;
+}
+
+/** "4 tasks go with it · 2 stay with Ravi · 1 stays with you" — after giving a 📂 project. */
+function giveSummary(p, person) {
+  const kids = childrenOf(store.view.data, p.id).filter((c) => c.state !== 'finished');
+  const go = kids.filter((c) => c.team && c.team.userId === person.id).length;
+  const others = new Map();
+  for (const c of kids) if (c.team && c.team.userId !== person.id) others.set(c.team.name, (others.get(c.team.name) || 0) + 1);
+  const mine = kids.filter((c) => !c.team).length;
+  const n = (k, w) => `${k} ${w}${k === 1 ? '' : 's'}`;
+  return [`${n(go, 'task')} go${go === 1 ? 'es' : ''} with it`, ...[...others].map(([name, k]) => `${k} stay${k === 1 ? 's' : ''} with ${name}`), mine ? `${mine} stay${mine === 1 ? 's' : ''} with you` : null].filter(Boolean).join(' · ');
 }
 
 /** Steps sent with project.sync that are not on the person's list yet (the server waits 10 minutes after one was finished). */
@@ -3315,6 +3346,7 @@ async function syncGivenNow(gen) {
   if (!store || !store.view) return;
   let m = {};
   try { m = JSON.parse(localStorage.getItem(SYNC_KEY) || '{}'); } catch { m = {}; }
+  followProjects(); // a task added to (or taken out of) a given 📂 project follows it
   // store.view is replaced after each save: read every project fresh after each wait, never an old copy
   const fresh = (id) => store.view.data.projects.find((x) => x.id === id);
   for (const id of store.view.data.projects.filter((x) => x.team).map((x) => x.id)) {
@@ -3353,7 +3385,12 @@ async function syncGivenNow(gen) {
   const ids = new Set(store.view.data.projects.map((p) => p.id));
   const savedIds = store.base ? new Set(store.base.data.projects.map((p) => p.id)) : null;
   for (const ref of Object.keys(m)) {
-    if (ids.has(ref)) continue;
+    const still = fresh(ref);
+    if (still && still.team) continue;
+    if (still) { // no longer given (it went with its 📂 project, which was taken back or it left): off the person's list
+      try { await teamApi('project.sync', { projectRef: ref, project: still.name, assigneeId: 0, steps: [], reason: 'taken' }); rememberSync(ref, null); } catch { /* try again next time */ }
+      continue;
+    }
     if (takeBackWaits(ref, savedIds, store.view.history)) continue; // not saved yet, or Undo still on screen: next time
     try {
       await teamApi('project.sync', { projectRef: ref, project: '', assigneeId: 0, steps: [], reason: 'deleted' });

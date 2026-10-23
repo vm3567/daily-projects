@@ -883,6 +883,9 @@ a.tag.team:hover { text-decoration: underline; }
 a.team-btn { position: relative; text-decoration: none; }
 .team-count { position: absolute; top: -2px; right: -4px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: #d93025; color: #fff; font-size: 11px; line-height: 16px; text-align: center; }
 .team-banner { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+/* giving a 📂 project: its tasks, ticked = they go too */
+.give-tasks { display: flex; flex-direction: column; gap: 4px; width: 100%; }
+.give-tasks .give-task { display: flex; gap: 6px; align-items: center; }
 a.team-line { display: block; margin: 6px 0 4px; padding: 6px 10px; border-radius: 8px; background: var(--brand-soft); border: 1px solid var(--line); color: var(--text); text-decoration: none; font-size: 14px; }
 a.team-line.late { border-color: var(--red); color: var(--red); }
 a.team-line.ok { border-color: var(--green); }
