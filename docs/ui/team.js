@@ -264,14 +264,16 @@ export function createTeam(opts) {
       return '';
     } catch (e) { return e.offline ? 'Photos in messages need the internet. Try again when online.' : fail(e); }
   }
+  // the task page open now (another one may be opened while an answer is on its way: never show its messages there)
+  const openTaskId = () => (state.detail && state.detail.task ? state.detail.task.id : null);
   async function editMessage(c) {
     const text = ask.prompt('Change your message:', c.text);
     if (text === null || text === undefined || text.trim() === String(c.text || '').trim()) return;
-    try { const out = await api('comment.edit', { id: c.id, text }); if (state.detail) state.detail.comments = out.comments; render(); toast('Changed ✓'); } catch (e) { say(e); }
+    try { const tid = openTaskId(); const out = await api('comment.edit', { id: c.id, text }); if (openTaskId() === tid && tid) state.detail.comments = out.comments; render(); toast('Changed ✓'); } catch (e) { say(e); }
   }
   async function deleteMessage(c) {
     if (!ask.confirm('Delete this message?')) return;
-    try { const out = await api('comment.delete', { id: c.id }); if (state.detail) state.detail.comments = out.comments; render(); toast('Deleted'); } catch (e) { say(e); }
+    try { const tid = openTaskId(); const out = await api('comment.delete', { id: c.id }); if (openTaskId() === tid && tid) state.detail.comments = out.comments; render(); toast('Deleted'); } catch (e) { say(e); }
   }
 
   /** Give a task (or save a change). The id is kept for the same words, so a second tap after a lost answer gives it once. */
@@ -279,7 +281,9 @@ export function createTeam(opts) {
     const editing = !!fields.id;
     if (!fields.assigneeId) return 'Choose who will do it.';
     if (!String(fields.title || '').trim()) return 'Write the task.';
+    if (state.givingNow) return ''; // a second tap while it is being given (its files would go twice)
     const formId = editing ? '' : (state.giveCid = rules.giveId(state.giveCid, fields, newClientId)).id;
+    state.givingNow = true;
     try {
       const out = await api('task.save', rules.taskSaveBody(fields, formId));
       state.giveCid = null;
@@ -290,7 +294,7 @@ export function createTeam(opts) {
       if (fromProjects && toProjects()) return '';
       open('task:' + out.task.id); load();
       return '';
-    } catch (e) { return fail(e); }
+    } catch (e) { return fail(e); } finally { state.givingNow = false; }
   }
 
   /** Work in one line ("Valar: send kiln photos by Friday"): the rule is parseQuickTask (logic.js). */

@@ -1261,3 +1261,55 @@ test('one app: a tapped notification opens the one app — an old "/#open=<id>" 
   assert.deepEqual((await run('/#open=9', ['/'])).moved, [{ u: '/', to: 'https://worktask.in/projects/#team-task=9' }], 'an old Work Task window is moved to the one app');
   assert.deepEqual((await run('https://evil.example/x', [])).opened, ['https://worktask.in/projects/'], 'only ever our own pages');
 });
+
+test('review r4-5 (whole code): a message changed or deleted while another task was opened never puts its task\'s messages on the new task\'s page (team pages and staff view)', async () => {
+  const ask = { prompt: () => 'changed words', confirm: () => true };
+  const mine = [{ id: 1, text: 'on task 5', mine: true }];
+  const other = [{ id: 9, text: 'on task 9', mine: true }];
+  // team pages
+  let opened;
+  const { t } = await teamPages({ 'comment.delete': () => { t.state.detail = opened; return { comments: [] }; }, 'comment.edit': () => { t.state.detail = opened; return { comments: [{ id: 1, text: 'changed words' }] }; } }, { ask });
+  for (const a of ['deleteMessage', 'editMessage']) {
+    t.state.detail = { task: { id: 5 }, comments: mine.slice() };
+    opened = { task: { id: 9 }, comments: other.slice() };
+    await t.act[a](mine[0]);
+    assert.deepEqual(t.state.detail.comments, other, 'team pages, ' + a + ': task 9 keeps its own messages');
+  }
+  t.state.detail = { task: { id: 5 }, comments: mine.slice() };
+  opened = t.state.detail; // nothing else opened meanwhile
+  await t.act.deleteMessage(mine[0]);
+  assert.deepEqual(t.state.detail.comments, [], 'still on task 5: its list follows the answer');
+  // staff view
+  const { createStaff } = await import('../docs/ui/staff.js');
+  const { memOutbox } = await import('../docs/ui/staffbox.js');
+  const rules = await import('../team/public_html/logic.js');
+  let s;
+  const api = async (a) => {
+    if (a === 'comment.delete' || a === 'comment.edit') { s.state.detail = opened; return { comments: [] }; }
+    if (a === 'my.today') return { today: '2026-10-22', fillBy: '18:00', tasks: [], other: [], suggestions: [] };
+    return { ok: true };
+  };
+  s = createStaff({ root: null, api, rules, user: { id: 3, name: 'Valar', role: 'staff' }, box: memOutbox(), lock: null, toast: () => {}, ask });
+  await s.load();
+  for (const a of ['deleteMessage', 'editMessage']) {
+    s.state.detail = { task: { id: 5 }, comments: mine.slice() };
+    opened = { task: { id: 9 }, comments: other.slice() };
+    await s.act[a](mine[0]);
+    assert.deepEqual(s.state.detail.comments, other, 'staff view, ' + a + ': task 9 keeps its own messages');
+  }
+});
+
+test('review r4-5 (whole code): "Give task" tapped twice while it is being given gives it (and sends its files) once', async () => {
+  let release;
+  const { t, calls } = await teamPages({ 'task.save': () => new Promise((r) => { release = () => r({ task: { id: 41, assignee: { name: 'Valar' } } }); }) });
+  const f = { assigneeId: 3, title: 'Glaze the tiles', details: '', project: '', repeat: 'once', skipSunday: true };
+  const first = t.act.saveTask(f, []);
+  assert.equal(await t.act.saveTask(f, []), '', 'the second tap does nothing');
+  release(); await first;
+  assert.equal(calls.filter((c) => c.a === 'task.save').length, 1);
+  release = null;
+  const again = t.act.saveTask({ ...f, title: 'Next one' }, []);
+  await new Promise((r) => setTimeout(r, 0));
+  assert.ok(release, 'once done, the next one goes');
+  release(); await again;
+});

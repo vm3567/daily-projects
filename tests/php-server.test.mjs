@@ -2890,6 +2890,22 @@ test('review r4-4 (whole code): the Outlook draft cleaner also removes on...= ha
   assert.deepEqual(good, ['<a href="https://worktask.in/x">a</a>', '<td class="one">Late</td>']);
 });
 
+test('review r4-5 (whole code): instruction files sent at the same moment never go past 10 on a task', { skip }, async () => {
+  const t = (await call('task.save', { assigneeId: id.suresh, title: 'File race', repeat: 'once' }, tok.boss)).task;
+  const port = WEB_PORT + 8;
+  const many = spawn('php', ['-S', `127.0.0.1:${port}`, '-t', join(ROOT, 'team', 'public_html')], { env: { ...env(), PHP_CLI_SERVER_WORKERS: '8' }, stdio: 'ignore' });
+  try {
+    const url = `http://127.0.0.1:${port}/api/?a=`;
+    await until(async () => (await fetch(url + 'ping', { method: 'POST', body: '{}' })).ok, 'PHP server with workers');
+    const send = () => { const fd = new FormData(); fd.append('taskId', String(t.id)); fd.append('file', new Blob([Buffer.from('%PDF-1.4\n%%EOF\n')], { type: 'application/pdf' }), 'm.pdf'); return fetch(url + 'task.file.add', { method: 'POST', headers: { Authorization: 'Bearer ' + tok.boss }, body: fd }).then(async (r) => ({ s: r.status, ...(await r.json()) })); };
+    for (let i = 0; i < 8; i++) assert.ok((await send()).ok);
+    const race = await Promise.all(Array.from({ length: 6 }, send));
+    assert.equal(race.filter((r) => r.ok).length, 2, race.map((r) => r.s + ' ' + (r.error || '')).join(', '));
+    assert.ok(race.filter((r) => !r.ok).every((r) => /Up to 10 files/.test(r.error)));
+  } finally { many.kill(); }
+  assert.equal(sqlOut(`SELECT COUNT(*) FROM wt.task_files WHERE task_id = ${t.id}`).trim(), '10');
+});
+
 test('review round 1 (whole code): importing a data folder with more than 500 files works (it goes in parts of 500; data.json last), every file is there', { skip }, async () => {
   const src = join(dir, 'import-big'); mkdirSync(join(src, 'files', 'x1'), { recursive: true });
   const n = 520;

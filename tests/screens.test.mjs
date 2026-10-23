@@ -1059,7 +1059,7 @@ test('📂 Projects page: a click on a project row selects it and stays on the p
   assert.match(mainsSrc, /ctx\.ui\.view === 'mains' && ctx\.showHere \? ctx\.showHere\(c\.id\)/, 'a task in the TASKS table while on the Projects page');
   const here = app.slice(app.indexOf('  showHere: (id) => {'), app.indexOf('  openProject: (id) => {'));
   assert.match(here, /select\(id\);/);
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-32'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-33'/, 'phones get the new copy');
 });
 
 test('📂 project page: "✕ Remove" on a task row takes it out of this project only — the task is kept (and stays in its other projects)', () => {
@@ -1844,7 +1844,7 @@ test('🔌 app wiring (app.js): "🔌 From apps" after ✉ Replies with the wait
   assert.match(app, /function go\(view\) \{\n\s*if \(view !== 'settings'\) forgetOnce\(\);/);
   assert.match(app, /if \(onServer\) loadApps\(appsCtx, force \|\| ui\.view === 'apps'\);/);
   assert.match(app, /replies: '✉ Replies', apps: '🔌 From apps', mains: '📂 Projects' \}\[ui\.view\]/, 'its page title');
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-32'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-33'/, 'phones get the new copy');
 });
 
 test('🔌 the PHP connector (team/connector/worktask-connector.php): the same text the app downloads, placeholders only (no real key), valid PHP 7.4+ (php -l), with wt_push / wt_withdraw / wt_decisions / wt_receive_decision', async () => {
@@ -3257,4 +3257,27 @@ test('review r4-4 (whole code): an error under a form shows even after the scree
     assert.doesNotMatch(src, /err\.(textContent|hidden) =/, f + ': every form error goes through errLine');
   }
   } finally { globalThis.document = realDoc; globalThis.Node = RealNode; }
+});
+
+test('review r4-5 (whole code): an answer in the team box goes on the newest message\'s task and marks only that person\'s messages read; another person\'s question stays new', async () => {
+  const s = sampleState();
+  const ctx = fakeCtx(s, { selected: 'p1', update: {} });
+  ctx.onServer = true;
+  ctx.teamInfo = () => ({ byStep: new Map(), fillBy: '18:00' });
+  ctx.teamPeople = () => [];
+  ctx.teamTask = () => null;
+  ctx.teamDaily = () => ({ data: { tasks: [], updates: [], comments: [
+    { id: 45, taskId: 7, by: 'Valar', at: '2026-10-21 10:05:00', text: 'Fired', unread: true },
+    { id: 44, taskId: 6, by: 'Valar', at: '2026-10-21 10:01:00', text: 'Step 1 done', unread: true },
+    { id: 43, taskId: 8, by: 'Ravi', at: '2026-10-21 10:00:00', text: 'Which clay?', unread: true },
+  ] } });
+  const calls = [];
+  ctx.teamReply = (p, taskId, text, ids, cid, upTo) => { calls.push([taskId, ids.slice().sort(), upTo]); return Promise.resolve(); };
+  const el = renderDetail(ctx);
+  const find = (node, f) => (f(node) ? node : (node.childNodes || []).map((c) => find(c, f)).find(Boolean));
+  const form = find(el, (n) => n.nodeName === 'FORM' && find(n, (x) => x.textContent === 'Send'));
+  form.elements = { reply: { value: 'Well done', disabled: false } };
+  form.__on.submit({ preventDefault() {}, target: form });
+  await new Promise((r) => setTimeout(r, 0));
+  assert.deepEqual(calls, [[7, [6, 7], 45]], 'to Valar; Ravi\'s question (task 8) is not marked read');
 });

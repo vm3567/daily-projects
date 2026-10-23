@@ -1283,8 +1283,16 @@ function add_task_file(array $me, array $t): int {
   if (!is_dir(UPLOAD_DIR . "/$dir")) mkdir(UPLOAD_DIR . "/$dir", 0750, true);
   $file = "$dir/" . bin2hex(random_bytes(12)) . ".$ext";
   file_put_contents(UPLOAD_DIR . "/$file", $bytes);
-  q('INSERT INTO task_files (task_id, user_id, file, name, mime, size, at) VALUES (?, ?, ?, ?, ?, ?, ?)', [$t['id'], $me['id'], $file, $name, $mime, strlen($bytes), now()]);
-  return (int)db()->lastInsertId();
+  // the limit, again under a lock on the task: files sent at the same moment are counted one after the other
+  return in_tx_with_alerts(function () use ($me, $t, $file, $name, $mime, $bytes) {
+    one('SELECT id FROM tasks WHERE id = ? FOR UPDATE', [$t['id']]);
+    if ((int)one('SELECT COUNT(*) AS n FROM task_files WHERE task_id = ?', [$t['id']])['n'] >= 10) {
+      @unlink(UPLOAD_DIR . '/' . $file);
+      throw new ApiError('Up to 10 files per task.');
+    }
+    q('INSERT INTO task_files (task_id, user_id, file, name, mime, size, at) VALUES (?, ?, ?, ?, ?, ?, ?)', [$t['id'], $me['id'], $file, $name, $mime, strlen($bytes), now()]);
+    return (int)db()->lastInsertId();
+  });
 }
 
 /** An instruction file: only to the manager or the person doing the task. */

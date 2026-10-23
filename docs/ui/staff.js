@@ -381,15 +381,17 @@ export function createStaff(opts) {
     } finally { delete state.sending[key]; render(); }
   }
 
+  // the task page open now (another one may be opened while an answer is on its way: never show its messages there)
+  const openTaskId = () => (state.detail && state.detail.task ? state.detail.task.id : null);
   async function editMessage(c) {
     const text = ask.prompt('Change your message:', c.text);
     if (text === null || text === undefined || text.trim() === String(c.text || '').trim()) return '';
-    try { const out = await api('comment.edit', { id: c.id, text }); if (state.detail) state.detail.comments = out.comments; render(); toast('Changed ✓'); return ''; }
+    try { const tid = openTaskId(); const out = await api('comment.edit', { id: c.id, text }); if (openTaskId() === tid && tid) state.detail.comments = out.comments; render(); toast('Changed ✓'); return ''; }
     catch (e) { const m = fail(e); if (m) toast(m, 5000); return m; }
   }
   async function deleteMessage(c) {
     if (!ask.confirm('Delete this message?')) return '';
-    try { const out = await api('comment.delete', { id: c.id }); if (state.detail) state.detail.comments = out.comments; render(); toast('Deleted'); return ''; }
+    try { const tid = openTaskId(); const out = await api('comment.delete', { id: c.id }); if (openTaskId() === tid && tid) state.detail.comments = out.comments; render(); toast('Deleted'); return ''; }
     catch (e) { const m = fail(e); if (m) toast(m, 5000); return m; }
   }
 

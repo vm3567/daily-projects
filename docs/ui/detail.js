@@ -124,7 +124,11 @@ function teamMessages(ctx, p) {
     form.elements.reply.disabled = true;
     const cids = (ui.teamReplyCid = ui.teamReplyCid || {});
     if (!cids[p.id] || cids[p.id].text !== text) cids[p.id] = { id: 'r' + newId() + newId(), text }; // a retry of the same words: the same id (never twice)
-    try { await ctx.teamReply(p, list[list.length - 1].taskId, text, taskIds, cids[p.id].id, upTo); delete (ui.teamReply ||= {})[p.id]; delete cids[p.id]; }
+    // the answer goes on the newest message's task: only that person's messages count as answered (another person's
+    // question stays new, so it is never marked read without an answer)
+    const to = list[list.length - 1];
+    const answered = [...new Set(list.filter((c) => c.by === to.by).map((c) => c.taskId))];
+    try { await ctx.teamReply(p, to.taskId, text, answered, cids[p.id].id, upTo); delete (ui.teamReply ||= {})[p.id]; delete cids[p.id]; }
     catch (e) { ctx.toast(e.message, 5000); form.elements.reply.disabled = false; }
   };
   return h('div', { class: 'banner team-msgs', key: 'tmsg-' + p.id },
