@@ -21,7 +21,7 @@ import { device } from './device.js';
 import { DATA_OWNER, DATA_REPO, DATA_BRANCH, MOVED_TO, REFRESH_MS, AI_DAILY_LIMIT, BRIEF_CLAIM_MINUTES, WAIT_RED_DAYS, NO_WORK_NOTE_DAYS } from './config.js';
 import { dotColour, greenByTeamOnly, isSnoozed, restUntil, restReason, onlyDaysLabel, openIdFromHash, awakeProjects, activeProjects, nextStep, todayIndia, isSundayIndia, colourCounts, isOverdue, indiaDate, waitingDays, daysWithoutWork, dayScore, greenStreak, addDays, monthOf, fmtMinutes, takeBackWaits, staffStepAction, pasteGoesToProject, singleStepClose, versionRequest, askDiaryAgain, pasteInForm, diaryLoadedAt, photoNeedsFetch, teamUndoKey, teamActionUndone, teamProgressOf, projectKeyIgnored, teamMovedTo, serverHolder, keepMovedStep, teamMemberFor, repliesOf, mailThreads, replyMailto, MAILTO_BODY_MAX, emailPath, pasteReason } from './rules.js';
 import { parentIdsOf, isMainProject, mainProjects, activeTasks, todayWithoutEmptyMains, todayList, stepTargets, mainSummary, childrenOf, deleteQuestion, pickEnterTarget } from './rules.js';
-import { newId, clone, opMonth, groupHasTimer, cleanLink, carriedOps } from './ops.js';
+import { newId, clone, opMonth, groupHasTimer, cleanLink, carriedOps, orderPosOf } from './ops.js';
 import * as ai from './ai.js';
 import { parseVoice } from './voice.js';
 
@@ -72,6 +72,9 @@ function toast(text, ms = 3500, undo = null) {
   toastTimer = setTimeout(() => { t.hidden = true; }, undo ? Math.max(ms, 6000) : ms);
 }
 
+// changes that take a task out of 📂 projects' order (dropFromOrder)
+const DROPS_ORDER = new Set(['removeFromProject', 'deleteProject', 'setParent']);
+
 /**
  * Several changes to one project as ONE action with one Undo (e.g. note + tick + next step).
  * `steps` is a list of [type, args]. Returns the ops that were applied, or null.
@@ -81,6 +84,8 @@ function actMany(projectId, steps, message, undoMark = null) {
   const list = store.view.data.projects;
   const index = list.findIndex((x) => x.id === projectId);
   const before = index >= 0 ? clone(list[index]) : null;
+  // taking it out of a 📂 project (or deleting it): Undo puts it back in its place in that project's order
+  const orderPos = steps.some(([type]) => DROPS_ORDER.has(type)) ? orderPosOf(store.view.data, projectId) : null;
   const ops = [];
   for (const [type, args] of steps) { const op = store.dispatch(type, args); if (op) ops.push(op); }
   if (!ops.length) return null;
@@ -90,7 +95,7 @@ function actMany(projectId, steps, message, undoMark = null) {
     const dropTeamSteps = ops.filter((o) => o.type === 'addStep' && o.args.byTeam).map((o) => o.args.stepId);
     // (an undone untick puts its tick line back: the save loads the month it is in)
     const tickMonths = [...new Set(ops.flatMap((o) => o.args.tickMonths || []))];
-    if (store.dispatch('restoreProject', { project: before, index, undoOpIds: ops.map((o) => o.id), undoMonth: months[0], dropTeamSteps, teamUndone: undoMark, tickMonths })) toast('Undone', 1500);
+    if (store.dispatch('restoreProject', { project: before, index, undoOpIds: ops.map((o) => o.id), undoMonth: months[0], dropTeamSteps, teamUndone: undoMark, tickMonths, ...(orderPos ? { orderPos } : {}) })) toast('Undone', 1500);
   } : null;
   if (message) toast(message, 5000, undo);
   return { ops, undo };
@@ -109,6 +114,7 @@ function act(type, args, message, ms = 4000) {
   const before = index >= 0 ? clone(list[index]) : null;
   // deleting a 📂 project: its tasks stay (no longer in it); Undo puts them back into it
   const parentIds = type === 'deleteProject' ? Object.fromEntries(list.filter((x) => parentIdsOf(x).includes(args.projectId)).map((x) => [x.id, args.projectId])) : null;
+  const orderPos = DROPS_ORDER.has(type) ? orderPosOf(store.view.data, snapId) : null; // Undo: its place in each 📂 project's order
   const timerBefore = store.view.data.timer && store.view.data.timer.projectId === snapId ? clone(store.view.data.timer) : null;
   const op = store.dispatch(type, args);
   if (!op) return null;
@@ -119,6 +125,7 @@ function act(type, args, message, ms = 4000) {
     const made = type === 'stepToProject' ? { removeProjectId: args.newProjectId } : {};
     Object.assign(made, type === 'createMainProject' ? { removeProjectId: args.projectId } : parentIds ? { parentIds } : {});
     if (timerStopped) made.timer = timerStopped;
+    if (orderPos) made.orderPos = orderPos;
     if (op.args.tickMonths) made.tickMonths = op.args.tickMonths; // an undone untick puts its tick line back
     if (store.dispatch('restoreProject', { project: before, index, undoOpId: op.id, undoMonth: opMonth(op), ...made })) toast('Undone', 1500);
   } : null;
@@ -523,7 +530,7 @@ async function giveStepsTo(items, user, person) {
     try {
       const out = await teamApi('task.save', {
         assigneeId: user.id, title: step.text, details: '', project: project.name, projectRef: project.id, stepRef: step.id,
-        repeat: 'daily', skipSunday: true, clientId: ids.get(key),
+        repeat: 'once', dueDate: step.dueDate || null, skipSunday: true, clientId: ids.get(key), // once: their Finished closes it and ticks the step
       });
       ids.delete(key); // given: a later give (after a cancel) is a new task
       if (out.task) team.byStep.set(step.id, out.task); // shows "👥 on …'s list" at once

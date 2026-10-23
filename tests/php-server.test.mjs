@@ -158,6 +158,13 @@ test('server: photo needed, closed tasks, late offline updates', { skip }, async
   assert.equal((await call('update.save', { taskId: d.id, note: 'yesterday', day: istDay(1) }, tok.suresh)).update.day, istDay(1), 'written yesterday counts for yesterday');
   assert.match((await call('update.save', { taskId: d.id, note: 'old', day: istDay(5) }, tok.suresh)).error || '', /more than 2 days/);
   assert.equal((await call('task.save', { assigneeId: id.suresh, title: 'bad date', repeat: 'once', dueDate: '2026-02-30' }, tok.boss)).s, 400);
+  // a step given from the People page (repeat once + stepRef): the person's Finished closes it, so Daily Projects ticks the step
+  const g = (await call('task.save', { assigneeId: id.suresh, title: 'Send drawing to vendor', details: '', project: 'Given P', projectRef: 'pg1', stepRef: 'sg1', repeat: 'once', dueDate: null, skipSunday: true }, tok.boss)).task;
+  assert.equal(g.repeat, 'once');
+  assert.ok((await call('update.save', { taskId: g.id, note: 'sent', state: 'finished' }, tok.suresh)).ok);
+  const gd = (await call('task.get', { id: g.id }, tok.boss)).task;
+  assert.equal(gd.status, 'done', 'Finished closes a given step');
+  assert.equal(gd.stepRef, 'sg1');
 });
 
 test('server: move, suggestions, give a whole project', { skip }, async () => {
@@ -1097,7 +1104,7 @@ test('work in one line: giving the same quick task twice (same clientId) makes o
 });
 
 // ---------------------------------------------------------------- Outlook → Daily Projects Inbox (against a fake Microsoft)
-const ms = { reqs: [], token: null, pages: [[]], moved: [], sent: [], bodies: {}, draftCode: 201, composeCode: 201, server: null };
+const ms = { reqs: [], token: null, pages: [[]], moved: [], sent: [], bodies: {}, draftCode: 201, composeCode: 201, server: null, graph: null };
 async function fakeMicrosoft() {
   if (ms.server) return;
   ms.server = createServer((req, res) => {
@@ -1110,6 +1117,8 @@ async function fakeMicrosoft() {
       const send = (code, j) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(j)); };
       if (u.pathname.endsWith('/oauth2/v2.0/token')) { const [code, j] = ms.token(form); return send(code, j); }
       if (u.pathname === '/v1.0/me') return send(200, { mail: 'venkat@acton.test', userPrincipalName: 'venkat@acton.test' });
+      const g = ms.graph && ms.graph(u); // a test's own mailbox (filters, order and pages like Graph): [code, json]
+      if (g) return send(...g);
       // the look for emails moved into the Inbox later (by when they last changed): its own list
       if (u.pathname === '/v1.0/me/mailFolders/inbox/messages' && (u.searchParams.get('$filter') || '').startsWith('lastModifiedDateTime')) return send(200, { value: ms.moved });
       if (u.pathname === '/v1.0/me/mailFolders/inbox/messages' || u.pathname === '/v1.0/next') {
@@ -1527,6 +1536,7 @@ test('replies: your reply in Outlook (Sent Items) joins the task\'s email thread
 });
 
 test('replies: dp-cli mail-body, and Claude\'s tracker replies / set-reply / mail-body on the local server copy (ambiguous refused)', { skip }, async () => {
+  const { repliesOf } = await import('../docs/rules.js');
   await fakeMicrosoft();
   sql('UPDATE wt.settings SET v = UNIX_TIMESTAMP() + 86400 WHERE k = \'jobs_at\'');
   await replyProjects();
@@ -1554,6 +1564,30 @@ test('replies: dp-cli mail-body, and Claude\'s tracker replies / set-reply / mai
   const r = data.projects.find((p) => p.id === 'rp1').steps.find((s) => s.id === 'rs2').reply;
   assert.deepEqual([r.text, r.by, r.state, r.forMessageId], ['Dear Anil,\nNoted.\nRegards, Venkat', 'claude', 'ready', 'MSG-R2']);
   assert.ok(!ms.reqs.some((x) => x.path.endsWith('/createReply') || /send/i.test(x.path)), 'set-reply sends nothing');
+  // the email id is shown; set-reply --for keeps the email Claude read, so one that came meanwhile shows as newer
+  assert.match(list, /\[rs2\] Price R2\n.*\n {2}email id \(for set-reply --for\): MSG-R2\n/);
+  assert.match(await tr('mail-body', 'rs2'), /Received: .*\nEmail id \(for set-reply --for\): MSG-R2\n/);
+  assert.match(await tr('set-reply', 'ri1', '--for', 'MSG-R0', 'Dear Ravi,', 'Noted.'), /a newer email came on this thread[\s\S]*Saved to worktask\.in: Reply prepared/);
+  const d2 = (await dpNow()).data;
+  assert.deepEqual([d2.inbox[0].reply.text, d2.inbox[0].reply.forMessageId], ['Dear Ravi, Noted.', 'MSG-R0'], 'not the newest email at save time');
+  assert.equal(repliesOf(d2, istDay(0)).ready.find((m) => m.id === 'ri1').newer, true);
+  await assert.rejects(tr('set-reply', 'ri1', 'Hello', '--for'), (e) => /Give the email id after --for/.test(String(e.stderr)));
+});
+
+test('tracker only-on --remind: 9:00 is saved as 09:00; a time like 9am is refused with a clear error (never "saved" without the reminder)', { skip }, async () => {
+  await replyProjects();
+  const run = promisify(execFile);
+  const tr = async (...args) => (await run(process.execPath, [join(ROOT, 'tools', 'tracker.mjs'), ...args], { env: { ...env(), DP_SERVER_LOCAL: '1', DP_DATA_DIR: '' }, encoding: 'utf8' })).stdout;
+  assert.match(await tr('only-on', 'rp1', 'Mon,Thu', '--remind', '9:00'), /Saved to worktask\.in: Only on days/);
+  const p = (await dpNow()).data.projects.find((x) => x.id === 'rp1');
+  assert.deepEqual([p.onlyDays, p.remindAt], [[1, 4], '09:00']);
+  for (const bad of [['9am'], ['25:00'], []]) {
+    await assert.rejects(tr('only-on', 'rp1', 'Mon', '--remind', ...bad), (e) => /Give the reminder time as HH:MM, like 09:00/.test(String(e.stderr)) && !/Saved/.test(String(e.stdout)), String(bad));
+  }
+  const q = (await dpNow()).data.projects.find((x) => x.id === 'rp1');
+  assert.deepEqual([q.onlyDays, q.remindAt], [[1, 4], '09:00'], 'nothing changed by a refused time');
+  assert.match(await tr('only-on', 'rp1', 'every', '--remind', 'off'), /Saved/);
+  assert.equal('remindAt' in (await dpNow()).data.projects.find((x) => x.id === 'rp1'), false);
 });
 
 // ---------------------------------------------------------------- project reminders on the phone + cron.php
@@ -2513,4 +2547,90 @@ test('review r16: an offline update from a phone whose date is behind is saved f
   // without the phone's times the phone's day is still used (and still limited to 2 days back)
   assert.equal((await call('update.save', { taskId: t3.id, note: 'old', day: istDay(1) }, tok.suresh)).update.day, istDay(1));
   assert.match((await call('update.save', { taskId: t3.id, note: 'old', day: istDay(5) }, tok.suresh)).error || '', /more than 2 days/);
+});
+
+test('review: the manager\'s Done / Take back from an old screen never overwrites the person\'s own Finished', { skip }, async () => {
+  const t = (await call('task.save', { assigneeId: id.suresh, title: 'Finished on the phone', repeat: 'once' }, tok.boss)).task;
+  assert.ok((await call('update.save', { taskId: t.id, note: 'All done', state: 'finished' }, tok.suresh)).ok);
+  const closedBy = () => sqlOut(`SELECT CONCAT(status, ':', IFNULL(closed_by, 'none')) FROM wt.tasks WHERE id = ${t.id}`).trim();
+  assert.equal(closedBy(), `done:${id.suresh}`, 'the person finished it');
+  for (const status of ['done', 'cancelled']) {
+    const r = await call('task.status', { id: t.id, status }, tok.boss);
+    assert.equal(r.s, 409, `${status} on an already closed task is refused`);
+    assert.equal(closedBy(), `done:${id.suresh}`, `still the person's Finished after ${status}`);
+  }
+  // a task the manager closed is not cancelled (or closed again) either
+  const m = (await call('task.save', { assigneeId: id.suresh, title: 'Closed by the manager', repeat: 'once' }, tok.boss)).task;
+  assert.equal((await call('task.status', { id: m.id, status: 'done' }, tok.boss)).task.status, 'done');
+  assert.equal((await call('task.status', { id: m.id, status: 'cancelled' }, tok.boss)).s, 409);
+  assert.equal((await call('task.get', { id: m.id }, tok.boss)).task.status, 'done');
+  // Open again still works
+  assert.equal((await call('task.status', { id: t.id, status: 'open' }, tok.boss)).task.status, 'open');
+});
+
+test('outlook: 250+ emails within the 5 minutes looked back (a mail merge, a bulk "Mark all as read") never stop the checks — later emails, moved emails and your replies are still read', { skip }, async () => {
+  await fakeMicrosoft();
+  sql('UPDATE wt.settings SET v = UNIX_TIMESTAMP() + 86400 WHERE k = \'jobs_at\'');
+  await connectOutlook();
+  const iso = (ms) => new Date(ms).toISOString().replace(/\.\d+Z$/, 'Z');
+  const now = Date.now();
+  const at = (secs) => iso(now - 6 * 60000 + secs * 1000); // all within a few minutes
+  // a mailbox that filters, orders and pages like Graph ($top 50, @odata.nextLink with $skip)
+  const box = { inbox: [], moved: [], sent: [] };
+  ms.graph = (u) => {
+    const m = /^\/v1\.0\/me\/mailFolders\/(inbox|sentitems)\/messages$/.exec(u.pathname);
+    if (!m) return null;
+    const f = /^(\w+) gt (\S+)(?: and receivedDateTime gt (\S+))?$/.exec(u.searchParams.get('$filter') || '');
+    if (!f) return [400, { error: { code: 'BadRequest' } }];
+    const [, field, gt, recv] = f;
+    const list = m[1] === 'sentitems' ? box.sent : field === 'lastModifiedDateTime' ? box.moved : box.inbox;
+    const hits = list.filter((x) => Date.parse(x[field]) > Date.parse(gt) && (!recv || Date.parse(x.receivedDateTime) > Date.parse(recv)))
+      .sort((a, b) => Date.parse(a[field]) - Date.parse(b[field]));
+    const skipN = Number(u.searchParams.get('$skip') || 0);
+    const next = new URL(u.href); next.searchParams.set('$skip', String(skipN + 50));
+    return [200, { value: hits.slice(skipN, skipN + 50), ...(hits.length > skipN + 50 ? { '@odata.nextLink': MS + next.pathname + next.search } : {}) }];
+  };
+  sql(`UPDATE wt.settings SET v = '${iso(now - 10 * 60000)}' WHERE k IN ('ol_since', 'ol_sent_since', 'ol_mod_since')`);
+  sql(`REPLACE INTO wt.settings (k, v) VALUES ('ol_mod_from', '${iso(now - 3 * 86400e3 + 3600e3)}')`);
+  sql("DELETE FROM wt.settings WHERE k IN ('ol_next_inbox', 'ol_next_moved', 'ol_next_sent')");
+  // the Inbox: 260 emails within one minute (one thread), then one later email
+  for (let i = 0; i < 260; i++) box.inbox.push({ ...mail(`bulk-in-${i}`, 'C-BULK-IN', 'Monthly statement', 'Bank', 0, `Statement ${i}`), receivedDateTime: at(i / 5) });
+  box.inbox.push({ ...mail('late-in', 'C-LATE-IN', 'Urgent: kiln order', 'Kumar', 0, 'Please call me.'), receivedDateTime: at(90) });
+  // a bulk change: 300 recent emails changed at the same moment, then one email moved in from Junk (received 2 days ago)
+  const T = at(30);
+  for (let i = 0; i < 300; i++) box.moved.push({ ...mail(`bulk-mv-${i}`, 'C-BULK-MV', 'Newsletter', 'Shop', 120, `News ${i}`), lastModifiedDateTime: T });
+  box.moved.push({ ...mail('late-mv', 'C-LATE-MV', 'Order for 90 tiles', 'Mohan', 2 * 1440, 'Found in Junk.'), lastModifiedDateTime: at(60) });
+  // Sent Items: a mail merge of 260 invoices within one minute, then your reply in the Inbox thread
+  for (let i = 0; i < 260; i++) box.sent.push({ id: `inv-${i}`, conversationId: `C-INV-${i}`, sentDateTime: at(i / 5), bodyPreview: `Invoice ${i}` });
+  box.sent.push({ id: 'late-sent', conversationId: 'C-BULK-IN', sentDateTime: at(100), bodyPreview: 'Thanks, received.' });
+  try {
+    for (let n = 0; n < 2; n++) assert.equal((await call('outlook.check', {}, tok.boss)).outlook.error, '');
+    const { data } = await dpNow();
+    const task = (conv) => data.projects.find((p) => p.mail && p.mail.conversationId === conv);
+    assert.ok(task('C-LATE-IN'), 'the later Inbox email became a task');
+    assert.ok(task('C-LATE-MV'), 'the email moved in from Junk became a task');
+    assert.ok(task('C-BULK-IN').thread.some((e) => e.messageId === 'late-sent' && e.fromMe), 'your later reply joined the thread');
+    // the next checks start again from the watermark: nothing is added twice
+    const head = (await dpNow()).head;
+    for (let n = 0; n < 2; n++) await call('outlook.check', {}, tok.boss);
+    assert.equal((await dpNow()).head, head, 'nothing new: no new version');
+    // a kept page address Microsoft no longer takes: one error, then the checks start again
+    sql(`REPLACE INTO wt.settings (k, v) VALUES ('ol_next_inbox', '${MS}/v1.0/me/mailFolders/inbox/messages?gone=1')`);
+    assert.notEqual((await call('outlook.check', {}, tok.boss)).outlook.error, '');
+    assert.equal((await call('outlook.check', {}, tok.boss)).outlook.error, '', 'not stuck on the old page address');
+    // a page address from somewhere else is never followed (the token goes to Microsoft only)
+    sql("REPLACE INTO wt.settings (k, v) VALUES ('ol_next_inbox', 'https://evil.test/steal')");
+    ms.reqs = [];
+    assert.equal((await call('outlook.check', {}, tok.boss)).outlook.error, '');
+    assert.ok(ms.reqs.some((x) => x.path === '/v1.0/me/mailFolders/inbox/messages' && decodeURIComponent(x.url).includes('$filter=receivedDateTime gt')), 'a fresh look instead');
+    // after a long break (a new sign-in looks at the last 24 hours only), a kept page address is dropped too
+    sql(`REPLACE INTO wt.settings (k, v) VALUES ('ol_next_inbox', '${MS}/v1.0/me/mailFolders/inbox/messages?old=1'), ('ol_next_moved', '${MS}/v1.0/me/mailFolders/inbox/messages?old=2')`);
+    sql(`UPDATE wt.settings SET v = '${iso(now - 5 * 86400e3)}' WHERE k = 'ol_since'`);
+    await connectOutlook();
+    assert.equal(sqlOut("SELECT CONCAT(IFNULL(MAX(IF(k = 'ol_next_inbox', v, NULL)), ''), '|', IFNULL(MAX(IF(k = 'ol_next_moved', v, NULL)), '')) FROM wt.settings").trim(), '|');
+  } finally {
+    ms.graph = null;
+    sql("DELETE FROM wt.settings WHERE k IN ('ol_next_inbox', 'ol_next_moved', 'ol_next_sent')");
+    sql('UPDATE wt.settings SET v = 0 WHERE k = \'jobs_at\'');
+  }
 });

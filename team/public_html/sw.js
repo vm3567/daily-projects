@@ -4,8 +4,11 @@ const CACHE = 'worktask-v26';
 const SHELL = ['./', 'index.html', 'app.js', 'logic.js', 'styles.css', 'projects/styles.css', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png'];
 
 self.addEventListener('install', (e) => {
-  // all app files at once, fresh from the server (not the browser's own store): one version, all or nothing
-  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL.map((u) => new Request(u, { cache: 'reload' })))).then(() => self.skipWaiting()));
+  // all app files at once, fresh from the server (not the browser's own store): one version, all or nothing.
+  // Their version is noted with them (asked first: an upload in between only makes the set look older, so it is renewed;
+  // not known: '' = old, renewed at the first version check)
+  const ver = fetch('version.txt', { cache: 'no-store' }).then((r) => (r.ok ? r.text() : '')).then((t) => t.trim(), () => '');
+  e.waitUntil(caches.open(CACHE).then((c) => ver.then((v) => c.addAll(SHELL.map((u) => new Request(u, { cache: 'reload' }))).then(() => c.put(STAMP, new Response(v))))).then(() => self.skipWaiting()));
 });
 self.addEventListener('activate', (e) => {
   // only our own old copies: the projects app keeps its own cache on the same site

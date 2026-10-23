@@ -1217,6 +1217,17 @@ test('replies: setReply saves the draft where the email lives (Inbox item, step,
   assert.equal(lastWorkDate(s.data.projects[0]), null);
 });
 
+test('replies: a Claude draft keeps the email it was written for (forMessageId); an email that came meanwhile shows as newer', async () => {
+  const { repliesOf } = await import('../docs/rules.js');
+  const s = withMails();
+  s.data.inbox[0].mail.messageId = 'msg-i1-b'; // a newer email on the thread while the owner read the drafts
+  assert.ok(applyOp(s, op('setReply', { itemId: 'i1', text: 'Dear Ravi, noted.', by: 'claude', forMessageId: 'msg-i1' }, '2026-10-22')));
+  assert.equal(s.data.inbox[0].reply.forMessageId, 'msg-i1', 'the email Claude read, not the newest at save time');
+  assert.equal(repliesOf(s.data, '2026-10-22').ready.find((m) => m.id === 'i1').newer, true, '"a newer email came after it"');
+  applyOp(s, op('setReply', { itemId: 'i2', text: 'Thanks Anil', by: 'claude' }, '2026-10-22'));
+  assert.equal(s.data.inbox[1].reply.forMessageId, 'msg-i2', 'not given: the newest email, as before');
+});
+
 test('replies: an Inbox item\'s draft goes with it to a step or project', () => {
   const s = withMails();
   applyOp(s, op('setReply', { itemId: 'i2', text: 'Thanks Anil', by: 'claude' }, '2026-10-22'));
@@ -2435,6 +2446,62 @@ test('📂 a task taken out of a project (or deleted, or moved by setParent) los
   s = make();
   applyOp(s, op('deleteProject', { projectId: 'k1' }, '2026-10-03'));
   assert.deepEqual(P(s, 'm').taskOrder, ['k2', 'x'], 'deleteProject');
+});
+
+test('📂 Undo of taking a task out (or deleting it) puts it back in its place in the project\'s order, not at the bottom', async () => {
+  const { orderedTasks } = await import('../docs/rules.js');
+  const { orderPosOf } = await import('../docs/ops.js');
+  const make = () => {
+    const s = withMains();
+    for (const id of ['k1', 'k2', 'x']) applyOp(s, op('addToProject', { projectId: id, parentId: 'm' }, '2026-10-02'));
+    applyOp(s, op('setTaskOrder', { projectId: 'm', order: ['x', 'k1', 'k2'] }, '2026-10-02'));
+    return s;
+  };
+  const ids = (s) => orderedTasks(s.data, P(s, 'm'), '2026-10-22').map((x) => x.id);
+  for (const [type, args] of [['removeFromProject', { projectId: 'k1', parentId: 'm' }], ['deleteProject', { projectId: 'k1' }]]) {
+    const s = make();
+    const index = s.data.projects.findIndex((p) => p.id === 'k1');
+    const before = clone(P(s, 'k1'));
+    const orderPos = orderPosOf(s.data, 'k1'); // as act() records it
+    assert.deepEqual(orderPos, { m: 1 });
+    const t = op(type, args, '2026-10-03');
+    assert.ok(applyOp(s, t));
+    assert.deepEqual(P(s, 'm').taskOrder, ['x', 'k2']);
+    assert.ok(applyOp(s, op('restoreProject', { project: before, index, undoOpId: t.id, orderPos }, '2026-10-03', '10:01:00')));
+    assert.deepEqual(P(s, 'm').taskOrder, ['x', 'k1', 'k2'], type);
+    assert.deepEqual(ids(s), ['x', 'k1', 'k2'], type + ': second again, as arranged');
+    // replayed (twice, or on another device): it is not put in twice
+    assert.ok(applyOp(s, op('restoreProject', { project: before, index, undoOpId: t.id, orderPos }, '2026-10-03', '10:02:00')));
+    assert.deepEqual(P(s, 'm').taskOrder, ['x', 'k1', 'k2'], type + ': once only');
+  }
+  // a saved place in a project the task is not in (after the Undo): never put in its order
+  const s = make();
+  const before = clone(P(s, 'k1'));
+  applyOp(s, op('removeFromProject', { projectId: 'k1', parentId: 'm' }, '2026-10-03'));
+  P(s, 'x').taskOrder = ['k2'];
+  applyOp(s, op('restoreProject', { project: before, orderPos: { m: 1, x: 0 } }, '2026-10-03', '10:01:00'));
+  assert.deepEqual(P(s, 'x').taskOrder, ['k2'], 'not in that project: no place in its order');
+  assert.deepEqual(P(s, 'm').taskOrder, ['x', 'k1', 'k2']);
+});
+
+test('make it a project, then un-ticked, then ticked the normal way: no longer moved, so the person\'s Work Task task closes', async () => {
+  const { singleStepClose, keepMovedStep } = await import('../docs/rules.js');
+  const s = withProject('2026-10-01');
+  assert.ok(applyOp(s, op('stepToProject', { projectId: 'p1', stepId: 's1', newProjectId: 'pn' }, '2026-10-02')));
+  const step = () => P(s, 'p1').steps.find((x) => x.id === 's1');
+  assert.equal(step().movedTo, 'pn');
+  assert.ok(applyOp(s, op('untickStep', { projectId: 'p1', stepId: 's1' }, '2026-10-03')));
+  assert.deepEqual([step().done, step().movedTo], [false, undefined], 'un-ticked: an ordinary open step again');
+  assert.ok(applyOp(s, op('tickStep', { projectId: 'p1', stepId: 's1' }, '2026-10-05')));
+  assert.deepEqual([step().done, step().movedTo], [true, undefined]);
+  const t = { status: 'open', stepRef: 's1', seq: null, projectRef: 'p1' };
+  assert.equal(singleStepClose(t, s.data.projects, new Set(['p1']), s.history, Date.parse(T('2026-10-06'))), 'done', 'the person\'s task is closed');
+  assert.equal(keepMovedStep(step(), t, true), false, 'not sent as moved any more');
+  // a step still carrying movedTo from older data, ticked the normal way: not a move
+  const st = P(s, 'p1').steps.find((x) => x.id === 's2');
+  st.movedTo = 'pn';
+  assert.ok(applyOp(s, op('tickStep', { projectId: 'p1', stepId: 's2' }, '2026-10-05')));
+  assert.equal(st.movedTo, undefined);
 });
 
 test('review r15: Undo of Pause / Finish while the timer ran starts the timer again — the timed minutes are never lost', () => {

@@ -795,10 +795,13 @@ function handle(string $a, array $in): array {
       if ($t['status'] === 'suggested') throw new ApiError('Answer the suggestion with Yes or Not now.');
       if ($st === 'cancelled' && $t['seq'] !== null && $t['project_ref']) throw new ApiError('This is a step of a given project: delete it (or take the project back) on your projects page.');
       if ($st === 'open' && !(int)(one('SELECT active FROM users WHERE id = ?', [$t['assignee_id']])['active'] ?? 0)) throw new ApiError('This person is switched off. Move the task to someone else first.');
+      // only an open task can be closed: never overwrite the person's own Finished (or an earlier close) from an old screen
+      if ($st !== 'open' && $t['status'] !== 'open') throw new ApiError('This task was already closed.', 409);
+      if ($st === 'open' && $t['status'] !== 'open') q('UPDATE tasks SET reopened_at = ?, closed_from = done_at WHERE id = ?', [now(), $t['id']]);
+      $upd = q('UPDATE tasks SET status = ?, done_at = ?, closed_by = NULL, updated_at = ? WHERE id = ?' . ($st === 'open' ? '' : " AND status = 'open'"), [$st, $st === 'open' ? null : now(), now(), $t['id']]); // closed by the manager, not by the person's Finished
+      if ($st !== 'open' && !$upd->rowCount()) throw new ApiError('This task was already closed.', 409); // (closed at the same moment)
       if ($st !== $t['status']) notify([(int)$t['assignee_id']], 'task',
         ['done' => '✓ Your manager closed a task', 'cancelled' => '✖️ A task was cancelled', 'open' => '↩️ A task is open again'][$st], $t['title'], '/#open=' . $t['id'], 't' . $t['id']);
-      if ($st === 'open' && $t['status'] !== 'open') q('UPDATE tasks SET reopened_at = ?, closed_from = done_at WHERE id = ?', [now(), $t['id']]);
-      q('UPDATE tasks SET status = ?, done_at = ?, closed_by = NULL, updated_at = ? WHERE id = ?', [$st, $st === 'open' ? null : now(), now(), $t['id']]); // closed by the manager, not by the person's Finished
       audit($me['id'], 'task_' . $st, "#{$t['id']} {$t['title']}");
       return ['task' => tasks_out([own_task($me, (int)$t['id'])], $day)[0]];
     }

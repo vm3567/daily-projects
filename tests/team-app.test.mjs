@@ -878,6 +878,28 @@ test('r14 version.txt: never answered from the kept copy (network only, no-store
   assert.match(fn, /`version\.txt\?check=\$\{Date\.now\(\)\}`, \{ cache: 'no-store' \}\)/, 'the page asks with no-store every time, the first time too');
 });
 
+test('sw: install notes the version of the files it keeps, so a later upload renews the kept set (never old code labelled new)', async () => {
+  let ver = 'A';
+  const h = await swHarness({ net: (u) => Promise.resolve(new Response(u.endsWith('version.txt') ? ver + '\n' : 'fresh ' + u)) });
+  let wait;
+  h.handlers.install({ waitUntil: (p) => { wait = p; } });
+  await wait;
+  assert.ok(h.fetches.some((f) => f.url === 'https://worktask.in/version.txt' && f.cache === 'no-store'), 'asked fresh from the server');
+  assert.equal(await h.store(h.cacheName).get('https://worktask.in/kept-version.txt').clone().text(), 'A', 'the stamp is the version of the kept files');
+  for (const f of ['app.js', 'logic.js']) h.store(h.cacheName).set('https://worktask.in/' + f, new Response('A ' + f));
+  ver = 'B'; // an upload; the page's first version check goes through the worker later
+  const waits = [];
+  assert.equal(await h.ask('/version.txt', 'no-cors', { waits }), 'B\n');
+  await Promise.all(waits);
+  for (const f of ['app.js', 'logic.js']) assert.equal(await h.store(h.cacheName).get('https://worktask.in/' + f).clone().text(), 'new https://worktask.in/' + f, f + ': the old A copy was renewed');
+  assert.equal(await h.store(h.cacheName).get('https://worktask.in/kept-version.txt').clone().text(), 'B');
+  // version.txt not readable at install: the set counts as old, renewed at the first check
+  const n = await swHarness({ net: (u) => Promise.resolve(u.endsWith('version.txt') ? new Response('', { status: 404 }) : new Response('x')) });
+  n.handlers.install({ waitUntil: (p) => { wait = p; } });
+  await wait;
+  assert.equal(await n.store(n.cacheName).get('https://worktask.in/kept-version.txt').clone().text(), '');
+});
+
 test('r14 Outlook status: one failed outlook.status answer does not switch the no-paste email off for the whole page load; the next redraw asks again', async () => {
   const src = APP.slice(APP.indexOf('let outlookOn = null;'), APP.indexOf('/**', APP.indexOf('function outlookConnected()')));
   let calls = 0, fail = true;

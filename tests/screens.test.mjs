@@ -463,6 +463,31 @@ test('replies: Undo after ✓ Sent takes it all back (undoReplySent with the dra
   assert.deepEqual([args.projectId, args.stepId, args.reply.text, args.reply.state, args.workDate, args.sentAt, args.undoOpId], ['p1', 'ms1', 'Dear Ravi', 'ready', wd, '2026-10-22T10:30:00.000Z', 'op9']);
 });
 
+test('replies: a save timer from an earlier screen update does not bring back a reply marked ✓ Sent or ✕ Cleared', async (t) => {
+  const { mailThreads } = await import('../docs/rules.js');
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  for (const button of ['✓ Sent', '✕ Clear']) {
+    const s = mailState();
+    const ctx = replyCtx(s);
+    ctx.store.dispatch = (type, args) => { const op = makeOp(type, args); applyOps(s, [op]); ctx.calls.push([type, args]); return op; };
+    const live = () => mailThreads(s.data).find((x) => x.key === 'inbox:i3');
+    const prepared = () => (JSON.stringify(s.history).match(/"reply_prepared"/g) || []).length;
+    const before = prepared();
+    const el = { value: 'Dear Meena, thanks a lot.' }; // the same box on the page across updates
+    rFind(replyArea(ctx, live()), (n) => n.nodeName === 'TEXTAREA').__on.input(null, el); // a letter typed
+    const box = replyArea(ctx, live()); // the page updates (the store's save status) within the pause
+    rFind(box, (n) => n.nodeName === 'TEXTAREA').__on.focusout(null, el); // leaving the box to click
+    btn(box, button).__on.click();
+    t.mock.timers.tick(1000); // the old pause runs out
+    const types = ctx.calls.map((c) => c[0]);
+    assert.deepEqual(types, ['setReply', button === '✓ Sent' ? 'markReplySent' : 'clearReply'], button + ': no late setReply after it');
+    const r = live().reply;
+    if (button === '✓ Sent') assert.equal(r && r.state, 'sent', 'still sent, not "Reply ready" again');
+    else assert.ok(!r || r.state === 'sent', 'still cleared');
+    assert.equal(prepared(), before, button + ': no stray "Reply prepared" line');
+  }
+});
+
 test('replies: the ✉ Replies page — counts, ready and waiting lists with days, tap opens, round button', () => {
   const s = mailState();
   assert.equal(readyCount(s.data), 1, 'the menu number');
@@ -573,7 +598,8 @@ test('people give: the app sends task.save with the step\'s projectRef and stepR
   const { readFileSync } = await import('node:fs');
   const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
   const fn = app.slice(app.indexOf('async function giveStepsTo('), app.indexOf('function refreshTeamPeople('));
-  assert.match(fn, /teamApi\('task\.save', \{\s*assigneeId: user\.id, title: step\.text, details: '', project: project\.name, projectRef: project\.id, stepRef: step\.id,\s*repeat: 'daily', skipSunday: true, clientId:/);
+  assert.match(fn, /teamApi\('task\.save', \{\s*assigneeId: user\.id, title: step\.text, details: '', project: project\.name, projectRef: project\.id, stepRef: step\.id,\s*repeat: 'once', dueDate: step\.dueDate \|\| null, skipSunday: true, clientId:/);
+  assert.doesNotMatch(fn, /repeat: 'daily'/, 'a given step is a one-off: a daily task never closes on Finished, so the step was never ticked');
   assert.match(fn, /Given to \$\{first\} ✓/);
   assert.match(fn, /Given \$\{given\} to \$\{person\.name\} ✓\$\{failed\.length \? ` \(\$\{failed\.length\} failed: \$\{failed\[0\]\}\)` : ''\}/);
   assert.match(fn, /team\.byStep\.set\(step\.id, out\.task\)/, 'the step shows it is on their list at once');

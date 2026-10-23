@@ -142,29 +142,40 @@ function ol_graph_error(int $code): OlError {
 }
 
 /** New emails in the Inbox since `since` (oldest first), a few pages at most. */
-function ol_fetch(string $token, string $since): array {
-  $all = ol_list($token, 'inbox', 'id,subject,from,receivedDateTime,bodyPreview,webLink,conversationId,internetMessageId', 'receivedDateTime', $since);
+function ol_fetch(string $token, string $since, ?string &$next = null): array {
+  $all = ol_list($token, 'inbox', 'id,subject,from,receivedDateTime,bodyPreview,webLink,conversationId,internetMessageId', 'receivedDateTime', $since, '', 'ol_next_inbox', $next);
   return array_values(array_filter($all, fn($m) => is_string($m['id'] ?? null) && $m['id'] !== ''));
 }
 
 /** Emails moved into the Inbox later (from Junk or another folder: their received time is old), changed after `since`, received after `from`. */
-function ol_fetch_moved(string $token, string $since, string $from): array {
-  $all = ol_list($token, 'inbox', 'id,subject,from,receivedDateTime,lastModifiedDateTime,bodyPreview,webLink,conversationId,internetMessageId', 'lastModifiedDateTime', $since, " and receivedDateTime gt $from");
+function ol_fetch_moved(string $token, string $since, string $from, ?string &$next = null): array {
+  $all = ol_list($token, 'inbox', 'id,subject,from,receivedDateTime,lastModifiedDateTime,bodyPreview,webLink,conversationId,internetMessageId', 'lastModifiedDateTime', $since, " and receivedDateTime gt $from", 'ol_next_moved', $next);
   return array_values(array_filter($all, fn($m) => is_string($m['id'] ?? null) && $m['id'] !== ''));
 }
 
-/** Emails in a folder (inbox, sentitems) whose $field (receivedDateTime, sentDateTime) is after `since`, oldest first. */
-function ol_list(string $token, string $folder, string $select, string $field, string $since, string $more = ''): array {
+/**
+ * Emails in a folder (inbox, sentitems) whose $field (receivedDateTime, sentDateTime) is after `since`, oldest first.
+ * More than OL_PAGES pages: $next is the next page's address ('' when all was read); the caller keeps it in the setting
+ * $key once the emails are put in, and the next check goes on from there (else 250+ emails within the few minutes looked
+ * back would come first every time, and nothing after them would ever be read).
+ */
+function ol_list(string $token, string $folder, string $select, string $field, string $since, string $more = '', string $key = '', ?string &$next = null): array {
   $q = ['$select' => $select, '$orderby' => "$field asc", '$filter' => "$field gt " . $since . $more, '$top' => '50'];
   $url = ol_graph_base() . '/v1.0/me/mailFolders/' . $folder . '/messages?' . http_build_query($q, '', '&', PHP_QUERY_RFC3986);
+  $saved = $key !== '' ? setting($key) : '';
+  if (str_starts_with($saved, ol_graph_base() . '/')) $url = $saved; // the token never goes anywhere else
   $all = [];
   for ($page = 0; $url !== '' && $page < OL_PAGES; $page++) {
     [$code, $j] = ol_http($url, null, $token);
-    if ($code !== 200) throw ol_graph_error($code);
+    if ($code !== 200) {
+      if ($key !== '') set_setting($key, ''); // (an old page address Microsoft no longer takes: start again next time)
+      throw ol_graph_error($code);
+    }
     foreach ((array)($j['value'] ?? []) as $m) if (is_array($m)) $all[] = $m;
     $next = (string)($j['@odata.nextLink'] ?? '');
     $url = str_starts_with($next, ol_graph_base() . '/') ? $next : ''; // the token never goes anywhere else
   }
+  $next = $url;
   return $all;
 }
 
@@ -507,7 +518,7 @@ function ol_thread_sent(object $data, array $m): bool {
 /** Look in Sent Items since the last look: a reply sent in a thread that waits for one ticks it as replied. */
 function ol_check_sent(string $token): void {
   $since = setting('ol_sent_since') ?: gmdate('Y-m-d\TH:i:s\Z', time() - 86400);
-  $sent = ol_list($token, 'sentitems', 'id,conversationId,sentDateTime,bodyPreview,webLink', 'sentDateTime', gmdate('Y-m-d\TH:i:s\Z', (int)strtotime($since) - 300));
+  $sent = ol_list($token, 'sentitems', 'id,conversationId,sentDateTime,bodyPreview,webLink', 'sentDateTime', gmdate('Y-m-d\TH:i:s\Z', (int)strtotime($since) - 300), '', 'ol_next_sent', $next);
   $last = strtotime($since);
   $by = []; // the newest reply of each thread
   $all = [];
@@ -529,6 +540,7 @@ function ol_check_sent(string $token): void {
     }, '✉ Replied in Outlook');
   }
   set_setting('ol_sent_since', gmdate('Y-m-d\TH:i:s\Z', $last));
+  set_setting('ol_next_sent', $next);
 }
 
 /**
@@ -660,14 +672,16 @@ function ol_check(bool $now = false): void {
     $token = ol_access_token();
     $since = setting('ol_since') ?: gmdate('Y-m-d\TH:i:s\Z', time() - 86400);
     // a few minutes back, in case two emails came in the same second (each email is still put in once)
-    $msgs = ol_fetch($token, gmdate('Y-m-d\TH:i:s\Z', (int)strtotime($since) - 300));
+    $msgs = ol_fetch($token, gmdate('Y-m-d\TH:i:s\Z', (int)strtotime($since) - 300), $next);
     // an email moved into the Inbox later keeps its old received time: looked for by when it last changed (its own
     // watermark), only among the last 3 days' emails (an old email marked as read never floods in); ol_seen adds each once
     if (setting('ol_mod_since') === '') { set_setting('ol_mod_since', gmdate('Y-m-d\TH:i:s\Z')); set_setting('ol_mod_from', $since); }
     $modSince = setting('ol_mod_since');
     $from = max(time() - 3 * 86400, (int)strtotime(setting('ol_mod_from')));
-    $moved = ol_fetch_moved($token, gmdate('Y-m-d\TH:i:s\Z', (int)strtotime($modSince) - 300), gmdate('Y-m-d\TH:i:s\Z', $from));
+    $moved = ol_fetch_moved($token, gmdate('Y-m-d\TH:i:s\Z', (int)strtotime($modSince) - 300), gmdate('Y-m-d\TH:i:s\Z', $from), $nextMoved);
     ol_add(array_merge($msgs, $moved));
+    set_setting('ol_next_inbox', $next); // more than OL_PAGES pages: the next check goes on from there
+    set_setting('ol_next_moved', $nextMoved);
     $last = strtotime($since);
     foreach ($msgs as $m) $last = max($last, (int)strtotime((string)($m['receivedDateTime'] ?? '')));
     set_setting('ol_since', gmdate('Y-m-d\TH:i:s\Z', $last));
@@ -797,7 +811,7 @@ function ol_callback(array $get): array {
     set_setting('ol_at', '0'); // look at once (the next request)
     // the first time: only the last 24 hours (after a long break too: never a flood of old emails)
     $since = strtotime(setting('ol_since')) ?: 0;
-    if ($since < time() - 3 * 86400) { set_setting('ol_since', gmdate('Y-m-d\TH:i:s\Z', time() - 86400)); set_setting('ol_mod_since', ''); }
+    if ($since < time() - 3 * 86400) { set_setting('ol_since', gmdate('Y-m-d\TH:i:s\Z', time() - 86400)); set_setting('ol_mod_since', ''); set_setting('ol_next_inbox', ''); set_setting('ol_next_moved', ''); }
     audit((int)$saved['user'], 'outlook_on', '');
     return [true, 'Outlook connected ✓' . ($account !== '' ? " ($account)" : '') . ' — you can close this.'];
   } catch (OlError $e) {

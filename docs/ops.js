@@ -309,6 +309,16 @@ function dropFromOrder(data, taskId, mainIds = null) {
   }
 }
 
+/** Where a task sits in each 📂 project's order ({ mainId: index }), so Undo can put it back in its place. */
+export function orderPosOf(data, taskId) {
+  const pos = {};
+  for (const m of data.projects) {
+    const k = Array.isArray(m.taskOrder) ? m.taskOrder.indexOf(taskId) : -1;
+    if (k >= 0) pos[m.id] = k;
+  }
+  return pos;
+}
+
 /** Every change to a project counts as activity for the dot colour (green today). */
 function touch(project, op) {
   project.updatedAt = op.at;
@@ -755,6 +765,15 @@ const handlers = {
         if (c && pid === snap.id && c.id !== snap.id && !parentIdsOf(c).includes(pid) && linkStillOk(data, c, back)) setParents(c, [...parentIdsOf(c), pid]);
       }
     }
+    // Undo of taking it out (or deleting it): its place in each 📂 project's order comes back ({ mainId: index })
+    if (a.orderPos && typeof a.orderPos === 'object' && !Array.isArray(a.orderPos)) {
+      for (const [mid, k] of Object.entries(a.orderPos)) {
+        const m = list.find((x) => x.id === mid);
+        if (!m || !Number.isInteger(k) || k < 0 || !parentIdsOf(back).includes(mid)) continue;
+        const order = Array.isArray(m.taskOrder) ? m.taskOrder : [];
+        if (!order.includes(back.id)) m.taskOrder = [...order.slice(0, k), back.id, ...order.slice(k)];
+      }
+    }
     for (const pid of parentIdsOf(back)) { const m = list.find((x) => x.id === pid); if (m) m.isMain = true; }
     if (list.some((x) => x.id !== back.id && parentIdsOf(x).includes(back.id))) back.isMain = true;
     const undone = [a.undoOpId, ...(Array.isArray(a.undoOpIds) ? a.undoOpIds : [])].filter(Boolean).flatMap((id) => [id, ...(keepLogged && id === a.undoOpId ? [] : [id + 't']), id + 'm', id + 'u']);
@@ -860,6 +879,7 @@ const handlers = {
     const s = p && p.steps.find((x) => x.id === a.stepId);
     if (!s || s.done) return false;
     s.done = true;
+    delete s.movedTo; // a normal tick is never a move (only stepToProject sets it)
     // ticked for the team (they finished it, maybe days ago): their day, and not your own work today
     s.doneAt = a.byTeam ? teamTime(a.at, op) : op.at;
     s.updatedAt = op.at;
@@ -901,6 +921,7 @@ const handlers = {
     s.doneAt = null;
     s.updatedAt = op.at;
     delete s.byTeam;
+    delete s.movedTo; // a moved step ("Make it a project") un-ticked: an ordinary open step again
     if (s.spawnedCopy) {
       // un-ticking a repeating step takes back the copy it made (if not started)
       const k = p.steps.findIndex((x) => x.id === s.spawnedCopy && !x.done);
@@ -1137,7 +1158,8 @@ const handlers = {
     if (replyOpen(old) && old.text === text) return false;
     const fresh = !replyOpen(old);
     t.target.reply = {
-      text, at: op.at, by, forMessageId: t.target.mail.messageId || null,
+      // the email it answers: the one Claude read (an email that came meanwhile then shows as newer), else the newest
+      text, at: op.at, by, forMessageId: (typeof a.forMessageId === 'string' && a.forMessageId.trim().slice(0, 400)) || t.target.mail.messageId || null,
       state: fresh ? 'ready' : old.state, ...(!fresh && old.laterUntil ? { laterUntil: old.laterUntil } : {}),
     };
     if (fresh) addEvent(state, op, t.project, 'reply_prepared', `Reply prepared${by === 'claude' ? ' by Claude' : ''}: ${t.target.mail.subject || ''}`.trim());

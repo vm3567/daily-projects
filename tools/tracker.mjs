@@ -22,7 +22,7 @@
 //   node tools/tracker.mjs restore <YYYY-MM-DD>          (shows that version; add --yes to restore it)
 //   node tools/tracker.mjs replies                       (emails waiting for your reply, for /replies)
 //   node tools/tracker.mjs mail-body <email>             (the newest email's words; worktask.in only)
-//   node tools/tracker.mjs set-reply <email> "<text>"    (a reply draft by Claude; it is NEVER sent from here)
+//   node tools/tracker.mjs set-reply <email> [--for <email id>] "<text>"    (a reply draft by Claude; it is NEVER sent from here)
 //
 // <task> / <project> is its id, or part of its name (a "task" is what the app once called a project; a 📂 "project" holds tasks). <email> is the id shown by `replies`, or a unique part of the subject or name.
 
@@ -418,7 +418,12 @@ try {
         if (i < 0) throw new Error(`Not a day: ${d}`);
         return i;
       });
-      const remind = argValue(args, '--remind');
+      let remind = argValue(args, '--remind');
+      if (args.includes('--remind')) {
+        // the same HH:MM the app keeps (9:00 → 09:00); anything else is refused here, never dropped quietly
+        remind = String(remind || '').trim().toLowerCase().replace(/^(\d):/, '0$1:');
+        if (remind !== 'off' && !/^([01]\d|2[0-3]):[0-5]\d$/.test(remind)) throw new Error('Give the reminder time as HH:MM, like 09:00 (or off).');
+      }
       commitOps((state) => {
         const p = findProject(state.data, query);
         const ops = [makeOp('setOnlyDays', { projectId: p.id, days })];
@@ -528,6 +533,7 @@ try {
       const show = (m) => {
         console.log(`\n[${m.id}] ${m.subject}`);
         console.log(`  from: ${m.from}${m.mail.fromAddress ? ` <${m.mail.fromAddress}>` : ''} · waiting ${m.days} day(s) · in: ${m.name}${m.mail.messageId ? '' : ' · (no Outlook id: mail-body cannot read it)'}`);
+        if (m.mail.messageId) console.log(`  email id (for set-reply --for): ${m.mail.messageId}`);
         if (m.preview) console.log(`  newest email: ${m.preview.replace(/\s+/g, ' ').slice(0, 400)}`);
         const th = m.project ? mailThreadOf(m.project) : [];
         if (th.length) console.log('  email thread (oldest first):\n' + th.slice(-10).map((e) => `    ${e.fromMe ? '↩ you' : '📧 ' + (e.fromName || 'them')} ${indiaDate(e.at)}: ${String(e.preview || '').replace(/\s+/g, ' ').slice(0, 300)}`).join('\n'));
@@ -546,18 +552,23 @@ try {
       const { data } = readState();
       const m = findMailThread(data, args.join(' '));
       const b = JSON.parse(serverRun(['mail-body', m.id]));
-      console.log(`Subject: ${b.subject}\nFrom: ${b.from}${b.fromAddress ? ` <${b.fromAddress}>` : ''}\nReceived: ${b.received}\n`);
+      console.log(`Subject: ${b.subject}\nFrom: ${b.from}${b.fromAddress ? ` <${b.fromAddress}>` : ''}\nReceived: ${b.received}${m.mail.messageId ? `\nEmail id (for set-reply --for): ${m.mail.messageId}` : ''}\n`);
       console.log(b.body);
       if (b.cut) console.log('\n(cut: the email is longer)');
       break;
     }
     case 'set-reply': {
-      const [query, ...words] = args;
+      // set-reply <email> [--for <email id>] "<text>": --for is the email the draft answers (from replies / mail-body)
+      const f = args.indexOf('--for');
+      const forMessageId = f >= 0 ? String(args[f + 1] || '').trim() : '';
+      if (f >= 0 && !forMessageId) throw new Error('Give the email id after --for (shown by replies and mail-body).');
+      const [query, ...words] = f >= 0 ? [...args.slice(0, f), ...args.slice(f + 2)] : args;
       const text = words.join(' ').trim();
       if (!text) throw new Error('Give the reply text.');
       commitOps((state) => {
         const m = findMailThread(state.data, query, mailThreads(state.data));
-        return [makeOp('setReply', { ...m.ref, text, by: 'claude' })];
+        if (forMessageId && m.mail.messageId && forMessageId !== m.mail.messageId) console.log('Note: a newer email came on this thread after the one this draft answers. Read it with mail-body before sending.');
+        return [makeOp('setReply', { ...m.ref, text, by: 'claude', ...(forMessageId ? { forMessageId } : {}) })];
       }, 'Reply prepared');
       break;
     }
