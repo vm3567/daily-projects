@@ -2655,3 +2655,16 @@ test('todayList: what Today counts — an empty 📂 project (no own step) is le
   assert.ok(todayList(s.data, '2026-10-22').some((p) => p.id === 'm'), 'with an own step it is on Today (as before)');
   assert.ok(!stepTargets(s.data, '2026-10-22').some((p) => p.id === 'm'), 'still never a step target');
 });
+
+test('one app: who signed in — the owner, a team member (staff view) or another manager; a sign-in tag never holds the sign-in itself', async () => {
+  const { whoFromUser, signInTag } = await import('../docs/rules.js');
+  assert.equal(whoFromUser({ role: 'admin', owner: true }), 'owner');
+  assert.equal(whoFromUser({ role: 'staff', owner: false }), 'staff');
+  assert.equal(whoFromUser({ role: 'admin', owner: false }), 'manager');
+  assert.equal(whoFromUser(null), '');
+  const tok = 'a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6';
+  assert.equal(signInTag(tok), signInTag(tok), 'the same sign-in: the same tag');
+  assert.notEqual(signInTag(tok), signInTag(tok + 'x'), 'another sign-in: another tag');
+  assert.ok(!tok.includes(signInTag(tok)) && signInTag(tok).length <= 8, 'not a piece of the sign-in');
+  assert.equal(signInTag(''), '');
+});

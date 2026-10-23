@@ -1061,3 +1061,21 @@ export function droppedOrder(list, id, slot) {
   ids.splice(slot > i ? slot - 1 : slot, 0, id);
   return ids;
 }
+
+/**
+ * Who signed in on worktask.in, for the one app: 'owner' (the Daily Projects owner: the full app), 'staff' (the staff
+ * view: only their own Work Task tasks), 'manager' (a manager who is not the owner: Work Task's manager screens).
+ * The server decides what each may reach; this only picks the screens.
+ */
+export function whoFromUser(u) {
+  if (!u) return '';
+  if (u.owner) return 'owner';
+  return u.role === 'admin' ? 'manager' : 'staff';
+}
+
+/** A short tag of a sign-in (never the sign-in itself), so a remembered "who" is used only for that same sign-in. */
+export function signInTag(token) {
+  let x = 2166136261;
+  for (const c of String(token || '')) { x ^= c.charCodeAt(0); x = Math.imul(x, 16777619) >>> 0; }
+  return token ? x.toString(36) : '';
+}

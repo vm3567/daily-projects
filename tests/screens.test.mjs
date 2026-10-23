@@ -1060,7 +1060,7 @@ test('📂 Projects page: a click on a project row selects it and stays on the p
   assert.match(mainsSrc, /ctx\.ui\.view === 'mains' && ctx\.showHere \? ctx\.showHere\(c\.id\)/, 'a task in the TASKS table while on the Projects page');
   const here = app.slice(app.indexOf('  showHere: (id) => {'), app.indexOf('  openProject: (id) => {'));
   assert.match(here, /select\(id\);/);
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-26'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-27'/, 'phones get the new copy');
 });
 
 test('📂 project page: "✕ Remove" on a task row takes it out of this project only — the task is kept (and stays in its other projects)', () => {
@@ -1823,7 +1823,7 @@ test('🔌 app wiring (app.js): "🔌 From apps" after ✉ Replies with the wait
   assert.match(app, /function go\(view\) \{\n\s*if \(view !== 'settings'\) forgetOnce\(\);/);
   assert.match(app, /if \(onServer\) loadApps\(appsCtx, force \|\| ui\.view === 'apps'\);/);
   assert.match(app, /replies: '✉ Replies', apps: '🔌 From apps', mains: '📂 Projects' \}\[ui\.view\]/, 'its page title');
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-26'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-27'/, 'phones get the new copy');
 });
 
 test('🔌 the PHP connector (team/connector/worktask-connector.php): the same text the app downloads, placeholders only (no real key), valid PHP 7.4+ (php -l), with wt_push / wt_withdraw / wt_decisions / wt_receive_decision', async () => {
@@ -2224,4 +2224,135 @@ test('📂 app wiring (app.js): Inbox, Chrome clip and their suggestions offer t
   const act = body('inboxAct');
   assert.match(act, /const saved = clone\(item\)/, 'Undo keeps the whole item (mail, note, reply)');
   assert.match(act, /store\.dispatch\('inboxUndo', \{\n\s+item: saved, index,/, 'that saved item is what Undo sends');
+});
+
+// ---------------------------------------------------------------- one app: the staff view (ui/staff.js)
+const staffMod = await import('../docs/ui/staff.js');
+const teamRules = await import('../team/public_html/logic.js');
+const STAFF_DAY = '2026-10-22';
+function staffData() {
+  return {
+    today: STAFF_DAY, fillBy: '18:00',
+    tasks: [
+      { id: 11, title: 'Check kiln temperature', project: '', status: 'open', repeat: 'daily', skipSunday: true, today: null, unread: 1, needsPhoto: false },
+      { id: 12, title: 'Pack the samples', project: '', status: 'open', repeat: 'once', dueDate: '2026-10-20', today: null },
+      { id: 13, title: 'Order clay', project: 'Kiln trial', projectRef: 'p1', stepRef: 's1', seq: 1, status: 'open', today: { id: 90, note: 'Called Ravi', state: 'progress', at: '2026-10-22 10:30:00', photos: [] } },
+    ],
+    other: [{ id: 14, title: 'Fire the second batch', project: 'Kiln trial', projectRef: 'p1', stepRef: 's2', seq: 2, queued: true, status: 'open' }],
+    suggestions: [{ id: 15, title: 'Clean dryer filters', status: 'suggested' }],
+  };
+}
+function fakeStaff(answers = {}) {
+  const calls = [];
+  const api = async (a, body) => {
+    calls.push({ a, body });
+    if (!staffMod.STAFF_CALLS.includes(a)) throw new Error('not a staff call: ' + a);
+    if (answers[a]) return answers[a](body);
+    if (a === 'my.today') return staffData();
+    return { ok: true };
+  };
+  const toasts = [];
+  const s = staffMod.createStaff({ root: null, api, rules: teamRules, user: { id: 7, name: 'Valar', role: 'staff' }, toast: (t) => toasts.push(t) });
+  return { s, calls, toasts };
+}
+
+test('one app — staff view: the same layout as Daily Projects (menu, list, page), only their own work; none of the owner\'s screens', async () => {
+  const { s, calls } = fakeStaff();
+  await s.load();
+  const tree = s.view();
+  assert.match(tree.className, /\blayout\b/, 'the same layout classes as the owner\'s app');
+  const text = tree.textContent;
+  for (const bit of ['Today', 'Coming next', 'My suggestions', '📁 Kiln trial', '💡 Suggest a task', '👤 Valar', 'Sign out', 'Check kiln temperature', 'Pack the samples', '1 of 3 sent', 'by 18:00', '✓ Sent 10:30 am']) assert.ok(text.includes(bit), bit);
+  for (const gone of ['📥 Inbox', '✉ Replies', 'Settings', 'People', 'Groups', '🔌 From apps', 'Dashboard', 'Time report', '+ Give a task']) assert.ok(!text.includes(gone), 'no owner screen: ' + gone);
+  // dots as on the owner's Today: green = sent today, red = not yet
+  const kilnRow = rFind(tree, (n) => n.nodeName === 'LI' && n.textContent.includes('Check kiln temperature'));
+  assert.ok(rFind(kilnRow, (n) => /\bdot red\b/.test(n.className || '')), 'not sent yet: red');
+  assert.ok(kilnRow.textContent.includes('💬 New'), 'a new message shows on the row');
+  assert.ok(calls.every((c) => staffMod.STAFF_CALLS.includes(c.a)));
+});
+
+test('one app — staff view: the staff server calls never include the owner\'s projects (dp.*), Outlook or connections; staffApi refuses them before asking', async () => {
+  for (const a of staffMod.STAFF_CALLS) assert.ok(!/^(dp\.|outlook\.|conn\.|connect\.|users?\.|team\.|task\.save|task\.status|task\.move|tasks\.moveAll|project\.sync|followup|morning|people)/.test(a), 'a staff call only: ' + a);
+  const was = globalThis.fetch;
+  let asked = 0;
+  globalThis.fetch = async () => { asked++; return new Response('{"ok":true}'); };
+  try {
+    const api = staffMod.staffApi('tok');
+    for (const a of ['dp.load', 'dp.head', 'outlook.draft', 'users.list', 'task.save', 'project.sync']) await assert.rejects(api(a, {}), /Not allowed here/);
+    assert.equal(asked, 0, 'never even sent');
+    assert.ok((await api('my.today')).ok);
+    assert.equal(asked, 1);
+  } finally { globalThis.fetch = was; }
+});
+
+test('one app — staff view: Send writes today\'s update with Work Task\'s rule (clientId), words typed while sending stay; an empty box says so', async () => {
+  let release;
+  const { s, calls, toasts } = fakeStaff({ 'update.save': (body) => new Promise((r) => { release = () => r({ ok: true, update: { id: 99, note: body.note } }); }) });
+  await s.load();
+  const t = s.state.data.tasks[0];
+  assert.equal(await s.act.sendUpdate(t), 'Write what you did first.');
+  s.state.drafts[t.id] = { note: 'Kiln at 1150', state: 'stuck' };
+  const going = s.act.sendUpdate(t);
+  await new Promise((r) => setTimeout(r, 0));
+  s.state.drafts[t.id].note = 'Kiln at 1150\nand the fan is noisy'; // typed while it was sending
+  release();
+  assert.equal(await going, '');
+  const save = calls.find((c) => c.a === 'update.save');
+  assert.deepEqual({ taskId: save.body.taskId, note: save.body.note, state: save.body.state }, { taskId: 11, note: 'Kiln at 1150', state: 'stuck' });
+  assert.ok(save.body.clientId, 'a clientId, as Work Task sends (a retry is kept once)');
+  // Work Task's rule (updateBoxLeft): more typed than what went = the whole text stays, open as a change of today's update
+  assert.equal(s.state.drafts[t.id].note, 'Kiln at 1150\nand the fan is noisy', 'what was typed meanwhile stays in the box');
+  assert.equal(s.state.editing[t.id], true);
+  assert.ok(toasts.includes('Sent ✓'));
+});
+
+test('one app — staff view: a needed photo is asked for before Finished; messages and steps send with a clientId and keep later words; suggest goes for a yes', async () => {
+  const { s, calls } = fakeStaff({ 'comment.add': () => ({ ok: true, comments: [{ id: 1, text: 'Is the fan ok?', mine: true, at: '2026-10-22 11:30:00' }] }) });
+  await s.load();
+  const t = { ...s.state.data.tasks[0], needsPhoto: true };
+  s.state.drafts[t.id] = { note: 'Done', state: 'finished' };
+  assert.match(await s.act.sendUpdate(t), /Add a photo to finish/);
+  assert.ok(!calls.some((c) => c.a === 'update.save'), 'nothing sent without the photo');
+  s.state.msgDrafts[11] = 'Is the fan ok?';
+  assert.equal(await s.act.sendMessage(11), '');
+  const m = calls.find((c) => c.a === 'comment.add');
+  assert.equal(m.body.text, 'Is the fan ok?'); assert.ok(m.body.clientId);
+  assert.equal(s.state.msgDrafts[11], undefined, 'the box is empty after Send');
+  s.state.stepDrafts.p1 = 'Order the spare servo motor';
+  assert.equal(await s.act.addStep('p1'), '');
+  assert.deepEqual(calls.filter((c) => c.a === 'project.addStep').map((c) => [c.body.projectRef, c.body.title, !!c.body.clientId]), [['p1', 'Order the spare servo motor', true]]);
+  assert.equal(await s.act.suggest({ title: '  ', details: '', repeat: 'once' }), 'Write the task first.');
+  assert.equal(await s.act.suggest({ title: 'Clean dryer filters', details: '', repeat: 'weekly', clientId: 'x1' }), '');
+  assert.equal(s.state.section, 'sugg', 'then My suggestions is shown');
+});
+
+test('one app — staff view: a task page shows chips, today\'s update box, messages and earlier days (Work Task\'s diary rule); a project page its steps in order', async () => {
+  const { s } = fakeStaff({
+    'task.get': () => ({ ok: true, task: staffData().tasks[1], updates: [], comments: [{ id: 3, by: 'Boss', text: 'Please send a photo', mine: false, at: '2026-10-21 11:30:00' }] }),
+    'project.mine': () => ({ ok: true, tasks: [{ id: 10, title: 'Buy clay', status: 'done', projectRef: 'p1', stepRef: 's0', seq: 0, doneAt: '2026-10-20 17:00:00' }] }),
+  });
+  await s.load();
+  s.open('task:12');
+  await new Promise((r) => setTimeout(r, 0));
+  const page = s.view().textContent;
+  for (const bit of ['Pack the samples', '⏰ Late — was by', "Today's update", 'Working on it', 'Stuck', 'Finished', 'Send', '💬 Messages', 'Please send a photo', '📅 Earlier days']) assert.ok(page.includes(bit), bit);
+  s.open('project:p1');
+  await new Promise((r) => setTimeout(r, 0));
+  const proj = s.view().textContent;
+  for (const bit of ['📁 Kiln trial', '✓ 1 done', 'Buy clay', 'Step 2 · current', 'Order clay', 'Step 3 · next', 'Fire the second batch', '+ Add step']) assert.ok(proj.includes(bit), bit);
+});
+
+test('one app wiring (app.js): who signed in picks the screens — staff get the staff view, another manager Work Task, the owner this app (never held up once known; no answer = the owner\'s app)', () => {
+  const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
+  const st = app.slice(app.indexOf('function start() {'), app.indexOf('/** The owner\'s Daily Projects. */'));
+  assert.match(st, /if \(known === 'staff'\) \{ startStaff\(\); return; \}/);
+  assert.match(st, /if \(known === 'manager'\) \{ location\.href = '\.\.\/'; return; \}/);
+  assert.match(st, /if \(who === 'staff'\) startStaff\(user\);\s*else if \(who === 'manager'\) location\.href = '\.\.\/';\s*else startOwner\(\);/, 'not known (or no answer): the owner\'s app');
+  assert.ok(st.indexOf("if (onServer && !serverToken()) { toSignIn(); return; }") < st.indexOf('rememberedWho()'), 'signed out: to sign-in first');
+  assert.match(app, /const timer = setTimeout\(\(\) => stop\.abort\(\), 4000\);/, 'a slow answer never holds the owner up for long');
+  // the staff code and Work Task's rules load only for staff: the owner's start (offline too) never needs them
+  assert.ok(!/^import .*ui\/staff\.js/m.test(app) && !/^import .*\.\.\/logic\.js/m.test(app));
+  assert.match(app, /await Promise\.all\(\[import\('\.\/ui\/staff\.js'\), import\('\.\.\/logic\.js'\)\]\)/);
+  assert.match(app, /link\.rel = 'stylesheet'; link\.href = '\.\.\/styles\.css';/, 'the same look as Work Task for staff');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /'ui\/staff\.js'/, 'kept for offline');
 });

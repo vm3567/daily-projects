@@ -20,6 +20,7 @@ import { MockRepo } from './mockrepo.js';
 import { device } from './device.js';
 import { DATA_OWNER, DATA_REPO, DATA_BRANCH, MOVED_TO, REFRESH_MS, AI_DAILY_LIMIT, BRIEF_CLAIM_MINUTES, WAIT_RED_DAYS, NO_WORK_NOTE_DAYS } from './config.js';
 import { dotColour, greenByTeamOnly, isSnoozed, restUntil, restReason, onlyDaysLabel, openIdFromHash, awakeProjects, activeProjects, nextStep, todayIndia, isSundayIndia, colourCounts, isOverdue, indiaDate, waitingDays, daysWithoutWork, dayScore, greenStreak, addDays, monthOf, fmtMinutes, takeBackWaits, staffStepAction, pasteGoesToProject, singleStepClose, versionRequest, askDiaryAgain, pasteInForm, diaryLoadedAt, photoNeedsFetch, teamUndoKey, teamActionUndone, teamProgressOf, projectKeyIgnored, teamMovedTo, serverHolder, keepMovedStep, teamMemberFor, repliesOf, mailThreads, replyMailto, MAILTO_BODY_MAX, emailPath, pasteReason } from './rules.js';
+import { whoFromUser, signInTag } from './rules.js';
 import { parentIdsOf, isMainProject, mainProjects, activeTasks, todayWithoutEmptyMains, todayList, stepTargets, mainSummary, childrenOf, deleteQuestion, pickEnterTarget } from './rules.js';
 import { newId, clone, opMonth, groupHasTimer, cleanLink, carriedOps, orderPosOf } from './ops.js';
 import * as ai from './ai.js';
@@ -35,6 +36,56 @@ const onServer = ['worktask.in', 'www.worktask.in'].includes(location.hostname)
 const serverToken = () => { try { return localStorage.getItem(SERVER_TOKEN_KEY) || ''; } catch { return ''; } };
 /** To the Work Task sign-in page; it comes back here after signing in. */
 function toSignIn() { location.href = '../?next=projects'; }
+
+// ---------------------------------------------------------------- one app for everyone on worktask.in
+// Who signed in decides the screens: the owner gets this app, a team member gets the staff view (only their own
+// Work Task tasks, ui/staff.js), another manager goes to Work Task's manager screens. It is remembered for this
+// sign-in only, so the owner's start-up never waits for the server (and works offline as before).
+const WHO_KEY = 'dp.who';
+function rememberedWho() {
+  try { const w = JSON.parse(localStorage.getItem(WHO_KEY) || 'null'); return w && w.tag === signInTag(serverToken()) ? w.who : ''; } catch { return ''; }
+}
+function rememberWho(who) { try { localStorage.setItem(WHO_KEY, JSON.stringify({ tag: signInTag(serverToken()), who })); } catch { /* blocked */ } }
+/** First time with this sign-in: ask the server who it is (no answer in 4 s, or none at all = the owner's app, as before). */
+async function askWho() {
+  const stop = new AbortController();
+  const timer = setTimeout(() => stop.abort(), 4000);
+  try {
+    const r = await fetch('../api/?a=me', { method: 'POST', cache: 'no-store', signal: stop.signal, headers: { Authorization: 'Bearer ' + serverToken(), 'Content-Type': 'application/json' }, body: '{}' });
+    const out = await r.json();
+    const who = out && out.ok ? whoFromUser(out.user) : '';
+    if (who) rememberWho(who);
+    return { who, user: out && out.user };
+  } catch { return { who: '' }; } finally { clearTimeout(timer); }
+}
+
+/** A team member: the staff view, in the same layout and look as this app (the rules come from Work Task's logic.js). */
+async function startStaff(user) {
+  if (!document.querySelector('link[data-team-look]')) { // the same look as Work Task: its styles on top of these
+    const link = document.createElement('link');
+    link.rel = 'stylesheet'; link.href = '../styles.css'; link.dataset.teamLook = '';
+    document.head.appendChild(link);
+  }
+  root.replaceChildren(h('div', { class: 'loading' }, 'Loading…'));
+  const [{ createStaff, staffApi }, rules] = await Promise.all([import('./ui/staff.js'), import('../logic.js')]);
+  const api = staffApi(serverToken(), '../api/');
+  if (!user) { try { user = (await api('me')).user; } catch (e) { if (e.auth) { toSignIn(); return; } root.replaceChildren(h('div', { class: 'loading' }, e.message)); return; } }
+  const photos = new Map();
+  const photo = (kind, id) => {
+    const k = kind + ':' + id;
+    if (!photos.has(k)) photos.set(k, fetch(`../api/?a=${kind}&id=${id}`, { headers: { Authorization: 'Bearer ' + serverToken() } }).then((r) => (r.ok ? r.blob() : Promise.reject(new Error('photo')))).then((b) => URL.createObjectURL(b)));
+    return photos.get(k);
+  };
+  const signOut = async () => {
+    try { await api('logout'); } catch { /* signed out on this phone anyway */ }
+    try { localStorage.removeItem(SERVER_TOKEN_KEY); localStorage.removeItem(WHO_KEY); } catch { /* blocked */ }
+    location.href = '../';
+  };
+  const staff = createStaff({ root, api, rules, user, toast, signOut, photo });
+  staff.render();
+  staff.load();
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') staff.act.reload(); });
+}
 
 const saved = device.ui();
 const ui = {
@@ -3333,6 +3384,25 @@ function start() {
   if (location.hash === '#apps' && onServer) { ui.view = 'apps'; ui.search = ''; history.replaceState(null, '', location.pathname + location.search); } // a phone alert "🔌 App: title"
   if (onServer) takeOpsFromHash(); // before the store starts: it reads the waiting changes once
   if (onServer && !serverToken()) { toSignIn(); return; }
+  if (onServer && !isMock) { // one app: who signed in picks the screens (the owner's start is not held up once known)
+    const known = rememberedWho();
+    if (known === 'staff') { startStaff(); return; }
+    if (known === 'manager') { location.href = '../'; return; }
+    if (!known) {
+      root.replaceChildren(h('div', { class: 'loading' }, 'Loading…'));
+      askWho().then(({ who, user }) => {
+        if (who === 'staff') startStaff(user);
+        else if (who === 'manager') location.href = '../';
+        else startOwner();
+      });
+      return;
+    }
+  }
+  startOwner();
+}
+
+/** The owner's Daily Projects. */
+function startOwner() {
   const key = device.githubKey();
   if (!isMock && !onServer && !key) { showKeyScreen(); return; }
   const repo = isMock ? new MockRepo() : onServer ? new ServerRepo(serverToken(), '../api/') : new GitHubRepo(key, DATA_OWNER, DATA_REPO, DATA_BRANCH);
