@@ -2973,6 +2973,21 @@ test('staff 📂 Projects (23 Oct): project.sync keeps the owner\'s 📂 project
   assert.ok((await call('project.sync', { projectRef: 'fold1', project: 'Feldspar testing', assigneeId: 0, steps: [] }, tok.boss)).ok);
 });
 
+test('review (Team today): one "late" rule on the server — open and past its by-date, never a step waiting its turn; the morning email uses the same', { skip }, async () => {
+  const past = (await phpRun('echo date("Y-m-d", strtotime(today() . " -3 days"));')).trim();
+  const once = (await call('task.save', { assigneeId: id.suresh, title: 'Late once', repeat: 'once', dueDate: past }, tok.boss)).task;
+  assert.ok((await call('project.sync', { projectRef: 'late1', project: 'Late steps', assigneeId: id.suresh, steps: [{ stepRef: 'l1', title: 'First step' }, { stepRef: 'l2', title: 'Waiting step', dueDate: past }] }, tok.boss)).ok);
+  const list = (await call('tasks.list', { status: 'open' }, tok.boss)).tasks;
+  assert.equal(list.find((t) => t.id === once.id).late, true, 'past its by-date: late');
+  const waiting = list.find((t) => t.title === 'Waiting step');
+  assert.deepEqual([waiting.queued, waiting.late], [true, false], 'a step waiting its turn is never late');
+  const mail = await call('morning.mail', { userId: id.suresh }, tok.boss);
+  assert.ok(mail.ok, mail.error);
+  assert.ok(!/Waiting step[^\n]*late/i.test(mail.text || ''), 'the email does not call the waiting step late');
+  assert.ok((await call('project.sync', { projectRef: 'late1', project: 'Late steps', assigneeId: 0, steps: [] }, tok.boss)).ok);
+  assert.ok((await call('task.status', { id: once.id, status: 'cancelled' }, tok.boss)).ok);
+});
+
 test('review round 1 (whole code): importing a data folder with more than 500 files works (it goes in parts of 500; data.json last), every file is there', { skip }, async () => {
   const src = join(dir, 'import-big'); mkdirSync(join(src, 'files', 'x1'), { recursive: true });
   const n = 520;

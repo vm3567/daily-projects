@@ -549,26 +549,37 @@ export function oneAppAddress(search, hash) {
 }
 
 /**
- * Team today as one table (owner, 23 Oct): every task of today, red first, with its status — sent, stuck, late (a
- * one-time task past its by-date, not sent today) or not yet (red once the fill-by time has passed) — the counts for
- * the strip on top (each a filter), and the rows grouped by person or by 📂 project (the owner's 📂 project, else the
- * work it is a step of, else 📂 Misc). The team's suggestions are rows too (they wait for a yes or no). 20 rows a page
- * (page: 1, 2, …; a person's or project's line comes again on the next page). filter: '' | 'sent' | 'notyet' |
- * 'stuck' | 'late' | 'msg' | 'sugg' | 'you' (stuck, waiting for the manager). Each row has its stage (teamStage). Pure: tested.
+ * Team today as one table (owner, 23 Oct): every task of today, red first, with its status, the counts for the strip
+ * on top (each a filter), and the rows grouped by person or by 📂 project (the owner's 📂 project, else the work it is a
+ * step of, else 📂 Misc). Status, first that fits: sugg (a suggestion: yes or no?) · stuck · late (the server's `late`:
+ * open and past its by-date, never a step waiting its turn — also on a Sunday; not when sent today) · sent · notdue (a
+ * stuck task or one with new messages that is not due today: the server's dueToday false — or no dueToday on one from
+ * those lists, an older copy) · notyet (red once the fill-by time has passed). "x of y sent" counts the rows due today;
+ * a group with any red row never has a green tag. 20 rows a page (page: 1, 2, …; a person's or project's line comes
+ * again on the next page). filter: '' | 'sent' | 'notyet' | 'stuck' | 'late' | 'notdue' | 'msg' | 'sugg' | 'you' (stuck, waiting for the
+ * manager). Each row has its stage (teamStage). Pure: tested.
  */
 export const BOARD_PAGE = 20;
 export function teamBoard(d, { filter = '', group = 'person', person = 0, page = 1 } = {}) {
   const today = d.today, RANK = { red: 0, yellow: 1, green: 2 };
-  const all = [...(d.tasks || []), ...(d.suggestions || []).filter((s) => !(d.tasks || []).some((t) => t.id === s.id))];
+  // today's tasks, then what needs the owner but is not due today (stuck, new messages — they were the "Needs you"
+  // list) and the suggestions; each task once
+  const ids = new Set((d.tasks || []).map((t) => t.id));
+  const more = [...(d.stuck || []), ...(d.unread || []), ...(d.suggestions || [])].filter((t) => !ids.has(t.id) && ids.add(t.id));
+  const extra = new Set(more.map((t) => t.id));
+  const all = [...(d.tasks || []), ...more];
   const rows = all.filter((t) => !person || t.assignee.id === person).map((t, i) => {
-    const late = t.status === 'open' && t.repeat === 'once' && !!t.dueDate && t.dueDate < today && !t.today;
-    const status = t.status === 'suggested' ? 'sugg' : t.stuck ? 'stuck' : late ? 'late' : t.today ? 'sent' : 'notyet';
-    const colour = status === 'sent' ? 'green' : status === 'sugg' || (status === 'notyet' && !d.late) ? 'yellow' : 'red';
+    const notDue = t.status !== 'suggested' && !t.today && (t.dueToday === false || (t.dueToday === undefined && extra.has(t.id)));
+    // (an older saved copy has no `late`: past its by-date and not waiting its turn, the server's own rule)
+    const pastBy = typeof t.late === 'boolean' ? t.late : t.status === 'open' && !!t.dueDate && t.dueDate < today && !t.queued;
+    const late = pastBy && !t.today;
+    const status = t.status === 'suggested' ? 'sugg' : t.stuck ? 'stuck' : late ? 'late' : t.today ? 'sent' : notDue ? 'notdue' : 'notyet';
+    const colour = status === 'sent' ? 'green' : status === 'sugg' || status === 'notdue' || (status === 'notyet' && !d.late) ? 'yellow' : 'red';
     const project = t.folder || t.project || 'Misc';
     const stage = t.status === 'suggested' ? null : teamStage(t); // (a suggestion has no stage yet)
-    return { t, status, colour, project, msg: (t.unread || 0) > 0, stage, you: !!(stage && stage.you), i };
+    return { t, status, colour, project, msg: (t.unread || 0) > 0, notDue, stage, you: !!(stage && stage.you), i };
   });
-  const counts = { sent: 0, notyet: 0, stuck: 0, late: 0, msg: 0, sugg: 0 };
+  const counts = { sent: 0, notyet: 0, stuck: 0, late: 0, notdue: 0, msg: 0, sugg: 0 };
   let you = 0; // waiting for you (stuck, waiting for "Manager"): its own count, beside the others
   for (const r of rows) { counts[r.status]++; if (r.msg) counts.msg++; if (r.you) you++; }
   const shown = rows.filter((r) => !filter || (filter === 'msg' ? r.msg : filter === 'you' ? r.you : r.status === filter))
@@ -576,7 +587,8 @@ export function teamBoard(d, { filter = '', group = 'person', person = 0, page =
   const key = (r) => (group === 'project' ? r.project : r.t.assignee.name);
   const groups = new Map();
   for (const r of shown) { if (!groups.has(key(r))) groups.set(key(r), []); groups.get(key(r)).push(r); }
-  const list = [...groups].map(([name, rs]) => ({ name, rows: rs, all: rs.filter((r) => r.status !== 'sugg').length, sent: rs.filter((r) => r.status === 'sent').length, person: group === 'person' ? rs[0].t.assignee : null }))
+  const list = [...groups].map(([name, rs]) => ({ name, rows: rs, all: rs.filter((r) => r.status !== 'sugg' && !r.notDue).length, sent: rs.filter((r) => r.status === 'sent' && !r.notDue).length,
+    red: rs.filter((r) => r.colour === 'red').length, person: group === 'person' ? rs[0].t.assignee : null }))
     .sort((a, b) => (group === 'project' && (a.name === 'Misc') - (b.name === 'Misc')) || RANK[a.rows[0].colour] - RANK[b.rows[0].colour] || a.name.localeCompare(b.name));
   // this page's 20 rows, each under its line (the line's "x of y sent" counts the whole group)
   const flat = list.flatMap((g) => g.rows.map((r) => [g, r]));

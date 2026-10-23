@@ -142,6 +142,9 @@ function tasks_out(array $tasks, string $day): array {
     'folder' => $t['seq'] !== null && $t['project_ref'] ? ($folder[$t['project_ref']] ?? '') : '',
     'status' => $t['status'], 'createdAt' => $t['created_at'], 'doneAt' => $t['done_at'],
     'dueToday' => $t['status'] === 'open' && due_on($t, $day) && !$queued($t),
+    // late: open and past its by-date — never a step still waiting its turn (it cannot be worked on yet); a Sunday or
+    // a later start does not stop it being late. The one rule for every screen and the morning email.
+    'late' => $t['status'] === 'open' && !empty($t['due_date']) && $t['due_date'] < $day && !$queued($t),
     'today' => update_out($todays[$t['id']] ?? null, $photos), 'last' => update_out($lasts[$t['id']] ?? null, $photos),
     'createdBy' => (int)$t['created_by'], 'createdByName' => user_name((int)$t['created_by']), 'declined' => (int)($t['closed_by'] ?? 0) === -2,
     'closedByPerson' => $t['status'] === 'done' && (int)($t['closed_by'] ?? 0) > 0, // their own Finished (not the manager's Mark done)
@@ -906,7 +909,7 @@ function handle(string $a, array $in): array {
  */
 function morning_items(int $who, string $day): array {
   $tasks = tasks_out(all(TASK_SELECT . " WHERE t.assignee_id = ? AND t.status = 'open' ORDER BY t.seq, t.id", [$who]), $day);
-  $late = fn($t) => $t['dueDate'] && $t['dueDate'] < $day ? $t['dueDate'] : null; // the same "late" as the screens: past its by-date
+  $late = fn($t) => !empty($t['late']) ? $t['dueDate'] : null; // the same "late" as the screens (tasks_out: past its by-date, not a step waiting its turn)
   $projects = []; $plain = [];
   foreach ($tasks as $t) {
     if ($t['seq'] !== null && $t['projectRef']) $projects[$t['projectRef']][] = $t;

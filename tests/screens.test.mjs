@@ -1060,7 +1060,7 @@ test('📂 Projects page: a click on a project row selects it and stays on the p
   assert.match(mainsSrc, /ctx\.ui\.view === 'mains' && ctx\.showHere \? ctx\.showHere\(c\.id\)/, 'a task in the TASKS table while on the Projects page');
   const here = app.slice(app.indexOf('  showHere: (id) => {'), app.indexOf('  openProject: (id) => {'));
   assert.match(here, /select\(id\);/);
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-36'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-37'/, 'phones get the new copy');
 });
 
 test('📂 project page: "✕ Remove" on a task row takes it out of this project only — the task is kept (and stays in its other projects)', () => {
@@ -1845,7 +1845,7 @@ test('🔌 app wiring (app.js): "🔌 From apps" after ✉ Replies with the wait
   assert.match(app, /function go\(view\) \{\n\s*if \(view !== 'settings'\) forgetOnce\(\);/);
   assert.match(app, /if \(onServer\) loadApps\(appsCtx, force \|\| ui\.view === 'apps'\);/);
   assert.match(app, /replies: '✉ Replies', apps: '🔌 From apps', mains: '📂 Projects' \}\[ui\.view\]/, 'its page title');
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-36'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-37'/, 'phones get the new copy');
 });
 
 test('🔌 the PHP connector (team/connector/worktask-connector.php): the same text the app downloads, placeholders only (no real key), valid PHP 7.4+ (php -l), with wt_push / wt_withdraw / wt_decisions / wt_receive_decision', async () => {
@@ -3595,4 +3595,38 @@ test('Stage on the Team today table and a team task: the chip on each row; stuck
   assert.deepEqual(rows.map((r) => r.textContent.includes('Fix kiln 2 fan')), [true], 'only the one waiting for you');
   rows[0].__on.click(); await new Promise((r) => setTimeout(r, 0)); await new Promise((r) => setTimeout(r, 0));
   assert.ok(rFind(t.view(), (n) => /\bstage-line\b/.test(n.className || '') && n.textContent === '🟠 Waiting: you'), 'on the task page too');
+});
+
+test('Team today table on screen: the 💡 Suggestions count stays while it is pressed, even at 0 (so it can be turned off)', async () => {
+  const V = { id: 3, name: 'Valar' };
+  const tasks = [{ id: 1, title: 'Job 1', assignee: V, status: 'open', repeat: 'daily', today: null, unread: 0 }];
+  const { t } = fakeTeam({ 'team.today': () => ({ ok: true, today: '2026-10-23', fillBy: '18:00', late: false, people: [V], tasks, stuck: [], unread: [], suggestions: [] }) });
+  t.state.boardFilter = 'sugg';
+  t.go('today'); await new Promise((r) => setTimeout(r, 0)); await new Promise((r) => setTimeout(r, 0));
+  assert.match(t.view().textContent, /💡 Suggestions 0/);
+});
+
+test('Team today (review): a stuck task of someone no longer on the team list, with nothing due today, still shows the table (never "No team members yet")', async () => {
+  const gone = { id: 9, name: 'Mohan' };
+  const stuck = { id: 77, title: 'Fix the dryer', assignee: gone, status: 'open', repeat: 'weekly', dueToday: false, today: null, stuck: true, unread: 0, last: { note: 'part missing' } };
+  const { t } = fakeTeam({ 'team.today': () => ({ ok: true, today: '2026-10-23', fillBy: '18:00', late: false, people: [], tasks: [], stuck: [stuck], unread: [], suggestions: [] }) });
+  t.go('today'); await new Promise((r) => setTimeout(r, 0)); await new Promise((r) => setTimeout(r, 0));
+  const text = t.view().textContent;
+  assert.ok(!text.includes('No team members yet'));
+  assert.ok(text.includes('Fix the dryer') && text.includes('Mohan'), 'the stuck task is a row');
+});
+
+test('Team today (review 2): a "📅 Not due today" count shows those rows alone; a person\'s "x of y sent" is never green beside a red row', async () => {
+  const R = { id: 4, name: 'Ravi' };
+  const sent = { id: 81, title: 'Sweep floor', assignee: R, status: 'open', repeat: 'daily', dueToday: true, late: false, today: { at: '2026-10-23 10:00:00', note: 'done' }, unread: 0 };
+  const stuckWeekly = { id: 82, title: 'Fix the fan', assignee: R, status: 'open', repeat: 'weekly', dueToday: false, late: false, stuck: true, today: null, unread: 0 };
+  const quiet = { id: 83, title: 'Order bags', assignee: R, status: 'open', repeat: 'weekly', dueToday: false, late: false, today: null, unread: 1, lastMessage: { by: 'Ravi', text: 'Which size?' } };
+  const { t } = fakeTeam({ 'team.today': () => ({ ok: true, today: '2026-10-23', fillBy: '18:00', late: false, people: [R], tasks: [sent], stuck: [stuckWeekly], unread: [quiet], suggestions: [] }) });
+  t.go('today'); await new Promise((r) => setTimeout(r, 0)); await new Promise((r) => setTimeout(r, 0));
+  const find = (n, f) => (f(n) ? n : (n.childNodes || []).map((c) => find(c, f)).find(Boolean));
+  const tag = find(t.view(), (n) => n.nodeName === 'SPAN' && n.textContent === '1 of 1 sent');
+  assert.ok(tag && !/\bdone-tag\b/.test(tag.className) && /\blate\b/.test(tag.className), 'red, not green: ' + (tag && tag.className));
+  find(t.view(), (n) => n.nodeName === 'BUTTON' && (n.textContent || '').startsWith('📅 Not due today 1')).__on.click();
+  const text = t.view().textContent;
+  assert.ok(text.includes('Order bags') && !text.includes('Sweep floor') && !text.includes('Fix the fan'), 'only the not-due one');
 });
