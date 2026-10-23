@@ -2815,7 +2815,14 @@ test('one app — team pages: Team today in the owner\'s design (progress line, 
   t.go('today'); await tick(); await tick();
   const v = t.view();
   const text = v.textContent;
-  for (const bit of ['📋 My projects', 'Team today', '🔁 Follow-up', 'Tasks', 'Done / cancelled', '📁 Projects', '📊 Weekly report', '🔍 Search', 'People', 'Settings', '+ Give a task',
+  // (owner, 23 Oct: the team menu is the same as the projects page's — a search box on top instead of "🔍 Search", 📂 Projects)
+  assert.match(readFileSync(new URL('../docs/ui/team.js', import.meta.url), 'utf8'), /h\('input', \{ class: 'search', type: 'search', placeholder: 'Search…', key: 'team-menu-search'/);
+  assert.match(readFileSync(new URL('../docs/ui/team.js', import.meta.url), 'utf8'), /h\('button', \{ class: 'icon', title: 'Search', 'aria-label': 'Search', onClick: \(\) => go\('search'\) \}, '🔍'\)/, 'and 🔍 at the top of the list (phones)');
+  const TEAMSRC = readFileSync(new URL('../docs/ui/team.js', import.meta.url), 'utf8');
+  assert.match(TEAMSRC, /h\('button', \{ class: 'btn primary new-project', onClick: \(\) => open\('give'\) \}, '\+ Give a task'\)/, '"+ Give a task" at the top of the list, as "+ New task"');
+  assert.match(TEAMSRC, /h\('li', \{ class: 'menu-dots', key: 'dots'/, 'the red / yellow / green count under Team today');
+  assert.doesNotMatch(TEAMSRC, /menu-give/, 'no longer in the menu');
+  for (const bit of ['📋 My projects', 'Team today', '🔁 Follow-up', 'Tasks', 'Done / cancelled', '📂 Projects', '📊 Weekly report', 'People', 'Settings', '+ Give a task',
     '1 of 3', 'updates in today', 'Not yet: Valar, Ravi', 'Stuck: Valar (2 days)', 'No update for: Ravi (3 days)', '⚠︎ Needs you', 'Valar: Stuck — Fan part missing', 'Ravi: 💬 1 new', 'Valar: 💡 Suggestion', 'Pack samples', '⏰ Late (by', '📧 Morning email']) assert.ok(text.includes(bit), bit);
   const has = (cls) => rFind(v, (n) => (' ' + (n.className || '') + ' ').includes(' ' + cls + ' '));
   for (const cls of ['layout', 'progress', 'progress-bar', 'plist', 'prow', 'list-sec']) assert.ok(has(cls), 'the owner\'s .' + cls);

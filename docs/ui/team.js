@@ -499,20 +499,28 @@ export function createTeam(opts) {
     const needs = t ? (t.stuck || []).length + (t.unread || []).length + (t.suggestions || []).length : 0;
     const ps = push ? push.state() : 'no';
     const listOn = (v) => !state.sel && state.view === v;
+    // the same menu as the owner's projects page (owner, 23 Oct): the search box on top, then the lists with their
+    // counts and the red / yellow / green count under the first, a line, the rest
+    const today = (t && t.tasks) || [];
+    const dots = { red: 0, yellow: 0, green: 0 };
+    for (const x of today) dots[x.today ? 'green' : t.late ? 'red' : 'yellow']++;
     return h('nav', { class: 'menu-inner' },
       h('div', { class: 'brand' }, h('img', { src: 'icons/icon-192.png', alt: '', width: 28, height: 28 }), h('span', null, owner ? 'Daily Projects' : 'Work Task')),
+      h('input', { class: 'search', type: 'search', placeholder: 'Search…', key: 'team-menu-search', 'aria-label': 'Search', value: state.searchQ || '',
+        onInput: (e, el) => { if (state.view !== 'search') go('search'); search(el.value); } }),
       h('ul', { class: 'menu-list' },
         opts.toProjects ? item('📋 My projects', false, () => toProjects()) : null,
-        item('Team today', listOn('today') && !state.personFilter, () => { state.personFilter = 0; go('today'); }, needs || null),
+        item('Team today', listOn('today') && !state.personFilter, () => { state.personFilter = 0; go('today'); }, t ? String(today.length) : null),
+        t ? h('li', { class: 'menu-dots', key: 'dots', title: needs ? `${needs} need you` : '' },
+          h('span', { class: 'dot red' }), String(dots.red), ' ', h('span', { class: 'dot yellow' }), String(dots.yellow), ' ', h('span', { class: 'dot green' }), String(dots.green)) : null,
+        item('✅ Tasks', listOn('tasks') && !state.closed, () => { state.closed = false; go('tasks'); }),
+        item('📂 Projects', listOn('projects'), () => go('projects')),
         item('🔁 Follow-up', listOn('followup'), () => go('followup')),
-        item('Tasks', listOn('tasks') && !state.closed, () => { state.closed = false; go('tasks'); }),
+        h('li', { class: 'menu-sep' }),
         item('Done / cancelled', listOn('tasks') && state.closed, () => { state.closed = true; go('tasks'); }),
-        item('📁 Projects', listOn('projects'), () => go('projects')),
         item('📊 Weekly report', listOn('report'), () => go('report')),
-        item('🔍 Search', listOn('search'), () => go('search')),
         item('People', listOn('people'), () => (opts.openPeople ? opts.openPeople() : go('people'))),
         item('Settings', listOn('settings'), () => go('settings')),
-        h('li', null, h('button', { class: 'btn primary small menu-give', onClick: () => open('give') }, '+ Give a task')),
         t && t.people && t.people.length ? [h('li', { class: 'menu-head' }, 'Team'), t.people.map((p) => {
           const tasks = t.tasks.filter((x) => x.assignee.id === p.id);
           const sent = tasks.filter((x) => x.today).length;
@@ -1034,17 +1042,20 @@ export function createTeam(opts) {
   }
 
   function list() {
-    const titles = { today: 'Team today', followup: '🔁 Follow-up', tasks: state.closed ? 'Done / cancelled' : 'Tasks', projects: '📁 Projects', report: '📊 Weekly report', search: '🔍 Search', people: 'People', settings: 'Settings' };
+    const titles = { today: 'Team today', followup: '🔁 Follow-up', tasks: state.closed ? 'Done / cancelled' : '✅ Tasks', projects: '📂 Projects', report: '📊 Weekly report', search: '🔍 Search', people: 'People', settings: 'Settings' };
     let title = titles[state.view];
     if (state.view === 'today' && state.personFilter && state.team) { const p = state.team.people.find((x) => x.id === state.personFilter); if (p) title = p.name; }
     const head = h('div', { class: 'list-head' },
       h('button', { class: 'icon menu-btn', 'aria-label': 'Menu', onClick: () => { state.menuOpen = true; render(); } }, '☰'),
       h('h2', null, title),
+      state.view === 'search' ? null : h('button', { class: 'icon', title: 'Search', 'aria-label': 'Search', onClick: () => go('search') }, '🔍'), // (as on the owner's list; on a phone the menu has no search box)
       state.view === 'settings' ? null : h('button', { class: 'icon', title: 'Get latest', 'aria-label': 'Refresh', onClick: reload }, '↻'));
     if (!state.data) return h('div', { class: 'col-inner' }, head, bars(), h('p', { class: 'empty-list' }, state.loadFailed ? [state.loadFailed === 'You are offline. Try again when the internet is back.' ? 'No saved copy on this phone yet.' : state.loadFailed, ' ', h('button', { class: 'link', onClick: reload }, 'Try again')] : 'Loading…'));
     const body = state.view === 'followup' ? followupList() : state.view === 'tasks' ? tasksList() : state.view === 'projects' ? projectsList()
       : state.view === 'search' ? searchList() : state.view === 'report' ? reportPage() : state.view === 'people' ? peoplePage() : state.view === 'settings' ? settingsPage() : teamList();
-    return h('div', { class: 'col-inner' }, head, bars(), body);
+    // "+ Give a task" at the top of the list, as the owner's "+ New task"
+    const give = ['today', 'tasks', 'followup', 'projects'].includes(state.view) ? h('button', { class: 'btn primary new-project', onClick: () => open('give') }, '+ Give a task') : null;
+    return h('div', { class: 'col-inner' }, head, bars(), give, body);
   }
 
   function detail() {
