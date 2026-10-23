@@ -408,7 +408,7 @@ function ol_load(): array {
  * Change the saved projects as one new version: $change($data, $hist) changes the data (and adds history lines by month);
  * it returns false when there is nothing to save. Another device saved first: read again, change again (a few tries).
  */
-function ol_write(callable $change, string $message): bool {
+function ol_write(callable $change, string $message, ?callable $alsoInTx = null): bool {
   $owner = (int)setting('dp_owner', '0');
   for ($try = 0; ; $try++) {
     [$head, $files, $data] = ol_load();
@@ -422,7 +422,7 @@ function ol_write(callable $change, string $message): bool {
       $changes[] = ['path' => $path, 'content' => ol_json(array_merge($list, $events))];
     }
     try {
-      dp_commit(['id' => $owner], $head, $changes, $message);
+      dp_commit(['id' => $owner], $head, $changes, $message, $alsoInTx);
       return true;
     } catch (ApiError $e) {
       if ($e->status !== 409 || $try >= 4) throw $e;
@@ -568,11 +568,18 @@ function ol_draft(string $id): string {
 
 /** outlook.compose: the app's email HTML, made safe anyway (no scripts, frames, on...= handlers or javascript: links). */
 function ol_clean_html(string $html): string {
-  $html = (string)preg_replace('#<(script|iframe|object|embed|style)\b[^>]*>.*?</\1\s*>#is', '', $html);
-  $html = (string)preg_replace('#</?(script|iframe|object|embed|frame|frameset|base|meta|link)\b[^>]*>#i', '', $html);
-  return (string)preg_replace_callback('#<[a-z][^>]*>#i', function ($m) {
+  $html = (string)preg_replace('#<(script|iframe|object|embed|style|svg|math)\b[^>]*>.*?</\1\s*>#is', '', $html);
+  $html = (string)preg_replace('#</?(script|iframe|object|embed|frame|frameset|base|meta|link|svg|math)\b[^>]*>#i', '', $html);
+  // a whole tag, also when a quoted value holds a ">" (else the rest of the tag would slip past as plain text)
+  return (string)preg_replace_callback('#<[a-z](?:[^>"\']|"[^"]*"|\'[^\']*\')*>#i', function ($m) {
     $tag = (string)preg_replace('#\s+on[a-z]+\s*=\s*("[^"]*"|\'[^\']*\'|[^\s>]+)#i', '', $m[0]);
-    return (string)preg_replace('#(href|src)\s*=\s*(["\']?)\s*(javascript|vbscript|data):#i', '$1=$2#', $tag);
+    // links and pictures: only web and mail addresses — read as the browser reads them (&#x73; = s, tabs and spaces dropped)
+    return (string)preg_replace_callback('#\b(href|src|action|formaction|xlink:href)\s*=\s*("[^"]*"|\'[^\']*\'|[^\s>]+)#i', function ($a) {
+      $v = trim($a[2], '"\'');
+      $plain = strtolower((string)preg_replace('#[\x00-\x20]+#', '', html_entity_decode(html_entity_decode($v, ENT_QUOTES | ENT_HTML5, 'UTF-8'), ENT_QUOTES | ENT_HTML5, 'UTF-8')));
+      $scheme = preg_match('#^([a-z][a-z0-9+.\-]*):#', $plain, $sm) ? $sm[1] : '';
+      return $scheme === '' || in_array($scheme, ['http', 'https', 'mailto'], true) ? $a[0] : $a[1] . '="#"';
+    }, $tag);
   }, $html);
 }
 
@@ -651,13 +658,16 @@ function ol_add(array $msgs): int {
       $threads[$ch] = true;
     }
     return true;
-  }, '📧 ' . count($new) . ' email' . (count($new) === 1 ? '' : 's') . ' from Outlook');
-  foreach ($new as [$m, $hs]) {
-    $r = strtotime((string)($m['receivedDateTime'] ?? ''));
-    // the internetMessageId row is marked OL_SEEN_IMID (not a thread, not counted as an email added)
-    foreach ($hs as $k => $h) q('INSERT IGNORE INTO ol_seen (msg_hash, conv_hash, received_at, added_at) VALUES (?, ?, ?, ?)',
-      [$h, $k ? OL_SEEN_IMID : hash('sha256', 'c|' . (string)($m['conversationId'] ?? '')), $r ? date('Y-m-d H:i:s', $r) : null, now()]);
-  }
+  }, '📧 ' . count($new) . ' email' . (count($new) === 1 ? '' : 's') . ' from Outlook', function () use ($new) {
+    // "these emails are in" is saved WITH the version that puts them in (never one without the other: a stop in between
+    // would add them all again next time)
+    foreach ($new as [$m, $hs]) {
+      $r = strtotime((string)($m['receivedDateTime'] ?? ''));
+      // the internetMessageId row is marked OL_SEEN_IMID (not a thread, not counted as an email added)
+      foreach ($hs as $k => $h) q('INSERT IGNORE INTO ol_seen (msg_hash, conv_hash, received_at, added_at) VALUES (?, ?, ?, ?)',
+        [$h, $k ? OL_SEEN_IMID : hash('sha256', 'c|' . (string)($m['conversationId'] ?? '')), $r ? date('Y-m-d H:i:s', $r) : null, now()]);
+    }
+  });
   return count($new);
 }
 

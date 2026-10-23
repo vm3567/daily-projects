@@ -14,8 +14,12 @@ function client_ip(): string {
 function locked(string $username, int $extra = 0): bool {
   $since = date('Y-m-d H:i:s', time() - LOCK_MINUTES * 60);
   $count = fn(string $k) => (int)one('SELECT COUNT(*) AS n FROM login_fails WHERE k = ? AND at > ?', [$k, $since])['n'];
+  // one name from every place: its tries from each address added up (a right password clears only that address's own,
+  // so guesses spread over many addresses keep counting); (k = 'u:<name>': rows from before, kept until they expire)
+  $name = 'u:' . $username;
+  $everywhere = (int)one('SELECT COUNT(*) AS n FROM login_fails WHERE (k = ? OR LEFT(k, ?) = ?) AND at > ?', [$name, strlen($name) + 1, $name . '|', $since])['n'];
   return $count('u:' . $username . '|' . client_ip()) >= MAX_FAILS + $extra
-    || $count('u:' . $username) >= MAX_FAILS * 10 + $extra // a loose limit for one name from many places, so a stranger cannot easily lock someone out
+    || $everywhere >= MAX_FAILS * 10 + $extra // a loose limit for one name from many places, so a stranger cannot easily lock someone out
     || $count('ip:' . client_ip()) >= MAX_FAILS * 10 + $extra; // a whole factory can share one internet address
 }
 
@@ -52,7 +56,7 @@ function login(string $username, string $password, string $device): array {
   if (locked($username)) throw too_many();
   // count this try first; it is taken off again below if the password is right
   $ids = [];
-  foreach (['u:' . $username . '|' . client_ip(), 'u:' . $username, 'ip:' . client_ip()] as $k) {
+  foreach (['u:' . $username . '|' . client_ip(), 'ip:' . client_ip()] as $k) {
     q('INSERT INTO login_fails (k, at) VALUES (?, ?)', [$k, now()]);
     $ids[] = (int)db()->lastInsertId();
   }
@@ -61,9 +65,10 @@ function login(string $username, string $password, string $device): array {
   if ($user && $user['username'] !== $username) $user = null; // the database ignores capitals and accents; only the exact name counts
   // the same slow check even for an unknown name, so nobody can find names by timing
   $ok = password_verify($password, $user['pass_hash'] ?? dummy_hash());
-  if (!$user || !$ok) throw new ApiError('Wrong username or password.', 401);
-  q('DELETE FROM login_fails WHERE k IN (?, ?) OR id = ?', ['u:' . $username . '|' . client_ip(), 'u:' . $username, $ids[2]]);
-  if (!$user['active']) throw new ApiError('This account is switched off. Ask your manager.', 403);
+  // a switched-off account answers exactly like a wrong password (and the try keeps counting): a different answer for the
+  // right password would tell a guesser it is right (a former employee's password, often used elsewhere too)
+  if (!$user || !$ok || !$user['active']) throw new ApiError('Wrong username or password.', 401);
+  q('DELETE FROM login_fails WHERE k = ? OR id = ?', ['u:' . $username . '|' . client_ip(), $ids[1]]); // this address's tries, and this try off the computer's count
   if (password_needs_rehash($user['pass_hash'], PASSWORD_DEFAULT)) {
     q('UPDATE users SET pass_hash = ? WHERE id = ?', [password_hash($password, PASSWORD_DEFAULT), $user['id']]);
   }
@@ -103,7 +108,7 @@ function public_user(array $u): array {
 
 function change_password(array $me, string $old, string $new): void {
   // the same limits as signing in, so a phone left signed in cannot be used to guess the password
-  $keys = ['u:' . $me['username'] . '|' . client_ip(), 'u:' . $me['username'], 'ip:' . client_ip()];
+  $keys = ['u:' . $me['username'] . '|' . client_ip(), 'ip:' . client_ip()];
   if (locked($me['username'])) throw too_many();
   // count this try first (as login() does), so tries sent at the same moment all count; taken off again if right
   $ids = [];
@@ -113,7 +118,7 @@ function change_password(array $me, string $old, string $new): void {
   }
   if (locked($me['username'], 1)) throw too_many();
   if (!password_verify($old, $me['pass_hash'])) throw new ApiError('Your current password is not right.');
-  q('DELETE FROM login_fails WHERE k IN (?, ?) OR id = ?', [$keys[0], $keys[1], $ids[2]]);
+  q('DELETE FROM login_fails WHERE k = ? OR id = ?', [$keys[0], $ids[1]]); // this address's tries only (guesses from elsewhere keep counting)
   check_password_rules($new);
   if ($old === $new) throw new ApiError('Choose a new password, not the same one.');
   q('UPDATE users SET pass_hash = ?, must_change = 0 WHERE id = ?', [password_hash($new, PASSWORD_DEFAULT), $me['id']]);

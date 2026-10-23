@@ -1579,7 +1579,18 @@ export function applyOp(state, op) {
 
 // Changes that may not come in through a link: they delete, give away, plant data or swap the AI key.
 // addFile from the old address points at a GitHub file the server does not have, so its save would always fail.
-const NOT_CARRIED = new Set(['deleteProject', 'restoreProject', 'deleteStep', 'setProjectTeam', 'addFile', 'setAiKey', 'setAiProvider']);
+// Only these kinds come along (a list of what is allowed, so a new kind of change is left out until it is added here):
+// they add or change things without removing anything. Deletes, removals, edits that could empty a text, team, AI-key,
+// timer-switch and the app's own bookkeeping changes never come in through a link (it can come from anyone).
+export const CARRIED = new Set(['createProject', 'createMainProject', 'addToProject', 'setTaskOrder', 'snooze', 'setOnlyDays', 'setRemindAt',
+  'setRemindOnce', 'wake', 'remindStep', 'addLink', 'markOpened', 'okForToday', 'undoOkForToday', 'moveProject', 'pause', 'unpause', 'reopen',
+  'addStep', 'tickStep', 'untickStep', 'moveStep', 'chased', 'addWorkNote', 'addTag', 'renameTag', 'addInbox', 'updateInbox', 'addMailNote',
+  'setReply', 'replyLater', 'inboxToStep', 'stepToProject', 'inboxToProject', 'addPerson', 'renamePerson', 'setPersonContact', 'markPersonSent',
+  'startTimer', 'stopTimer', 'addTime']);
+export const NOT_CARRIED = new Set(['deleteProject', 'restoreProject', 'deleteStep', 'setProjectTeam', 'addFile', 'setAiKey', 'setAiProvider',
+  'removeFromProject', 'setParent', 'removeLink', 'editLink', 'finish', 'teamWorked', 'deleteWorkNote', 'editWorkNote', 'setProjectField', 'setStepField',
+  'removeFile', 'setTimer', 'deleteTag', 'clearReply', 'markReplySent', 'undoReplySent', 'mailReplied', 'removeInbox', 'inboxUndo', 'deletePerson',
+  'recordScores', 'removeTime', 'incrementAiUsage', 'claimBrief', 'setBriefReady', 'addEvent']);
 
 /** Changes carried from the old address (#ops=): keeps only known, harmless ones. Returns { ok, files, dropped }. */
 export function carriedOps(list) {
@@ -1590,7 +1601,7 @@ export function carriedOps(list) {
       && Object.prototype.hasOwnProperty.call(handlers, o.type) && typeof o.at === 'string' && !Number.isNaN(Date.parse(o.at))
       && (o.args === undefined || (o.args && typeof o.args === 'object' && !Array.isArray(o.args)));
     if (good && o.type === 'addFile') out.files++;
-    else if (good && !NOT_CARRIED.has(o.type) && !(o.args && o.args.sha)) out.ok.push(o);
+    else if (good && CARRIED.has(o.type) && !NOT_CARRIED.has(o.type) && !(o.args && o.args.sha)) out.ok.push(o);
     else out.dropped++;
   }
   out.dropped += Math.max(0, list.length - 500);

@@ -86,8 +86,11 @@ function dp_path_ok(string $p): bool {
   return strlen($p) <= 300 && preg_match('#^[A-Za-z0-9._ ()-]+(/[A-Za-z0-9._ ()-]+)*$#', $p) === 1 && !preg_match('#(^|/)\.\.?(/|$)#', $p);
 }
 
-/** Make one version on top of `parent`. Throws 409 when another computer saved first. */
-function dp_commit(array $me, string $parent, array $changes, string $message): array {
+/**
+ * Make one version on top of `parent`. Throws 409 when another computer saved first.
+ * $alsoInTx: more database writes that must be saved with this version or not at all (e.g. "these emails are in").
+ */
+function dp_commit(array $me, string $parent, array $changes, string $message, ?callable $alsoInTx = null): array {
   if (!dp_valid_sha($parent)) throw new ApiError('Bad version.');
   if (count($changes) > 500) throw new ApiError('Too many changes at once.');
   // write new text files first (outside the lock: they are content-addressed, so harmless if unused)
@@ -112,6 +115,7 @@ function dp_commit(array $me, string $parent, array $changes, string $message): 
     $id = sha1(random_bytes(20));
     q('INSERT INTO dp_commits (id, parent, tree, message, user_id, at) VALUES (?, ?, ?, ?, ?, ?)', [$id, $parent, $tree, mb_substr($message, 0, 300), $me['id'], now()]);
     q("UPDATE settings SET v = ? WHERE k = 'dp_head'", [$id]);
+    if ($alsoInTx) $alsoInTx();
     $pdo->commit();
     return ['commit' => $id, 'tree' => $tree];
   } catch (ApiError $e) {

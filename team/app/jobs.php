@@ -50,19 +50,31 @@ function server_steps(array $p, string $today): array {
   return [['stepRef' => $p['id'] . ':whole', 'title' => (string)($p['name'] ?? 'Project'), 'details' => (string)($p['status'] ?? '')]];
 }
 
+/**
+ * Run $work in one database transaction. Phone alerts it queued (notify) go out only if it is saved: when it is rolled
+ * back, they are taken back too — never "New project for you" for a change that did not happen.
+ */
+function in_tx_with_alerts(callable $work) {
+  $alerts = $GLOBALS['push_out'] ?? [];
+  db()->beginTransaction();
+  try {
+    $out = $work();
+    db()->commit();
+    return $out;
+  } catch (Throwable $e) {
+    if (db()->inTransaction()) db()->rollBack();
+    $GLOBALS['push_out'] = $alerts;
+    throw $e;
+  }
+}
+
 /** One project.sync, one at a time per project (the same lock as the owner's app uses). */
 function locked_project_sync(array $me, array $in, string $ref, string $day): array {
   $lk = 'ps:' . md5($ref);
   if (!(int)(one('SELECT GET_LOCK(?, 10) AS l', [$lk])['l'] ?? 0)) throw new ApiError('Busy, try again in a moment.', 503);
   try {
     if (!empty($in['_server']) && (int)setting('psc:' . md5($ref), '0') >= (int)($in['_since'] ?? PHP_INT_MAX)) return []; // the owner's app just sent it
-    db()->beginTransaction();
-    $out = project_sync($me, $in, $ref, $day);
-    db()->commit();
-    return $out;
-  } catch (Throwable $e) {
-    if (db()->inTransaction()) db()->rollBack();
-    throw $e;
+    return in_tx_with_alerts(fn() => project_sync($me, $in, $ref, $day));
   } finally {
     q('SELECT RELEASE_LOCK(?)', [$lk]);
   }
@@ -160,7 +172,7 @@ function evening_summary(): void {
   $body = [];
   if ($s['missing']) $body[] = 'No update: ' . implode(', ', $s['missing']);
   if ($s['stuck']) $body[] = 'Stuck: ' . implode(', ', $s['stuck']);
-  notify(admin_ids(), $s['missing'] || $s['stuck'] ? 'stuck' : 'update', "📊 Today: {$s['sent']} of {$s['due']} updates in", $body ? implode(' · ', $body) : 'Everyone sent their update ✓', '/?team', 'sum');
+  notify(admin_ids(), $s['missing'] || $s['stuck'] ? 'stuck' : 'update', "📊 Today: {$s['sent']} of {$s['due']} updates in", $body ? implode(' · ', $body) : 'Everyone sent their update ✓', '/projects/#team', 'sum'); // (opens the team pages of the one app)
 }
 
 /** Today in numbers: tasks due, updates sent, who has not sent, who is stuck (with days). */

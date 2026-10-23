@@ -17,7 +17,17 @@ $v = fn(string $k, string $d = '') => htmlspecialchars((string)($_POST[$k] ?? $d
 if (!$done && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
   try {
     $code = is_file($codeFile) ? trim((string)file_get_contents($codeFile)) : '';
-    if ($code === '' || !hash_equals($code, trim((string)($_POST['code'] ?? '')))) throw new Exception('The setup code is not right.');
+    // wrong codes are counted (in a file: there is no database yet): after 5 in 15 minutes, a pause for everyone,
+    // so the code cannot be guessed by trying fast
+    $triesFile = dirname($codeFile) . '/setup-tries.json';
+    $tries = array_values(array_filter((array)json_decode((string)@file_get_contents($triesFile), true), fn($t) => is_int($t) && $t > time() - 900));
+    if (count($tries) >= 5) throw new Exception('Too many wrong setup codes. Wait 15 minutes and try again.');
+    if ($code === '' || !hash_equals($code, trim((string)($_POST['code'] ?? '')))) {
+      $tries[] = time();
+      @file_put_contents($triesFile, json_encode($tries), LOCK_EX);
+      usleep(500000); // and a little slower each time
+      throw new Exception('The setup code is not right.');
+    }
     $dbName = trim((string)($_POST['db_name'] ?? ''));
     $dbUser = trim((string)($_POST['db_user'] ?? ''));
     $dbPass = (string)($_POST['db_pass'] ?? '');

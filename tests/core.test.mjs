@@ -2768,3 +2768,13 @@ test('review (code-review 23 Oct): data without groups still has an empty groups
     assert.doesNotThrow(() => { d.groups.map((g) => g.name); d.groups.find((g) => g.id === 'g1'); d.groups.some(() => true); }, 'what the old app does with it');
   }
 });
+
+test('review round 2 (whole code): a #ops= link (it can come from anyone) carries only changes that add — removing a file, deleting notes, links, tags, people or Inbox items, finishing, taking a task out of a project, or emptying a text never come in; every kind of change is sorted one way or the other', async () => {
+  const { carriedOps, CARRIED, NOT_CARRIED, OP_TYPES } = await import('../docs/ops.js');
+  const at = '2026-10-17T05:00:00.000Z';
+  const bad = ['removeFile', 'deleteWorkNote', 'removeLink', 'deleteTag', 'deletePerson', 'removeInbox', 'removeFromProject', 'finish', 'setProjectField', 'editWorkNote', 'editLink', 'setParent', 'setTimer', 'removeTime'];
+  const r = carriedOps([...bad.map((type, i) => ({ id: 'x' + i, type, at, args: { projectId: 'p' } })), { id: 'ok1', type: 'addWorkNote', at, args: { projectId: 'p', noteId: 'n', text: 'hi' } }]);
+  assert.deepEqual(r.ok.map((o) => o.id), ['ok1'], 'only the adding change');
+  assert.equal(r.dropped, bad.length);
+  for (const t of OP_TYPES) assert.ok(CARRIED.has(t) !== NOT_CARRIED.has(t), `${t}: sorted into exactly one list (a new kind of change must be decided)`);
+});

@@ -2411,7 +2411,7 @@ function takeOpsFromHash() {
   const { ok, files, dropped } = carriedOps(ops);
   const add = ok.filter((o) => !have.has(o.id) && !took.has(o.id));
   const filesMsg = (files ? ` ${files} photo(s)/file(s) could not come along: please add them again.` : '')
-    + (dropped ? ` ${dropped} change(s) (deletes, team changes) could not come along: please do them again.` : '');
+    + (dropped ? ` ${dropped} change(s) (deletes, removals, edits, team changes) could not come along: please do them again.` : '');
   if (!add.length) {
     const msg = (ok.length ? 'These changes already arrived here ✓' : '') + filesMsg;
     if (msg) setTimeout(() => toast(msg.trim(), 8000), 1500);

@@ -41,8 +41,13 @@ $parent = dp_head((int)$user['id']);
 $changes = [];
 $old = dp_tree_files(one('SELECT tree FROM dp_commits WHERE id = ?', [$parent])['tree']);
 foreach ($old as $path => $sha) if (!isset($files[$path])) $changes[] = ['path' => $path, 'sha' => null];
-foreach ($files as $path => $sha) $changes[] = ['path' => $path, 'sha' => $sha];
-$r = dp_commit(['id' => (int)$user['id']], $parent, $changes, 'Moved from GitHub');
+foreach ($files as $path => $sha) if ($path !== 'data.json') $changes[] = ['path' => $path, 'sha' => $sha];
+$changes[] = ['path' => 'data.json', 'sha' => $files['data.json']]; // last: the projects point at files that are all there by then
+// a version takes at most 500 changes (dp_commit): many attached files go in a few versions, one after the other
+foreach (array_chunk($changes, 500) as $i => $part) {
+  $r = dp_commit(['id' => (int)$user['id']], $parent, $part, 'Moved from GitHub' . (count($changes) > 500 ? ' (part ' . ($i + 1) . ')' : ''));
+  $parent = $r['commit'];
+}
 set_setting('dp_owner', (string)$user['id']);
 echo 'Imported ' . count($files) . " files as version {$r['commit']}. Owner: $username\n";
 foreach ($files as $path => $sha) echo "  $path  " . strlen(dp_get_blob($sha)) . " bytes  sha1 $sha\n";

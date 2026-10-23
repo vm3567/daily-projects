@@ -53,6 +53,7 @@ if (cmd === 'export') {
     process.exit(3);
   }
   if (input.parent !== st.head) { process.stderr.write('Another device saved first.'); process.exit(3); }
+  if (input.changes.length > 500) fail('Too many changes at once.'); // (as dp_commit on the real server)
   for (const c of input.changes) {
     if ('content' in c) st.files[c.path] = c.content;
     else if (c.sha === null) delete st.files[c.path];
