@@ -8,6 +8,7 @@
 import { h, morph, errLine } from './dom.js';
 import { createOutbox } from './staffbox.js';
 import { stageChip } from './stage.js';
+import { openMenuAt, menuBox, focusLater } from './rowmenu.js';
 import { fmtDay, fmtTime, LONG_DAYS, stateTag, newClientId, istDay, daysBetween, repeatLabel, block, sec, taskRow, chipsFor, makePics, photosRow, filesBlock, diaryBlock, messagesBlock, phoneBack } from './workparts.js';
 
 const KEEP_FAIL = 'Could not keep this on the phone. Try again when online.';
@@ -538,7 +539,7 @@ export function createTeam(opts) {
   }
 
   const rowOf = (t, sub, dot, warn = false) => taskRow({
-    key: 't-' + t.id, title: t.title, sub, dot: dotOf(dot), warn, current: state.sel === 'task:' + t.id, onOpen: () => open('task:' + t.id),
+    key: 't-' + t.id, title: t.title, sub, dot: dotOf(dot), warn, current: state.sel === 'task:' + t.id, onOpen: () => open('task:' + t.id), onMenu: (e) => openMenuAt(state, render, { t }, e),
     tags: [state.newIds.has(t.id) ? h('span', { class: 'tag high' }, 'New') : null, t.unread ? h('span', { class: 'tag on-step', title: `${t.unread} new message(s)` }, '💬 New') : null],
   });
 
@@ -630,7 +631,8 @@ export function createTeam(opts) {
     const cell = (cls, ...c) => h('td', { class: cls }, ...c);
     const line = (r) => {
       const t = r.t, u = t.today, m = t.lastMessage;
-      return h('tr', { key: 'b-' + t.id, class: 'sub-row board-row' + (state.sel === 'task:' + t.id ? ' current' : ''), onClick: () => open('task:' + t.id) },
+      return h('tr', { key: 'b-' + t.id, class: 'sub-row board-row' + (state.sel === 'task:' + t.id ? ' current' : ''), onClick: () => open('task:' + t.id),
+        onContextmenu: (e) => openMenuAt(state, render, { t }, e) }, // right-click: message, finish, edit, move, cancel
         cell('', h('span', { class: 'dot ' + dotOf(r.colour) })),
         cell('board-task', h('button', { class: 'link sub-name', type: 'button' }, t.title), ' ', state.boardGroup === 'project' ? null : h('span', { class: 'tag main-tag' }, '📂 ' + r.project), // (by 📂 project: its line says it)
           state.newIds.has(t.id) ? h('span', { class: 'tag high' }, 'New') : null,
@@ -956,6 +958,26 @@ export function createTeam(opts) {
       t.seq !== null && t.seq !== undefined ? null : h('button', { class: 'menu-row danger', onClick: () => { close(); if (ask.confirm('Cancel this task?')) setStatus(t, 'cancelled'); else render(); } }, '✖ Cancel task'));
   }
 
+  /** Right-click on a task (Team today's table, Tasks, a project's steps): the things the task's page can do, without opening it first. */
+  function rowMenu() {
+    const t = state.rowMenu && state.rowMenu.t;
+    if (!t) return null;
+    const go2 = (then) => () => { open('task:' + t.id); if (then) then(); };
+    const isOpen = t.status === 'open' || !t.status;
+    const whole = t.seq !== null && t.seq !== undefined; // (a step of a given project: cancelled with the project)
+    return menuBox(state, render, t.title, [
+      ['↗', 'Open', go2()],
+      t.status === 'suggested' ? ['✓', 'Yes, add it', () => answerSuggestion(t, true)] : null,
+      t.status === 'suggested' ? ['✗', 'Not now…', () => answerSuggestion(t, false)] : null,
+      t.status === 'suggested' ? null : ['💬', `Message ${t.assignee ? t.assignee.name : ''}`.trim(), go2(() => focusLater('msg-' + t.id))],
+      isOpen && t.status !== 'suggested' ? ['🏁', 'Finish task', () => setStatus(t, 'done')] : null,
+      !isOpen && t.status !== 'suggested' ? ['↺', 'Open again', () => setStatus(t, 'open')] : null,
+      isOpen && t.status !== 'suggested' ? ['✎', 'Edit task', () => open('edit:' + t.id)] : null,
+      isOpen && t.status !== 'suggested' ? ['↔', 'Move to another person…', go2(() => { state.moving = t.id; render(); })] : null,
+      isOpen && t.status !== 'suggested' && !whole ? ['✖', 'Cancel task', () => { if (ask.confirm('Cancel this task?')) setStatus(t, 'cancelled'); }, true] : null,
+    ]);
+  }
+
   function taskPage() {
     const { task: t, updates = [], comments = [] } = state.detail;
     const td = today();
@@ -1116,7 +1138,8 @@ export function createTeam(opts) {
       h('aside', { id: 'menu' }, menu()),
       h('div', { class: 'scrim', onClick: () => { state.menuOpen = false; render(); } }),
       h('main', { id: 'list' }, list()),
-      wide ? null : h('section', { id: 'detail' }, detail()));
+      wide ? null : h('section', { id: 'detail' }, detail()),
+      rowMenu());
   }
 
   // the phone's Back button closes the menu, then the page on the right (never leaves the app)
@@ -1131,5 +1154,5 @@ export function createTeam(opts) {
     backSync();
   }
 
-  return { state, render, go, open, act, view, start, setOffline, refreshOutbox };
+  return { state, render, go, open, back, act, view, start, setOffline, refreshOutbox };
 }

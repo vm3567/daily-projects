@@ -1,6 +1,7 @@
 // Daily Projects — main app: start-up, menu, project list, Today box, Diary, Settings, key screen.
 
 import { h, morph, installEvents, fmtDay, fmtLongDay, fmtTime, keyHint, withKey } from './ui/dom.js';
+import { pageKey } from './ui/listkeys.js';
 import { renderDetail, linkChip, isMailLink, pasteIntoProject, takeBackQuestion, updateState, makeItAProject } from './ui/detail.js';
 import { renderPeopleList, renderPerson, peopleByFollowUp } from './ui/people.js';
 import { installMentions } from './ui/mention.js';
@@ -264,6 +265,7 @@ async function startManager(user, teamTask = 0) {
   root.replaceChildren(h('div', { class: 'loading' }, 'Loading…'));
   try { teamView = await teamPages(user); } catch (e) { if (e.auth) { signInAgain(); return; } root.replaceChildren(h('div', { class: 'loading' }, e.message)); return; }
   space = 'team';
+  listenKeys(); // ↓ ↑ and the other keys on their pages too
   const how = teamHowFromHash() || (teamTask ? { sel: 'task:' + teamTask } : {});
   teamView.start({ ...how, fromProjects: false }); // (they have no projects page to go back to)
   startBell();
@@ -298,6 +300,7 @@ async function startStaff(user, openTask = 0) {
   const onAuth = () => signInAgain();
   staff = createStaff({ root, api, rules, user, toast, signOut, onAuth, photo, viewer, box: idbOutbox(), shrink: shrinkPhoto, push });
   staffView = staff;
+  listenKeys(); // ↓ ↑ and the other keys in the staff app too
   if (openTask) { if (teamTaskInHash() === openTask) history.replaceState(null, '', location.pathname + location.search); staff.open('task:' + openTask); } // a phone notification: that task (taken off the address, so a reload does not open it again)
   staff.start();
   startBell();
@@ -3187,8 +3190,18 @@ function selectedProject() {
   return store && store.view ? store.view.data.projects.find((p) => p.id === ui.selected) : null;
 }
 
+/** The keys, once, for whoever signed in (owner, manager or staff: onKey sends each to its own pages). */
+let keysOn = false;
+function listenKeys() {
+  if (keysOn) return;
+  keysOn = true;
+  document.addEventListener('keydown', onKey);
+}
+
 function onKey(e) {
-  if (space === 'team') return; // (the projects' keys are not for the team pages)
+  // the team pages and the staff app: their own keys (↓ ↑ j k next task, Esc, /, n, ?; ui/listkeys.js)
+  if (space === 'team') { pageKey(e, document, teamView, { say: toast, owner: true }); return; }
+  if (staffView && !store) { pageKey(e, document, staffView, { say: toast }); return; }
   if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) { e.preventDefault(); openJump(); return; }
   if (e.metaKey || e.ctrlKey || e.altKey) return; // leave browser shortcuts alone
   if (e.key === 'Escape') {
@@ -3825,7 +3838,7 @@ function startOwner() {
     store.init().then(() => { if (store.pending.length) store.save(); else if (store.status !== 'auth') store.setStatus('saved'); });
   });
   window.addEventListener('offline', () => store.setStatus('offline', 'No connection'));
-  document.addEventListener('keydown', onKey);
+  listenKeys();
   // Ctrl+V anywhere on an open project: a screenshot or a copied file is added to it (the update box handles its own paste)
   document.addEventListener('paste', (e) => {
     if (space === 'team' && teamView) { pasteToView(teamView, e, TEAM_BOX); return; } // the team pages: an instruction file, or a photo message
@@ -3844,9 +3857,13 @@ function startOwner() {
   // a click anywhere else closes the right-click menu
   document.addEventListener('click', (e) => {
     if (ui.rowMenu && !e.target.closest('.row-menu')) { ui.rowMenu = null; render(); }
+    for (const v of [teamView, staffView]) if (v && v.state.rowMenu && !e.target.closest('.row-menu')) { v.state.rowMenu = null; v.render(); } // the team / staff pages' menu
     if (ui.projMenu && !e.target.closest('.proj-menu') && !e.target.closest('[aria-label="More actions"]')) { ui.projMenu = null; render(); }
   });
-  window.addEventListener('scroll', () => { if (ui.rowMenu) { ui.rowMenu = null; render(); } }, true);
+  window.addEventListener('scroll', () => {
+    if (ui.rowMenu) { ui.rowMenu = null; render(); }
+    for (const v of [teamView, staffView]) if (v && v.state.rowMenu) { v.state.rowMenu = null; v.render(); }
+  }, true);
 }
 
 installEvents(document.body);

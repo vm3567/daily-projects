@@ -9,6 +9,7 @@
 import { h, morph, errLine } from './dom.js';
 import { createOutbox } from './staffbox.js';
 import { stageChip, stageFilterBar } from './stage.js';
+import { openMenuAt, menuBox, focusLater } from './rowmenu.js';
 import { fmtDay, fmtTime, STATES, stateTag, newClientId, istDay, repeatLabel, block, chipsFor, makePics, photosRow, filesBlock, diaryBlock, messagesBlock } from './workparts.js';
 
 export { STATES, repeatLabel }; // (the pieces of a task page are shared with the team pages: ui/workparts.js)
@@ -635,7 +636,7 @@ export function createStaff(opts) {
   }
 
   function row(t, sub, dot, warn = false) {
-    return h('li', { key: 't-' + t.id, class: 'prow' + (state.sel === 'task:' + t.id ? ' current' : '') },
+    return h('li', { key: 't-' + t.id, class: 'prow' + (state.sel === 'task:' + t.id ? ' current' : ''), onContextmenu: (e) => openMenuAt(state, render, { t }, e) },
       h('span', { class: 'quick-tick-space', 'aria-hidden': 'true' }),
       h('button', { class: 'prow-btn', onClick: () => open('task:' + t.id) },
         h('span', { class: 'dot ' + dot, 'aria-label': dot }),
@@ -659,7 +660,7 @@ export function createStaff(opts) {
     const work = t.project && t.project !== x.folder.name && t.project !== t.title ? t.project : ''; // the work it is a step of (not said twice)
     const sub = waiting ? '⏳ Waiting to send' : t.today ? `✓ Sent ${fmtTime(t.today.at)}` : t.dueToday ? (work ? `${work} · ` : '') + 'Send today\'s update'
       : [work, repeatLabel(t, td)].filter(Boolean).join(' · ') || 'Not today';
-    return h('li', { key: 't-' + t.id, class: 'prow' + (state.sel === 'task:' + t.id ? ' current' : '') },
+    return h('li', { key: 't-' + t.id, class: 'prow' + (state.sel === 'task:' + t.id ? ' current' : ''), onContextmenu: (e) => openMenuAt(state, render, { t }, e) },
       h('span', { class: 'quick-tick-space', 'aria-hidden': 'true' }),
       h('button', { class: 'prow-btn', onClick: () => open('task:' + t.id) },
         h('span', { class: 'dot ' + x.dot, 'aria-label': x.dot }),
@@ -677,7 +678,7 @@ export function createStaff(opts) {
       f.key === 'misc' ? h('p', { class: 'muted' }, 'Every task of yours that is in no project.') : null,
       block(`Tasks (${f.tasks.length})`, h('table', { class: 'sub-table' },
         h('thead', null, h('tr', null, h('th', null, ''), h('th', null, 'Task'), h('th', null, 'Now'), h('th', null, 'Last update'))),
-        h('tbody', null, f.tasks.map((x) => h('tr', { key: 'ft-' + x.t.id, class: 'sub-row', onClick: () => open('task:' + x.t.id) },
+        h('tbody', null, f.tasks.map((x) => h('tr', { key: 'ft-' + x.t.id, class: 'sub-row', onClick: () => open('task:' + x.t.id), onContextmenu: (e) => openMenuAt(state, render, { t: x.t }, e) },
           h('td', null, h('span', { class: 'dot ' + x.dot })),
           h('td', null, h('button', { class: 'link sub-name', type: 'button', onClick: () => open('task:' + x.t.id) }, x.t.title)),
           h('td', { class: x.dot === 'red' ? 'warn' : '' }, x.t.today ? '✓ Sent today' : waitingFor(x.t.id) ? '⏳ Waiting to send' : x.t.dueToday ? 'Send today\'s update' : repeatLabel(x.t, state.data.today) || 'Not today'),
@@ -994,12 +995,25 @@ export function createStaff(opts) {
       body);
   }
 
+  /** Right-click on one of my tasks: open it, write today's update, send a message (the box is ready to type in). */
+  function rowMenu() {
+    const t = state.rowMenu && state.rowMenu.t;
+    if (!t) return null;
+    const go2 = (key) => () => { open('task:' + t.id); if (key) focusLater(key); };
+    return menuBox(state, render, t.title, [
+      ['↗', 'Open', go2()],
+      t.status === 'suggested' ? null : ['📝', t.today ? 'Add to today\'s update' : 'Write today\'s update', go2('up-' + t.id)],
+      ['💬', 'Send a message', go2('msg-' + t.id)],
+    ]);
+  }
+
   function view() {
     return h('div', { class: ['layout', 'staff', state.mobile === 'detail' ? 'show-detail' : '', state.menuOpen ? 'menu-open' : ''].join(' ').trim() },
       h('aside', { id: 'menu' }, menu()),
       h('div', { class: 'scrim', onClick: () => { state.menuOpen = false; render(); } }),
       h('main', { id: 'list' }, list()),
-      h('section', { id: 'detail' }, detail()));
+      h('section', { id: 'detail' }, detail()),
+      rowMenu());
   }
 
   /** The number on the app icon (installed app): tasks still to send today. */
@@ -1019,5 +1033,5 @@ export function createStaff(opts) {
     else root.replaceChildren(next);
   }
 
-  return { state, render, load, open, act, view, start, setOffline, refreshOutbox };
+  return { state, render, load, open, back, act, view, start, setOffline, refreshOutbox };
 }

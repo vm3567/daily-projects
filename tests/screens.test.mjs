@@ -1060,7 +1060,7 @@ test('📂 Projects page: a click on a project row selects it and stays on the p
   assert.match(mainsSrc, /ctx\.ui\.view === 'mains' && ctx\.showHere \? ctx\.showHere\(c\.id\)/, 'a task in the TASKS table while on the Projects page');
   const here = app.slice(app.indexOf('  showHere: (id) => {'), app.indexOf('  openProject: (id) => {'));
   assert.match(here, /select\(id\);/);
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-38'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-39'/, 'phones get the new copy');
 });
 
 test('📂 project page: "✕ Remove" on a task row takes it out of this project only — the task is kept (and stays in its other projects)', () => {
@@ -1845,7 +1845,7 @@ test('🔌 app wiring (app.js): "🔌 From apps" after ✉ Replies with the wait
   assert.match(app, /function go\(view\) \{\n\s*if \(view !== 'settings'\) forgetOnce\(\);/);
   assert.match(app, /if \(onServer\) loadApps\(appsCtx, force \|\| ui\.view === 'apps'\);/);
   assert.match(app, /replies: '✉ Replies', apps: '🔌 From apps', mains: '📂 Projects' \}\[ui\.view\]/, 'its page title');
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-38'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-39'/, 'phones get the new copy');
 });
 
 test('🔌 the PHP connector (team/connector/worktask-connector.php): the same text the app downloads, placeholders only (no real key), valid PHP 7.4+ (php -l), with wt_push / wt_withdraw / wt_decisions / wt_receive_decision', async () => {
@@ -2984,7 +2984,7 @@ test('one app wiring (step 4): 👥 Team, a team task chip and "Give to team" op
   assert.match(hashFn, /how = \{ sel: 'task:' \+ m\[1\], fromProjects: true \};/);
   assert.match(hashFn, /how = \{ sel: 'give', prefill: p && typeof p === 'object' \? p : null, fromProjects: true \};/);
   assert.match(app, /function render\(\) \{\n\s*if \(space === 'team'\) return;/, 'the projects never draw over the team pages');
-  assert.match(app, /function onKey\(e\) \{\n\s*if \(space === 'team'\) return;/, 'the projects\' keys are off on the team pages');
+  assert.match(app, /function onKey\(e\) \{\n.*\n\s*if \(space === 'team'\) \{ pageKey\(e, document, teamView, \{ say: toast, owner: true \}\); return; \}/, 'the projects\' keys are off on the team pages (they get their own: ui/listkeys.js)');
   const st = app.slice(app.indexOf('function start() {'), app.indexOf("/** The owner's Daily Projects. */"));
   assert.match(st, /if \(known === 'manager'\) \{ startManager\(undefined, teamTask\); return; \}/);
   // one copy of a task page's pieces: both views use ui/workparts.js
@@ -3697,4 +3697,125 @@ test('Right-click menu (app.js): drawn over the whole page (list or task page); 
   assert.match(app, /playMoves\(moves\);\n  if \(ui\.rowMenu\) fitMenu\(\);/, 'a menu near the bottom moves up to show all of it');
   assert.match(app, /if \(r\.bottom > window\.innerHeight - 8\) el\.style\.top = Math\.max\(8, window\.innerHeight - 8 - r\.height\) \+ 'px';/);
   assert.ok(!/style=/.test(readFileSync(new URL('../docs/ui/mains.js', import.meta.url), 'utf8')), 'no inline style (strict CSP)');
+});
+
+// ---------------------------------------------------------------- keys and right-click on the team / staff pages (owner, 23 Oct)
+const listKeys = await import('../docs/ui/listkeys.js');
+
+/** A tiny page for the keys: rows in #list (li.prow with a .prow-btn, or tr.sub-row); a click marks it current. */
+function keyDoc(kinds, current = -1) {
+  const clicked = [];
+  const rows = kinds.map((kind, i) => {
+    const r = { nodeName: kind === 'tr' ? 'TR' : 'LI', className: kind === 'tr' ? 'sub-row' : 'prow', i, scrollIntoView() {} };
+    const btn = { click: () => { clicked.push(i); rows.forEach((x) => { x.className = x.className.replace(' current', ''); }); r.className += ' current'; } };
+    if (kind === 'tr') r.click = btn.click; else r.querySelector = (q) => (q === '.prow-btn' ? btn : null);
+    if (i === current) r.className += ' current';
+    return r;
+  });
+  const doc = {
+    activeElement: null, clicked,
+    getElementById: (id) => (id === 'list' ? { querySelectorAll: () => rows } : id === 'viewer' ? { hidden: true } : null),
+    querySelector: () => null,
+  };
+  return doc;
+}
+const keyEv = (key, more = {}) => ({ key, prevented: false, preventDefault() { this.prevented = true; }, ...more });
+
+test('Keys on the team / staff pages: ↓ ↑ (and j k) open the next / previous task in the list or Team today table; not while typing, not with ⌘ / Ctrl; Esc closes the menu, then the task; ? shows the keys; n gives a task (owner)', () => {
+  const page = { state: { sel: null }, render() {}, back() { this.state.sel = null; this.backs = (this.backs || 0) + 1; }, open(sel) { this.opened = sel; }, go(v) { this.went = v; } };
+  let doc = keyDoc(['li', 'tr', 'tr']);
+  let e = keyEv('ArrowDown');
+  assert.equal(listKeys.pageKey(e, doc, page), true);
+  assert.deepEqual(doc.clicked, [0], 'nothing open: ↓ opens the first');
+  assert.ok(e.prevented, 'the page does not scroll');
+  listKeys.pageKey(keyEv('ArrowDown'), doc, page);
+  listKeys.pageKey(keyEv('j'), doc, page);
+  assert.deepEqual(doc.clicked, [0, 1, 2], 'next, next (table rows too)');
+  listKeys.pageKey(keyEv('ArrowDown'), doc, page);
+  assert.deepEqual(doc.clicked, [0, 1, 2], 'at the last: stays');
+  listKeys.pageKey(keyEv('k'), doc, page);
+  listKeys.pageKey(keyEv('ArrowUp'), doc, page);
+  assert.deepEqual(doc.clicked, [0, 1, 2, 1, 0]);
+  doc = keyDoc(['li', 'li'], -1);
+  listKeys.pageKey(keyEv('ArrowUp'), doc, page);
+  assert.deepEqual(doc.clicked, [1], 'nothing open: ↑ opens the last');
+  doc = keyDoc(['li', 'li']);
+  doc.activeElement = { nodeName: 'TEXTAREA' };
+  assert.equal(listKeys.pageKey(keyEv('ArrowDown'), doc, page), false, 'typing in a box: the key is for the box');
+  doc.activeElement = null;
+  assert.equal(listKeys.pageKey(keyEv('ArrowDown', { metaKey: true }), doc, page), false);
+  assert.deepEqual(doc.clicked, []);
+  assert.equal(listKeys.pageKey(keyEv('ArrowDown'), keyDoc([]), page), false, 'no rows: the page scrolls');
+  // Esc
+  page.state.rowMenu = { t: {} }; page.state.sel = 'task:1';
+  listKeys.pageKey(keyEv('Escape'), doc, page);
+  assert.equal(page.state.rowMenu, null, 'the right-click menu first');
+  assert.equal(page.state.sel, 'task:1');
+  listKeys.pageKey(keyEv('Escape'), doc, page);
+  assert.equal(page.backs, 1, 'then the open task');
+  // ? and n
+  const said = [];
+  listKeys.pageKey(keyEv('?'), doc, page, { say: (x) => said.push(x) });
+  assert.equal(said[0], listKeys.PAGE_KEYS_HELP);
+  assert.equal(listKeys.pageKey(keyEv('n'), doc, page), false, 'staff: no "give a task"');
+  listKeys.pageKey(keyEv('n'), doc, page, { owner: true });
+  assert.equal(page.opened, 'give');
+  // wired: the team pages and the staff app
+  const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
+  assert.ok(app.includes("if (space === 'team') { pageKey(e, document, teamView, { say: toast, owner: true }); return; }"));
+  assert.ok(app.includes('if (staffView && !store) { pageKey(e, document, staffView, { say: toast }); return; }'));
+  // the keys are switched on for every kind of sign-in (they were on for the owner only: staff and managers had none)
+  assert.match(app, /staffView = staff;\n  listenKeys\(\);/, 'staff');
+  assert.match(app, /space = 'team';\n  listenKeys\(\);/, 'a manager who is not the owner');
+  assert.match(app, /store\.setStatus\('offline', 'No connection'\)\);\n  listenKeys\(\);/, 'the owner');
+  assert.equal((app.match(/addEventListener\('keydown', onKey\)/g) || []).length, 1, 'once');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /'ui\/listkeys\.js', 'ui\/mains\.js', 'ui\/rowmenu\.js',/, 'kept for offline use');
+});
+
+test('Right-click on the team pages (Team today table, Tasks list): the task\'s menu — open, message, finish, edit, move to another person, cancel; a suggestion: yes / not now; a closed task: open again', async () => {
+  const { t, calls } = fakeTeam();
+  t.go('today'); await tick(); await tick();
+  const row = rFind(t.view(), (n) => n.nodeName === 'TR' && /board-row/.test(n.className) && n.textContent.includes('Pack samples'));
+  row.__on.contextmenu({ preventDefault() {}, clientX: 50, clientY: 60, target: {} });
+  let menu = rFind(t.view(), (n) => n.className === 'row-menu');
+  assert.ok(menu, 'the menu opens');
+  const labels = () => rAll(rFind(t.view(), (n) => n.className === 'row-menu'), (n) => /row-menu-item/.test(n.className || '')).map((b) => b.textContent);
+  assert.deepEqual(labels(), ['↗Open', '💬Message Valar', '🏁Finish task', '✎Edit task', '↔Move to another person…', '✖Cancel task']);
+  rAll(menu, (n) => /row-menu-item/.test(n.className || '')).find((b) => b.textContent.includes('Finish task')).__on.click();
+  await tick();
+  assert.deepEqual(calls.find((c) => c.a === 'task.status').body, { id: 22, status: 'done' });
+  assert.equal(t.state.rowMenu, null, 'closed');
+  // move: opens the task with "move to" ready
+  rFind(t.view(), (n) => n.nodeName === 'TR' && /board-row/.test(n.className) && n.textContent.includes('Pack samples')).__on.contextmenu({ preventDefault() {}, target: {} });
+  rAll(rFind(t.view(), (n) => n.className === 'row-menu'), (n) => /row-menu-item/.test(n.className || '')).find((b) => b.textContent.includes('Move to another person')).__on.click();
+  assert.equal(t.state.sel, 'task:22');
+  assert.equal(t.state.moving, 22);
+  // a suggestion
+  t.state.rowMenu = { t: teamToday().suggestions[0] };
+  assert.deepEqual(labels(), ['↗Open', '✓Yes, add it', '✗Not now…']);
+  // a closed task
+  t.state.rowMenu = { t: { id: 30, title: 'Old', status: 'done', assignee: { id: 7, name: 'Valar' } } };
+  assert.deepEqual(labels(), ['↗Open', '💬Message Valar', '↺Open again']);
+  // the Tasks list rows (li) have it too
+  const W = readFileSync(new URL('../docs/ui/workparts.js', import.meta.url), 'utf8');
+  assert.ok(W.includes("return h('li', { key, class: 'prow' + (current ? ' current' : ''), onContextmenu: onMenu || undefined },"));
+  assert.ok(readFileSync(new URL('../docs/ui/team.js', import.meta.url), 'utf8').includes("onOpen: () => open('task:' + t.id), onMenu: (e) => openMenuAt(state, render, { t }, e),"));
+});
+
+test('Right-click in the staff app (my tasks, a folder\'s table): open, write today\'s update, send a message', async () => {
+  const { s } = fakeStaff2();
+  s.start(); await tick(); await tick();
+  const row = rFind(s.view(), (n) => n.nodeName === 'LI' && /\bprow\b/.test(n.className) && n.__on && n.__on.contextmenu);
+  assert.ok(row, 'a task row with a right-click menu');
+  row.__on.contextmenu({ preventDefault() {}, target: {} });
+  const items = rAll(rFind(s.view(), (n) => n.className === 'row-menu'), (n) => /row-menu-item/.test(n.className || '')).map((b) => b.textContent);
+  assert.deepEqual(items.map((x) => x.slice(0, 2)), ['↗O', '📝', '💬']);
+  assert.match(items[1], /today's update/);
+  rAll(rFind(s.view(), (n) => n.className === 'row-menu'), (n) => /row-menu-item/.test(n.className || ''))[0].__on.click();
+  assert.match(s.state.sel, /^task:/, 'opened');
+  assert.equal(s.state.rowMenu, null);
+  const S = readFileSync(new URL('../docs/ui/staff.js', import.meta.url), 'utf8');
+  assert.ok(S.includes("class: 'sub-row', onClick: () => open('task:' + x.t.id), onContextmenu: (e) => openMenuAt(state, render, { t: x.t }, e) },"), 'the folder table too');
+  const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
+  assert.ok(app.includes("for (const v of [teamView, staffView]) if (v && v.state.rowMenu && !e.target.closest('.row-menu')) { v.state.rowMenu = null; v.render(); }"), 'a click elsewhere closes it');
 });

@@ -39,8 +39,8 @@ export const block = (title, ...children) => h('section', { class: 'block' }, h(
 export const sec = (label, extra) => h('div', { class: 'list-sec' }, h('span', null, label), extra || null);
 
 /** One row of a list, as the owner's rows: dot · title (tags) · the line under it. */
-export function taskRow({ key, title, sub, dot, current = false, warn = false, tags = null, onOpen }) {
-  return h('li', { key, class: 'prow' + (current ? ' current' : '') },
+export function taskRow({ key, title, sub, dot, current = false, warn = false, tags = null, onOpen, onMenu = null }) {
+  return h('li', { key, class: 'prow' + (current ? ' current' : ''), onContextmenu: onMenu || undefined }, // (right-click: its menu)
     h('span', { class: 'quick-tick-space', 'aria-hidden': 'true' }),
     h('button', { class: 'prow-btn', onClick: onOpen },
       dot ? h('span', { class: 'dot ' + dot, 'aria-label': dot }) : null,

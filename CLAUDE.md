@@ -25,3 +25,14 @@ The owner asked for this so a later update never breaks what already works.
 - Test only on 127.0.0.1 with the throwaway data, never on the live site's data.
 - Any email drafted for the owner (/replies, follow-ups, any mail the owner asks for) must follow the my-writing-style skill
   (~/.claude/skills/my-writing-style). No "Regards"/signature at the end: Outlook adds "Thanks & Regards," and the signature itself.
+
+## A new feature goes everywhere it belongs (owner asked, 23 Oct)
+
+When the owner asks for something new (e.g. a right-click menu, keyboard shortcuts, a stage label), do it in EVERY
+place where it fits, not only the screen in the screenshot or the one named:
+- the owner's Daily Projects pages (Today, ✅ Tasks, 📂 Projects, a task's page, a project's task table, Inbox, People),
+- the owner's / managers' team pages (docs/ui/team.js: Team today, Tasks, People, Projects, Follow-up, Search),
+- the staff app (docs/ui/staff.js: their tasks, folders, a task's page),
+- desktop and phone (and the Work Task forwarding page if it still draws anything).
+Before calling it done, go through that list, check each place, and say which places got it (and why any did not).
+Every place gets its own test.
