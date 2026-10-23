@@ -232,7 +232,7 @@ test('server: phone notifications go to the right person, once', { skip }, async
   const t = (await call('task.save', { assigneeId: id.suresh, title: 'Check moulds', repeat: 'once' }, tok.boss)).task;
   let m = fresh();
   assert.deepEqual(m.map((x) => [x.user, x.msg.title, x.msg.body, x.msg.kind]), [[id.suresh, '📥 New task for you', 'Check moulds', 'task']]);
-  assert.equal(m[0].msg.url, '/#open=' + t.id);
+  assert.equal(m[0].msg.url, '/projects/#team-task=' + t.id, 'one app: a tap opens the task in the one app (worktask.in/projects/), not the old Work Task page');
   const steps = [{ stepRef: 'n1', title: 'Weigh clay' }, { stepRef: 'n2', title: 'Mix slip' }];
   await call('project.sync', { projectRef: 'pn', project: 'New body', assigneeId: id.suresh, steps }, tok.boss);
   assert.deepEqual(fresh().map((x) => [x.user, x.msg.title, x.msg.body]), [[id.suresh, '📁 New project for you: New body', '2 steps. First: Weigh clay']]);
@@ -250,7 +250,7 @@ test('server: phone notifications go to the right person, once', { skip }, async
   await call('comment.add', { taskId: t.id, text: 'Use mould 4' }, tok.boss);
   assert.deepEqual(fresh().map((x) => [x.user, x.msg.title, x.msg.body]), [[id.suresh, '💬 Boss · Check moulds', 'Use mould 4']]);
   assert.ok((await call('push.test', {}, tok.suresh)).ok);
-  assert.deepEqual(fresh().map((x) => [x.user, x.msg.tag]), [[id.suresh, 'test']]);
+  assert.deepEqual(fresh().map((x) => [x.user, x.msg.tag, x.msg.url]), [[id.suresh, 'test', '/projects/']], 'one app: the test notification opens the one app');
   await call('push.unsubscribe', { endpoint: 'https://fcm.googleapis.com/fcm/send/suresh-phone' }, tok.suresh);
   await call('task.save', { assigneeId: id.suresh, title: 'After sign out', repeat: 'once' }, tok.boss);
   assert.deepEqual(fresh(), [], 'a phone that signed out gets nothing');

@@ -142,3 +142,20 @@ export function messagesBlock({ taskId, comments, waiting = [], draft, sending, 
       h('button', { class: 'btn primary small', disabled: sending ? true : undefined, onClick: () => onSend().then(say) }, 'Send message'),
       h('label', { class: 'btn small', title: 'Send a photo (with the words in the box)' }, '📷 Photo', pick))));
 }
+
+/**
+ * The phone's Back button closes the open page (or the menu) instead of leaving the app: one Back step is added while
+ * something is open, and taken off again when it is closed another way (← or a tap). Returns sync(), called after each
+ * redraw. isOpen() → is a page or the menu open; close() closes the top one.
+ */
+export function phoneBack(win, isOpen, close) {
+  if (!win || !win.history || !win.addEventListener) return () => {};
+  let skip = 0;
+  const marked = () => !!(win.history.state && win.history.state.dpBack);
+  if (marked()) win.history.replaceState(null, ''); // a reload keeps the old step: it would leave on the first Back
+  win.addEventListener('popstate', () => { if (skip) { skip--; return; } if (isOpen()) close(); });
+  return () => {
+    if (isOpen() && !marked()) win.history.pushState({ dpBack: 1 }, '');
+    else if (!isOpen() && marked()) { skip++; win.history.back(); }
+  };
+}

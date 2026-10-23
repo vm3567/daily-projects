@@ -126,12 +126,17 @@ export function browserPush(api, userId) {
       await link();
       return 'on';
     },
-    async turnOff() {
+    /** This phone stops getting this person's notifications (signing out: the next person must not get them). */
+    async unlink() {
       if (!ok()) return;
       const r = await navigator.serviceWorker.getRegistration('../');
       const sub = r && await r.pushManager.getSubscription();
       if (sub) { await api('push.unsubscribe', { endpoint: sub.endpoint }).catch(() => {}); await sub.unsubscribe().catch(() => {}); }
       on = false;
+    },
+    async turnOff() {
+      if (!ok()) return;
+      await this.unlink();
       try { localStorage.setItem(offKey(), '1'); } catch { /* blocked */ }
     },
     test: () => api('push.test'),

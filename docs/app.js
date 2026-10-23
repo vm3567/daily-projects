@@ -21,6 +21,7 @@ import { device } from './device.js';
 import { DATA_OWNER, DATA_REPO, DATA_BRANCH, MOVED_TO, REFRESH_MS, AI_DAILY_LIMIT, BRIEF_CLAIM_MINUTES, WAIT_RED_DAYS, NO_WORK_NOTE_DAYS } from './config.js';
 import { dotColour, greenByTeamOnly, isSnoozed, restUntil, restReason, onlyDaysLabel, openIdFromHash, awakeProjects, activeProjects, nextStep, todayIndia, isSundayIndia, colourCounts, isOverdue, indiaDate, waitingDays, daysWithoutWork, dayScore, greenStreak, addDays, monthOf, fmtMinutes, takeBackWaits, staffStepAction, pasteGoesToProject, singleStepClose, versionRequest, askDiaryAgain, pasteInForm, diaryLoadedAt, photoNeedsFetch, teamUndoKey, teamActionUndone, teamProgressOf, projectKeyIgnored, teamMovedTo, serverHolder, keepMovedStep, teamMemberFor, repliesOf, mailThreads, replyMailto, MAILTO_BODY_MAX, emailPath, pasteReason } from './rules.js';
 import { whoFromUser, signInTag } from './rules.js';
+import { signInCard, firstPasswordCard } from './ui/signin.js';
 import { parentIdsOf, isMainProject, mainProjects, activeTasks, todayWithoutEmptyMains, todayList, stepTargets, mainSummary, childrenOf, deleteQuestion, pickEnterTarget } from './rules.js';
 import { newId, clone, opMonth, groupHasTimer, cleanLink, carriedOps, orderPosOf } from './ops.js';
 import * as ai from './ai.js';
@@ -34,8 +35,68 @@ const isMock = new URLSearchParams(location.search).has('mock')
 const onServer = ['worktask.in', 'www.worktask.in'].includes(location.hostname)
   || (location.port === '8090' && ['localhost', '127.0.0.1'].includes(location.hostname));
 const serverToken = () => { try { return localStorage.getItem(SERVER_TOKEN_KEY) || ''; } catch { return ''; } };
-/** To the Work Task sign-in page; it comes back here after signing in. */
-function toSignIn() { location.href = '../?next=projects'; }
+/** Signed out (or the sign-in stopped working) while the app runs: the sign-in of this app, then it opens again. */
+function toSignIn() { signInAgain(); }
+
+// ---------------------------------------------------------------- signing in (one app: everyone signs in here)
+// The sign-in card sits where the owner's key screen does; the person's own screens stay hidden behind it.
+const LAST_USER_KEY = 'wt.lastUser';
+const signScreen = () => document.getElementById('keyscreen');
+function showCard(el) { const s = signScreen(); root.hidden = true; s.hidden = false; s.replaceChildren(el); }
+function hideCard() { const s = signScreen(); s.hidden = true; s.replaceChildren(); root.hidden = false; }
+async function postNoToken(a, body, token = '') {
+  const r = await fetch(`../api/?a=${a}`, { method: 'POST', cache: 'no-store', headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}) }, body: JSON.stringify(body) });
+  let out = null; try { out = await r.json(); } catch { /* not an answer */ }
+  return { status: r.status, out };
+}
+/** Keep the new sign-in. Someone else than last time on this phone: the last person's saved lists go. */
+function keepSignIn(token, user) {
+  try {
+    if (localStorage.getItem(LAST_USER_KEY) !== String(user.id)) {
+      for (const k of Object.keys(localStorage)) if (k.startsWith('wt.c.')) localStorage.removeItem(k);
+      localStorage.setItem(LAST_USER_KEY, String(user.id));
+    }
+    localStorage.setItem(SERVER_TOKEN_KEY, token);
+    localStorage.removeItem(WHO_KEY);
+  } catch { /* blocked */ }
+}
+/** The sign-in card; then(user) once signed in. */
+function showSignIn(then, message = '') {
+  showCard(signInCard({ post: postNoToken, message, onSignedIn: ({ token, user }) => { keepSignIn(token, user); hideCard(); then(user); } }));
+}
+/** Their first password (or one the manager reset), before anything else; then(user) once saved. */
+function showFirstPassword(user, then) {
+  const api = async (a, body = {}) => {
+    let res; try { res = await postNoToken(a, body, serverToken()); } catch { throw new Error('No connection. Try again when the internet is back.'); }
+    if (!res.out || !res.out.ok) throw new Error((res.out && res.out.error) || 'Something went wrong. Try again.');
+    return res.out;
+  };
+  showCard(firstPasswordCard({
+    api, user,
+    onDone: (u) => { rememberWho(whoFromUser(u)); hideCard(); toast('Password changed ✓'); then(u); },
+    onSignOut: async () => { try { await api('logout'); } catch { /* signed out on this phone anyway */ } dropSignIn(); showSignIn(then); },
+  }));
+}
+function dropSignIn() { try { localStorage.removeItem(SERVER_TOKEN_KEY); localStorage.removeItem(WHO_KEY); } catch { /* blocked */ } }
+/** The sign-in stopped working (or a new password is needed) while the app runs: sign in here, then open again. */
+let signingIn = false;
+async function signInAgain() {
+  if (signingIn) return;
+  signingIn = true;
+  const { user } = serverToken() ? await askWho() : {};
+  if (user && user.mustChange) { showFirstPassword(user, () => location.reload()); return; }
+  dropSignIn(); // (what waits to be sent stays on this phone and goes after signing in)
+  showSignIn(() => location.reload(), 'Please sign in again.');
+}
+/** Signed in: their first password if needed, then their own screens (team task: a task link that waited). */
+function openFor(user, teamTask = 0) {
+  if (user && user.mustChange) { showFirstPassword(user, (u) => openFor(u, teamTask)); return; }
+  const who = whoFromUser(user);
+  if (who) rememberWho(who);
+  if (who === 'staff') startStaff(user, teamTask);
+  else if (who === 'manager') startManager(user, teamTask);
+  else startOwner();
+}
 
 // ---------------------------------------------------------------- one app for everyone on worktask.in
 // Who signed in decides the screens: the owner gets this app, a team member gets the staff view (only their own
@@ -59,8 +120,11 @@ async function askWho() {
   } catch { return { who: '' }; } finally { clearTimeout(timer); }
 }
 
-/** What the staff view and the team pages share: photos fetched with the sign-in, the viewer, signing out. */
-function serverTools(api) {
+/**
+ * What the staff view and the team pages share: photos fetched with the sign-in, the viewer, signing out.
+ * more: { waiting() (items still to send), push() (this phone's notifications) }.
+ */
+function serverTools(api, more = {}) {
   const photos = new Map();
   const photo = (kind, id) => {
     const k = kind + ':' + id;
@@ -72,12 +136,15 @@ function serverTools(api) {
     return photos.get(k);
   };
   const signOut = async () => {
+    const n = more.waiting ? more.waiting() : 0;
+    if (n && !confirm(`${n} item${n > 1 ? 's are' : ' is'} not sent yet. They go out when you sign in again on this phone. Sign out anyway?`)) return;
+    try { const p = more.push && more.push(); if (p) await p.unlink(); } catch { /* tried: offline */ } // the next person on this phone must not get this person's messages
     try { await api('logout'); } catch { /* signed out on this phone anyway */ }
     try { // nothing of this person stays for the next one on this phone (what waits to send stays, sent after they sign in again)
       localStorage.removeItem(SERVER_TOKEN_KEY); localStorage.removeItem(WHO_KEY);
       for (const k of Object.keys(localStorage)) if (k.startsWith('wt.c.')) localStorage.removeItem(k);
     } catch { /* blocked */ }
-    location.href = '../';
+    location.replace(location.pathname); // this app's sign-in
   };
   /** A photo or PDF on top of the page (the same viewer as the owner's files). */
   const viewer = (url, name, image) => {
@@ -91,14 +158,15 @@ function serverTools(api) {
 }
 
 /** The team pages (ui/team.js): the owner's "👥 Team" space, or all a manager who is not the owner gets. */
-let teamView = null, space = 'owner'; // space: 'owner' (Daily Projects) | 'team' (the team pages)
+let teamView = null, staffView = null, space = 'owner'; // space: 'owner' (Daily Projects) | 'team' (the team pages)
 async function teamPages(user, more = {}) {
   const [{ createTeam }, { staffApi, shrinkPhoto, browserPush }, { idbOutbox }, rules] = await Promise.all([import('./ui/team.js'), import('./ui/staff.js'), import('./ui/staffbox.js'), import('../logic.js')]);
   let t = null;
   const api = staffApi(serverToken(), '../api/', { allow: null, onNet: (on) => { if (t) t.setOffline(!on); } }); // (the server decides what a manager may do)
   if (!user) user = (await api('me')).user;
-  const { photo, viewer, signOut } = serverTools(api);
-  t = createTeam({ root, api, rules, user, toast, signOut, onAuth: () => { location.href = '../'; }, photo, viewer, box: idbOutbox(), shrink: shrinkPhoto, push: browserPush(api, user.id), appLink: location.origin + '/', ...more });
+  const push = browserPush(api, user.id);
+  const { photo, viewer, signOut } = serverTools(api, { waiting: () => (t ? t.state.outbox.length : 0), push: () => push });
+  t = createTeam({ root, api, rules, user, toast, signOut, onAuth: () => signInAgain(), photo, viewer, box: idbOutbox(), shrink: shrinkPhoto, push, appLink: location.origin + '/', ...more });
   setInterval(() => { if (document.visibilityState === 'visible' && (space === 'team' || !store)) t.act.liveCheck(); }, 20000); // new work comes in by itself
   setInterval(() => { if (t.state.outbox.length) t.act.flush(); }, 30000);
   window.addEventListener('online', () => { t.setOffline(false); t.act.flush(); });
@@ -125,26 +193,36 @@ async function openTeam(how = {}) {
 /** Back from the team pages to the owner's projects. */
 function leaveTeam() { space = 'owner'; if (teamView) teamView.state.hidden = true; root.replaceChildren(); }
 
-/** worktask.in/projects/#team (👥), #team-task=<id> (a team task chip), #team-new=<what to give> ("Give to team"). */
-function takeTeamFromHash() {
+/**
+ * worktask.in/projects/#team (👥), #team-task=<id> (a team task chip, a phone notification), #team-new=<what to give>
+ * ("Give to team"): what to open on the team pages, or null. Taken off the address.
+ */
+function teamHowFromHash() {
   const hsh = location.hash;
   let how = null;
   const m = /^#team-task=(\d+)$/.exec(hsh);
   if (hsh === '#team') how = {};
   else if (m) how = { sel: 'task:' + m[1], fromProjects: true };
   else if (hsh.startsWith('#team-new=')) { try { const p = JSON.parse(decodeURIComponent(hsh.slice(10))); how = { sel: 'give', prefill: p && typeof p === 'object' ? p : null, fromProjects: true }; } catch { how = { sel: 'give' }; } }
+  if (how) history.replaceState(null, '', location.pathname + location.search);
+  return how;
+}
+/** The owner: "#team…" opens the team pages of this app. */
+function takeTeamFromHash() {
+  const how = teamHowFromHash();
   if (!how) return false;
-  history.replaceState(null, '', location.pathname + location.search);
   openTeam(how);
   return true;
 }
 
-/** A manager who is not the owner: the team pages are all of this app for them. */
-async function startManager(user) {
+/** A manager who is not the owner: the team pages are all of this app for them (teamTask: a task to open first). */
+async function startManager(user, teamTask = 0) {
   root.replaceChildren(h('div', { class: 'loading' }, 'Loading…'));
-  try { teamView = await teamPages(user); } catch (e) { if (e.auth) { location.href = '../'; return; } root.replaceChildren(h('div', { class: 'loading' }, e.message)); return; }
+  try { teamView = await teamPages(user); } catch (e) { if (e.auth) { signInAgain(); return; } root.replaceChildren(h('div', { class: 'loading' }, e.message)); return; }
   space = 'team';
-  teamView.start({ sel: openTaskFromHash() });
+  const how = teamHowFromHash() || (teamTask ? { sel: 'task:' + teamTask } : {});
+  teamView.start({ ...how, fromProjects: false }); // (they have no projects page to go back to)
+  window.addEventListener('hashchange', () => { const h2 = teamHowFromHash(); if (h2) teamView.start({ ...h2, fromProjects: false }); }); // a notification tapped while open
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') teamView.act.reload(); });
   document.addEventListener('paste', (e) => {
     if (e.defaultPrevented || !e.clipboardData) return;
@@ -152,7 +230,8 @@ async function startManager(user) {
     if (teamView.act.paste({ files: [...(e.clipboardData.files || [])], text: e.clipboardData.getData('text/plain') || '', inMessageBox })) e.preventDefault();
   });
 }
-const openTaskFromHash = () => { const m = /^#(?:open|team-task)=(\d+)$/.exec(location.hash); if (!m) return null; history.replaceState(null, '', location.pathname + location.search); return 'task:' + m[1]; };
+/** A task number on the address for a team member or a manager (a phone notification): "#team-task=<id>", or the older "#open=<id>". */
+const teamTaskInHash = () => Number((/^#(?:open|team-task)=(\d+)$/.exec(location.hash) || [])[1] || 0);
 
 /** A team member: the staff view, in the same layout and look as this app (the rules come from Work Task's logic.js). */
 async function startStaff(user, openTask = 0) {
@@ -163,14 +242,21 @@ async function startStaff(user, openTask = 0) {
   const api = staffApi(serverToken(), '../api/', { onNet: (on) => { if (staff) staff.setOffline(!on); } });
   if (!user) {
     try { user = (await api('me')).user; } // (offline: the saved copy)
-    catch (e) { if (e.auth) { location.href = '../'; return; } root.replaceChildren(h('div', { class: 'loading' }, e.message)); return; }
+    catch (e) { if (e.auth) { signInAgain(); return; } root.replaceChildren(h('div', { class: 'loading' }, e.message)); return; }
   }
-  const { photo, viewer, signOut } = serverTools(api);
-  // signed out (or their first password still to choose): Work Task's sign-in; what waits on the phone stays and is sent after
-  const onAuth = () => { location.href = '../'; };
-  staff = createStaff({ root, api, rules, user, toast, signOut, onAuth, photo, viewer, box: idbOutbox(), shrink: shrinkPhoto, push: browserPush(api, user.id) });
-  if (openTask) staff.open('task:' + openTask); // a phone notification: that task
+  const push = browserPush(api, user.id);
+  const { photo, viewer, signOut } = serverTools(api, { waiting: () => (staff ? staff.state.outbox.length : 0), push: () => push });
+  // signed out (or their first password still to choose): this app's sign-in; what waits on the phone stays and is sent after
+  const onAuth = () => signInAgain();
+  staff = createStaff({ root, api, rules, user, toast, signOut, onAuth, photo, viewer, box: idbOutbox(), shrink: shrinkPhoto, push });
+  staffView = staff;
+  if (openTask) { if (teamTaskInHash() === openTask) history.replaceState(null, '', location.pathname + location.search); staff.open('task:' + openTask); } // a phone notification: that task (taken off the address, so a reload does not open it again)
   staff.start();
+  window.addEventListener('hashchange', () => { // a notification tapped while open
+    const id = teamTaskInHash();
+    if (location.hash) history.replaceState(null, '', location.pathname + location.search);
+    if (id) staff.open('task:' + id);
+  });
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') staff.act.reload(); });
   window.addEventListener('online', () => { staff.setOffline(false); staff.act.flush(); });
   window.addEventListener('offline', () => staff.setOffline(true));
@@ -2248,8 +2334,8 @@ async function signOutServer() {
   clearTimeout(store.saveTimer);
   store.forgetPending(); // before clearing storage below; also stops the leave-page check from sending them
   try { await fetch('../api/?a=logout', { method: 'POST', headers: { Authorization: 'Bearer ' + serverToken() } }); } catch { /* signed out anyway */ }
-  try { localStorage.removeItem(SERVER_TOKEN_KEY); localStorage.removeItem('dp.pending'); localStorage.removeItem('dp.snapshot'); } catch { /* blocked */ }
-  location.href = '../';
+  try { localStorage.removeItem(SERVER_TOKEN_KEY); localStorage.removeItem(WHO_KEY); localStorage.removeItem('dp.pending'); localStorage.removeItem('dp.snapshot'); } catch { /* blocked */ }
+  location.replace(location.pathname); // this app's sign-in
 }
 
 // ---------------------------------------------------------------- key screen
@@ -3480,23 +3566,24 @@ function start() {
   if (!isMock && !onServer && MOVED_TO) { showMoved(); return; } // first: it passes #say= / #add= on to the new address
   takeClipFromHash();
   takeVoiceFromHash();
-  // a staff notification's "#open=<task>" (read before the owner's reminder link below takes the same hash away)
-  const staffTask = Number((/^#open=(\d+)$/.exec(location.hash) || [])[1] || 0);
+  // a team task on the address (a phone notification): read before the owner's reminder link below takes "#open=" away
+  const teamTask = teamTaskInHash();
   takeOpenFromHash(); // "#open=<id>": a phone reminder opens that project
   if (location.hash === '#people') { ui.view = 'people'; ui.search = ''; history.replaceState(null, '', location.pathname + location.search); } // from Work Task's "People ↗"
   if (location.hash === '#apps' && onServer) { ui.view = 'apps'; ui.search = ''; history.replaceState(null, '', location.pathname + location.search); } // a phone alert "🔌 App: title"
   if (onServer) takeOpsFromHash(); // before the store starts: it reads the waiting changes once
-  if (onServer && !serverToken()) { toSignIn(); return; }
+  if (onServer && !isMock && !serverToken()) { root.replaceChildren(); showSignIn((user) => openFor(user, teamTask)); return; } // sign in here (one app)
   if (onServer && !isMock) { // one app: who signed in picks the screens (the owner's start is not held up once known)
     const known = rememberedWho();
-    if (known === 'staff') { startStaff(undefined, staffTask); return; }
-    if (known === 'manager') { startManager(); return; }
+    if (known === 'staff') { startStaff(undefined, teamTask); return; }
+    if (known === 'manager') { startManager(undefined, teamTask); return; }
     if (!known) {
       root.replaceChildren(h('div', { class: 'loading' }, 'Loading…'));
       askWho().then(({ who, user }) => {
-        if (who === 'staff') startStaff(user, staffTask);
-        else if (who === 'manager') startManager(user);
-        else startOwner();
+        if (user && user.mustChange) openFor(user, teamTask); // their own password first
+        else if (who === 'staff') startStaff(user, teamTask);
+        else if (who === 'manager') startManager(user, teamTask);
+        else startOwner(); // (no answer in time, offline: the owner's app, as before)
       });
       return;
     }
@@ -3589,6 +3676,15 @@ installEvents(document.body);
 installSwipe();
 // Keep the app's files on the device so it opens without internet (not in test mode on this Mac).
 if ('serviceWorker' in navigator && !isMock && !(onServer && !['worktask.in', 'www.worktask.in'].includes(location.hostname))) navigator.serviceWorker.register('sw.js').catch(() => {});
+// A phone notification tapped (or arriving) while this app is open: the site's service worker (../sw.js) tells it.
+// Tapped: open that team task (or the owner's project reminder). Arriving: look for the news now.
+if ('serviceWorker' in navigator && onServer) {
+  navigator.serviceWorker.addEventListener('message', (e) => {
+    const d = e.data || {};
+    if (d.type === 'open' && typeof d.hash === 'string' && /^#(?:team-task=\d+|open=[\w-]{1,64})$/.test(d.hash)) location.hash = d.hash;
+    else if (d.type === 'push') { if (staffView) staffView.act.liveCheck(); else if (teamView) teamView.act.liveCheck(); }
+  });
+}
 installMentions(() => ctx);
 installAutocorrect(device.autocorrect());
 if (isMock) document.title = 'Daily Projects (test mode)';

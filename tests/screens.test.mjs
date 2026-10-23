@@ -1060,7 +1060,7 @@ test('📂 Projects page: a click on a project row selects it and stays on the p
   assert.match(mainsSrc, /ctx\.ui\.view === 'mains' && ctx\.showHere \? ctx\.showHere\(c\.id\)/, 'a task in the TASKS table while on the Projects page');
   const here = app.slice(app.indexOf('  showHere: (id) => {'), app.indexOf('  openProject: (id) => {'));
   assert.match(here, /select\(id\);/);
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-30'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-31'/, 'phones get the new copy');
 });
 
 test('📂 project page: "✕ Remove" on a task row takes it out of this project only — the task is kept (and stays in its other projects)', () => {
@@ -1823,7 +1823,7 @@ test('🔌 app wiring (app.js): "🔌 From apps" after ✉ Replies with the wait
   assert.match(app, /function go\(view\) \{\n\s*if \(view !== 'settings'\) forgetOnce\(\);/);
   assert.match(app, /if \(onServer\) loadApps\(appsCtx, force \|\| ui\.view === 'apps'\);/);
   assert.match(app, /replies: '✉ Replies', apps: '🔌 From apps', mains: '📂 Projects' \}\[ui\.view\]/, 'its page title');
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-30'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-31'/, 'phones get the new copy');
 });
 
 test('🔌 the PHP connector (team/connector/worktask-connector.php): the same text the app downloads, placeholders only (no real key), valid PHP 7.4+ (php -l), with wt_push / wt_withdraw / wt_decisions / wt_receive_decision', async () => {
@@ -2346,11 +2346,14 @@ test('one app — staff view: a task page shows chips, today\'s update box, mess
 test('one app wiring (app.js): who signed in picks the screens — staff get the staff view, another manager Work Task, the owner this app (never held up once known; no answer = the owner\'s app)', () => {
   const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
   const st = app.slice(app.indexOf('function start() {'), app.indexOf('/** The owner\'s Daily Projects. */'));
-  assert.match(st, /if \(known === 'staff'\) \{ startStaff\(undefined, staffTask\); return; \}/);
+  // (step 4: a task link from a notification goes along to the staff view and the team pages: teamTask)
+  assert.match(st, /if \(known === 'staff'\) \{ startStaff\(undefined, teamTask\); return; \}/);
   // (step 4: a manager who is not the owner gets the team pages of this app, no longer Work Task)
-  assert.match(st, /if \(known === 'manager'\) \{ startManager\(\); return; \}/);
-  assert.match(st, /if \(who === 'staff'\) startStaff\(user, staffTask\);\s*else if \(who === 'manager'\) startManager\(user\);\s*else startOwner\(\);/, 'not known (or no answer): the owner\'s app');
-  assert.ok(st.indexOf("if (onServer && !serverToken()) { toSignIn(); return; }") < st.indexOf('rememberedWho()'), 'signed out: to sign-in first');
+  assert.match(st, /if \(known === 'manager'\) \{ startManager\(undefined, teamTask\); return; \}/);
+  assert.match(st, /if \(user && user\.mustChange\) openFor\(user, teamTask\);[^\n]*\n\s*else if \(who === 'staff'\) startStaff\(user, teamTask\);\s*else if \(who === 'manager'\) startManager\(user, teamTask\);\s*else startOwner\(\);/, 'their first password first; not known (or no answer): the owner\'s app');
+  // (step 4: signing in is inside this app now — the owner asked for one app)
+  assert.ok(st.indexOf("if (onServer && !isMock && !serverToken()) { root.replaceChildren(); showSignIn((user) => openFor(user, teamTask)); return; }") >= 0, 'signed out: this app\'s sign-in');
+  assert.ok(st.indexOf('showSignIn(') < st.indexOf('rememberedWho()'), 'signed out: to sign-in first');
   assert.match(app, /const timer = setTimeout\(\(\) => stop\.abort\(\), 4000\);/, 'a slow answer never holds the owner up for long');
   // the staff code and Work Task's rules load only for staff: the owner's start (offline too) never needs them
   assert.ok(!/^import .*ui\/staff\.js/m.test(app) && !/^import .*\.\.\/logic\.js/m.test(app));
@@ -2597,17 +2600,19 @@ test('one app — staff view: 🔔 Notifications (menu, page, the banner once, L
 test('one app wiring (step 2): offline sending, the shared outbox, #open from a notification, signing out clears the saved copies; the offline copy keeps Work Task\'s rules and look', () => {
   const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
   const st = app.slice(app.indexOf('async function startStaff(user, openTask = 0) {'), app.indexOf('const saved = device.ui();'));
-  assert.match(st, /box: idbOutbox\(\), shrink: shrinkPhoto, push: browserPush\(api, user\.id\)/);
+  assert.match(st, /const push = browserPush\(api, user\.id\);/); assert.match(st, /box: idbOutbox\(\), shrink: shrinkPhoto, push \}\);/);
   assert.match(st, /staffApi\(serverToken\(\), '\.\.\/api\/', \{ onNet: \(on\) => \{ if \(staff\) staff\.setOffline\(!on\); \} \}\)/);
   // a notification's #open=<task> is read before the owner's reminder link takes the same hash away (it did in the browser)
   const begin = app.slice(app.indexOf('function start() {'), app.indexOf("/** The owner's Daily Projects. */"));
-  assert.ok(begin.indexOf("const staffTask = Number((/^#open=(\\d+)$/.exec(location.hash)") >= 0 && begin.indexOf('const staffTask') < begin.indexOf('takeOpenFromHash();'), 'read first');
-  assert.match(st, /if \(openTask\) staff\.open\('task:' \+ openTask\);/);
+  // (step 4: "#team-task=<id>" too, the notifications' new link)
+  assert.ok(begin.indexOf('const teamTask = teamTaskInHash();') >= 0 && begin.indexOf('const teamTask') < begin.indexOf('takeOpenFromHash();'), 'read first');
+  assert.match(app, /const teamTaskInHash = \(\) => Number\(\(\/\^#\(\?:open\|team-task\)=\(\\d\+\)\$\/\.exec\(location\.hash\)/);
+  assert.match(st, /if \(openTask\) \{ if \(teamTaskInHash\(\) === openTask\) history\.replaceState\(null, '', location\.pathname \+ location\.search\); staff\.open\('task:' \+ openTask\); \}/, 'that task, taken off the address (a reload does not open it again)');
   assert.match(st, /window\.addEventListener\('online', \(\) => \{ staff\.setOffline\(false\); staff\.act\.flush\(\); \}\);/);
   assert.match(st, /setInterval\(\(\) => \{ if \(staff\.state\.outbox\.length\) staff\.act\.flush\(\); \}, 30000\);/);
   // (signing out is shared by the staff view and the team pages now: serverTools)
-  const tools = app.slice(app.indexOf('function serverTools(api) {'), app.indexOf('/** The team pages (ui/team.js)'));
-  assert.match(st, /const \{ photo, viewer, signOut \} = serverTools\(api\);/);
+  const tools = app.slice(app.indexOf('function serverTools(api, more = {}) {'), app.indexOf('/** The team pages (ui/team.js)'));
+  assert.match(st, /const \{ photo, viewer, signOut \} = serverTools\(api, \{ waiting: \(\) => \(staff \? staff\.state\.outbox\.length : 0\), push: \(\) => push \}\);/);
   assert.match(tools, /if \(k\.startsWith\('wt\.c\.'\)\) localStorage\.removeItem\(k\);/, 'signing out leaves no saved lists for the next person');
   const box = readFileSync(new URL('../docs/ui/staffbox.js', import.meta.url), 'utf8');
   assert.match(box, /indexedDB\.open\('worktask', 1\)/, 'Work Task\'s own outbox (both apps send what waits)');
@@ -2929,14 +2934,14 @@ test('one app wiring (step 4): 👥 Team, a team task chip and "Give to team" op
   assert.match(app, /href: '#team'/);
   assert.match(detailSrc, /href: `#team-task=\$\{t\.id\}`/);
   assert.match(detailSrc, /'#team-new=' \+ encodeURIComponent/);
-  const hashFn = app.slice(app.indexOf('function takeTeamFromHash() {'), app.indexOf('/** A manager who is not the owner'));
+  const hashFn = app.slice(app.indexOf('function teamHowFromHash() {'), app.indexOf('/** A manager who is not the owner'));
   assert.match(hashFn, /if \(hsh === '#team'\) how = \{\};/);
   assert.match(hashFn, /how = \{ sel: 'task:' \+ m\[1\], fromProjects: true \};/);
   assert.match(hashFn, /how = \{ sel: 'give', prefill: p && typeof p === 'object' \? p : null, fromProjects: true \};/);
   assert.match(app, /function render\(\) \{\n\s*if \(space === 'team'\) return;/, 'the projects never draw over the team pages');
   assert.match(app, /function onKey\(e\) \{\n\s*if \(space === 'team'\) return;/, 'the projects\' keys are off on the team pages');
   const st = app.slice(app.indexOf('function start() {'), app.indexOf("/** The owner's Daily Projects. */"));
-  assert.match(st, /if \(known === 'manager'\) \{ startManager\(\); return; \}/);
+  assert.match(st, /if \(known === 'manager'\) \{ startManager\(undefined, teamTask\); return; \}/);
   // one copy of a task page's pieces: both views use ui/workparts.js
   for (const f of ['staff.js', 'team.js']) {
     const src = readFileSync(new URL('../docs/ui/' + f, import.meta.url), 'utf8');
@@ -2945,4 +2950,145 @@ test('one app wiring (step 4): 👥 Team, a team task chip and "Give to team" op
   }
   const sw = readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8');
   assert.match(sw, /'ui\/team\.js'/); assert.match(sw, /'ui\/workparts\.js'/);
+});
+
+// ---------------------------------------------------------------- one app, step 4 part 2: signing in inside the one app
+const signMod = await import('../docs/ui/signin.js');
+const fakeForm = (vals) => ({ elements: Object.fromEntries(Object.entries(vals).map(([k, v]) => [k, { value: v }])), querySelector: () => ({ disabled: false }) });
+const submit = async (card, vals) => { await card.__on.submit({ preventDefault() {} }, fakeForm(vals)); };
+const shown = (card) => { const m = rFind(card, (n) => /\bkey-msg\b/.test(n.className || '')); const hid = m && (m.hidden === undefined ? m.hasAttribute('hidden') : m.hidden); return m && !hid ? m.textContent : ''; };
+
+test('one app — sign in: the key screen\'s card asks for the username and password, signs in with the server and hands over the sign-in; wrong words or no internet say so', async () => {
+  const posts = [];
+  let got = null;
+  const card = signMod.signInCard({ post: async (a, body) => { posts.push({ a, body }); return body.password === 'right-one' ? { status: 200, out: { ok: true, token: 't'.repeat(64), user: { id: 7, name: 'Valar', role: 'staff' } } } : { status: 401, out: { ok: false, error: 'Wrong username or password.' } }; }, onSignedIn: (x) => { got = x; } });
+  assert.equal(card.nodeName, 'FORM'); assert.match(card.className, /\bkey-card\b/, 'the owner\'s key screen card');
+  const text = card.textContent;
+  for (const bit of ['Work Task', 'Username', 'Password', 'Sign in']) assert.ok(text.includes(bit), bit);
+  assert.ok(rFind(card, (n) => n.nodeName === 'INPUT' && n.getAttribute('autocomplete') === 'current-password' && n.getAttribute('type') === 'password'), 'a password box the phone can fill');
+  await submit(card, { username: '', password: '' });
+  assert.equal(posts.length, 0, 'empty: nothing is sent'); assert.match(shown(card), /Type your username and password/);
+  await submit(card, { username: ' valar ', password: 'wrong' });
+  assert.deepEqual(posts[0], { a: 'login', body: { username: 'valar', password: 'wrong' } }, 'the username without spaces around it');
+  assert.equal(got, null); assert.equal(shown(card), 'Wrong username or password.');
+  await submit(card, { username: 'valar', password: 'right-one' });
+  assert.equal(got.token.length, 64); assert.equal(got.user.name, 'Valar');
+  const off = signMod.signInCard({ post: async () => { throw new TypeError('Failed to fetch'); }, onSignedIn: () => assert.fail('never') });
+  await submit(off, { username: 'valar', password: 'x' });
+  assert.match(shown(off), /No connection/);
+  assert.match(shown(signMod.signInCard({ post: async () => ({}), onSignedIn: () => {}, message: 'Please sign in again.' })), /Please sign in again/, 'the reason it is shown again');
+});
+
+test('one app — first password: chosen before anything else (8 or more, the same twice), then saved with the server', async () => {
+  const calls = [];
+  let done = null;
+  const api = async (a, body) => { calls.push({ a, body }); if (body.old !== 'from-manager') throw new Error('Your current password is not right.'); return { ok: true, user: { id: 7, mustChange: false } }; };
+  const card = signMod.firstPasswordCard({ api, user: { id: 7, name: 'Valar', mustChange: true }, onDone: (u) => { done = u; }, onSignOut: () => {} });
+  const text = card.textContent;
+  for (const bit of ['Choose your own password', 'Welcome, Valar!', 'Password from your manager', 'New password', 'New password again', 'Save password', 'Sign out']) assert.ok(text.includes(bit), bit);
+  await submit(card, { old: 'from-manager', new1: 'short', new2: 'short' });
+  assert.match(shown(card), /8 or more/); assert.equal(calls.length, 0);
+  await submit(card, { old: 'from-manager', new1: 'longer-one', new2: 'longer-two' });
+  assert.match(shown(card), /not the same/); assert.equal(calls.length, 0);
+  await submit(card, { old: 'guess', new1: 'longer-one', new2: 'longer-one' });
+  assert.match(shown(card), /not right/); assert.equal(done, null);
+  await submit(card, { old: 'from-manager', new1: 'longer-one', new2: 'longer-one' });
+  assert.deepEqual(calls[1], { a: 'password', body: { old: 'from-manager', new: 'longer-one' } });
+  assert.deepEqual(done, { id: 7, mustChange: false });
+});
+
+test('one app wiring (step 4 part 2): no sign-in → this app\'s sign-in card, then the person\'s own screens (their first password first); a sign-in that stops working shows it again; sign out comes back here', () => {
+  const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
+  assert.ok(!/\.\.\/\?next=projects/.test(app), 'never sent to Work Task\'s old sign-in page');
+  assert.ok(!/location\.href = '\.\.\/'/.test(app), 'nothing goes to the old Work Task page');
+  assert.match(app, /import \{ signInCard, firstPasswordCard \} from '\.\/ui\/signin\.js';/);
+  const fns = app.slice(app.indexOf('// ---------------------------------------------------------------- signing in'), app.indexOf('// ---------------------------------------------------------------- one app for everyone'));
+  assert.match(fns, /function showCard\(el\) \{ const s = signScreen\(\); root\.hidden = true; s\.hidden = false; s\.replaceChildren\(el\); \}/, 'the card covers the app (nothing of it shows or is drawn over it)');
+  assert.match(fns, /onSignedIn: \(\{ token, user \}\) => \{ keepSignIn\(token, user\); hideCard\(\); then\(user\); \}/);
+  assert.match(fns, /localStorage\.setItem\(SERVER_TOKEN_KEY, token\);\n\s*localStorage\.removeItem\(WHO_KEY\);/, 'the new sign-in is kept; who it is is asked again');
+  assert.match(fns, /if \(localStorage\.getItem\(LAST_USER_KEY\) !== String\(user\.id\)\) \{\n\s*for \(const k of Object\.keys\(localStorage\)\) if \(k\.startsWith\('wt\.c\.'\)\) localStorage\.removeItem\(k\);/, 'someone else on this phone: the last person\'s saved lists go');
+  assert.match(fns, /if \(user && user\.mustChange\) \{ showFirstPassword\(user, \(u\) => openFor\(u, teamTask\)\); return; \}/, 'their own password first');
+  assert.match(fns, /if \(who === 'staff'\) startStaff\(user, teamTask\);\n\s*else if \(who === 'manager'\) startManager\(user, teamTask\);\n\s*else startOwner\(\);/);
+  assert.match(fns, /if \(user && user\.mustChange\) \{ showFirstPassword\(user, \(\) => location\.reload\(\)\); return; \}\n\s*dropSignIn\(\);[^\n]*\n\s*showSignIn\(\(\) => location\.reload\(\), 'Please sign in again\.'\);/, 'stopped working: a new password if the manager reset it, else sign in again');
+  assert.match(app, /function toSignIn\(\) \{ signInAgain\(\); \}/, 'the owner\'s projects (what waits to be saved stays on this device)');
+  assert.match(app, /onAuth: \(\) => signInAgain\(\)/, 'the team pages');
+  assert.match(app, /const onAuth = \(\) => signInAgain\(\);/, 'the staff view');
+  const tools = app.slice(app.indexOf('function serverTools(api, more = {}) {'), app.indexOf('/** The team pages (ui/team.js)'));
+  assert.match(tools, /location\.replace\(location\.pathname\); \/\/ this app's sign-in/, 'signing out comes back to this app\'s sign-in');
+  assert.match(app.slice(app.indexOf('async function signOutServer()')), /location\.replace\(location\.pathname\); \/\/ this app's sign-in/, 'the owner too');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /'ui\/signin\.js'/, 'kept for offline');
+  assert.match(readFileSync(new URL('../docs/styles.css', import.meta.url), 'utf8'), /\.key-card \.sign-field \{/, 'in the key screen\'s own style');
+});
+
+test('one app wiring (step 4 part 3): a notification tapped while the app is open opens its task in the staff view or the team pages; arriving, the news is looked for at once', () => {
+  const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
+  const staff = app.slice(app.indexOf('async function startStaff('), app.indexOf('const saved = device.ui();'));
+  assert.match(staff, /window\.addEventListener\('hashchange', \(\) => \{[^]*const id = teamTaskInHash\(\);[^]*if \(id\) staff\.open\('task:' \+ id\);/, 'the staff view');
+  const mgr = app.slice(app.indexOf('async function startManager('), app.indexOf('const teamTaskInHash'));
+  assert.match(mgr, /const how = teamHowFromHash\(\) \|\| \(teamTask \? \{ sel: 'task:' \+ teamTask \} : \{\}\);/, 'a manager opens on the task (or Give a task) from the link');
+  assert.match(mgr, /window\.addEventListener\('hashchange', \(\) => \{ const h2 = teamHowFromHash\(\); if \(h2\) teamView\.start\(\{ \.\.\.h2, fromProjects: false \}\); \}\);/, 'the team pages');
+  assert.match(app, /else if \(d\.type === 'push'\) \{ if \(staffView\) staffView\.act\.liveCheck\(\); else if \(teamView\) teamView\.act\.liveCheck\(\); \}/);
+});
+
+test('one app — team pages: "turn on notifications" at the top (Later hides it for 3 days), 🎤 only where the browser can listen, the People card\'s about line and "no email — add one", and a message given back is "back in the box" only when the box was empty', async () => {
+  localStorage.removeItem('wt.pushLater'); localStorage.removeItem('wt.pushOff.1'); // (left by earlier checks)
+  let state = 'default';
+  const push = { state: () => state, sync: async () => {}, turnOn: async () => 'on' };
+  const { t } = fakeTeam({}, { push });
+  t.go('today'); await tick(); await tick();
+  let v = t.view();
+  assert.ok(v.textContent.includes('🔔 Get a message on this phone'), 'the banner');
+  btn(v, 'Later').__on.click();
+  assert.ok(!t.view().textContent.includes('🔔 Get a message on this phone'), 'Later: gone');
+  assert.ok(Number(localStorage.getItem('wt.pushLater')) > Date.now() + 2 * 86400000, 'for 3 days');
+  localStorage.removeItem('wt.pushLater'); state = 'on';
+  const { t: t2 } = fakeTeam({}, { push });
+  t2.go('today'); await tick(); await tick();
+  assert.ok(!t2.view().textContent.includes('🔔 Get a message on this phone'), 'already on: no banner');
+  // 🎤
+  t2.go('followup'); await tick(); await tick();
+  assert.ok(!btn(t2.view(), '🎤'), 'no 🎤 where the browser cannot listen');
+  globalThis.window = { SpeechRecognition: class { start() {} } };
+  try { assert.ok(btn(t2.view(), '🎤'), 'the 🎤 where it can'); } finally { delete globalThis.window; }
+  // People: the about line and the missing email
+  const { t: m } = fakeTeam({ 'users.list': () => ({ users: [{ id: 7, name: 'Valar', role: 'staff', active: true, username: 'valar' }] }), 'people.morning': () => ({ people: [{ id: 7, sentAt: null, items: [{ kind: 'project', title: 'Basin glaze', about: 'New glaze for line 2', now: 'Test 3 samples' }] }] }) }, { user: { id: 2, name: 'Meena', role: 'admin', owner: false } });
+  m.go('people'); await tick(); await tick();
+  v = m.view();
+  assert.ok(v.textContent.includes('New glaze for line 2'), 'the project\'s about line');
+  assert.ok(btn(v, 'no email — add one'), 'a missing email can be added from the card');
+  // a message given back
+  const { t: g, box } = fakeTeam({ 'comment.add': () => { throw new Error('This task is closed.'); } });
+  await box.add({ kind: 'comment', taskId: 5, text: 'Please hurry', clientId: 'c', userId: 1, at: new Date().toISOString() });
+  g.state.msgDrafts[5] = 'other words typed meanwhile';
+  await g.act.flush();
+  assert.equal(g.state.msgDrafts[5], 'other words typed meanwhile', 'the words being typed stay');
+  assert.ok(!/also back in the box/.test(g.state.notices.map((n) => n.body).join('\n')), 'never says it is back in the box when it is not');
+  const { t: g2, box: box2 } = fakeTeam({ 'comment.add': () => { throw new Error('This task is closed.'); } });
+  await box2.add({ kind: 'comment', taskId: 5, text: 'Please hurry', clientId: 'c', userId: 1, at: new Date().toISOString() });
+  await g2.act.flush();
+  assert.equal(g2.state.msgDrafts[5], 'Please hurry', 'an empty box gets the words back');
+});
+
+test('one app — signing out (staff view and team pages): asks first while items still wait to be sent, and stops this phone getting that person\'s notifications (without turning them off for their next sign-in)', async () => {
+  const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
+  const tools = app.slice(app.indexOf('function serverTools(api, more = {}) {'), app.indexOf('/** A photo or PDF on top of the page'));
+  assert.match(tools, /const n = more\.waiting \? more\.waiting\(\) : 0;\n\s*if \(n && !confirm\(`\$\{n\} item/, 'asks first');
+  assert.ok(tools.indexOf('p.unlink()') > 0 && tools.indexOf('p.unlink()') < tools.indexOf("api('logout')"), 'notifications off for this phone before the sign-in ends');
+  for (const who of ['async function teamPages(', 'async function startStaff(']) assert.match(app.slice(app.indexOf(who)), /serverTools\(api, \{ waiting: \(\) => \([a-z]+ \? [a-z]+\.state\.outbox\.length : 0\), push: \(\) => push \}\)/, who);
+  const { browserPush } = await import('../docs/ui/staff.js');
+  const calls = [];
+  let unsubscribed = 0;
+  const sub = { endpoint: 'https://fcm.googleapis.com/x', unsubscribe: async () => { unsubscribed++; } };
+  globalThis.window = { PushManager: 1, Notification: 1 };
+  globalThis.Notification = { permission: 'granted' };
+  const nav = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+  Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { userAgent: 'x', serviceWorker: { getRegistration: async () => ({ pushManager: { getSubscription: async () => sub } }) } } });
+  try {
+    const p = browserPush(async (a, b) => { calls.push({ a, b }); return {}; }, 7);
+    await p.unlink();
+    assert.deepEqual(calls, [{ a: 'push.unsubscribe', b: { endpoint: sub.endpoint } }]); assert.equal(unsubscribed, 1);
+    assert.equal(localStorage.getItem('wt.pushOff.7'), null, 'not "turned off by them": it links again at their next sign-in');
+    await p.turnOff();
+    assert.equal(localStorage.getItem('wt.pushOff.7'), '1', 'Turn off still stays off');
+  } finally { delete globalThis.window; delete globalThis.Notification; if (nav) Object.defineProperty(globalThis, 'navigator', nav); else delete globalThis.navigator; localStorage.removeItem('wt.pushOff.7'); }
 });

@@ -145,7 +145,7 @@ function stuck_second_alerts(): void {
     [date('Y-m-d H:i:s', time() - 86400), date('Y-m-d H:i:s', time() - 7 * 86400)]);
   foreach ($rows as $r) {
     q('UPDATE updates SET alert2 = 1 WHERE id = ?', [$r['id']]);
-    notify(admin_ids(), 'stuck', "⚠️ {$r['name']} is still stuck (1 day, no answer)", $r['title'] . ': ' . $r['note'], '/#open=' . $r['task_id'], 'u' . $r['task_id']);
+    notify(admin_ids(), 'stuck', "⚠️ {$r['name']} is still stuck (1 day, no answer)", $r['title'] . ': ' . $r['note'], '/projects/#team-task=' . $r['task_id'], 'u' . $r['task_id']);
   }
 }
 

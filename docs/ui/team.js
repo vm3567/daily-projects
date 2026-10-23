@@ -7,7 +7,7 @@
 
 import { h, morph } from './dom.js';
 import { createOutbox } from './staffbox.js';
-import { fmtDay, fmtTime, LONG_DAYS, stateTag, newClientId, istDay, daysBetween, repeatLabel, block, sec, taskRow, chipsFor, makePics, photosRow, filesBlock, diaryBlock, messagesBlock } from './workparts.js';
+import { fmtDay, fmtTime, LONG_DAYS, stateTag, newClientId, istDay, daysBetween, repeatLabel, block, sec, taskRow, chipsFor, makePics, photosRow, filesBlock, diaryBlock, messagesBlock, phoneBack } from './workparts.js';
 
 const KEEP_FAIL = 'Could not keep this on the phone. Try again when online.';
 const OFFLINE_KEPT = '📴 Saved on this phone — it will be sent when you are online';
@@ -72,8 +72,9 @@ export function createTeam(opts) {
     userId: () => state.user.id, signedIn: () => !state.signedOut,
     older: (k) => kept(k.title, k.body),
     giveBack: (it, why) => {
-      if (it.kind === 'comment' && !state.msgDrafts[it.taskId]) state.msgDrafts[it.taskId] = it.text;
-      const show = rules.giveBackShow(it, why, it.kind === 'comment');
+      const back = it.kind === 'comment' && !state.msgDrafts[it.taskId]; // (other words typed in the box meanwhile stay)
+      if (back) state.msgDrafts[it.taskId] = it.text;
+      const show = rules.giveBackShow(it, why, back);
       if (show.sticky) kept(show.title, show.body); else toast(show.text, show.ms);
     },
   });
@@ -141,9 +142,17 @@ export function createTeam(opts) {
 
   /** A list on the left: Team today, Follow-up, Tasks, Projects, Weekly report, Search, People, Settings. */
   function go(view) {
+    const keepForm = formTyped(); // a half-filled Give / Edit form stays open on the right (on a phone: the list shows)
     state.view = view; state.round = null; state.data = null; state.loadFailed = '';
-    state.sel = null; state.detail = null; state.mobile = 'list'; state.menuOpen = false; state.moving = 0; state.taskMenu = 0;
+    if (!keepForm) { state.sel = null; state.detail = null; }
+    state.mobile = 'list'; state.menuOpen = false; state.moving = 0; state.taskMenu = 0;
+    if (view === 'settings') { state.settingsForm = null; if (state.olForm && !state.olForm.secret) state.olForm = null; } // asked again on each visit
     render(); load();
+  }
+  /** Something typed in the Give / Edit form that is open now. */
+  function formTyped() {
+    const f = state.giveForm, sel = state.sel || '';
+    return !!(f && f.key === sel && (sel === 'give' || sel.startsWith('edit:')) && (f.title.trim() || f.details.trim() || (f.files && f.files.length)));
   }
   /** A page on the right: 'task:5', 'project:<ref>', 'give', 'edit:5', 'password', 'notify'. */
   function open(sel) {
@@ -468,7 +477,7 @@ export function createTeam(opts) {
   }
 
   const act = { go, open, back, reload, setStatus, answerSuggestion, move, addFiles, removeFile, openFile, sendMessage, sendMessagePhoto, editMessage, deleteMessage,
-    saveTask, giveQuick, chase, closeFollow, takeBack, startRound, morningEmail, addPerson, resetPassword, switchPerson, editPerson, moveAll, changePassword, search, liveCheck, paste, flush, notifyOn };
+    saveTask, giveQuick, chase, closeFollow, takeBack, startRound, morningEmail, addPerson, resetPassword, switchPerson, editPerson, moveAll, changePassword, search, liveCheck, paste, flush, notifyOn, outlookConnected };
 
   // ---------------------------------------------------------------- screens
 
@@ -514,10 +523,23 @@ export function createTeam(opts) {
     tags: [state.newIds.has(t.id) ? h('span', { class: 'tag high' }, 'New') : null, t.unread ? h('span', { class: 'tag on-step', title: `${t.unread} new message(s)` }, '💬 New') : null],
   });
 
-  /** Words that could not be sent (to copy), and news to open. */
+  /** Once at the top: "turn on notifications" (until done, or Later), as on the staff view. */
+  function pushBanner() {
+    const s = push ? push.state() : 'no';
+    if ((s !== 'default' && s !== 'granted') || state.pushLater) return null;
+    try { if (Number(localStorage.getItem('wt.pushLater') || 0) > Date.now() || localStorage.getItem('wt.pushOff.' + state.user.id)) return null; } catch { /* blocked */ }
+    return h('div', { class: 'banner stack', key: 'push-banner' },
+      h('span', null, '🔔 Get a message on this phone when your team sends an update or a message — like email.'),
+      h('div', { class: 'row' },
+        h('button', { class: 'btn primary small', onClick: notifyOn }, 'Turn on'),
+        h('button', { class: 'link', onClick: () => { try { localStorage.setItem('wt.pushLater', String(Date.now() + 3 * 86400000)); } catch { /* blocked */ } state.pushLater = true; render(); } }, 'Later')));
+  }
+
+  /** Words that could not be sent (to copy), news to open, and the notifications banner. */
   function bars() {
     const n = state.outbox.length;
     return [
+      pushBanner(),
       state.offline || n ? h('div', { class: 'offline-bar', key: 'offline' },
         state.offline ? '📴 Offline — showing the last saved copy. What you send is kept on this phone and goes out when you are online.' : '',
         n ? h('strong', null, ` ⏳ ${n} waiting to send`) : null,
@@ -608,6 +630,20 @@ export function createTeam(opts) {
             : h('button', { class: 'chip', onClick: () => takeBack(r) }, '↩ Take back'))));
   }
 
+  /** 🎤 only where the browser can listen; when it stops, its words go into the one-line box. */
+  const listen = () => (typeof window !== 'undefined' && (window.SpeechRecognition || window.webkitSpeechRecognition)) || null;
+  function sayIt() {
+    const Listen = listen();
+    if (!Listen || state.listening) return;
+    const rec = new Listen();
+    rec.lang = 'en-IN'; rec.interimResults = false; rec.maxAlternatives = 1;
+    let heard = '';
+    rec.onresult = (e) => { heard = [...e.results].map((x) => x[0].transcript).join(' ').trim(); };
+    rec.onerror = (e) => { if (e.error === 'not-allowed') toast('Allow the microphone to speak the task', 5000); };
+    rec.onend = () => { state.listening = false; if (heard) (state.quick || (state.quick = { text: '', sig: '', cid: '' })).text = heard; render(); };
+    try { rec.start(); state.listening = true; render(); } catch { /* already listening */ }
+  }
+
   /** Work in one line: the box, then a preview card with ✓ Give it / ✎ Change. */
   function quickBox(people) {
     const q = state.quick || (state.quick = { text: '', sig: '', cid: '' });
@@ -615,7 +651,9 @@ export function createTeam(opts) {
     const r = q.text.trim() ? rules.parseQuickTask(q.text, people, today()) : null;
     if (r && !r.error) { const sig = JSON.stringify([r.person.id, r.title, r.dueDate]); if (q.sig !== sig) { q.sig = sig; q.cid = newClientId(); } } // one id per preview: a second tap gives it once
     return h('div', { class: 'stack staff-pad', key: 'quick' },
-      h('input', { key: 'quick-in', class: 'search', placeholder: 'Valar: send kiln photos by Friday', 'aria-label': 'Hand out work in one line', enterkeyhint: 'done', value: q.text, onInput: (e, el) => { q.text = el.value; render(); } }),
+      h('div', { class: 'row quick-line' },
+        h('input', { key: 'quick-in', class: 'search', placeholder: 'Valar: send kiln photos by Friday', 'aria-label': 'Hand out work in one line', enterkeyhint: 'done', value: q.text, onInput: (e, el) => { q.text = el.value; render(); } }),
+        listen() ? h('button', { class: 'chip' + (state.listening ? ' on' : ''), title: 'Say it', 'aria-label': 'Say it', onClick: sayIt }, '🎤') : null),
       !r ? null : r.error ? h('p', { class: 'warn', key: 'qerr2' }, r.error) : h('div', { class: 'banner stack', key: 'qcard' },
         h('div', null, h('span', { class: 'muted small' }, 'Task: '), h('strong', null, r.title)),
         h('div', null, h('span', { class: 'muted small' }, 'Person: '), r.person.name),
@@ -780,13 +818,14 @@ export function createTeam(opts) {
         h('div', { class: 'row' }, h('strong', null, u.name), h('span', { class: 'muted small' }, '@' + u.username),
           h('span', { class: 'tag ' + (!u.active ? 'waiting' : mp ? (sent ? 'done-tag' : 'remind') : u.role === 'admin' ? 'on-step' : 'done-tag') },
             !u.active ? 'Switched off' : mp ? (sent ? '✓ ' : '') + rules.sentTag(at, td) : u.role === 'admin' ? 'Manager' : 'Staff')),
-        h('div', { class: 'muted small' }, u.lastLogin ? `Last signed in ${fmtDay(u.lastLogin)} ${fmtTime(u.lastLogin)}` : 'Not signed in yet', u.email ? ` · 📧 ${u.email}` : ''),
+        h('div', { class: 'muted small' }, u.lastLogin ? `Last signed in ${fmtDay(u.lastLogin)} ${fmtTime(u.lastLogin)}` : 'Not signed in yet', u.email ? ` · 📧 ${u.email}` : '',
+          mp && !u.email && u.id !== state.user.id ? [' · ', h('button', { class: 'link small', onClick: () => editPerson(u, 'email') }, 'no email — add one')] : null),
         mp ? [h('div', { class: 'row' }, h('button', { class: 'chip', onClick: () => morningEmail(u) }, sent ? '📧 Send again' : '📧 Morning email')),
-          list.length ? [h('p', { class: 'muted small' }, rules.morningSummary(list)), h('table', { class: 'wt-table' },
-            h('thead', null, h('tr', null, h('th', null, '#'), h('th', null, 'Work'), h('th', null, 'Last update'))),
+          list.length ? [h('p', { class: 'muted small' }, rules.morningSummary(list)), h('table', { class: 'wt-table morning' },
+            h('thead', null, h('tr', null, h('th', { class: 'm-no' }, '#'), h('th', null, 'Work'), h('th', { class: 'm-last' }, 'Last update'))),
             h('tbody', null, list.map((x, i) => h('tr', { class: x.taskId || x.projectRef ? 'wt-open' : null, onClick: () => (x.projectRef ? open('project:' + x.projectRef) : x.taskId ? open('task:' + x.taskId) : null) },
               h('td', null, String(i + 1)),
-              h('td', null, h('b', null, rules.morningTitle(x)), x.lateSince ? h('div', { class: 'warn' }, `Late since ${rules.mailDate(x.lateSince)}`) : null, x.stuck ? h('div', { class: 'warn' }, 'Stuck') : null, x.now ? h('div', { class: 'muted small' }, `Now: ${x.now}`) : null),
+              h('td', null, h('b', null, rules.morningTitle(x)), x.about ? h('div', { class: 'muted small' }, rules.aboutShort(x.about)) : null, x.lateSince ? h('div', { class: 'warn' }, `Late since ${rules.mailDate(x.lateSince)}`) : null, x.stuck ? h('div', { class: 'warn' }, 'Stuck') : null, x.now ? h('div', { class: 'muted small' }, `Now: ${x.now}`) : null),
               h('td', { class: 'muted' }, rules.morningLast(x))))))] : h('p', { class: 'muted small' }, 'No pending work today.')] : null,
         u.id === state.user.id ? null : h('div', { class: 'row' },
           h('button', { class: 'btn small', onClick: () => editPerson(u, 'name') }, '✎ Name'),
@@ -1031,11 +1070,16 @@ export function createTeam(opts) {
       wide ? null : h('section', { id: 'detail' }, detail()));
   }
 
+  // the phone's Back button closes the menu, then the page on the right (never leaves the app)
+  const backSync = phoneBack(opts.win !== undefined ? opts.win : (typeof window !== 'undefined' ? window : null),
+    () => !state.hidden && (state.menuOpen || (state.mobile === 'detail' && !!state.sel)),
+    () => { if (state.menuOpen) { state.menuOpen = false; render(); } else back(); });
   function render() {
     if (!root || state.hidden) return;
     const next = view();
     if (root.firstChild && root.firstChild.classList && root.firstChild.classList.contains('team')) morph(root.firstChild, next);
     else root.replaceChildren(next);
+    backSync();
   }
 
   return { state, render, go, open, act, view, start, setOffline, refreshOutbox };

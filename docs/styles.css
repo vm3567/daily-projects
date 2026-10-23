@@ -229,6 +229,7 @@ label.late { color: var(--red); }
 .key-card input { width: 100%; }
 .key-card .btn { width: 100%; justify-content: center; }
 .key-card p { margin: 0; }
+.key-card .sign-field { width: 100%; display: flex; flex-direction: column; gap: 4px; text-align: left; font-size: 14px; } /* signing in on worktask.in */
 
 #viewer {
   position: fixed; inset: 0; z-index: 50; background: rgba(15, 20, 30, .92);
@@ -1163,3 +1164,10 @@ img.rich-photo { width: 72px; height: 72px; object-fit: cover; border-radius: 6p
 .layout.staff .update-form textarea, .layout.staff .team-msgs textarea { width: 100%; min-height: 64px; }
 .layout.staff .update-form .segmented { align-self: flex-start; }
 .layout.staff .detail-top h2 { flex: 1 1 0; min-width: 0; }
+.layout.staff .quick-line .search { flex: 1; min-width: 0; }
+/* the People page's morning-email table: words never squeezed to one letter a line */
+.layout.staff .wt-table.morning { table-layout: fixed; }
+.layout.staff .wt-table.morning td { overflow-wrap: anywhere; word-break: normal; }
+.layout.staff .wt-table.morning .m-no { width: 2.2em; }
+.layout.staff .wt-table.morning .m-last { width: 38%; }
+.layout.staff .wt-table tr.wt-open { cursor: pointer; }
