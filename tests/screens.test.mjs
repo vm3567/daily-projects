@@ -2827,9 +2827,10 @@ test('one app — team pages: Team today in the owner\'s design (progress line, 
   assert.match(TEAMSRC, /h\('li', \{ class: 'menu-dots', key: 'dots'/, 'the red / yellow / green count under Team today');
   assert.doesNotMatch(TEAMSRC, /menu-give/, 'no longer in the menu');
   for (const bit of ['📋 My projects', 'Team today', '🔁 Follow-up', 'Tasks', 'Done / cancelled', '📂 Projects', '📊 Weekly report', 'People', 'Settings', '+ Give a task',
-    '1 of 3', 'updates in today', 'Not yet: Valar, Ravi', 'Stuck: Valar (2 days)', 'No update for: Ravi (3 days)', '⚠︎ Needs you', 'Valar: Stuck — Fan part missing', 'Ravi: 💬 1 new', 'Valar: 💡 Suggestion', 'Pack samples', '⏰ Late (by', '📧 Morning email']) assert.ok(text.includes(bit), bit);
+    '1 of 3', 'updates in today', 'Not yet: Valar, Ravi', 'Stuck: Valar (2 days)', 'No update for: Ravi (3 days)', '⚠️ Stuck 1', '💬 New messages 1', '💡 Suggestions 1', '💡 Suggestion — yes or no?', 'Pack samples', '⏰ Late (by', '📧 Morning email']) assert.ok(text.includes(bit), bit);
+  assert.ok(!text.includes('Needs you'), 'owner, 23 Oct: no "Needs you" list — stuck, new messages and suggestions are in the table with their counts');
   const has = (cls) => rFind(v, (n) => (' ' + (n.className || '') + ' ').includes(' ' + cls + ' '));
-  for (const cls of ['layout', 'progress', 'progress-bar', 'plist', 'prow', 'list-sec']) assert.ok(has(cls), 'the owner\'s .' + cls);
+  for (const cls of ['layout', 'progress', 'progress-bar', 'board-table', 'sub-table']) assert.ok(has(cls), 'the owner\'s .' + cls + ' (owner, 23 Oct: Team today is one table, as the owner\'s Tasks table)');
   assert.ok(!has('card') && !has('summary') && !has('trow'), 'no Work Task-only styles');
   // (owner, 23 Oct: Team today is one table — each task a row of it)
   const pack = rFind(v, (n) => n.nodeName === 'TR' && n.textContent.includes('Pack samples'));
@@ -3431,4 +3432,20 @@ test('Team today table on screen: the counts filter it, By person | By 📂 proj
   find(t.view(), (n) => n.nodeName === 'TR' && (n.textContent || '').includes('Fire the kiln')).__on.click();
   assert.equal(t.state.sel, 'task:41', 'a row opens its task');
   assert.doesNotMatch(t.view().className, /\bwide\b/, 'with a task open: the table and the task side by side');
+});
+
+test('Team today table on screen: 20 tasks a page, ‹ Previous / Next ›, and back to page 1 when the counts or the grouping change', async () => {
+  const V = { id: 3, name: 'Valar' };
+  const tasks = Array.from({ length: 23 }, (_, i) => ({ id: i + 1, title: 'Job ' + (i + 1), assignee: V, status: 'open', repeat: 'daily', today: null, unread: 0 }));
+  const { t } = fakeTeam({ 'team.today': () => ({ ok: true, today: '2026-10-23', fillBy: '18:00', late: false, people: [V], tasks, stuck: [], unread: [], suggestions: [] }) });
+  t.go('today'); await new Promise((r) => setTimeout(r, 0)); await new Promise((r) => setTimeout(r, 0));
+  const find = (n, f) => (f(n) ? n : (n.childNodes || []).map((c) => find(c, f)).find(Boolean));
+  const rows = () => { const out = []; (function w(n) { if (n.nodeName === 'TR' && / board-row/.test(' ' + (n.className || ''))) out.push(n); (n.childNodes || []).forEach(w); })(t.view()); return out; };
+  assert.equal(rows().length, 20, '20 on a page');
+  assert.match(t.view().textContent, /Page 1 of 2 · 23 tasks/);
+  find(t.view(), (n) => n.nodeName === 'BUTTON' && n.textContent === 'Next ›').__on.click();
+  assert.equal(rows().length, 3, 'the rest');
+  assert.match(t.view().textContent, /Page 2 of 2/);
+  find(t.view(), (n) => n.nodeName === 'BUTTON' && (n.textContent || '').startsWith('⏳ Not yet')).__on.click();
+  assert.equal(t.state.boardPage, 1, 'a count pressed: page 1');
 });

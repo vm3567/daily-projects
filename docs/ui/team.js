@@ -510,7 +510,7 @@ export function createTeam(opts) {
         onInput: (e, el) => { if (state.view !== 'search') go('search'); search(el.value); } }),
       h('ul', { class: 'menu-list' },
         opts.toProjects ? item('📋 My projects', false, () => toProjects()) : null,
-        item('Team today', listOn('today') && !state.personFilter, () => { state.personFilter = 0; go('today'); }, t ? String(today.length) : null),
+        item('Team today', listOn('today') && !state.personFilter, () => { state.personFilter = 0; state.boardPage = 1; go('today'); }, t ? String(today.length) : null),
         t ? h('li', { class: 'menu-dots', key: 'dots', title: needs ? `${needs} need you` : '' },
           h('span', { class: 'dot red' }), String(dots.red), ' ', h('span', { class: 'dot yellow' }), String(dots.yellow), ' ', h('span', { class: 'dot green' }), String(dots.green)) : null,
         item('✅ Tasks', listOn('tasks') && !state.closed, () => { state.closed = false; go('tasks'); }),
@@ -527,7 +527,7 @@ export function createTeam(opts) {
           const dot = !tasks.length ? 'grey' : sent === tasks.length ? 'green' : t.late ? 'red' : 'yellow';
           return h('li', { key: 'tp-' + p.id }, h('button', {
             class: 'menu-item' + (state.view === 'today' && state.personFilter === p.id ? ' current' : ''), title: tasks.length ? `${sent} of ${tasks.length} sent today` : 'No tasks today',
-            onClick: () => { const pick = state.personFilter === p.id ? 0 : p.id; if (state.view !== 'today') go('today'); state.personFilter = pick; state.menuOpen = false; render(); },
+            onClick: () => { const pick = state.personFilter === p.id ? 0 : p.id; if (state.view !== 'today') go('today'); state.personFilter = pick; state.boardPage = 1; state.menuOpen = false; render(); },
           }, h('span', null, h('span', { class: 'dot ' + dot }), ' ', p.name), h('span', { class: 'count' }, tasks.length ? `${sent}/${tasks.length}` : '')));
         })] : null,
         h('li', { class: 'menu-sep' }),
@@ -606,18 +606,14 @@ export function createTeam(opts) {
       const lateBy = t.status === 'open' && t.dueDate && t.dueDate < d.today;
       return rowOf(t, (lateBy ? `⏰ Late (by ${fmtDay(t.dueDate)}) · ` : '') + sub, t.stuck || lateBy ? 'red' : u ? 'green' : d.late ? 'red' : 'yellow', (!u && d.late) || lateBy);
     };
-    const needs = filt ? [] : [...(d.stuck || []).map((t) => [t, `Stuck — ${(t.today || t.last || {}).note || ''}`, 'red']),
-      ...(d.unread || []).map((t) => [t, `💬 ${t.unread} new — ${t.lastMessage ? t.lastMessage.text : ''}`, 'yellow']),
-      ...(d.suggestions || []).map((t) => [t, '💡 Suggestion — tap to say yes or no', 'yellow'])];
     const sentMark = (p) => { const tm = rules.sentTime(sentAtOf(p.id, p.morningSentAt), istDay()); return tm ? h('span', { class: 'muted small', title: 'Morning email sent today' }, ' ✓ ' + tm) : null; };
     return [
       d.stale ? h('p', { class: 'empty-list' }, `📴 Saved copy from ${fmtDay(d.today)} — today's updates are not shown yet.`) : null,
       filt ? null : summary(d),
-      needs.length ? [sec('⚠︎ Needs you', h('span', { class: 'tag remind' }, String(needs.length))),
-        h('ul', { class: 'plist' }, needs.map(([t, sub, dot]) => rowOf(t, `${t.assignee.name}: ${sub}`, dot, dot === 'red')))] : null,
+      // (owner, 23 Oct: no "Needs you" list — stuck, new messages and suggestions are in the table, with their counts)
       people.length ? null : h('p', { class: 'empty-list' }, 'No team members yet. ', h('button', { class: 'link', onClick: () => (opts.openPeople ? opts.openPeople() : go('people')) }, 'Add a person')),
       people.length ? board(d, sentMark) : null,
-      filt ? h('p', { class: 'empty-list' }, h('button', { class: 'link', onClick: () => { state.personFilter = 0; render(); } }, '← Show everyone')) : null,
+      filt ? h('p', { class: 'empty-list' }, h('button', { class: 'link', onClick: () => { state.personFilter = 0; state.boardPage = 1; render(); } }, '← Show everyone')) : null,
     ];
   }
 
@@ -627,11 +623,16 @@ export function createTeam(opts) {
    * message. A row opens the task on the right. With no task open the table fills the screen.
    */
   function board(d, sentMark) {
-    const b = rules.teamBoard(d, { filter: state.boardFilter || '', group: state.boardGroup || 'person', person: state.personFilter || 0 });
-    const pick = (k) => () => { state.boardFilter = state.boardFilter === k ? '' : k; render(); };
+    const b = rules.teamBoard(d, { filter: state.boardFilter || '', group: state.boardGroup || 'person', person: state.personFilter || 0, page: state.boardPage || 1 });
+    const pick = (k) => () => { state.boardFilter = state.boardFilter === k ? '' : k; state.boardPage = 1; render(); };
+    const turn = (n) => () => { state.boardPage = n; render(); };
+    const pager = b.pages > 1 ? h('div', { class: 'board-pager row' },
+      h('button', { class: 'btn small', disabled: b.page > 1 ? undefined : true, onClick: turn(b.page - 1) }, '‹ Previous'),
+      h('span', { class: 'muted small' }, `Page ${b.page} of ${b.pages} · ${b.shown} tasks`),
+      h('button', { class: 'btn small', disabled: b.page < b.pages ? undefined : true, onClick: turn(b.page + 1) }, 'Next ›')) : null;
     const chip = (k, label) => h('button', { class: 'chip board-count' + (state.boardFilter === k ? ' on' : ''), 'aria-pressed': String(state.boardFilter === k), onClick: pick(k) }, label);
-    const seg = (g, label) => h('button', { class: 'seg' + ((state.boardGroup || 'person') === g ? ' on' : ''), 'aria-pressed': String((state.boardGroup || 'person') === g), onClick: () => { state.boardGroup = g; render(); } }, label);
-    const STATUS = { sent: ['✓ Sent', 'good'], notyet: ['Not yet', d.late ? 'late' : 'waiting'], stuck: ['⚠️ Stuck', 'late'], late: ['⏰ Late', 'late'] };
+    const seg = (g, label) => h('button', { class: 'seg' + ((state.boardGroup || 'person') === g ? ' on' : ''), 'aria-pressed': String((state.boardGroup || 'person') === g), onClick: () => { state.boardGroup = g; state.boardPage = 1; render(); } }, label);
+    const STATUS = { sent: ['✓ Sent', 'good'], notyet: ['Not yet', d.late ? 'late' : 'waiting'], stuck: ['⚠️ Stuck', 'late'], late: ['⏰ Late', 'late'], sugg: ['💡 Suggestion — yes or no?', 'remind'] };
     const cell = (cls, ...c) => h('td', { class: cls }, ...c);
     const line = (r) => {
       const t = r.t, u = t.today, m = t.lastMessage;
@@ -646,16 +647,17 @@ export function createTeam(opts) {
     };
     const head = (g) => h('tr', { key: 'g-' + g.name, class: 'board-group' }, h('td', { colspan: '6' },
       h('strong', null, (state.boardGroup === 'project' ? '📂 ' : '') + g.name), ' ',
-      h('span', { class: 'tag ' + tagOf(g.sent === g.rows.length ? 'green' : d.late ? 'red' : 'amber') }, `${g.sent} of ${g.rows.length} sent`),
+      g.all ? h('span', { class: 'tag ' + tagOf(g.sent === g.all ? 'green' : d.late ? 'red' : 'amber') }, `${g.sent} of ${g.all} sent`) : null,
       g.person ? [' ', h('button', { class: 'chip', onClick: (e) => { if (e && e.stopPropagation) e.stopPropagation(); morningEmail(g.person); } }, '📧 Morning email'), sentMark(g.person)] : null));
     return [
       h('div', { class: 'board-counts row' }, chip('sent', `✓ Sent ${b.counts.sent}`), chip('notyet', `⏳ Not yet ${b.counts.notyet}`), chip('stuck', `⚠️ Stuck ${b.counts.stuck}`),
-        chip('late', `⏰ Late ${b.counts.late}`), chip('msg', `💬 New messages ${b.counts.msg}`)),
+        chip('late', `⏰ Late ${b.counts.late}`), chip('msg', `💬 New messages ${b.counts.msg}`), b.counts.sugg ? chip('sugg', `💡 Suggestions ${b.counts.sugg}`) : null),
       h('div', { class: 'segmented board-group-by', role: 'group', 'aria-label': 'Group the table' }, seg('person', 'By person'), seg('project', 'By 📂 project')),
       !b.total ? h('p', { class: 'empty-list' }, 'No tasks today.') : !b.groups.length ? h('p', { class: 'empty-list' }, 'None of these. ', h('button', { class: 'link', onClick: pick(state.boardFilter) }, 'Show all')) :
         h('table', { class: 'sub-table board-table' },
           h('thead', null, h('tr', null, h('th', null, ''), h('th', null, 'Task'), h('th', null, 'Person'), h('th', { class: 'col-extra' }, 'Today'), h('th', null, 'Status'), h('th', { class: 'col-extra' }, 'Last message'))),
           h('tbody', null, b.groups.map((g) => [head(g), g.rows.map(line)]))),
+      pager, // 20 tasks a page
     ];
   }
 

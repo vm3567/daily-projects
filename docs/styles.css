@@ -1184,6 +1184,7 @@ body.has-bell .detail-top { padding-right: 56px; }
 body.has-bell .layout.wide .list-head { padding-right: 60px; } /* (the 🔔 sits on the right of a page that fills the screen) */
 .board-count.on { background: var(--brand-soft); border-color: var(--brand); color: var(--brand); }
 .board-group-by { margin: 0 14px 8px; }
+.board-pager { margin: 0 14px 24px; gap: 10px; justify-content: center; }
 .board-table .board-row { cursor: pointer; }
 .board-table .board-row:hover td { background: var(--panel); }
 .board-table .board-row.current td { background: var(--brand-soft); }

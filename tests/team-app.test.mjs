@@ -1368,7 +1368,7 @@ test('Team today as one table (owner, 23 Oct): status of each task (sent / not y
     T(4, R, { unread: 2, folder: 'Kilns' }),
   ] };
   let b = teamBoard(d);
-  assert.deepEqual(b.counts, { sent: 1, notyet: 1, stuck: 1, late: 1, msg: 1 });
+  assert.deepEqual(b.counts, { sent: 1, notyet: 1, stuck: 1, late: 1, msg: 1, sugg: 0 });
   assert.deepEqual(b.groups.map((g) => [g.name, g.rows.map((r) => [r.t.id, r.status, r.colour]), g.sent]),
     [['Ravi', [[3, 'late', 'red'], [4, 'notyet', 'yellow']], 0], ['Valar', [[2, 'stuck', 'red'], [1, 'sent', 'green']], 1]], 'by person, red first (both red: by name)');
   assert.equal(b.groups[1].person.id, 3, 'a person\'s line has the person (📧 Morning email)');
@@ -1379,4 +1379,24 @@ test('Team today as one table (owner, 23 Oct): status of each task (sent / not y
   assert.deepEqual(teamBoard(d, { filter: 'sent' }).groups.flatMap((g) => g.rows.map((r) => r.t.id)), [1]);
   assert.deepEqual(teamBoard(d, { person: 4 }).groups.map((g) => g.name), ['Ravi'], 'a person picked in the menu');
   assert.equal(teamBoard(d, { filter: 'stuck' }).total, 4, 'the counts stay for all');
+});
+
+test('Team today table: 20 rows a page (a person\'s line comes again on the next page, its "x of y sent" for the whole group); suggestions are rows with their own count', async () => {
+  const { teamBoard, BOARD_PAGE } = await import('../team/public_html/logic.js');
+  assert.equal(BOARD_PAGE, 20);
+  const V = { id: 3, name: 'Valar' }, R = { id: 4, name: 'Ravi' };
+  const T = (id, who, x = {}) => ({ id, title: 'T' + id, assignee: who, status: 'open', repeat: 'daily', today: null, stuck: false, unread: 0, ...x });
+  const tasks = [...Array.from({ length: 15 }, (_, i) => T(i + 1, V)), ...Array.from({ length: 10 }, (_, i) => T(i + 101, R, { today: { at: 'x', note: 'ok' } }))];
+  const d = { today: '2026-10-23', late: false, tasks, suggestions: [T(900, V, { status: 'suggested' })] };
+  const p1 = teamBoard(d);
+  assert.deepEqual([p1.page, p1.pages, p1.shown, p1.total], [1, 2, 26, 26]);
+  assert.equal(p1.groups.reduce((n, g) => n + g.rows.length, 0), 20, '20 on page 1');
+  const p2 = teamBoard(d, { page: 2 });
+  assert.equal(p2.groups.reduce((n, g) => n + g.rows.length, 0), 6, 'the rest on page 2');
+  assert.deepEqual(p2.groups.map((g) => [g.name, g.rows.length, g.sent, g.all]), [['Ravi', 6, 10, 10]], 'Ravi\'s line again, counted for all of Ravi');
+  assert.equal(teamBoard(d, { page: 9 }).page, 2, 'past the end: the last page');
+  assert.equal(p1.counts.sugg, 1);
+  const s = teamBoard(d, { filter: 'sugg' });
+  assert.deepEqual(s.groups.flatMap((g) => g.rows.map((r) => [r.t.id, r.status, r.colour])), [[900, 'sugg', 'yellow']], 'a suggestion: yes or no');
+  assert.equal(s.groups[0].all, 0, 'a suggestion is not a task to send an update on');
 });
