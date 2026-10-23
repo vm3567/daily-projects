@@ -824,6 +824,7 @@ function handle(string $a, array $in): array {
       $email = txt($in['email'] ?? '', 120);
       if ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) throw new ApiError('That email address is not right.');
       if ($id) {
+        if (!one('SELECT id FROM users WHERE id = ?', [$id])) throw new ApiError('That person is not there any more. Reload the page.', 404);
         guard_owner($id, $me);
         if ($id === $me['id'] && $role !== 'admin') throw new ApiError('You cannot remove your own manager rights.');
         q('UPDATE users SET name = ?, role = ? WHERE id = ?', [$name, $role, $id]);

@@ -67,7 +67,7 @@ export function summaryText(data, history, today, dateText) {
     const mins = minutesBetween(p, today, today, data.timer);
     if (mins > 0) entry(p.id).mins = mins;
     for (const n of p.workNotes) {
-      if (indiaDate(n.createdAt) !== today || n.mail) continue; // (an email reply is not something you did)
+      if (indiaDate(n.createdAt) !== today || n.mail || n.app) continue; // (an email reply, or a note from a connected app, is not something you did)
       const st = n.stepId && p.steps.find((s) => s.id === n.stepId);
       entry(p.id).notes.push(st ? `${n.text} (on: ${st.text})` : n.text);
     }
@@ -116,7 +116,7 @@ const cut = (t, n) => { const s = String(t || '').replace(/\s+/g, ' ').trim(); r
 
 /** The newest work note on a step (or on the project when the step has none): { day, note }, or null. */
 function lastNoteOf(project, stepId = null) {
-  const notes = (project.workNotes || []).filter((n) => n && n.text && n.createdAt);
+  const notes = (project.workNotes || []).filter((n) => n && n.text && n.createdAt && !n.mail && !n.app); // real progress: never an email that came in or a note from an app
   const newest = (list) => list.reduce((a, n) => (!a || n.createdAt > a.createdAt ? n : a), null);
   const n = (stepId && newest(notes.filter((x) => x.stepId === stepId))) || newest(notes);
   return n ? { day: indiaDate(n.createdAt), note: n.text } : null;

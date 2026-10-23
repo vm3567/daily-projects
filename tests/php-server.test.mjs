@@ -2786,6 +2786,21 @@ test('review round 2 (whole code): photos sent at the same moment never push an 
   assert.equal(files() - before, 5, 'no file left for a refused one');
 });
 
+test('review round 3 (whole code): a switched-off account answers a right password exactly like a wrong one (never "switched off": that told a guesser the password was right); editing a person who is gone says so (no server error)', { skip }, async () => {
+  assert.ok((await call('user.save', { name: 'Gone Soon', username: 'gonesoon', password: 'first-pass-123' }, tok.boss)).ok);
+  const u = (await call('users.list', {}, tok.boss)).users.find((x) => x.username === 'gonesoon');
+  await call('user.active', { id: u.id, active: false }, tok.boss);
+  const from = Number(sqlOut('SELECT IFNULL(MAX(id), 0) FROM wt.login_fails').trim());
+  const right = await call('login', { username: 'gonesoon', password: 'first-pass-123' });
+  const wrong = await call('login', { username: 'gonesoon', password: 'not-it-123' });
+  assert.deepEqual([right.s, right.error], [401, 'Wrong username or password.']);
+  assert.deepEqual([wrong.s, wrong.error], [401, 'Wrong username or password.'], 'the same answer');
+  assert.equal(sqlOut(`SELECT COUNT(*) FROM wt.login_fails WHERE id > ${from} AND k LIKE 'u:gonesoon|%'`).trim(), '2', 'both tries keep counting');
+  sql(`DELETE FROM wt.login_fails WHERE id > ${from}`);
+  const ghost = await call('user.save', { id: 999999, name: 'Nobody' }, tok.boss);
+  assert.deepEqual([ghost.s, ghost.error], [404, 'That person is not there any more. Reload the page.']);
+});
+
 test('review round 1 (whole code): importing a data folder with more than 500 files works (it goes in parts of 500; data.json last), every file is there', { skip }, async () => {
   const src = join(dir, 'import-big'); mkdirSync(join(src, 'files', 'x1'), { recursive: true });
   const n = 520;

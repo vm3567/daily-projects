@@ -157,3 +157,22 @@ test('auto-correct: common mistakes fixed, case kept, real words and names left 
   for (const ok of ['the', 'form', 'its', 'lets', 'kiln', 'Ravi', 'id', 'I']) assert.equal(fixWord(ok), null, ok);
   assert.equal(fixWord('teh2'), null, 'words with numbers are left alone');
 });
+
+test('review round 3 (whole code): a note from a connected app or an email that came in is not your work (daily summary) and not a step\'s "Last update" (pending list)', async () => {
+  const { pendingRows } = await import('../docs/reports.js');
+  const data = emptyData();
+  data.people = [{ id: 'r', name: 'Ravi' }];
+  const today = '2026-10-23';
+  const at = (h) => `${today}T0${h}:00:00.000Z`;
+  data.projects = [{ id: 'p1', name: 'Kiln trial', state: 'active', priority: 'medium', steps: [{ id: 's1', text: 'Get the price from @Ravi', done: false, waiting: true, waitingOn: 'Ravi', createdAt: at(1) }],
+    workNotes: [
+      { id: 'n3', text: '🔌 ERP updated this: Amount 12,500', app: true, createdAt: at(5), stepId: 's1' },
+      { id: 'n2', text: '📧 New reply from Ravi: price next week', mail: true, createdAt: at(4), stepId: 's1' },
+      { id: 'n1', text: 'Called Ravi, he will check', createdAt: at(3), stepId: 's1' },
+    ], links: [], files: [], timeLogs: [] }];
+  const text = summaryText(data, {}, today, 'Fri, 23 Oct 2026');
+  assert.ok(text.includes('Called Ravi, he will check'), 'your own note is there');
+  assert.ok(!text.includes('ERP updated this') && !text.includes('New reply from Ravi'), 'not the app\'s or the email\'s');
+  const row = pendingRows(data, data.people[0], today).find((r) => r.kind === 'step');
+  assert.deepEqual(row.lastUpdate, { day: today, note: 'Called Ravi, he will check' }, 'the last real progress');
+});

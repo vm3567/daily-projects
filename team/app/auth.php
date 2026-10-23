@@ -65,9 +65,10 @@ function login(string $username, string $password, string $device): array {
   if ($user && $user['username'] !== $username) $user = null; // the database ignores capitals and accents; only the exact name counts
   // the same slow check even for an unknown name, so nobody can find names by timing
   $ok = password_verify($password, $user['pass_hash'] ?? dummy_hash());
-  if (!$user || !$ok) throw new ApiError('Wrong username or password.', 401);
+  // a switched-off account answers exactly like a wrong password (and the try keeps counting): a different answer for the
+  // right password would tell a guesser it is right (a former employee's password, often used elsewhere too)
+  if (!$user || !$ok || !$user['active']) throw new ApiError('Wrong username or password.', 401);
   q('DELETE FROM login_fails WHERE k = ? OR id = ?', ['u:' . $username . '|' . client_ip(), $ids[1]]); // this address's tries, and this try off the computer's count
-  if (!$user['active']) throw new ApiError('This account is switched off. Ask your manager.', 403);
   if (password_needs_rehash($user['pass_hash'], PASSWORD_DEFAULT)) {
     q('UPDATE users SET pass_hash = ? WHERE id = ?', [password_hash($password, PASSWORD_DEFAULT), $user['id']]);
   }
