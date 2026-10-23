@@ -332,7 +332,7 @@ test('project description: taken from the project\'s tasks (the first one that h
   // (one app: the team pages)
   assert.match(TEAM, /p\.projectAbout \? rules\.aboutShort\(p\.projectAbout\) \+ ' · ' : ''/, 'the Projects list row');
   assert.match(TEAM, /const about = state\.detail && sel\.startsWith\('task:'\) \? rules\.projectAboutOf\(\[state\.detail\.task\]\) : state\.detail && sel\.startsWith\('project:'\) \? rules\.projectAboutOf\(/, 'under the title of the project and task pages');
-  assert.match(readFileSync(new URL('../team/public_html/sw.js', import.meta.url), 'utf8'), /const CACHE = 'worktask-v28'/, 'new files reach the phones');
+  assert.match(readFileSync(new URL('../team/public_html/sw.js', import.meta.url), 'utf8'), /const CACHE = 'worktask-v29'/, 'new files reach the phones');
 });
 
 // ---------------------------------------------------------------- 📧 morning email (one person's pending work as a table to fill in)
