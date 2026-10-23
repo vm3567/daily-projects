@@ -461,6 +461,28 @@ export function mainChoices(data, p, query = '') {
 }
 
 /**
+ * Right-click → "Move to another project": the projects the task p can move to (not the one it is moved from, not one
+ * it is in already), for `query`; plus a new project with the typed name. Returns { items: [project], create: name|null }.
+ */
+export function moveChoices(data, p, from, query = '') {
+  const { items, create } = mainChoices(data, p, query);
+  return { items: items.filter((x) => !x.in && x.p.id !== from).map((x) => x.p), create };
+}
+
+/**
+ * The changes for "move p from `from` to the project `to`" (one Undo): out of `from` (its other projects are kept)
+ * and into `to`. From 📂 Misc (in no project): only into `to`. No `from` (a list row): into `to` only, out of every other.
+ */
+export function moveSteps(p, from, to) {
+  const now = parentIdsOf(p);
+  if (from && from !== MISC_ID && now.includes(from)) {
+    return [['removeFromProject', { projectId: p.id, parentId: from }], ['addToProject', { projectId: p.id, parentId: to }]];
+  }
+  if (!from && now.length) return [['setParent', { projectId: p.id, parentId: to }]];
+  return [['addToProject', { projectId: p.id, parentId: to }]];
+}
+
+/**
  * Enter in the list's "📂 Add to project…" box (several tasks picked): the project whose name is exactly the typed one
  * (any case), wherever it is in the list; else a new project with that name. Nothing typed: nothing (no hidden pick).
  * Returns { add: project } | { create: name } | null.

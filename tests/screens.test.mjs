@@ -1060,7 +1060,7 @@ test('📂 Projects page: a click on a project row selects it and stays on the p
   assert.match(mainsSrc, /ctx\.ui\.view === 'mains' && ctx\.showHere \? ctx\.showHere\(c\.id\)/, 'a task in the TASKS table while on the Projects page');
   const here = app.slice(app.indexOf('  showHere: (id) => {'), app.indexOf('  openProject: (id) => {'));
   assert.match(here, /select\(id\);/);
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-37'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-38'/, 'phones get the new copy');
 });
 
 test('📂 project page: "✕ Remove" on a task row takes it out of this project only — the task is kept (and stays in its other projects)', () => {
@@ -1845,7 +1845,7 @@ test('🔌 app wiring (app.js): "🔌 From apps" after ✉ Replies with the wait
   assert.match(app, /function go\(view\) \{\n\s*if \(view !== 'settings'\) forgetOnce\(\);/);
   assert.match(app, /if \(onServer\) loadApps\(appsCtx, force \|\| ui\.view === 'apps'\);/);
   assert.match(app, /replies: '✉ Replies', apps: '🔌 From apps', mains: '📂 Projects' \}\[ui\.view\]/, 'its page title');
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-37'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-38'/, 'phones get the new copy');
 });
 
 test('🔌 the PHP connector (team/connector/worktask-connector.php): the same text the app downloads, placeholders only (no real key), valid PHP 7.4+ (php -l), with wt_push / wt_withdraw / wt_decisions / wt_receive_decision', async () => {
@@ -3629,4 +3629,72 @@ test('Team today (review 2): a "📅 Not due today" count shows those rows alone
   find(t.view(), (n) => n.nodeName === 'BUTTON' && (n.textContent || '').startsWith('📅 Not due today 1')).__on.click();
   const text = t.view().textContent;
   assert.ok(text.includes('Order bags') && !text.includes('Sweep floor') && !text.includes('Fix the fan'), 'only the not-due one');
+});
+
+test('Right-click in a 📂 project\'s task table opens the menu for that task (with the project it is in); right-click on a step opens the step menu', () => {
+  const s = mainsState();
+  const ctx = liveCtx(s, { selected: 'm' });
+  ctx.openRowMenu = (id, e, from) => ctx.calls.push(['menu', id, from]);
+  ctx.openStepMenu = (projectId, stepId) => ctx.calls.push(['stepMenu', projectId, stepId]);
+  const m = s.data.projects.find((p) => p.id === 'm');
+  const row = rFind(mains.subProjectsBlock(ctx, m), (n) => n.nodeName === 'TR' && /sub-row/.test(n.className) && n.textContent.includes('Kiln 2'));
+  row.__on.contextmenu({ preventDefault() {} });
+  assert.deepEqual(ctx.calls.at(-1), ['menu', 'c2', 'm']);
+  ctx.ui.selected = 'p1';
+  ctx.ui.update = {};
+  const p1 = s.data.projects.find((p) => p.id === 'p1');
+  const step = rFind(renderDetail(ctx), (n) => n.nodeName === 'LI' && /\bstep\b/.test(n.className) && n.dataset.key === 's-' + p1.steps.find((x) => !x.done).id);
+  step.__on.contextmenu({ preventDefault() {} });
+  assert.deepEqual(ctx.calls.at(-1), ['stepMenu', 'p1', p1.steps.find((x) => !x.done).id]);
+});
+
+test('Move box (right-click → Move to another project…): the projects it can go to; Enter moves it (out of the one it was in, one Undo); a typed new name makes the project; Esc closes', () => {
+  const s = mainsState(); // c2 in 📂 Kilns
+  applyOps(s, [makeOp('createMainProject', { projectId: 'sa', name: 'Supplier approval' })]);
+  const ctx = liveCtx(s, {});
+  ctx.actMany = (projectId, steps, message) => { ctx.calls.push(['actMany', projectId, steps, message]); for (const [t, a] of steps) applyOps(s, [makeOp(t, a)]); return {}; };
+  const c2 = () => s.data.projects.find((p) => p.id === 'c2');
+  mains.openMoveBox(ctx, c2(), 'm');
+  let el = mains.moveBox(ctx);
+  assert.match(el.textContent, /Out of 📂 Kilns, into:/);
+  assert.deepEqual(rAll(el, (n) => /main-box-item/.test(n.className || '')).map((b) => b.textContent), ['📂 Supplier approval'], 'not Kilns (it is leaving it)');
+  rFind(el, (n) => n.nodeName === 'INPUT').__on.keydown({ key: 'Enter', preventDefault() {} });
+  assert.equal(ctx.calls.at(-1)[0], 'actMany');
+  assert.equal(ctx.calls.at(-1)[3], 'Kiln 2 moved to 📂 Supplier approval');
+  assert.deepEqual(c2().parentIds, ['sa'], 'out of Kilns, into Supplier approval');
+  assert.equal(ctx.ui.moveBox, null, 'closed');
+  assert.equal(mains.moveBox(ctx), null);
+  // a new project
+  mains.openMoveBox(ctx, c2(), 'sa');
+  ctx.ui.moveBox.q = 'Dryers';
+  el = mains.moveBox(ctx);
+  const create = rFind(el, (n) => /main-box-item/.test(n.className || '') && /create/.test(n.className));
+  assert.equal(create.textContent, "+ Create 'Dryers' as a new project");
+  create.__on.click();
+  const dryers = s.data.projects.find((p) => p.name === 'Dryers');
+  assert.ok(dryers, 'the new project');
+  assert.deepEqual(c2().parentIds, [dryers.id], 'in the new one only (out of Supplier approval)');
+  // Esc
+  mains.openMoveBox(ctx, c2(), null);
+  rFind(mains.moveBox(ctx), (n) => n.nodeName === 'INPUT').__on.keydown({ key: 'Escape', preventDefault() {} });
+  assert.equal(ctx.ui.moveBox, null);
+});
+
+test('Right-click menu (app.js): drawn over the whole page (list or task page); keeps the browser menu in a text box; stage buttons, Move, Take out, Rename, Finish / Reopen; a step menu and an Inbox menu', () => {
+  const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
+  assert.match(app, /ui\.capture \? captureBox\(\) : null,\n  rowMenu\(\), \/\/ right-click menu: over the list or the task's page\n  moveBox\(ctx\),/);
+  assert.ok(!app.includes('rowMenu())') && !app.includes('empty,\n    rowMenu()'), 'drawn once (no longer only inside the list column)');
+  assert.ok(app.includes(`e.target.closest('input:not([type="checkbox"]):not([data-rowmenu]), textarea, select, [contenteditable="true"]')) return;`), 'a text box keeps the browser menu (not a tick box or a step name)');
+  assert.ok(readFileSync(new URL('../docs/ui/detail.js', import.meta.url), 'utf8').includes("class: 'step-text', value: s.text, 'aria-label': 'Step', key: 'st-' + s.id, 'data-mention': '1', 'data-rowmenu': '1',"), 'a step name opens the step menu');
+  for (const label of ["'Move to another project…'", "'Add to a project…'", '`Take out of 📂 ${from.name}`', "'Rename…'", '`Finish ${kindWord(p)}`', '`Reopen ${kindWord(p)}`',
+    "'Tick (done)'", "'Waiting on someone'", "'Give to team…'", "'Make it a task'", "'Delete step'", "'Make it a new task'", "'Make it a task in a project…'"]) {
+    assert.ok(app.includes(label), label);
+  }
+  assert.match(app, /task && p\.state !== 'finished' \? stageButtons\(p\) : null,/);
+  assert.match(app, /const waiting = !s\.waiting; \/\/ \(read first: the change updates s\)\n      store\.dispatch\('setStepField', \{ projectId: p\.id, stepId: s\.id, field: 'waiting', value: waiting \}\);\n      if \(waiting\) ui\.openStep = s\.id;/, 'Waiting on someone opens "on whom?"');
+  assert.match(app, /onContextmenu: \(e\) => openRowMenu\(\{ kind: 'inbox', id: item\.id \}, e\)/);
+  assert.match(app, /if \(ui\.moveBox\) \{ ui\.moveBox = null; render\(\); return; \}/, 'Esc closes the move box');
+  assert.match(app, /playMoves\(moves\);\n  if \(ui\.rowMenu\) fitMenu\(\);/, 'a menu near the bottom moves up to show all of it');
+  assert.match(app, /if \(r\.bottom > window\.innerHeight - 8\) el\.style\.top = Math\.max\(8, window\.innerHeight - 8 - r\.height\) \+ 'px';/);
+  assert.ok(!/style=/.test(readFileSync(new URL('../docs/ui/mains.js', import.meta.url), 'utf8')), 'no inline style (strict CSP)');
 });

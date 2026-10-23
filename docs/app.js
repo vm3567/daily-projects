@@ -1,7 +1,7 @@
 // Daily Projects — main app: start-up, menu, project list, Today box, Diary, Settings, key screen.
 
 import { h, morph, installEvents, fmtDay, fmtLongDay, fmtTime, keyHint, withKey } from './ui/dom.js';
-import { renderDetail, linkChip, isMailLink, pasteIntoProject, takeBackQuestion } from './ui/detail.js';
+import { renderDetail, linkChip, isMailLink, pasteIntoProject, takeBackQuestion, updateState, makeItAProject } from './ui/detail.js';
 import { renderPeopleList, renderPerson, peopleByFollowUp } from './ui/people.js';
 import { installMentions } from './ui/mention.js';
 import { installAutocorrect, setAutocorrect, autocorrectOn } from './ui/autocorrect.js';
@@ -9,7 +9,7 @@ import { renderDashboard } from './ui/dashboard.js';
 import { renderTimeReport } from './ui/timereport.js';
 import { renderReplies, renderReplyRound, replyArea, readyCount } from './ui/replies.js';
 import { renderConnectionsSettings, renderFromApps, loadApps, appsPending, forgetOnce } from './ui/connections.js';
-import { projectChips, renderProjectsHead, openMainBox, listColour } from './ui/mains.js';
+import { projectChips, renderProjectsHead, openMainBox, openMoveBox, moveBox, listColour } from './ui/mains.js';
 import { projectMatches, diaryEntries, backupPayload, summaryText, personMessageText, personMessageHtml, sentMarkOf, copyNotice, tasksListText } from './reports.js';
 import { closeViewer, uploadBlob, photoThumb } from './ui/files.js';
 import { newTaskBox, createTaskWithNote, richView } from './ui/richedit.js';
@@ -20,7 +20,7 @@ import { MockRepo } from './mockrepo.js';
 import { device } from './device.js';
 import { DATA_OWNER, DATA_REPO, DATA_BRANCH, MOVED_TO, REFRESH_MS, AI_DAILY_LIMIT, BRIEF_CLAIM_MINUTES, WAIT_RED_DAYS, NO_WORK_NOTE_DAYS } from './config.js';
 import { dotColour, greenByTeamOnly, isSnoozed, restUntil, restReason, onlyDaysLabel, openIdFromHash, awakeProjects, activeProjects, nextStep, todayIndia, isSundayIndia, colourCounts, isOverdue, indiaDate, waitingDays, daysWithoutWork, dayScore, greenStreak, addDays, monthOf, fmtMinutes, takeBackWaits, staffStepAction, pasteGoesToProject, singleStepClose, versionRequest, askDiaryAgain, pasteInForm, diaryLoadedAt, photoNeedsFetch, teamUndoKey, teamActionUndone, teamProgressOf, projectKeyIgnored, teamMovedTo, serverHolder, keepMovedStep, teamMemberFor, repliesOf, mailThreads, replyMailto, MAILTO_BODY_MAX, emailPath, pasteReason } from './rules.js';
-import { stageOf, stageCounts, byStage } from './rules.js';
+import { stageOf, stageCounts, byStage, STAGES, STAGE_LABELS } from './rules.js';
 import { stageChip, stageFilterBar } from './ui/stage.js';
 import { whoFromUser, signInTag, timerOn, projectGiveChanges, UNDO_GRACE_MS, MISC_ID } from './rules.js';
 import { signInCard, firstPasswordCard } from './ui/signin.js';
@@ -505,6 +505,8 @@ const ctx = {
   teamInfo: () => team,
   afterTick: (id, where, undo) => afterTick(id, where, undo),
   openPersonMenu: (id, e) => openPersonMenu(id, e),
+  openRowMenu: (id, e, from) => openRowMenu({ id, from }, e),
+  openStepMenu: (projectId, stepId, e) => openRowMenu({ kind: 'step', id: projectId, stepId }, e),
   selectPerson: (id) => { ui.person = id; ui.mobile = 'detail'; render(); const d = document.getElementById('detail'); if (d) d.scrollTop = 0; },
   giveSteps: (items, user, person) => giveStepsTo(items, user, person),
   openReplyDraft: (m) => openReplyDraft(m),
@@ -1183,7 +1185,7 @@ function projectRow(p, today, opts = {}) {
   const picking = canPickRows(); // ✅ Tasks: a select box for moving many tasks at once
   return h('li', {
     key: 'p-' + p.id, 'data-id': p.id, class: 'prow' + (ui.selected === p.id ? ' current' : '') + (isMainProject(store.view.data, p) ? ' main-row' : ''),
-    onContextmenu: (e) => { e.preventDefault(); ui.rowMenu = { id: p.id, x: e.clientX, y: e.clientY }; render(); },
+    onContextmenu: (e) => openRowMenu({ id: p.id }, e),
   },
     picking
       ? h('input', {
@@ -1699,7 +1701,7 @@ function renderInbox() {
       h('span', { class: 'muted small' }, items.length ? 'Send each item to a task. Tap a name, or pick from the list.' : '')),
     items.length ? h('ul', { class: 'inbox-list' }, items.map((item) => {
       const sugg = inboxSuggestions(item.text);
-      return h('li', { key: 'ib-' + item.id },
+      return h('li', { key: 'ib-' + item.id, onContextmenu: (e) => openRowMenu({ kind: 'inbox', id: item.id }, e) },
         h('div', { class: 'inbox-text' }, item.text, h('span', { class: 'muted small' }, ` · ${fmtDay(indiaDate(item.createdAt))} `), linkChip(item.link, item.mail ? '✉ Open in Outlook' : null)),
         item.note ? h('div', { class: 'inbox-note muted small', key: 'ibn-' + item.id }, item.note) : null, // from an email: when, and how it starts
         item.mail ? inboxReply(item) : null, // ✉ the reply to this email (a draft; you press Send in Outlook)
@@ -1733,21 +1735,64 @@ function inboxReminder() {
   return h('button', { class: 'inbox-reminder', key: 'inbox-rem', onClick: () => go('inbox') }, `📥 Inbox (${n}) — sort now →`);
 }
 
-/** The small menu that opens when you right-click a project in the list. */
+/**
+ * Right-click (or a long press on a phone): open the small menu at the pointer. `what` = { id } for a task or project
+ * row (+ from: the 📂 project whose table it is in), { kind: 'step', id, stepId } or { kind: 'inbox', id }.
+ * Inside a text box the browser's own menu (copy, paste) stays.
+ */
+function openRowMenu(what, e) {
+  // (a tick box and a step's name, data-rowmenu, open this menu too)
+  if (e.target && e.target.closest && e.target.closest('input:not([type="checkbox"]):not([data-rowmenu]), textarea, select, [contenteditable="true"]')) return;
+  e.preventDefault();
+  ui.rowMenu = { ...what, x: e.clientX, y: e.clientY };
+  render();
+}
+
+/** Keep a menu on the screen (style object: allowed by the page's safety rules); a tall one scrolls inside. */
+function placeMenu(el, m) {
+  el.style.left = Math.max(8, Math.min(m.x, window.innerWidth - 290)) + 'px';
+  el.style.top = Math.max(8, Math.min(m.y, window.innerHeight - 480)) + 'px';
+  return el;
+}
+
+/** After drawing: a menu near the bottom moves up so all of it shows (it scrolls inside only when taller than the screen). */
+function fitMenu() {
+  const el = document.querySelector('.row-menu');
+  if (!el) return;
+  const r = el.getBoundingClientRect();
+  if (r.bottom > window.innerHeight - 8) el.style.top = Math.max(8, window.innerHeight - 8 - r.height) + 'px';
+}
+
+/** The menu's 4 stage buttons on one line (⚪ 🔵 🟠 ✅); the one it is at now is marked. */
+function stageButtons(p) {
+  const info = stageOf(p, p.team ? ctx.teamProgress(p.id) : null);
+  return h('div', { class: 'row-menu-stages', role: 'group', 'aria-label': 'Stage' }, STAGES.map((s) => h('button', {
+    class: 'stage-chip stage-' + s + ' tap' + (info.stage === s ? ' on' : ''), type: 'button', role: 'menuitemradio', 'aria-checked': String(info.stage === s),
+    title: STAGE_LABELS[s].replace(/^\S+ /, ''),
+    onClick: () => { ui.rowMenu = null; act('setStage', { projectId: p.id, stage: s }, `${p.name}: ${STAGE_LABELS[s]}`); render(); },
+  }, STAGE_LABELS[s])));
+}
+
+/** The small menu that opens when you right-click a task or project (a list, a project's task table), a step or an Inbox item. */
 function rowMenu() {
   const m = ui.rowMenu;
   if (m && m.kind === 'person') return personMenu(m);
+  if (m && m.kind === 'step') return stepMenu(m);
+  if (m && m.kind === 'inbox') return inboxMenu(m);
   const p = m && store.view.data.projects.find((x) => x.id === m.id);
   if (!p) return null;
   const today = todayIndia();
   const due = p.state === 'active' && nextStep(p, today, { dueOnly: true });
   const timing = store.view.data.timer && store.view.data.timer.projectId === p.id;
-  const item = (icon, label, fn) => h('button', {
-    class: 'row-menu-item', role: 'menuitem',
+  const task = !isMainProject(store.view.data, p) && !p.misc; // (a 📂 project is never inside another one)
+  const from = m.from ? store.view.data.projects.find((x) => x.id === m.from) : null; // right-clicked in this project's table
+  const item = (icon, label, fn, cls = '') => h('button', {
+    class: 'row-menu-item' + cls, role: 'menuitem',
     onClick: () => { ui.rowMenu = null; fn(); render(); },
   }, h('span', { class: 'rm-icon', 'aria-hidden': 'true' }, icon), label);
   const el = h('div', { class: 'row-menu', role: 'menu', key: 'row-menu', 'aria-label': `Actions for ${p.name}` },
     h('div', { class: 'row-menu-title' }, p.name),
+    task && p.state !== 'finished' ? stageButtons(p) : null,
     due ? item('✓', `Tick: ${due.text}`, () => quickTick(p, due)) : null,
     p.state === 'active' ? item('+', 'Add a step', () => { select(p.id); focusKey('add-step-' + p.id); }) : null,
     p.state === 'active' ? item('📝', 'Write an update', () => { select(p.id); focusKey('wn-' + p.id); }) : null,
@@ -1762,16 +1807,74 @@ function rowMenu() {
       ? item('👥', `Take back from ${p.team.name}`, () => { if (confirm(takeBackQuestion(store.view.data, p))) giveProject(p, null); })
       : item('👥', `Give ${kindWord(p)} to…`, () => { select(p.id); ui.giveOpen = p.id; ui.givePhoto = false; })) : null,
     item('↗', 'Open', () => select(p.id)),
-    !isMainProject(store.view.data, p) ? item('📂', 'Add to a project…', () => { select(p.id); openMainBox(ctx, p, 'parent'); }) : null,
-    item('🗑', `Delete ${kindWord(p)}…`, () => {
+    task ? item('🔀', 'Move to another project…', () => openMoveBox(ctx, p, from ? from.id : null)) : null,
+    task ? item('📂', 'Add to a project…', () => { select(p.id); openMainBox(ctx, p, 'parent'); }) : null,
+    from && !from.misc ? item('✕', `Take out of 📂 ${from.name}`, () => act('removeFromProject', { projectId: p.id, parentId: from.id }, `${p.name} taken out of 📂 ${from.name} (the task is kept)`)) : null,
+    item('✎', 'Rename…', () => {
+      const n = prompt('New name:', p.name);
+      if (n && n.trim() && n.trim() !== p.name) act('setProjectField', { projectId: p.id, field: 'name', value: n.trim() }, `Renamed: ${n.trim()}`);
+    }),
+    p.state === 'finished' ? item('↺', `Reopen ${kindWord(p)}`, () => act('reopen', { projectId: p.id }, `Reopened: ${p.name}`))
+      : !p.misc ? item('🏁', `Finish ${kindWord(p)}`, () => act('finish', { projectId: p.id }, `Finished: ${p.name} (moved to Finished)`)) : null,
+    p.misc ? null : item('🗑', `Delete ${kindWord(p)}…`, () => {
       if (!confirm(deleteQuestion(store.view.data, p))) return;
       act('deleteProject', { projectId: p.id }, `Deleted: ${p.name}`, 10000);
       if (ui.selected === p.id) { ui.selected = null; ui.mobile = 'list'; }
-    }));
-  // keep it on the screen (style object: allowed by the page's safety rules)
-  el.style.left = Math.max(8, Math.min(m.x, window.innerWidth - 270)) + 'px';
-  el.style.top = Math.max(8, Math.min(m.y, window.innerHeight - 330)) + 'px';
-  return el;
+    }, ' danger'));
+  return placeMenu(el, m);
+}
+
+/** Right-click on a step (a task's page): tick, write an update, waiting, give to the team, make it a task, delete. */
+function stepMenu(m) {
+  const p = store.view.data.projects.find((x) => x.id === m.id);
+  const s = p && p.steps.find((x) => x.id === m.stepId);
+  if (!s) return null;
+  const item = (icon, label, fn, cls = '') => h('button', {
+    class: 'row-menu-item' + cls, role: 'menuitem',
+    onClick: () => { ui.rowMenu = null; fn(); render(); },
+  }, h('span', { class: 'rm-icon', 'aria-hidden': 'true' }, icon), label);
+  const tt = ctx.teamTask(s.id);
+  const live = !!tt && tt.status === 'open';
+  const open = p.state === 'active';
+  const el = h('div', { class: 'row-menu', role: 'menu', key: 'step-menu', 'aria-label': `Actions for ${s.text}` },
+    h('div', { class: 'row-menu-title' }, s.text),
+    s.done ? item('↺', 'Un-tick', () => act('untickStep', { projectId: p.id, stepId: s.id }))
+      : item('✓', 'Tick (done)', () => { const done = act('tickStep', { projectId: p.id, stepId: s.id }, `✓ ${s.text}`); if (done) ctx.afterTick(p.id, 'detail', done.undo); }),
+    s.done ? null : item('📝', 'Write what happened', () => { updateState(ui, p).about = s.id; focusKey('wn-' + p.id); }),
+    s.done ? null : item('⏳', s.waiting ? 'Not waiting any more' : 'Waiting on someone', () => {
+      const waiting = !s.waiting; // (read first: the change updates s)
+      store.dispatch('setStepField', { projectId: p.id, stepId: s.id, field: 'waiting', value: waiting });
+      if (waiting) ui.openStep = s.id; // then: on whom
+    }),
+    s.done ? null : item('⏰', 'Remind me later / due date…', () => { ui.openStep = s.id; }),
+    onServer && open && !s.done ? (live ? item('👥', `Team task: ${tt.assignee.name}`, () => { location.hash = `#team-task=${tt.id}`; })
+      : item('👥', 'Give to team…', () => { location.hash = '#team-new=' + encodeURIComponent(JSON.stringify({ title: s.text, project: p.name, projectRef: p.id, stepRef: s.id })); })) : null,
+    s.done ? null : item('↗', 'Make it a task', () => makeItAProject(ctx, p, s, live ? tt : null)),
+    item('🗑', 'Delete step', () => act('deleteStep', { projectId: p.id, stepId: s.id }, `Step deleted: ${s.text}`), ' danger'));
+  return placeMenu(el, m);
+}
+
+/** Right-click on an Inbox item: make it a task (or a task in a project), open its email, delete. */
+function inboxMenu(m) {
+  const item0 = (store.view.data.inbox || []).find((x) => x.id === m.id);
+  if (!item0) return null;
+  const item = (icon, label, fn, cls = '') => h('button', {
+    class: 'row-menu-item' + cls, role: 'menuitem',
+    onClick: () => { ui.rowMenu = null; fn(); render(); },
+  }, h('span', { class: 'rm-icon', 'aria-hidden': 'true' }, icon), label);
+  const newTask = () => { const projectId = newId(); return inboxAct('inboxToProject', { itemId: item0.id, projectId }, item0, `New task: ${item0.text}`) ? projectId : null; };
+  const el = h('div', { class: 'row-menu', role: 'menu', key: 'inbox-menu', 'aria-label': `Actions for ${item0.text}` },
+    h('div', { class: 'row-menu-title' }, item0.text),
+    item('+', 'Make it a new task', () => newTask()),
+    item('📂', 'Make it a task in a project…', () => {
+      const id = newTask();
+      const p = id && store.view.data.projects.find((x) => x.id === id);
+      if (p) openMoveBox(ctx, p, null);
+    }),
+    item('→', 'Add as a step to a task…', () => focusKey('pick-' + item0.id)),
+    item0.link ? item('✉', item0.mail ? 'Open in Outlook' : 'Open link', () => window.open(item0.link, '_blank', 'noopener')) : null,
+    item('🗑', 'Delete', () => inboxAct('removeInbox', { itemId: item0.id }, item0, 'Removed from Inbox'), ' danger'));
+  return placeMenu(el, m);
 }
 
 /** Lists where a 📂 project shows (and sorts by) the worst of it and its tasks. Today and search: its own dot. */
@@ -1895,9 +1998,7 @@ function personMenu(m) {
     item('🗑', 'Remove from People…', () => {
       if (confirm(`Remove ${person.name} from People?\n\nTheir name stays in your steps and notes; it is just no longer linked.${account ? '\nTheir Work Task sign-in is not changed.' : ''}`)) { if (store.dispatch('deletePerson', { personId: person.id })) toast(`Removed: ${person.name}`); }
     }, ' danger'));
-  el.style.left = Math.max(8, Math.min(m.x, window.innerWidth - 270)) + 'px';
-  el.style.top = Math.max(8, Math.min(m.y, window.innerHeight - 420)) + 'px';
-  return el;
+  return placeMenu(el, m);
 }
 
 /** Tick a project's next step straight from the list. */
@@ -2118,7 +2219,7 @@ function renderListColumn() {
   if (ui.view === 'settings' && !ui.search) return h('div', { class: 'col-inner' }, head, timerStrip(), renderSettings());
   if (ui.view === 'dashboard' && !ui.search) return h('div', { class: 'col-inner' }, head, timerStrip(), renderDashboard(ctx));
   if (ui.view === 'time' && !ui.search) return h('div', { class: 'col-inner' }, head, timerStrip(), renderTimeReport(ctx));
-  if (ui.view === 'people' && !ui.search) return h('div', { class: 'col-inner' }, head, timerStrip(), renderPeopleList(ctx), rowMenu());
+  if (ui.view === 'people' && !ui.search) return h('div', { class: 'col-inner' }, head, timerStrip(), renderPeopleList(ctx));
 
   const list = sortForView(visibleProjects(), today);
   const showSort = !ui.search && ui.view !== 'paused' && ui.view !== 'finished' && list.length > 1;
@@ -2143,8 +2244,7 @@ function renderListColumn() {
     taskListView() && !ui.search && !ui.adding ? stageFilterChips() : null,
     pickBar(list),
     ...listParts(list, today),
-    empty,
-    rowMenu());
+    empty);
 }
 
 /** Today: projects not yet green, then a folded "Done today (n)" group. Other views: one list. */
@@ -2525,6 +2625,8 @@ function render() {
   wide ? null : h('section', { id: 'detail' }, ui.round ? renderRound() : ui.view === 'people' && !ui.search ? renderPerson(ctx) : renderDetail(ctx)),
   ui.showKeys ? keysHelp() : null,
   ui.capture ? captureBox() : null,
+  rowMenu(), // right-click menu: over the list or the task's page
+  moveBox(ctx),
   offlineBar(),
   unsentBar(),
   tabBar());
@@ -2532,6 +2634,7 @@ function render() {
   if (root.firstChild && root.firstChild.classList && root.firstChild.classList.contains('layout')) morph(root.firstChild, next);
   else root.replaceChildren(next);
   playMoves(moves);
+  if (ui.rowMenu) fitMenu();
   document.body.classList.toggle('on-detail', ui.mobile === 'detail' || ui.menuOpen); // phone: messages sit lower when the bottom bar is hidden
   restoreScrollOnce();
   setupSortable();
@@ -3093,6 +3196,7 @@ function onKey(e) {
     if (!viewer.hidden) { closeSheet(); return; }
     if (ui.showKeys) { ui.showKeys = false; render(); return; }
     if (ui.rowMenu) { ui.rowMenu = null; render(); return; }
+    if (ui.moveBox) { ui.moveBox = null; render(); return; }
     if (ui.mainBox) { ui.mainBox = null; render(); return; }
     if (ui.projMenu || ui.giveOpen || ui.snoozeOpen) { ui.projMenu = null; ui.giveOpen = null; ui.snoozeOpen = null; render(); return; }
     if (ui.capture) { ui.capture = false; render(); return; }

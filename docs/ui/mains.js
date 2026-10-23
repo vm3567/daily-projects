@@ -3,7 +3,7 @@
 // on a task, the small project chips under a task's row in the lists, and the "📂 Projects" page.
 
 import { h, fmtDay } from './dom.js';
-import { dotColour, nextStep, todayIndia, indiaDate, childrenOf, parentsOf, isMainProject, mainProjects, mainColour, mainSummary, mainChoices, addHereChoices, orderedTasks, movedOrder, dropSlot, droppedOrder } from '../rules.js';
+import { dotColour, nextStep, todayIndia, indiaDate, childrenOf, parentsOf, isMainProject, mainProjects, mainColour, mainSummary, mainChoices, moveChoices, moveSteps, addHereChoices, orderedTasks, movedOrder, dropSlot, droppedOrder } from '../rules.js';
 import { newId } from '../ops.js';
 import { stageCounts, byStage } from '../rules.js';
 import { stageChip, stageFilterBar, ownerStage } from './stage.js';
@@ -100,6 +100,74 @@ export function mainBox(ctx, p, mode = 'parent') {
       }, it.on ? '✓ ' : '', it.kind === 'main' ? '📂 ' : '', it.label)))),
     !items.length ? h('p', { class: 'muted small' }, box.mode === 'add' ? 'No task can go here.' : 'Type a name.') : null,
     h('div', { class: 'row' }, h('button', { class: 'btn small', type: 'button', onClick: close }, 'Done')));
+}
+
+/** Right-click → "Move to another project…": the floating box (from = the project the task is moved out of, or null). */
+export function openMoveBox(ctx, p, from = null) {
+  ctx.ui.moveBox = { id: p.id, from, q: '', index: 0 };
+  ctx.ui.mainBox = null;
+  ctx.render();
+  focusBox('movebox-q');
+}
+
+/** What the move box offers now: [{ label, run, kind }] (the highlighted one is picked by Enter). */
+export function moveBoxItems(ctx, p) {
+  const { store, ui } = ctx;
+  const box = ui.moveBox;
+  const data = store.view.data;
+  const from = box.from ? data.projects.find((x) => x.id === box.from) : null;
+  const done = () => { ui.moveBox = null; ctx.render(); };
+  const { items, create } = moveChoices(data, p, box.from, box.q);
+  const out = items.slice(0, 12).map((m) => ({
+    kind: 'main', p: m, label: m.name,
+    run: () => { ctx.actMany(p.id, moveSteps(p, box.from, m.id), `${p.name} moved to 📂 ${m.name}`); done(); },
+  }));
+  if (create) {
+    out.push({
+      kind: 'create', label: `+ Create '${create}' as a new project`,
+      run: () => {
+        // the new project with the task in it (Undo puts the task back), then out of the one it came from
+        if (ctx.act('createMainProject', { projectId: newId(), name: create, childId: p.id }, `${p.name} moved to the new project 📂 ${create}`, 6000)
+          && from && !from.misc) store.dispatch('removeFromProject', { projectId: p.id, parentId: from.id });
+        done();
+      },
+    });
+  }
+  return out;
+}
+
+/** The move box: type to find, ↓ ↑ to move, Enter or tap to pick, Esc to close. Drawn over the page (any screen). */
+export function moveBox(ctx) {
+  const { ui, store } = ctx;
+  const box = ui.moveBox;
+  const p = box && store.view.data.projects.find((x) => x.id === box.id);
+  if (!p) return null;
+  const from = box.from ? store.view.data.projects.find((x) => x.id === box.from) : null;
+  const items = moveBoxItems(ctx, p);
+  const index = Math.min(Math.max(0, box.index || 0), Math.max(0, items.length - 1));
+  const close = () => { ui.moveBox = null; ctx.render(); };
+  return h('div', { class: 'move-box-wrap', key: 'movebox-wrap', onClick: (e) => { if (e.target === e.currentTarget) close(); } },
+    h('div', { class: 'main-box move-box', role: 'dialog', 'aria-label': `Move ${p.name} to another project` },
+      h('div', { class: 'main-box-head' },
+        h('strong', null, `Move "${p.name}"`),
+        h('button', { class: 'icon', type: 'button', 'aria-label': 'Close', onClick: close }, '✕')),
+      h('p', { class: 'muted small' }, from && !from.misc ? `Out of 📂 ${from.name}, into:` : 'Into the project:'),
+      h('input', {
+        class: 'main-box-input', key: 'movebox-q', value: box.q, autocomplete: 'off', 'aria-label': 'Type a project name', placeholder: 'Type a project name…',
+        onInput: (e, el) => { box.q = el.value; box.index = 0; ctx.render(); },
+        onKeydown: (e) => {
+          if (e.key === 'ArrowDown') { e.preventDefault(); box.index = Math.min(items.length - 1, index + 1); ctx.render(); }
+          else if (e.key === 'ArrowUp') { e.preventDefault(); box.index = Math.max(0, index - 1); ctx.render(); }
+          else if (e.key === 'Enter') { e.preventDefault(); if (items[index]) items[index].run(); }
+          else if (e.key === 'Escape') { e.preventDefault(); if (e.stopPropagation) e.stopPropagation(); close(); }
+        },
+      }),
+      h('ul', { class: 'main-box-list', role: 'listbox' }, items.map((it, i) => h('li', { key: 'mv-' + (it.p ? it.p.id : 'create') },
+        h('button', {
+          class: 'main-box-item' + (i === index ? ' on' : '') + (it.kind === 'create' ? ' create' : ''), type: 'button', role: 'option',
+          'aria-selected': String(i === index), onClick: () => it.run(),
+        }, it.kind === 'main' ? '📂 ' : '', it.label)))),
+      !items.length ? h('p', { class: 'muted small' }, 'Type a name for a new project.') : null));
 }
 
 /** "+ Add tasks": the task list with tick boxes, to put one or several tasks into the project m at once. */
@@ -270,7 +338,10 @@ export function subProjectsBlock(ctx, p, today = todayIndia()) {
         const ns = c.state === 'active' ? nextStep(c, today) : null;
         const lu = lastUpdate(c);
         const done = c.state === 'finished'; // a finished task shows in green (owner asked, 22 Oct)
-        return h('tr', { class: 'sub-row' + (done ? ' sub-done' : ''), key: 'sub-' + c.id, onClick: () => (ctx.ui.view === 'mains' && ctx.showHere ? ctx.showHere(c.id) : ctx.openProject(c.id)) },
+        return h('tr', {
+          class: 'sub-row' + (done ? ' sub-done' : ''), key: 'sub-' + c.id, onClick: () => (ctx.ui.view === 'mains' && ctx.showHere ? ctx.showHere(c.id) : ctx.openProject(c.id)),
+          onContextmenu: (e) => ctx.openRowMenu && ctx.openRowMenu(c.id, e, p.id), // right-click: move, stage, rename, finish…
+        },
           // hold the grip and drag the row up or down (mouse or finger); or ↑ ↓ (Alt+↑ ↓) on it
           h('td', { class: 'sub-grip-cell' }, sf !== 'all' ? null : h('button', { // (moved only while every task shows: a filtered list has gaps)
             class: 'sub-grip', type: 'button', key: 'grip-' + c.id, title: 'Drag to move (or ↑ ↓)', 'aria-label': `Drag to move ${c.name}`,

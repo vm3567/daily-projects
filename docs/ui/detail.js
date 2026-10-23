@@ -49,7 +49,7 @@ function autoField(tag, props, onSave, onEnter = null) {
   });
 }
 
-function updateState(ui, p) {
+export function updateState(ui, p) {
   return ((ui.update ||= {})[p.id] ||= { note: '', next: '' });
 }
 
@@ -181,7 +181,7 @@ function stepNotes(p, s) {
  * "↗ Make it a project": the step becomes its own project (one change; Undo puts both back as they were), then the new
  * project opens with its name ready to change. A step given to the team: ask first (the person's task stays as it is).
  */
-function makeItAProject(ctx, p, s, tt) {
+export function makeItAProject(ctx, p, s, tt) {
   if (tt && tt.status === 'open' && !confirm(`${tt.assignee.name}'s task stays with ${p.name}. Continue?`)) return;
   const newProjectId = newId();
   const done = ctx.act('stepToProject', { projectId: p.id, stepId: s.id, newProjectId }, `↗ Now its own task: ${s.text}`, 8000);
@@ -241,7 +241,8 @@ function stepRow(ctx, p, s, box = null) {
   else if (s.snoozedUntil && s.snoozedUntil > today && !s.done) tags.push(h('span', { class: 'tag' }, `from ${fmtDay(s.snoozedUntil)}`));
   else if (!s.done && s.remindUntil && s.remindUntil <= today) tags.push(h('span', { class: 'tag remind due', title: 'Your reminder for this step' }, '⏰ Reminder'));
   const aboutThis = () => { const u = updateState(ui, p); if (u.about !== s.id) { u.about = s.id; ctx.render(); } };
-  return h('li', { class: 'step' + (box ? ' has-update' : '') + (s.done ? ' done' : '') + (s.snoozedUntil && s.snoozedUntil > today && !s.done ? ' later' : ''), key: 's-' + s.id, 'data-id': s.id },
+  return h('li', { class: 'step' + (box ? ' has-update' : '') + (s.done ? ' done' : '') + (s.snoozedUntil && s.snoozedUntil > today && !s.done ? ' later' : ''), key: 's-' + s.id, 'data-id': s.id,
+    onContextmenu: (e) => ctx.openStepMenu && ctx.openStepMenu(p.id, s.id, e) }, // right-click: tick, waiting, give, delete…
     h('div', { class: 'step-main' },
       s.done ? null : h('span', { class: 'grip', title: 'Drag to reorder', 'aria-hidden': 'true' }, '⋮⋮'),
       h('input', {
@@ -255,7 +256,7 @@ function stepRow(ctx, p, s, box = null) {
       s.done
         ? h('span', { class: 'step-text' }, s.text, h('span', { class: 'muted small' }, ` · ${fmtDay(s.doneAt ? indiaDate(s.doneAt) : '')}`), s.movedTo ? movedLink(ctx, s) : null)
         : autoField('input', {
-          class: 'step-text', value: s.text, 'aria-label': 'Step', key: 'st-' + s.id, 'data-mention': '1',
+          class: 'step-text', value: s.text, 'aria-label': 'Step', key: 'st-' + s.id, 'data-mention': '1', 'data-rowmenu': '1', // right-click: the step menu
           title: 'Click: Today\'s update is about this step. Enter: write what happened.',
           // clicking a step points "Today's update" at it, so there is no extra button to reach for
           onFocusin: () => aboutThis(),

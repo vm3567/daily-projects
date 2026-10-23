@@ -2933,3 +2933,27 @@ test('Stage: setStage may come in through an old-address link (a harmless label)
   assert.ok(CARRIED.has('setStage'));
   assert.equal(carriedOps([makeOp('setStage', { projectId: 'p1', stage: 'done' })]).ok.length, 1);
 });
+
+test('Right-click → Move to another project: the choices (not the one it leaves, not one it is in) and the changes (one Undo); from 📂 Misc only adds; from a list row it ends up in that one project only', async () => {
+  const { moveChoices, moveSteps, MISC_ID } = await import('../docs/rules.js');
+  const s = withMains();
+  applyOp(s, op('addToProject', { projectId: 'k1', parentId: 'm' }, '2026-10-02'));
+  applyOp(s, op('createMainProject', { projectId: 'sa', name: 'Supplier approval' }, '2026-10-02'));
+  applyOp(s, op('createMainProject', { projectId: 'q', name: 'Quality' }, '2026-10-02'));
+  applyOp(s, op('addToProject', { projectId: 'k1', parentId: 'q' }, '2026-10-02'));
+  assert.deepEqual(moveChoices(s.data, P(s, 'k1'), 'm', '').items.map((x) => x.id), ['sa'], 'not Kilns (it leaves it), not Quality (in it already)');
+  assert.equal(moveChoices(s.data, P(s, 'k1'), 'm', 'New one').create, 'New one', 'a typed new name: create it');
+  assert.deepEqual(moveChoices(s.data, P(s, 'm'), null, ''), { items: [], create: null }, 'a 📂 project never moves into another');
+  // from Kilns to Supplier approval: out of Kilns, into Supplier approval, still in Quality
+  const steps = moveSteps(P(s, 'k1'), 'm', 'sa');
+  assert.deepEqual(steps.map(([t]) => t), ['removeFromProject', 'addToProject']);
+  for (const [t, a] of steps) applyOp(s, op(t, a, '2026-10-03'));
+  assert.deepEqual([...P(s, 'k1').parentIds].sort(), ['q', 'sa']);
+  // a loose task (shown in 📂 Misc): only into the new project
+  assert.deepEqual(moveSteps(P(s, 'k2'), MISC_ID, 'sa'), [['addToProject', { projectId: 'k2', parentId: 'sa' }]]);
+  assert.deepEqual(moveSteps(P(s, 'k2'), null, 'sa'), [['addToProject', { projectId: 'k2', parentId: 'sa' }]]);
+  // from a list row (no project given): into that one project only
+  assert.deepEqual(moveSteps(P(s, 'k1'), null, 'm'), [['setParent', { projectId: 'k1', parentId: 'm' }]]);
+  for (const [t, a] of moveSteps(P(s, 'k1'), null, 'm')) applyOp(s, op(t, a, '2026-10-04'));
+  assert.deepEqual(P(s, 'k1').parentIds, ['m']);
+});

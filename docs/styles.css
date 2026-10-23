@@ -931,6 +931,12 @@ a.tag.me:hover { color: var(--brand); border-color: var(--brand); }
 @media (max-width: 600px) { .diary-day { grid-template-columns: 1fr; gap: 4px; } }
 .row-menu-item.danger { color: var(--red); }
 .row-menu-note { padding: 6px 10px 2px; border-top: 1px solid var(--line); margin-top: 4px; }
+.row-menu { max-height: calc(100vh - 16px); overflow-y: auto; max-width: 290px; }
+.row-menu-stages { display: flex; flex-wrap: wrap; gap: 4px; padding: 4px 6px 8px; border-bottom: 1px solid #f1f5f9; margin-bottom: 4px; }
+.row-menu-stages .stage-chip { font-size: 12px; padding: 2px 8px; }
+.row-menu-stages .stage-chip.on { outline: 2px solid currentColor; outline-offset: 1px; }
+.move-box-wrap { position: fixed; inset: 0; z-index: 70; background: rgba(15, 23, 42, .25); display: flex; align-items: flex-start; justify-content: center; padding: 12vh 16px 16px; }
+.main-box.move-box { width: 100%; max-width: 420px; margin: 0; background: #fff; box-shadow: 0 16px 40px rgba(15, 23, 42, .25); }
 /* given project: how far the team is */
 .team-progress { flex-basis: 100%; display: flex; align-items: center; gap: 10px; font-size: 13.5px; color: var(--muted); margin-top: 2px; }
 .team-progress.stuck { color: var(--red); }
