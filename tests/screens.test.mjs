@@ -3449,3 +3449,12 @@ test('Team today table on screen: 20 tasks a page, ‹ Previous / Next ›, and 
   find(t.view(), (n) => n.nodeName === 'BUTTON' && (n.textContent || '').startsWith('⏳ Not yet')).__on.click();
   assert.equal(t.state.boardPage, 1, 'a count pressed: page 1');
 });
+
+test('Team today table on screen: the 💡 Suggestions count stays while it is pressed, even at 0 (so it can be turned off)', async () => {
+  const V = { id: 3, name: 'Valar' };
+  const tasks = [{ id: 1, title: 'Job 1', assignee: V, status: 'open', repeat: 'daily', today: null, unread: 0 }];
+  const { t } = fakeTeam({ 'team.today': () => ({ ok: true, today: '2026-10-23', fillBy: '18:00', late: false, people: [V], tasks, stuck: [], unread: [], suggestions: [] }) });
+  t.state.boardFilter = 'sugg';
+  t.go('today'); await new Promise((r) => setTimeout(r, 0)); await new Promise((r) => setTimeout(r, 0));
+  assert.match(t.view().textContent, /💡 Suggestions 0/);
+});

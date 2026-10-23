@@ -600,12 +600,6 @@ export function createTeam(opts) {
     const filt = state.personFilter;
     const people = [...(d.people || [])];
     for (const t of d.tasks) if (!people.some((p) => p.id === t.assignee.id)) people.push({ id: t.assignee.id, name: t.assignee.name });
-    const row = (t) => {
-      const u = t.today;
-      const sub = u ? `✓ ${fmtTime(u.at)}${u.state === 'stuck' ? ' · stuck' : u.state === 'finished' ? ' · finished' : ''} — ${u.note}` : t.queued ? 'Coming next' : d.late ? 'Not filled today' : 'Not filled yet';
-      const lateBy = t.status === 'open' && t.dueDate && t.dueDate < d.today;
-      return rowOf(t, (lateBy ? `⏰ Late (by ${fmtDay(t.dueDate)}) · ` : '') + sub, t.stuck || lateBy ? 'red' : u ? 'green' : d.late ? 'red' : 'yellow', (!u && d.late) || lateBy);
-    };
     const sentMark = (p) => { const tm = rules.sentTime(sentAtOf(p.id, p.morningSentAt), istDay()); return tm ? h('span', { class: 'muted small', title: 'Morning email sent today' }, ' ✓ ' + tm) : null; };
     return [
       d.stale ? h('p', { class: 'empty-list' }, `📴 Saved copy from ${fmtDay(d.today)} — today's updates are not shown yet.`) : null,
@@ -632,7 +626,7 @@ export function createTeam(opts) {
       h('button', { class: 'btn small', disabled: b.page < b.pages ? undefined : true, onClick: turn(b.page + 1) }, 'Next ›')) : null;
     const chip = (k, label) => h('button', { class: 'chip board-count' + (state.boardFilter === k ? ' on' : ''), 'aria-pressed': String(state.boardFilter === k), onClick: pick(k) }, label);
     const seg = (g, label) => h('button', { class: 'seg' + ((state.boardGroup || 'person') === g ? ' on' : ''), 'aria-pressed': String((state.boardGroup || 'person') === g), onClick: () => { state.boardGroup = g; state.boardPage = 1; render(); } }, label);
-    const STATUS = { sent: ['✓ Sent', 'good'], notyet: ['Not yet', d.late ? 'late' : 'waiting'], stuck: ['⚠️ Stuck', 'late'], late: ['⏰ Late', 'late'], sugg: ['💡 Suggestion — yes or no?', 'remind'] };
+    const STATUS = { sent: ['✓ Sent', 'good'], notyet: ['Not yet', d.late ? 'late' : 'waiting'], stuck: ['⚠️ Stuck', 'late'], late: ['⏰ Late', 'late'], sugg: ['💡 Suggestion — yes or no?', 'remind'], notdue: ['Not due today', 'waiting'] };
     const cell = (cls, ...c) => h('td', { class: cls }, ...c);
     const line = (r) => {
       const t = r.t, u = t.today, m = t.lastMessage;
@@ -651,7 +645,7 @@ export function createTeam(opts) {
       g.person ? [' ', h('button', { class: 'chip', onClick: (e) => { if (e && e.stopPropagation) e.stopPropagation(); morningEmail(g.person); } }, '📧 Morning email'), sentMark(g.person)] : null));
     return [
       h('div', { class: 'board-counts row' }, chip('sent', `✓ Sent ${b.counts.sent}`), chip('notyet', `⏳ Not yet ${b.counts.notyet}`), chip('stuck', `⚠️ Stuck ${b.counts.stuck}`),
-        chip('late', `⏰ Late ${b.counts.late}`), chip('msg', `💬 New messages ${b.counts.msg}`), b.counts.sugg ? chip('sugg', `💡 Suggestions ${b.counts.sugg}`) : null),
+        chip('late', `⏰ Late ${b.counts.late}`), chip('msg', `💬 New messages ${b.counts.msg}`), b.counts.sugg || state.boardFilter === 'sugg' ? chip('sugg', `💡 Suggestions ${b.counts.sugg}`) : null),
       h('div', { class: 'segmented board-group-by', role: 'group', 'aria-label': 'Group the table' }, seg('person', 'By person'), seg('project', 'By 📂 project')),
       !b.total ? h('p', { class: 'empty-list' }, 'No tasks today.') : !b.groups.length ? h('p', { class: 'empty-list' }, 'None of these. ', h('button', { class: 'link', onClick: pick(state.boardFilter) }, 'Show all')) :
         h('table', { class: 'sub-table board-table' },

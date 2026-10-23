@@ -1400,3 +1400,15 @@ test('Team today table: 20 rows a page (a person\'s line comes again on the next
   assert.deepEqual(s.groups.flatMap((g) => g.rows.map((r) => [r.t.id, r.status, r.colour])), [[900, 'sugg', 'yellow']], 'a suggestion: yes or no');
   assert.equal(s.groups[0].all, 0, 'a suggestion is not a task to send an update on');
 });
+
+test('Team today table: a stuck task or one with new messages that is not due today is still a row (they were the "Needs you" list), each once', async () => {
+  const { teamBoard } = await import('../team/public_html/logic.js');
+  const V = { id: 3, name: 'Valar' };
+  const T = (id, x = {}) => ({ id, title: 'T' + id, assignee: V, status: 'open', repeat: 'daily', today: null, stuck: false, unread: 0, ...x });
+  const due = T(1, { unread: 1 });
+  const d = { today: '2026-10-23', late: true, tasks: [due], stuck: [T(2, { repeat: 'weekly', stuck: true })], unread: [due, T(3, { repeat: 'weekly', unread: 2 })], suggestions: [] };
+  const b = teamBoard(d);
+  assert.deepEqual(b.groups.flatMap((g) => g.rows.map((r) => [r.t.id, r.status])), [[1, 'notyet'], [2, 'stuck'], [3, 'notdue']], 'the stuck one and the one with new messages are in the table; today\'s task once');
+  assert.deepEqual([b.counts.stuck, b.counts.msg, b.counts.notyet], [1, 2, 1], 'a task not due today is not "Not yet"');
+  assert.equal(b.groups[0].all, 1, '"x of y sent" counts only today\'s tasks');
+});
