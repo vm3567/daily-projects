@@ -986,7 +986,7 @@ test('📂 Projects page head: the line (each task counted once) and "+ New proj
   const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
   assert.match(app, /if \(ui\.view === 'mains'\) return mainProjects\(store\.view\.data\)\.filter\(\(p\) => p\.state !== 'finished'\);/, 'the list shows projects only');
   assert.match(app, /const asProject = ui\.view === 'mains' && !ui\.search;/, 'a project row shows "N tasks · …" instead of the next step');
-  assert.match(app, /asProject \? h\('span', \{ class: 'prow-next' \}, mainSummary\(/);
+  assert.match(app, /asProject \? h\('span', \{ class: 'prow-next' \}, projectLine\(store\.view\.data, p, today\)\)/, 'its line counts the projects inside it and their tasks (owner asked 23 Oct)');
   assert.ok(!/'replies', 'mains'\]\.includes\(ui\.view\)/.test(app), '↓ ↑ move through projects like tasks');
   assert.ok(!/renderMainProjects/.test(app), 'the old cards are gone');
 });
@@ -1006,7 +1006,7 @@ test('📂 app wiring (app.js): ✅ Tasks and 📂 Projects menu items (keys; li
   assert.match(APP, /if \(ui\.view === 'all'\) return activeTasks\(store\.view\.data\)/);
   assert.match(APP, /const rows = open\.map\(\(p\) => projectRow\(p, today\)\);/, 'flat: each task once');
   assert.match(APP, /projectChips\(store\.view\.data, p\)/, 'project chips under the row');
-  assert.match(APP, /item\('📂', 'Add to a project…'/);
+  assert.match(APP, /item\('📂', task \? 'Add to a project…' : 'Put inside a project…'/, 'a task: Add to a project; a 📂 project: Put inside a project (owner asked 23 Oct)');
   assert.match(APP, /'\+ New task', keyHint\('N'\)/);
   assert.match(APP, /todayWithoutEmptyMains\(awakeProjects/);
   assert.match(APP, /type === 'createMainProject' \? \{ removeProjectId: args\.projectId \} : parentIds \? \{ parentIds \}/);
@@ -1060,7 +1060,7 @@ test('📂 Projects page: a click on a project row selects it and stays on the p
   assert.match(mainsSrc, /ctx\.ui\.view === 'mains' && ctx\.showHere \? ctx\.showHere\(c\.id\)/, 'a task in the TASKS table while on the Projects page');
   const here = app.slice(app.indexOf('  showHere: (id) => {'), app.indexOf('  openProject: (id) => {'));
   assert.match(here, /select\(id\);/);
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-39'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-40'/, 'phones get the new copy');
 });
 
 test('📂 project page: "✕ Remove" on a task row takes it out of this project only — the task is kept (and stays in its other projects)', () => {
@@ -1845,7 +1845,7 @@ test('🔌 app wiring (app.js): "🔌 From apps" after ✉ Replies with the wait
   assert.match(app, /function go\(view\) \{\n\s*if \(view !== 'settings'\) forgetOnce\(\);/);
   assert.match(app, /if \(onServer\) loadApps\(appsCtx, force \|\| ui\.view === 'apps'\);/);
   assert.match(app, /replies: '✉ Replies', apps: '🔌 From apps', mains: '📂 Projects' \}\[ui\.view\]/, 'its page title');
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-39'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-40'/, 'phones get the new copy');
 });
 
 test('🔌 the PHP connector (team/connector/worktask-connector.php): the same text the app downloads, placeholders only (no real key), valid PHP 7.4+ (php -l), with wt_push / wt_withdraw / wt_decisions / wt_receive_decision', async () => {
@@ -3818,4 +3818,36 @@ test('Right-click in the staff app (my tasks, a folder\'s table): open, write to
   assert.ok(S.includes("class: 'sub-row', onClick: () => open('task:' + x.t.id), onContextmenu: (e) => openMenuAt(state, render, { t: x.t }, e) },"), 'the folder table too');
   const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
   assert.ok(app.includes("for (const v of [teamView, staffView]) if (v && v.state.rowMenu && !e.target.closest('.row-menu')) { v.state.rowMenu = null; v.render(); }"), 'a click elsewhere closes it');
+});
+
+test('📂 A project\'s page lists the projects inside it (each opens; right-click: its menu) above its TASKS table; "+ 📂 Project inside" makes one; the TASKS table has only tasks', () => {
+  const s = mainsState(); // 📂 Kilns: p1, c2
+  applyOps(s, [makeOp('createMainProject', { projectId: 'big', name: 'Plant upgrade' }), makeOp('addToProject', { projectId: 'm', parentId: 'big' }), makeOp('addToProject', { projectId: 'o', parentId: 'big' })]);
+  const ctx = liveCtx(s, { selected: 'big' });
+  ctx.openRowMenu = (id, e, from) => ctx.calls.push(['menu', id, from]);
+  const big = s.data.projects.find((p) => p.id === 'big');
+  const el = mains.subProjectsBlock(ctx, big);
+  assert.match(el.textContent, /PROJECTS INSIDE \(1\)/);
+  const inner = rFind(el, (n) => n.nodeName === 'LI' && /inner-project/.test(n.className));
+  assert.match(inner.textContent, /📂 Kilns/);
+  assert.match(inner.textContent, /2 tasks/, 'its own line');
+  rFind(inner, (n) => n.nodeName === 'BUTTON').__on.click();
+  assert.deepEqual(ctx.calls.at(-1), ['open', 'm']);
+  inner.__on.contextmenu({ preventDefault() {} });
+  assert.deepEqual(ctx.calls.at(-1), ['menu', 'm', 'big']);
+  assert.match(el.textContent, /TASKS \(1\)/, 'only the task Office move: Kilns is listed above');
+  // + 📂 Project inside
+  const btn = rFind(el, (n) => n.nodeName === 'BUTTON' && n.textContent === '+ 📂 Project inside');
+  globalThis.prompt = () => 'Dryers';
+  ctx.toast = (t) => ctx.calls.push(['toast', t]);
+  btn.__on.click();
+  delete globalThis.prompt;
+  const dryers = s.data.projects.find((p) => p.name === 'Dryers');
+  assert.deepEqual(dryers.parentIds, ['big']);
+  assert.deepEqual(ctx.calls.at(-1), ['toast', 'New project 📂 Dryers inside 📂 Plant upgrade']);
+  // the right-click menu and the ⋯ menu offer it for projects (never 📂 Misc)
+  const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
+  assert.ok(app.includes("movable ? item('🔀', task ? 'Move to another project…' : 'Move inside another project…'"));
+  assert.ok(app.includes("!task && !p.misc && p.state !== 'finished' ? item('＋', 'New project inside…', () => newInnerProject(ctx, p)) : null,"));
+  assert.ok(readFileSync(new URL('../docs/ui/detail.js', import.meta.url), 'utf8').includes("p.misc ? null : item(isMainProject(store.view.data, p) ? '📂 Put inside a project…' : '📂 Add to a project…'"));
 });

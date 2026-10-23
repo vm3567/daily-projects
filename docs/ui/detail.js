@@ -13,7 +13,7 @@ import { richArea, richView, addDraftPhotos, readDraft, clearDraft, photoArgs, f
 import { enterAction, richFileIds, textToHtml } from '../rich.js';
 import { projectEmailCards, emailThreadBlock } from './replies.js';
 import { mainBox, mainChip, subProjectsBlock, openMainBox } from './mains.js';
-import { isMainProject, timerOn, childrenOf } from '../rules.js';
+import { isMainProject, timerOn, childrenOf, projectTasks } from '../rules.js';
 import { stageLine } from './stage.js';
 
 /** 'project' for a 📂 project, 'task' for everything else (what the app once called a project). */
@@ -659,7 +659,7 @@ function remindOnceBar(ctx, p) {
  */
 function giveTaskList(ctx, p) {
   const { ui } = ctx;
-  const kids = childrenOf(ctx.store.view.data, p.id).filter((c) => c.state !== 'finished');
+  const kids = projectTasks(ctx.store.view.data, p.id).filter((c) => c.state !== 'finished'); // (its projects' tasks go too)
   if (!ui.giveKeep || ui.giveKeepFor !== p.id) { ui.giveKeep = new Set(kids.filter((c) => c.teamOff).map((c) => c.id)); ui.giveKeepFor = p.id; } // (this project's, never another's)
   if (!kids.length) return h('p', { class: 'muted small' }, 'No tasks in it yet. Tasks you add later go to the same person.');
   const keep = ui.giveKeep;
@@ -885,8 +885,8 @@ function projectMenu(ctx, p) {
     p.state === 'active' ? item('⏸ Pause', () => ctx.act('pause', { projectId: p.id }, `Paused: ${p.name}`)) : null,
     timed ? item('⏱ Add time', () => addTimePrompt(ctx, p)) : null,
     item('✎ Tag, priority, target date', () => { ui.editMeta = true; }),
-    // 📂 a task can be in several projects; a project is never inside another one
-    !isMainProject(store.view.data, p) ? item('📂 Add to a project…', () => openMainBox(ctx, p, 'parent')) : null,
+    // 📂 a task can be in several projects; a project can be inside other projects too (never 📂 Misc)
+    p.misc ? null : item(isMainProject(store.view.data, p) ? '📂 Put inside a project…' : '📂 Add to a project…', () => openMainBox(ctx, p, 'parent')),
     p.misc ? null : item(`🗑 Delete ${kindWord(ctx, p)}`, () => { // (📂 Misc stays: it holds every task in no other project)
       if (!confirm(deleteQuestion(ctx.store.view.data, p))) return;
       ctx.act('deleteProject', { projectId: p.id }, `Deleted: ${p.name}`, 10000);

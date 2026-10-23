@@ -1,9 +1,10 @@
-// 📂 Projects: a project holds a few tasks; a task can be in several projects (or none). A project is never inside another.
+// 📂 Projects: a project holds a few tasks and projects (projects inside projects, owner asked 23 Oct; never in a circle);
+// a task can be in several projects (or none).
 // The "📂 Add to a project…" box (pick several: ✓ = in it), the TASKS table on a project's page, the "📂 Kilns ›" chips
 // on a task, the small project chips under a task's row in the lists, and the "📂 Projects" page.
 
 import { h, fmtDay } from './dom.js';
-import { dotColour, nextStep, todayIndia, indiaDate, childrenOf, parentsOf, isMainProject, mainProjects, mainColour, mainSummary, mainChoices, moveChoices, moveSteps, addHereChoices, orderedTasks, movedOrder, dropSlot, droppedOrder } from '../rules.js';
+import { dotColour, nextStep, todayIndia, indiaDate, childrenOf, parentsOf, isMainProject, mainProjects, mainColour, mainSummary, projectTasks, projectLine, subProjectsOf, mainChoices, moveChoices, moveSteps, addHereChoices, orderedTasks, movedOrder, dropSlot, droppedOrder } from '../rules.js';
 import { newId } from '../ops.js';
 import { stageCounts, byStage } from '../rules.js';
 import { stageChip, stageFilterBar, ownerStage } from './stage.js';
@@ -20,7 +21,7 @@ function redFirst(list, colour) {
 
 /** The dot in a list: a 📂 project shows the worst of itself and its tasks; a task its own dot. */
 export function listColour(data, p, today = todayIndia()) {
-  return isMainProject(data, p) ? mainColour(p, childrenOf(data, p.id), today) : dotColour(p, today);
+  return isMainProject(data, p) ? mainColour(p, projectTasks(data, p.id), today) : dotColour(p, today); // (its tasks at any depth)
 }
 
 function focusBox(key) {
@@ -197,7 +198,7 @@ export function addTasksPicker(ctx, m) {
     list.length ? h('ul', { class: 'add-tasks-list' }, list.map((x) => h('li', { key: 'at-' + x.id },
       h('label', { class: 'add-tasks-row' },
         h('input', { type: 'checkbox', checked: pk.picked.has(x.id) ? true : undefined, onChange: (e, el) => { if (el.checked) pk.picked.add(x.id); else pk.picked.delete(x.id); ctx.render(); } }),
-        h('span', { class: `dot ${dotColour(x, todayIndia())}` }), ` ${x.name}`,
+        h('span', { class: `dot ${listColour(data, x, todayIndia())}` }), isMainProject(data, x) ? ` 📂 ${x.name}` : ` ${x.name}`, // (a project can go in too)
         parentsOf(data, x).length ? h('span', { class: 'muted small' }, `  · ${parentsOf(data, x).map((m) => '📂 ' + m.name).join(', ')}`) : null))))
       : h('p', { class: 'muted small' }, pk.q ? 'No task matches.' : 'Every task is in it already.'),
     h('div', { class: 'row' },
@@ -309,7 +310,7 @@ export function subProjectsBlock(ctx, p, today = todayIndia()) {
   const { store } = ctx;
   const data = store.view.data;
   if (!isMainProject(data, p)) return null;
-  const all = orderedTasks(data, p, today); // your order (drag the ⋮⋮ grip), new ones after
+  const all = orderedTasks(data, p, today).filter((c) => !isMainProject(data, c)); // your order (drag the ⋮⋮ grip), new ones after; (its projects: listed above)
   // Stage filter chips over the table (counts of this project's tasks); the drag order is kept for the ones shown
   const stages = new Map(all.map((c) => [c.id, ownerStage(ctx, c)]));
   const stageOfKid = (c) => stages.get(c.id).stage;
@@ -329,6 +330,7 @@ export function subProjectsBlock(ctx, p, today = todayIndia()) {
     save(c, movedOrder(kids, c.id, e.key === 'ArrowUp' ? -1 : 1));
   };
   return h('section', { class: 'block sub-projects', key: 'subs-' + p.id },
+    innerProjects(ctx, p, today),
     h('h3', null, `TASKS (${all.length})`),
     all.length ? stageFilterBar(stageCounts(all, stageOfKid), sf, (k) => { (ctx.ui.subStage ||= {})[p.id] = k; ctx.render(); }) : null,
     !kids.length && all.length ? h('p', { class: 'muted small' }, 'None in this stage.') : null,
@@ -364,12 +366,40 @@ export function subProjectsBlock(ctx, p, today = todayIndia()) {
     h('div', { class: 'sub-buttons' },
       p.misc ? null : h('button', { class: 'btn small', type: 'button', onClick: () => openAddTasks(ctx, p) }, '+ Add tasks'),
       h('button', { class: 'btn small', type: 'button', onClick: () => newProjectHere(ctx, p) }, '+ New task here'),
+      p.misc ? null : h('button', { class: 'btn small', type: 'button', title: 'A project inside this one (it holds its own tasks)', onClick: () => newInnerProject(ctx, p) }, '+ 📂 Project inside'),
       h('button', { class: 'btn small', type: 'button', title: 'Copy this project\'s tasks as a numbered list (for an AI chat or an email)', onClick: () => ctx.copyList && ctx.copyList(orderedTasks(ctx.store.view.data, p).filter((c) => c.state !== 'finished'), { title: `📂 ${p.name}`, about: p.about || '' }) }, '📋 Copy list')),
     addTasksPicker(ctx, p),
     newHereBox(ctx, p));
 }
 
 /** "+ New task here": opens a box on the page (a name, and notes you can paste a screenshot or a table into). */
+/** On a project's page: the 📂 projects inside it (each opens; right-click: move, take out…), with their own counts. */
+function innerProjects(ctx, p, today) {
+  const data = ctx.store.view.data;
+  const subs = subProjectsOf(data, p.id).filter((c) => c.state !== 'finished');
+  if (!subs.length) return null;
+  const openIt = (c) => (ctx.ui.view === 'mains' && ctx.showHere ? ctx.showHere(c.id) : ctx.openProject(c.id));
+  return h('div', { class: 'inner-projects', key: 'inner-' + p.id },
+    h('h3', null, `PROJECTS INSIDE (${subs.length})`),
+    h('ul', { class: 'plist' }, subs.map((c) => h('li', {
+      key: 'in-' + c.id, class: 'prow main-row inner-project', onContextmenu: (e) => ctx.openRowMenu && ctx.openRowMenu(c.id, e, p.id),
+    },
+    h('button', { class: 'prow-btn', type: 'button', onClick: () => openIt(c) },
+      h('span', { class: 'dot ' + listColour(data, c, today) }),
+      h('span', { class: 'prow-text' }, h('span', { class: 'prow-name' }, '📂 ', c.name), h('span', { class: 'prow-next' }, projectLine(data, c, today))))))));
+}
+
+/** "+ 📂 Project inside": a new project made inside this one (one Undo takes it away). */
+export function newInnerProject(ctx, p) {
+  const name = globalThis.prompt ? prompt(`Name of the new project inside 📂 ${p.name}:`) : null;
+  if (!name || !name.trim()) return;
+  const projectId = newId();
+  if (!ctx.store.dispatch('createMainProject', { projectId, name: name.trim() })) return;
+  ctx.store.dispatch('addToProject', { projectId, parentId: p.id });
+  ctx.toast(`New project 📂 ${name.trim()} inside 📂 ${p.name}`);
+  ctx.render();
+}
+
 export function newProjectHere(ctx, p) {
   ctx.ui.newHere = p.id;
   ctx.render();
@@ -399,7 +429,7 @@ export function renderProjectsHead(ctx) {
   const { store } = ctx;
   const data = store.view.data;
   const mains = mainProjects(data).filter((m) => m.state !== 'finished');
-  const inside = new Set(mains.flatMap((m) => childrenOf(data, m.id).filter((c) => c.state !== 'finished').map((c) => c.id))).size; // each task once
+  const inside = new Set(mains.flatMap((m) => projectTasks(data, m.id).filter((c) => c.state !== 'finished').map((c) => c.id))).size; // each task once
   const newMain = () => {
     const name = globalThis.prompt ? prompt('Name of the new project (it holds a few tasks):') : null;
     if (!name || !name.trim()) return;

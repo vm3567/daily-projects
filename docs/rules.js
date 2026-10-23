@@ -351,7 +351,8 @@ export function projectGiveChanges(data) {
     if (isMainProject(data, t)) continue;
     if (t.state === 'finished') continue; // finished: never given, moved or taken back (it stays as it ended)
     if (t.team && !t.team.viaProject) continue; // given on its own: stays with its person
-    const given = parentIdsOf(t).map((id) => byId.get(id)).filter((m) => m && m.team && m.state !== 'finished');
+    // the projects it is in, and the ones those are in (a task in a project inside a given project goes too), nearest first
+    const given = ancestorsOf(data, t).filter((m) => m.team && m.state !== 'finished');
     const via = t.team && byId.get(t.team.viaProject);
     const m = (via && given.includes(via) ? via : given[0]) || null;
     if (!m) { if (t.team) out.push({ projectId: t.id, team: null }); continue; }
@@ -437,13 +438,59 @@ export function mainSummary(children, today = todayIndia()) {
   return [head, n.green ? `${n.green} green` : null, n.grey ? `${n.grey} resting` : null].filter(Boolean).join(' · ');
 }
 
-/** Can the task `child` go into the project `main`? (never itself; a project is never inside another; the project is active or paused). */
+/**
+ * Can `child` (a task, or a 📂 project: projects inside projects, owner asked 23 Oct) go into the project `main`?
+ * Never itself; never into 📂 Misc or a finished one; a task that is inside a project cannot hold things (it is a task,
+ * not a project); a project never goes inside one of its own projects (no circle), and 📂 Misc never goes in anything.
+ */
 export function canPutUnder(data, child, main) {
   if (!child || !main || child.id === main.id) return false;
-  if (main.id === MISC_ID) return false; // 📂 Misc holds what is in no other project by itself: nothing is put in it
-  if (parentIdsOf(main).length || main.state === 'finished') return false; // something inside a project cannot hold tasks
-  if (isMainProject(data, child)) return false; // a project is never inside another project
+  if (main.id === MISC_ID || child.id === MISC_ID) return false; // 📂 Misc holds what is in no other project by itself
+  if (main.state === 'finished') return false;
+  if (parentIdsOf(main).length && !isMainProject(data, main)) return false; // a task inside a project cannot hold tasks
+  if (isMainProject(data, child) && !isMainProject(data, main)) return false; // a project goes into a project, never into a task
+  if (isMainProject(data, child) && descendantIds(data, child.id).has(main.id)) return false; // no circle
   return true;
+}
+
+/** Every id inside the project `id`, at any depth (its tasks and projects, theirs…); each once, safe from circles. */
+export function descendantIds(data, id) {
+  const out = new Set();
+  const walk = (x) => { for (const c of data.projects) if (!out.has(c.id) && c.id !== id && parentIdsOf(c).includes(x)) { out.add(c.id); walk(c.id); } };
+  walk(id);
+  return out;
+}
+
+/** The tasks inside the project `id` at any depth (the ones in its projects too), each once; 📂 Misc: its loose tasks. */
+export function projectTasks(data, id) {
+  if (id === MISC_ID && hasMisc(data)) return childrenOf(data, id);
+  const ids = descendantIds(data, id);
+  return data.projects.filter((p) => ids.has(p.id) && !isMainProject(data, p));
+}
+
+/** The 📂 projects right inside the project `id` (one level down). */
+export function subProjectsOf(data, id) {
+  return childrenOf(data, id).filter((c) => isMainProject(data, c));
+}
+
+/** The projects a project or task is inside, going up (nearest first), each once. */
+export function ancestorsOf(data, p) {
+  const byId = new Map(data.projects.map((x) => [x.id, x]));
+  const out = [], seen = new Set([p.id]);
+  let level = parentIdsOf(p);
+  while (level.length) {
+    const next = [];
+    for (const id of level) { const m = byId.get(id); if (!m || seen.has(id)) continue; seen.add(id); out.push(m); next.push(...parentIdsOf(m)); }
+    level = next;
+  }
+  return out;
+}
+
+/** A 📂 project's line in a list: "2 projects · 5 tasks · 1 red" (its tasks at any depth; finished ones left out). */
+export function projectLine(data, p, today = todayIndia()) {
+  const subs = subProjectsOf(data, p.id).filter((c) => c.state !== 'finished').length;
+  const line = mainSummary(projectTasks(data, p.id).filter((c) => c.state !== 'finished'), today);
+  return subs ? `${subs} project${subs === 1 ? '' : 's'} · ${line === 'No tasks in it yet' ? 'no tasks yet' : line}` : line;
 }
 
 /**
@@ -457,7 +504,7 @@ export function mainChoices(data, p, query = '') {
   const fits = (x) => (inIds.includes(x.id) || canPutUnder(data, p, x)) && x.id !== p.id && (!q || x.name.toLowerCase().includes(q));
   const mains = data.projects.filter((x) => isMainProject(data, x) && x.state !== 'finished' && fits(x));
   const exact = q && data.projects.some((x) => isMainProject(data, x) && x.name.trim().toLowerCase() === q);
-  return { items: mains.map((x) => ({ p: x, main: true, in: inIds.includes(x.id) })), create: q && !exact && !isMainProject(data, p) ? String(query).trim() : null };
+  return { items: mains.map((x) => ({ p: x, main: true, in: inIds.includes(x.id) })), create: q && !exact && p.id !== MISC_ID ? String(query).trim() : null };
 }
 
 /**
@@ -499,8 +546,9 @@ export function addHereChoices(data, main, query = '') {
   const q = String(query || '').trim().toLowerCase();
   const list = data.projects.filter((x) => x.state !== 'finished' && !parentIdsOf(x).includes(main.id) && canPutUnder(data, x, main)
     && (!q || x.name.toLowerCase().includes(q)));
-  // tasks in no project first, then the ones already in another project (owner asked, 22 Oct)
-  return [...list.filter((x) => !parentIdsOf(x).length), ...list.filter((x) => parentIdsOf(x).length)];
+  // tasks in no project first, then the ones already in another project (owner asked, 22 Oct), then 📂 projects (23 Oct)
+  const tasks = list.filter((x) => !isMainProject(data, x));
+  return [...tasks.filter((x) => !parentIdsOf(x).length), ...tasks.filter((x) => parentIdsOf(x).length), ...list.filter((x) => isMainProject(data, x))];
 }
 
 /** Today: a project with no own next step only holds its tasks; they show as normal rows (the project is left out). */
@@ -1113,9 +1161,12 @@ export function keepMovedStep(step, task, teamLoaded) {
 
 /** The delete question: a 📂 project says its tasks are kept (they only leave it); a task asks plainly. */
 export function deleteQuestion(data, p) {
-  const n = childrenOf(data, p.id).length;
+  const kids = childrenOf(data, p.id);
+  const subs = kids.filter((c) => isMainProject(data, c)).length;
+  const n = kids.length - subs;
   if (isMainProject(data, p)) {
-    return `Delete the project "${p.name}"?\n\n${n ? `Its ${n} task${n === 1 ? ' is' : 's are'} kept — ${n === 1 ? 'it just leaves' : 'they just leave'} this project.` : 'It has no tasks.'}\n\nYou can press Undo for a few seconds after.`;
+    const what = [n ? `${n} task${n === 1 ? '' : 's'}` : '', subs ? `${subs} project${subs === 1 ? '' : 's'}` : ''].filter(Boolean).join(' and ');
+    return `Delete the project "${p.name}"?\n\n${what ? `Its ${what} ${n + subs === 1 ? 'is' : 'are'} kept — ${n + subs === 1 ? 'it just leaves' : 'they just leave'} this project.` : 'It has no tasks.'}\n\nYou can press Undo for a few seconds after.`;
   }
   return `Delete "${p.name}"?\n\nYou can press Undo for a few seconds after.`;
 }

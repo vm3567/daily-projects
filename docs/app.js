@@ -10,7 +10,7 @@ import { renderDashboard } from './ui/dashboard.js';
 import { renderTimeReport } from './ui/timereport.js';
 import { renderReplies, renderReplyRound, replyArea, readyCount } from './ui/replies.js';
 import { renderConnectionsSettings, renderFromApps, loadApps, appsPending, forgetOnce } from './ui/connections.js';
-import { projectChips, renderProjectsHead, openMainBox, openMoveBox, moveBox, listColour } from './ui/mains.js';
+import { projectChips, renderProjectsHead, openMainBox, openMoveBox, moveBox, listColour, newInnerProject } from './ui/mains.js';
 import { projectMatches, diaryEntries, backupPayload, summaryText, personMessageText, personMessageHtml, sentMarkOf, copyNotice, tasksListText } from './reports.js';
 import { closeViewer, uploadBlob, photoThumb } from './ui/files.js';
 import { newTaskBox, createTaskWithNote, richView } from './ui/richedit.js';
@@ -26,7 +26,7 @@ import { stageChip, stageFilterBar } from './ui/stage.js';
 import { whoFromUser, signInTag, timerOn, projectGiveChanges, UNDO_GRACE_MS, MISC_ID } from './rules.js';
 import { signInCard, firstPasswordCard } from './ui/signin.js';
 import { createBell } from './ui/bell.js';
-import { parentIdsOf, isMainProject, mainProjects, activeTasks, todayWithoutEmptyMains, todayList, stepTargets, mainSummary, childrenOf, deleteQuestion, pickEnterTarget } from './rules.js';
+import { parentIdsOf, isMainProject, mainProjects, activeTasks, todayWithoutEmptyMains, todayList, stepTargets, mainSummary, childrenOf, deleteQuestion, pickEnterTarget, projectLine, projectTasks } from './rules.js';
 import { newId, clone, opMonth, cleanLink, carriedOps, orderPosOf } from './ops.js';
 import * as ai from './ai.js';
 import { parseVoice } from './voice.js';
@@ -1216,7 +1216,7 @@ function projectRow(p, today, opts = {}) {
           p.state !== 'active' ? h('span', { class: 'tag' }, p.state) : null,
           p.priority === 'high' ? h('span', { class: 'tag high' }, 'High') : null,
           ui.view === 'all' && !isMainProject(store.view.data, p) ? stageChip(taskStage(p)) : null), // ✅ Tasks: the Stage chip on each row
-        asProject ? h('span', { class: 'prow-next' }, mainSummary(childrenOf(store.view.data, p.id).filter((c) => c.state !== 'finished'), today)) : null,
+        asProject ? h('span', { class: 'prow-next' }, projectLine(store.view.data, p, today)) : null, // "2 projects · 5 tasks · 1 red"
         asProject ? null : h('span', { class: 'prow-next' }, ns ? `Next: ${ns.text}` : '', // (no next step: nothing said — the + on the left adds one)
           ns && ns.waiting ? waitingTag(ns) : null,
           ns && ns.snoozedUntil && ns.snoozedUntil > today ? h('span', { class: 'tag repeat' }, `↻ from ${fmtDay(ns.snoozedUntil)}`) : null,
@@ -1787,7 +1787,8 @@ function rowMenu() {
   const today = todayIndia();
   const due = p.state === 'active' && nextStep(p, today, { dueOnly: true });
   const timing = store.view.data.timer && store.view.data.timer.projectId === p.id;
-  const task = !isMainProject(store.view.data, p) && !p.misc; // (a 📂 project is never inside another one)
+  const task = !isMainProject(store.view.data, p) && !p.misc;
+  const movable = !p.misc; // a task, or a 📂 project (projects inside projects); never 📂 Misc
   const from = m.from ? store.view.data.projects.find((x) => x.id === m.from) : null; // right-clicked in this project's table
   const item = (icon, label, fn, cls = '') => h('button', {
     class: 'row-menu-item' + cls, role: 'menuitem',
@@ -1810,8 +1811,9 @@ function rowMenu() {
       ? item('👥', `Take back from ${p.team.name}`, () => { if (confirm(takeBackQuestion(store.view.data, p))) giveProject(p, null); })
       : item('👥', `Give ${kindWord(p)} to…`, () => { select(p.id); ui.giveOpen = p.id; ui.givePhoto = false; })) : null,
     item('↗', 'Open', () => select(p.id)),
-    task ? item('🔀', 'Move to another project…', () => openMoveBox(ctx, p, from ? from.id : null)) : null,
-    task ? item('📂', 'Add to a project…', () => { select(p.id); openMainBox(ctx, p, 'parent'); }) : null,
+    movable ? item('🔀', task ? 'Move to another project…' : 'Move inside another project…', () => openMoveBox(ctx, p, from ? from.id : null)) : null,
+    movable ? item('📂', task ? 'Add to a project…' : 'Put inside a project…', () => { select(p.id); openMainBox(ctx, p, 'parent'); }) : null,
+    !task && !p.misc && p.state !== 'finished' ? item('＋', 'New project inside…', () => newInnerProject(ctx, p)) : null,
     from && !from.misc ? item('✕', `Take out of 📂 ${from.name}`, () => act('removeFromProject', { projectId: p.id, parentId: from.id }, `${p.name} taken out of 📂 ${from.name} (the task is kept)`)) : null,
     item('✎', 'Rename…', () => {
       const n = prompt('New name:', p.name);
@@ -3464,7 +3466,7 @@ async function giveProject(p, person, needsPhoto = !!ui.givePhoto, keep = ui.giv
       const out = await teamApi('project.sync', { projectRef: p.id, project: p.name, about: p.about || '', folder: folderOf(p), assigneeId: person ? person.id : 0, steps, needsPhoto, reason: person ? '' : 'taken', baseCommit: store.base && store.base.commit, pending: true });
       team.gen++; // a list fetched before this change is old now: it must not move the project back
       store.dispatch('setProjectTeam', { projectId: p.id, userId: person ? person.id : null, name: person ? person.name : '', needsPhoto, ...(main && person ? { giveTasks: true } : {}), ...(!main && !person ? { keepOff: true } : {}) });
-      const kids = new Set(main ? childrenOf(store.view.data, p.id).map((c) => c.id) : []);
+      const kids = new Set(main ? projectTasks(store.view.data, p.id).map((c) => c.id) : []); // (its projects' tasks too)
       if (main && person && keep) for (const id of keep) if (kids.has(id)) store.dispatch('setProjectTeam', { projectId: id, userId: null, keepOff: true }); // the ones you keep (of this project only)
       ui.giveOpen = null;
       ui.givePhoto = false;
@@ -3507,7 +3509,7 @@ function followProjects({ onlyFresh = false } = {}) {
 
 /** "4 tasks go with it · 2 stay with Ravi · 1 stays with you" — after giving a 📂 project. */
 function giveSummary(p, person) {
-  const kids = childrenOf(store.view.data, p.id).filter((c) => c.state !== 'finished');
+  const kids = projectTasks(store.view.data, p.id).filter((c) => c.state !== 'finished'); // (its projects' tasks go too)
   const go = kids.filter((c) => c.team && c.team.userId === person.id).length;
   const others = new Map();
   for (const c of kids) if (c.team && c.team.userId !== person.id) others.set(c.team.name, (others.get(c.team.name) || 0) + 1);

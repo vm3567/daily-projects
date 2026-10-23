@@ -9,7 +9,7 @@
 // applyOp(state, op) changes the state in place and returns true, or returns false
 // when the operation must be skipped (for example, its item no longer exists).
 
-import { WORK, indiaDate, monthOf, laterDate, addDays, REPEATS, nextRepeatDate, waitingAgain, WEEKDAYS, indiaDateTime, validRemindOnce, remindOnceText, canPutUnder, parentIdsOf, normalizeParents, isMainProject, THREAD_MAX, timerOn, MISC_ID, STAGES, STAGE_LABELS, cleanWaitingFor } from './rules.js';
+import { WORK, indiaDate, monthOf, laterDate, addDays, REPEATS, nextRepeatDate, waitingAgain, WEEKDAYS, indiaDateTime, validRemindOnce, remindOnceText, canPutUnder, parentIdsOf, normalizeParents, isMainProject, descendantIds, THREAD_MAX, timerOn, MISC_ID, STAGES, STAGE_LABELS, cleanWaitingFor } from './rules.js';
 import { AI_DAILY_LIMIT, BRIEF_CLAIM_MINUTES } from './config.js';
 import { sanitizeRich, htmlToText, isRich, RICH_MAX } from './rich.js';
 
@@ -226,9 +226,10 @@ function keepServerParts(now, back) {
   });
 }
 
-/** Can `child` stay in `main` after an Undo? (main still there, not the same, not itself inside a project, child is not a project) */
+/** Can `child` stay in `main` after an Undo? (main still there, not the same, not a task inside a project, no circle) */
 function linkStillOk(data, child, main) {
-  return !!child && !!main && child.id !== main.id && !parentIdsOf(main).length && !isMainProject(data, child);
+  return !!child && !!main && child.id !== main.id && !(parentIdsOf(main).length && !isMainProject(data, main))
+    && !(isMainProject(data, child) && descendantIds(data, child.id).has(main.id));
 }
 
 /** A team tick / untick you undid stays undone (see teamUndoKey in rules.js): kept through every later Undo too. */
@@ -385,7 +386,7 @@ const handlers = {
   },
 
   /**
-   * 📂 Add a task to a project (a task can be in several projects). A project is never inside another one.
+   * 📂 Add a task to a project (a task can be in several projects), or a project into another project (never in a circle).
    * Not work (the dot does not change). Undo: restoreProject of the task (both history lines go).
    */
   /** The order of a 📂 project's tasks, as the owner arranged them (ids not in it keep their place after). Not work. */
@@ -475,7 +476,7 @@ const handlers = {
   createMainProject(state, op, a) {
     const { data } = state;
     const child = typeof a.childId === 'string' && a.childId ? findProject(data, a.childId) : null;
-    if (a.childId && (!child || child.isMain || data.projects.some((x) => parentIdsOf(x).includes(child.id)))) return false;
+    if (a.childId && (!child || child.misc)) return false; // (a 📂 project can go into the new one too, owner asked 23 Oct; never 📂 Misc)
     if (!handlers.createProject(state, op, { projectId: a.projectId, name: a.name })) return false;
     const main = findProject(data, a.projectId);
     main.isMain = true;

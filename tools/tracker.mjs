@@ -383,21 +383,22 @@ try {
           if (!create) {
             const other = findProject(state.data, mainQuery); // (none at all: "No task or project matches")
             throw new Error(other.id === p.id ? 'A task cannot be in itself.'
-              : parentIdsOf(other).length ? `${other.name} is a task in a project, so it cannot hold tasks (a project is never inside another).`
+              : parentIdsOf(other).length ? `${other.name} is a task in a project, so it cannot hold tasks.`
                 : `${other.name} is a task, not a 📂 project. To make a new 📂 project called "${mainQuery}", add --create.`);
           }
         }
         if (!main) {
-          if (isMainProject(state.data, p)) throw new Error(`${p.name} is a project, so it cannot go into another project.`);
+          if (p.misc) throw new Error('📂 Misc cannot go into another project.');
           made = `New project ${mainQuery}; ${p.name} is in it`;
           return [makeOp('createMainProject', { projectId: newId(), name: mainQuery, childId: p.id })];
         }
         if (inIds.includes(main.id)) throw new Error(`${p.name} is already in ${main.name}.`);
         if (!canPutUnder(state.data, p, main)) {
           throw new Error(main.id === p.id ? 'A task cannot be in itself.'
-            : parentIdsOf(main).length ? `${main.name} is a task in a project, so it cannot hold tasks (a project is never inside another).`
-              : main.state === 'finished' ? `${main.name} is finished.`
-                : `${p.name} is a project, so it cannot go into another project.`);
+            : main.state === 'finished' ? `${main.name} is finished.`
+              : p.misc || main.misc ? '📂 Misc cannot go into a project, and nothing is put into it.'
+                : parentIdsOf(main).length && !isMainProject(state.data, main) ? `${main.name} is a task in a project, so it cannot hold tasks.`
+                  : `${main.name} is inside ${p.name}, so ${p.name} cannot go into it (that would be a circle).`);
         }
         made = `${p.name} is now in ${main.name}${inIds.length ? ` (and still in ${parentsOf(state.data, p).map((x) => x.name).join(', ')})` : ''}`;
         return [makeOp('addToProject', { projectId: p.id, parentId: main.id })];

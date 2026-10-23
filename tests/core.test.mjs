@@ -1627,7 +1627,7 @@ test('📂 setParent (the older change, still replayed): a task into one project
   assert.equal(applyOp(s, op('setParent', { projectId: 'k1', parentId: null }, '2026-10-02', '13:00:00')), false, 'nothing to take out');
 });
 
-test('📂 setParent / addToProject checks — exists, not itself, a project is never inside another (no cycles), the project active or paused', () => {
+test('📂 setParent / addToProject checks — exists, not itself, a project inside a project but never in a circle or into a task, the project active or paused', () => {
   const s = withMains();
   assert.equal(applyOp(s, op('setParent', { projectId: 'k1', parentId: 'nope' }, '2026-10-02')), false, 'project must exist');
   assert.equal(applyOp(s, op('addToProject', { projectId: 'k1', parentId: 'nope' }, '2026-10-02')), false, 'project must exist');
@@ -1635,7 +1635,13 @@ test('📂 setParent / addToProject checks — exists, not itself, a project is 
   assert.equal(applyOp(s, op('addToProject', { projectId: 'k1', parentId: 'k1' }, '2026-10-02')), false, 'not in itself');
   applyOp(s, op('addToProject', { projectId: 'k1', parentId: 'm' }, '2026-10-02'));
   assert.equal(applyOp(s, op('addToProject', { projectId: 'k2', parentId: 'k1' }, '2026-10-02')), false, 'a task in a project cannot hold tasks');
-  assert.equal(applyOp(s, op('addToProject', { projectId: 'm', parentId: 'x' }, '2026-10-02')), false, 'a project cannot go into another');
+  assert.equal(applyOp(s, op('addToProject', { projectId: 'm', parentId: 'x' }, '2026-10-02')), false, 'a project never goes into a task');
+  // (rule changed, owner asked 23 Oct: a project can go inside another project — never in a circle)
+  applyOp(s, op('createMainProject', { projectId: 'big', name: 'Plant upgrade' }, '2026-10-02'));
+  assert.equal(applyOp(s, op('addToProject', { projectId: 'm', parentId: 'big' }, '2026-10-02')), true, 'a project inside a project');
+  assert.equal(applyOp(s, op('addToProject', { projectId: 'big', parentId: 'm' }, '2026-10-02')), false, 'no circle (big holds m)');
+  assert.equal(applyOp(s, op('addToProject', { projectId: 'big', parentId: 'k1' }, '2026-10-02')), false, 'no circle through a task either');
+  applyOp(s, op('removeFromProject', { projectId: 'm', parentId: 'big' }, '2026-10-02'));
   assert.equal(applyOp(s, op('setParent', { projectId: 'm', parentId: 'k1' }, '2026-10-02')), false, 'no cycle project → its own task');
   applyOp(s, op('finish', { projectId: 'x' }, '2026-10-02'));
   assert.equal(applyOp(s, op('addToProject', { projectId: 'k2', parentId: 'x' }, '2026-10-02')), false, 'a finished one cannot take tasks');
@@ -1730,8 +1736,8 @@ test('📂 createMainProject makes an active isMain project, with the task in it
   assert.ok(!allEvents(s).some((e) => e.projectId === 'nm'), 'its history lines gone');
   assert.equal(applyOp(s, op('createMainProject', { projectId: 'em', name: 'Empty' }, '2026-10-02')), true);
   assert.equal(P(s, 'em').isMain, true);
-  assert.equal(applyOp(s, op('createMainProject', { projectId: 'zz', name: 'Z', childId: 'em' }, '2026-10-02')), false, 'a project cannot go into a new one');
-  assert.ok(!P(s, 'zz'));
+  assert.equal(applyOp(s, op('createMainProject', { projectId: 'zz', name: 'Z', childId: 'em' }, '2026-10-02')), true, 'a project can go into a new one (rule changed, owner asked 23 Oct)');
+  assert.deepEqual(P(s, 'em').parentIds, ['zz']);
 });
 
 test('📂 deleting a project keeps its tasks (it leaves their parentIds, the other projects stay); Undo puts them back; finishing a project keeps open tasks', () => {
@@ -1839,7 +1845,11 @@ test('📂 the "Add to a project" box choices (projects only, ✓ on the ones it
   assert.equal(mainChoices(s.data, P(s, 'k2'), 'kil').create, 'kil', 'no exact match: offer to create it');
   assert.equal(mainChoices(s.data, P(s, 'k2'), 'KILNS').create, null, 'an exact match: no create line');
   assert.deepEqual(mainChoices(s.data, P(s, 'k1'), '').items.map((x) => `${x.p.id}:${x.in}`).sort(), ['m:true', 'sa:false'], 'its own project is offered with ✓ (to take it out)');
-  assert.deepEqual(mainChoices(s.data, P(s, 'm'), 'x'), { items: [], create: null }, 'a project is never put into another');
+  // (rule changed, owner asked 23 Oct: a project can be put inside another project)
+  assert.deepEqual(mainChoices(s.data, P(s, 'm'), '').items.map((x) => x.p.id), ['sa'], 'a project can go inside another project');
+  assert.equal(mainChoices(s.data, P(s, 'm'), 'Plant').create, 'Plant', 'or inside a new one');
+  applyOp(s, op('addToProject', { projectId: 'm', parentId: 'sa' }, '2026-10-02'));
+  assert.deepEqual(mainChoices(s.data, P(s, 'sa'), '').items, [], 'never in a circle (sa holds m)');
   assert.deepEqual(addHereChoices(s.data, P(s, 'm'), '').map((x) => x.id).sort(), ['k2', 'x']);
   assert.deepEqual(addHereChoices(s.data, P(s, 'sa'), '').map((x) => x.id).sort(), ['k1', 'k2', 'x'], 'a task in another project can be added too');
   assert.deepEqual(addHereChoices(s.data, P(s, 'm'), 'oth').map((x) => x.id), ['x']);
@@ -2160,7 +2170,7 @@ test('Undo (restoreProject) drops a link to a project another device deleted mea
   assert.equal('parentIds' in d2.projects[0], false);
 });
 
-test('Undo (restoreProject) never puts a project inside a project (it became one on another device)', async () => {
+test('Undo (restoreProject) of a task that became a project on another device: it goes back into its project (projects inside projects, owner asked 23 Oct)', async () => {
   const { parentIdsOf, isMainProject } = await import('../docs/rules.js');
   const s = withMains();
   applyOp(s, op('addToProject', { projectId: 'k1', parentId: 'm' }, '2026-10-02'));
@@ -2171,7 +2181,7 @@ test('Undo (restoreProject) never puts a project inside a project (it became one
   applyOp(s, op('addToProject', { projectId: 'k2', parentId: 'k1' }, '2026-10-02', '10:00:02'));
   applyOp(s, edit);
   applyOp(s, op('restoreProject', { project: before, index: 0, undoOpId: edit.id }, '2026-10-02', '10:00:05'));
-  assert.deepEqual(parentIdsOf(P(s, 'k1')), [], 'k1 holds k2, so it is not put back inside m');
+  assert.deepEqual(parentIdsOf(P(s, 'k1')), ['m'], 'k1 holds k2 now: a project inside m (rule changed: projects can be inside projects)');
   assert.ok(isMainProject(s.data, P(s, 'k1')));
   assert.deepEqual(parentIdsOf(P(s, 'k2')), ['k1'], 'k2 stays in k1');
   // Undo of deleting a project: a task that became a project meanwhile is not put back into it
@@ -2183,7 +2193,7 @@ test('Undo (restoreProject) never puts a project inside a project (it became one
   applyOp(t, op('addToProject', { projectId: 'k2', parentId: 'k1' }, '2026-10-02', '10:00:01'));
   applyOp(t, op('restoreProject', { project: snap, index: 2, undoOpId: del.id, parentIds: { k1: 'm' } }, '2026-10-02', '10:00:05'));
   assert.ok(P(t, 'm'), 'the project is back');
-  assert.deepEqual(parentIdsOf(P(t, 'k1')), [], 'k1 is a project now: not inside m');
+  assert.deepEqual(parentIdsOf(P(t, 'k1')), ['m'], 'k1 is a project now: back inside m as a project inside a project');
   // and the normal case still works
   const u = withMains();
   applyOp(u, op('addToProject', { projectId: 'k1', parentId: 'm' }, '2026-10-02'));
@@ -2943,7 +2953,7 @@ test('Right-click → Move to another project: the choices (not the one it leave
   applyOp(s, op('addToProject', { projectId: 'k1', parentId: 'q' }, '2026-10-02'));
   assert.deepEqual(moveChoices(s.data, P(s, 'k1'), 'm', '').items.map((x) => x.id), ['sa'], 'not Kilns (it leaves it), not Quality (in it already)');
   assert.equal(moveChoices(s.data, P(s, 'k1'), 'm', 'New one').create, 'New one', 'a typed new name: create it');
-  assert.deepEqual(moveChoices(s.data, P(s, 'm'), null, ''), { items: [], create: null }, 'a 📂 project never moves into another');
+  assert.deepEqual(moveChoices(s.data, P(s, 'm'), null, '').items.map((x) => x.id).sort(), ['q', 'sa'], 'a 📂 project can move inside another (rule changed, owner asked 23 Oct)');
   // from Kilns to Supplier approval: out of Kilns, into Supplier approval, still in Quality
   const steps = moveSteps(P(s, 'k1'), 'm', 'sa');
   assert.deepEqual(steps.map(([t]) => t), ['removeFromProject', 'addToProject']);
@@ -2956,4 +2966,54 @@ test('Right-click → Move to another project: the choices (not the one it leave
   assert.deepEqual(moveSteps(P(s, 'k1'), null, 'm'), [['setParent', { projectId: 'k1', parentId: 'm' }]]);
   for (const [t, a] of moveSteps(P(s, 'k1'), null, 'm')) applyOp(s, op(t, a, '2026-10-04'));
   assert.deepEqual(P(s, 'k1').parentIds, ['m']);
+});
+
+test('Test servers with helper copies (PHP_CLI_SERVER_WORKERS) are started on their own and stopped as a group (they used to be left running after each test run)', async () => {
+  const { readFileSync } = await import('node:fs');
+  const src = readFileSync(new URL('./php-server.test.mjs', import.meta.url), 'utf8');
+  const starts = src.match(/spawn\('php', \[[^\]]*\], \{[^}]*PHP_CLI_SERVER_WORKERS[^\n]*/g) || [];
+  assert.ok(starts.length >= 6);
+  for (const line of starts) assert.match(line, /detached: true \}\);/, line);
+  assert.ok(!/\bmany\.kill\(\)/.test(src), 'never only the first copy');
+  assert.match(src, /function stopServer\(child\) \{\n  if \(!child\) return;\n  try \{ process\.kill\(-child\.pid, 'SIGTERM'\); \}/);
+});
+
+test('📂 Projects inside projects (owner asked 23 Oct): tasks at any depth, the parents going up, the line "2 projects · 3 tasks", the colour is the worst of all its tasks, giving the top project gives the tasks of the projects inside, the delete question names both', async () => {
+  const { descendantIds, projectTasks, subProjectsOf, ancestorsOf, projectLine, deleteQuestion, projectGiveChanges, isMainProject } = await import('../docs/rules.js');
+  const { listColour } = await import('../docs/ui/mains.js');
+  const s = withMains(); // k1, k2, m (Kilns), x
+  applyOp(s, op('createMainProject', { projectId: 'big', name: 'Plant upgrade' }, '2026-10-01'));
+  applyOp(s, op('addToProject', { projectId: 'k1', parentId: 'm' }, '2026-10-01'));
+  applyOp(s, op('addToProject', { projectId: 'm', parentId: 'big' }, '2026-10-01'));
+  applyOp(s, op('addToProject', { projectId: 'k2', parentId: 'big' }, '2026-10-01'));
+  assert.deepEqual([...descendantIds(s.data, 'big')].sort(), ['k1', 'k2', 'm']);
+  assert.deepEqual(projectTasks(s.data, 'big').map((p) => p.id).sort(), ['k1', 'k2'], 'its tasks and its projects\' tasks, not the projects');
+  assert.deepEqual(subProjectsOf(s.data, 'big').map((p) => p.id), ['m']);
+  assert.deepEqual(ancestorsOf(s.data, P(s, 'k1')).map((p) => p.id), ['m', 'big'], 'nearest first');
+  assert.ok(isMainProject(s.data, P(s, 'm')), 'still a project inside a project');
+  assert.match(projectLine(s.data, P(s, 'big'), '2026-10-01'), /^1 project · 2 tasks/);
+  assert.equal(projectLine(s.data, P(s, 'm'), '2026-10-01').startsWith('1 task'), true, 'no projects inside: as before');
+  assert.match(deleteQuestion(s.data, P(s, 'big')), /Its 1 task and 1 project are kept/);
+  // colour: a red task deep inside makes the top project red
+  applyOp(s, op('addStep', { projectId: 'k1', stepId: 's1', text: 'Fix' }, '2026-09-01'));
+  assert.equal(listColour(s.data, P(s, 'big'), '2026-10-05'), listColour(s.data, P(s, 'k1'), '2026-10-05'));
+  // giving the top project: the task inside its project goes to the same person
+  applyOp(s, op('setProjectTeam', { projectId: 'big', userId: 7, name: 'Ravi', giveTasks: true }, '2026-10-02'));
+  const ch = projectGiveChanges(s.data);
+  assert.ok(ch.some((c) => c.projectId === 'k1' && c.team && c.team.viaProject === 'big'), 'k1 (inside Kilns, inside Plant upgrade) goes with it');
+  // a nearer given project wins
+  applyOp(s, op('setProjectTeam', { projectId: 'm', userId: 8, name: 'Valar', giveTasks: true }, '2026-10-02'));
+  assert.ok(projectGiveChanges(s.data).some((c) => c.projectId === 'k1' && c.team && c.team.userId === 8 && c.team.viaProject === 'm'));
+  // 📂 Misc never goes inside anything
+  applyOp(s, op('makeMisc', {}, '2026-10-02'));
+  assert.equal(applyOp(s, op('addToProject', { projectId: 'misc', parentId: 'big' }, '2026-10-02')), false);
+});
+
+test('📂 createMainProject with a 📂 project as its child: the new project holds it (projects inside projects); never 📂 Misc', () => {
+  const s = withMains();
+  applyOp(s, op('addToProject', { projectId: 'k1', parentId: 'm' }, '2026-10-01'));
+  assert.equal(applyOp(s, op('createMainProject', { projectId: 'big', name: 'Plant upgrade', childId: 'm' }, '2026-10-02')), true);
+  assert.deepEqual(P(s, 'm').parentIds, ['big']);
+  applyOp(s, op('makeMisc', {}, '2026-10-02'));
+  assert.equal(applyOp(s, op('createMainProject', { projectId: 'b2', name: 'Other', childId: 'misc' }, '2026-10-02')), false);
 });

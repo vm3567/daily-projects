@@ -70,6 +70,16 @@ before(async () => {
   await until(async () => (await fetch(B + 'ping', { method: 'POST', body: '{}' })).ok, 'PHP server');
 });
 
+/**
+ * Stop a test web server with all its helpers: with PHP_CLI_SERVER_WORKERS the server forks helper copies, and
+ * killing only the first one left them running after every test run (2,000+ php copies filled the Mac, 23 Oct).
+ * It is started on its own (detached), so the whole group can be stopped at once.
+ */
+function stopServer(child) {
+  if (!child) return;
+  try { process.kill(-child.pid, 'SIGTERM'); } catch { try { child.kill(); } catch { /* gone */ } }
+}
+
 after(() => {
   if (!READY) return;
   try { web?.kill(); } catch { /* gone */ }
@@ -2513,7 +2523,7 @@ test('review r16: change password — many wrong guesses sent at the same moment
   const from = Number(sqlOut('SELECT IFNULL(MAX(id), 0) FROM wt.login_fails').trim());
   // a web server that answers many requests at once (the real one does)
   const port = WEB_PORT + 2;
-  const many = spawn('php', ['-S', `127.0.0.1:${port}`, '-t', join(ROOT, 'team', 'public_html')], { env: { ...env(), PHP_CLI_SERVER_WORKERS: '8' }, stdio: 'ignore' });
+  const many = spawn('php', ['-S', `127.0.0.1:${port}`, '-t', join(ROOT, 'team', 'public_html')], { env: { ...env(), PHP_CLI_SERVER_WORKERS: '8' }, stdio: 'ignore', detached: true });
   try {
     const url = `http://127.0.0.1:${port}/api/?a=`;
     await until(async () => (await fetch(url + 'ping', { method: 'POST', body: '{}' })).ok, 'PHP server with workers');
@@ -2521,7 +2531,7 @@ test('review r16: change password — many wrong guesses sent at the same moment
     const codes = await Promise.all(Array.from({ length: 24 }, (_, i) => guess(i)));
     assert.ok(codes.filter((c) => c === 400).length <= 5, `at most 5 guesses checked, got ${codes.join(',')}`);
     assert.equal(codes.filter((c) => c !== 400 && c !== 429).length, 0, codes.join(','));
-  } finally { many.kill(); }
+  } finally { stopServer(many); }
   // the right password still works after fewer than 5 wrong tries, and clears the count
   sql(`DELETE FROM wt.login_fails WHERE id > ${from}`);
   for (let i = 0; i < 4; i++) assert.equal((await call('password', { old: 'wrong-' + i, new: 'race-own-pass2' }, l.token)).s, 400);
@@ -2713,7 +2723,7 @@ test('review round 1 (whole code): the same photo (same clientId) sent several t
   const files = () => { const out = []; const walk = (d) => { for (const f of readdirSync(d)) { const p = join(d, f); if (statSync(p).isDirectory()) walk(p); else out.push(p); } }; try { walk(join(dir, 'uploads')); } catch { /* none yet */ } return out.length; };
   const before = files();
   const port = WEB_PORT + 3;
-  const many = spawn('php', ['-S', `127.0.0.1:${port}`, '-t', join(ROOT, 'team', 'public_html')], { env: { ...env(), PHP_CLI_SERVER_WORKERS: '8' }, stdio: 'ignore' });
+  const many = spawn('php', ['-S', `127.0.0.1:${port}`, '-t', join(ROOT, 'team', 'public_html')], { env: { ...env(), PHP_CLI_SERVER_WORKERS: '8' }, stdio: 'ignore', detached: true });
   try {
     const url = `http://127.0.0.1:${port}/api/?a=`;
     await until(async () => (await fetch(url + 'ping', { method: 'POST', body: '{}' })).ok, 'PHP server with workers');
@@ -2724,14 +2734,14 @@ test('review round 1 (whole code): the same photo (same clientId) sent several t
     const msgs = await Promise.all(Array.from({ length: 6 }, () => send('comment.photo', { taskId: String(t.id), text: 'look', clientId: 'race-msg-1' })));
     assert.ok(msgs.every((r) => r.ok), msgs.map((r) => r.s + ' ' + (r.error || '')).join(', '));
     assert.equal(msgs[0].comments.filter((c) => c.photo).length, 1, 'one photo message');
-  } finally { many.kill(); }
+  } finally { stopServer(many); }
   assert.equal(files() - before, 2, 'one file for the photo, one for the message: none left over');
 });
 
 test('review round 2 (whole code): a message, a suggestion and a new task sent twice at the same moment (same clientId) are kept once — no error answer', { skip }, async () => {
   const t = (await call('task.save', { assigneeId: id.suresh, title: 'Message race', repeat: 'daily', skipSunday: false }, tok.boss)).task;
   const port = WEB_PORT + 4;
-  const many = spawn('php', ['-S', `127.0.0.1:${port}`, '-t', join(ROOT, 'team', 'public_html')], { env: { ...env(), PHP_CLI_SERVER_WORKERS: '8' }, stdio: 'ignore' });
+  const many = spawn('php', ['-S', `127.0.0.1:${port}`, '-t', join(ROOT, 'team', 'public_html')], { env: { ...env(), PHP_CLI_SERVER_WORKERS: '8' }, stdio: 'ignore', detached: true });
   try {
     const url = `http://127.0.0.1:${port}/api/?a=`;
     await until(async () => (await fetch(url + 'ping', { method: 'POST', body: '{}' })).ok, 'PHP server with workers');
@@ -2746,7 +2756,7 @@ test('review round 2 (whole code): a message, a suggestion and a new task sent t
     const give = await all6('task.save', { assigneeId: id.suresh, title: 'Race give', repeat: 'once', clientId: 'race-give-1' }, tok.boss);
     assert.ok(give.every((r) => r.ok), give.map((r) => r.s + ' ' + (r.error || '')).join(', '));
     assert.equal(new Set(give.map((r) => r.task.id)).size, 1, 'one task');
-  } finally { many.kill(); }
+  } finally { stopServer(many); }
 });
 
 test('review round 2 (whole code): Outlook emails and "these emails are in" are saved together (dp_commit alsoInTx) — a stop in between can never add them twice', { skip }, async () => {
@@ -2771,14 +2781,14 @@ test('review round 2 (whole code): photos sent at the same moment never push an 
   const files = () => { const out = []; const walk = (d) => { for (const f of readdirSync(d)) { const p = join(d, f); if (statSync(p).isDirectory()) walk(p); else out.push(p); } }; try { walk(join(dir, 'uploads')); } catch { /* none */ } return out.length; };
   const before = files();
   const port = WEB_PORT + 5;
-  const many = spawn('php', ['-S', `127.0.0.1:${port}`, '-t', join(ROOT, 'team', 'public_html')], { env: { ...env(), PHP_CLI_SERVER_WORKERS: '8' }, stdio: 'ignore' });
+  const many = spawn('php', ['-S', `127.0.0.1:${port}`, '-t', join(ROOT, 'team', 'public_html')], { env: { ...env(), PHP_CLI_SERVER_WORKERS: '8' }, stdio: 'ignore', detached: true });
   let res;
   try {
     const url = `http://127.0.0.1:${port}/api/?a=`;
     await until(async () => (await fetch(url + 'ping', { method: 'POST', body: '{}' })).ok, 'PHP server with workers');
     const send = (i) => { const fd = new FormData(); fd.append('updateId', String(up.update.id)); fd.append('clientId', 'limit-' + i); fd.append('file', new Blob([png], { type: 'image/png' }), 'p.png'); return fetch(url + 'photo.add', { method: 'POST', headers: { Authorization: 'Bearer ' + tok.suresh }, body: fd }).then(async (r) => ({ s: r.status, ...(await r.json()) })); };
     res = await Promise.all(Array.from({ length: 8 }, (_, i) => send(i)));
-  } finally { many.kill(); }
+  } finally { stopServer(many); }
   const ok = res.filter((r) => r.ok).length;
   assert.equal(ok, 5, res.map((r) => r.s + ' ' + (r.error || '')).join(', '));
   assert.ok(res.filter((r) => !r.ok).every((r) => /Up to 5 photos/.test(r.error)), 'the others are told the limit');
@@ -2803,7 +2813,7 @@ test('review round 3 (whole code): a switched-off account answers a right passwo
 
 test('review r4-1 (whole code): an outside app pushing the same NEW item twice at the same moment gets the same item both times (no server error)', { skip }, async () => {
   const port = WEB_PORT + 7;
-  const many = spawn('php', ['-S', `127.0.0.1:${port}`, '-t', join(ROOT, 'team', 'public_html')], { env: { ...env(), PHP_CLI_SERVER_WORKERS: '8' }, stdio: 'ignore' });
+  const many = spawn('php', ['-S', `127.0.0.1:${port}`, '-t', join(ROOT, 'team', 'public_html')], { env: { ...env(), PHP_CLI_SERVER_WORKERS: '8' }, stdio: 'ignore', detached: true });
   try {
     const url = `http://127.0.0.1:${port}/api/?a=`;
     await until(async () => (await fetch(url + 'ping', { method: 'POST', body: '{}' })).ok, 'PHP server with workers');
@@ -2814,7 +2824,7 @@ test('review r4-1 (whole code): an outside app pushing the same NEW item twice a
       assert.equal(new Set(out.map((r) => r.id)).size, 1, kind + ': one item');
       assert.equal(sqlOut(`SELECT COUNT(*) FROM wt.conn_items WHERE external_id = '${ext}'`).trim(), '1');
     }
-  } finally { many.kill(); }
+  } finally { stopServer(many); }
 });
 
 test('review r4-2 (whole code): signing out on a phone stops that phone\'s notifications (never another phone\'s); an older link is found by the phone\'s address', { skip }, async () => {
@@ -2893,7 +2903,7 @@ test('review r4-4 (whole code): the Outlook draft cleaner also removes on...= ha
 test('review r4-5 (whole code): instruction files sent at the same moment never go past 10 on a task', { skip }, async () => {
   const t = (await call('task.save', { assigneeId: id.suresh, title: 'File race', repeat: 'once' }, tok.boss)).task;
   const port = WEB_PORT + 8;
-  const many = spawn('php', ['-S', `127.0.0.1:${port}`, '-t', join(ROOT, 'team', 'public_html')], { env: { ...env(), PHP_CLI_SERVER_WORKERS: '8' }, stdio: 'ignore' });
+  const many = spawn('php', ['-S', `127.0.0.1:${port}`, '-t', join(ROOT, 'team', 'public_html')], { env: { ...env(), PHP_CLI_SERVER_WORKERS: '8' }, stdio: 'ignore', detached: true });
   try {
     const url = `http://127.0.0.1:${port}/api/?a=`;
     await until(async () => (await fetch(url + 'ping', { method: 'POST', body: '{}' })).ok, 'PHP server with workers');
@@ -2902,7 +2912,7 @@ test('review r4-5 (whole code): instruction files sent at the same moment never 
     const race = await Promise.all(Array.from({ length: 6 }, send));
     assert.equal(race.filter((r) => r.ok).length, 2, race.map((r) => r.s + ' ' + (r.error || '')).join(', '));
     assert.ok(race.filter((r) => !r.ok).every((r) => /Up to 10 files/.test(r.error)));
-  } finally { many.kill(); }
+  } finally { stopServer(many); }
   assert.equal(sqlOut(`SELECT COUNT(*) FROM wt.task_files WHERE task_id = ${t.id}`).trim(), '10');
 });
 
