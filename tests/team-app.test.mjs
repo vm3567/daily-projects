@@ -212,7 +212,7 @@ test('team: a finished send never redraws over a form opened and typed in meanwh
   // keystroke is kept there, so the redraw after a send never wipes words typed meanwhile — in any box)
   assert.match(STAFF, /h\('textarea', \{ key: 'up-' \+ t\.id,[^\n]*value: d\.note, onInput: \(e, el\) => \{ d\.note = el\.value;/, 'the update box');
   assert.match(STAFF, /h\('textarea', \{ key: 'msg-' \+ taskId,[^\n]*value: state\.msgDrafts\[taskId\] \|\| '', onInput: \(e, el\) => \{ state\.msgDrafts\[taskId\] = el\.value;/, 'the message box');
-  assert.match(STAFF, /value: state\.stepDrafts\[ref\] \|\| '', onInput: \(e, el\) => \{ state\.stepDrafts\[ref\] = el\.value; \}/, 'the Add a step box');
+  assert.match(STAFF, /value: state\.stepDrafts\[ref\] \|\| '', onInput: \(e, el\) => \{ state\.stepDrafts\[ref\] = el\.value;/, 'the Add a step box');
 });
 
 test('team: Ctrl+V of a photo while the update waits on the phone is refused (it would go nowhere)', () => {

@@ -18,7 +18,8 @@ const fmtTime = (dt) => {
 const LONG_DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 export const STATES = [['progress', 'Working on it'], ['stuck', 'Stuck'], ['finished', 'Finished']];
 const stateName = (s) => (STATES.find((x) => x[0] === s) || STATES[0])[1];
-const stateTag = (s) => h('span', { class: 'tag ' + (s === 'stuck' ? 'red' : s === 'finished' ? 'green' : 'grey') }, stateName(s));
+// (the owner's tags: Stuck as late, Finished as done, Working on it as waiting)
+const stateTag = (s) => h('span', { class: 'tag ' + (s === 'stuck' ? 'late' : s === 'finished' ? 'done-tag' : 'waiting') }, stateName(s));
 const newClientId = () => (crypto.randomUUID ? crypto.randomUUID() : Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join(''));
 const istDay = (d = new Date()) => new Date(d.getTime() + 5.5 * 3600e3).toISOString().slice(0, 10);
 const nowHm = () => new Date().toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' });
@@ -591,7 +592,7 @@ export function createStaff(opts) {
       h('button', { class: 'prow-btn', onClick: () => open('task:' + t.id) },
         h('span', { class: 'dot ' + dot, 'aria-label': dot }),
         h('span', { class: 'prow-text' },
-          h('span', { class: 'prow-name' }, t.title, state.newIds.has(t.id) ? h('span', { class: 'tag amber new-tag' }, 'New') : null, t.unread ? h('span', { class: 'tag high', title: `${t.unread} new message(s)` }, '💬 New') : null),
+          h('span', { class: 'prow-name' }, t.title, state.newIds.has(t.id) ? h('span', { class: 'tag high' }, 'New') : null, t.unread ? h('span', { class: 'tag on-step', title: `${t.unread} new message(s)` }, '💬 New') : null),
           h('span', { class: 'prow-next' + (warn ? ' warn' : '') }, sub))));
   }
 
@@ -618,20 +619,20 @@ export function createStaff(opts) {
 
   /** Notices that stay (words that could not be sent): to copy, then close. */
   function notices() {
-    return state.notices.map((n, i) => h('div', { class: 'card stack notice-kept', key: 'n-' + i },
+    return state.notices.map((n, i) => h('div', { class: 'banner stack', key: 'n-' + i },
       h('strong', null, n.title), h('div', { class: 'pre small' }, n.body),
       h('div', { class: 'row' },
-        h('button', { class: 'btn', onClick: () => copy(n.body).then(() => toast('Copied ✓'), () => toast('Select the words and copy them.', 4000)) }, 'Copy'),
-        h('button', { class: 'btn', onClick: () => { state.notices.splice(i, 1); render(); } }, 'Close'))));
+        h('button', { class: 'btn small', onClick: () => copy(n.body).then(() => toast('Copied ✓'), () => toast('Select the words and copy them.', 4000)) }, 'Copy'),
+        h('button', { class: 'btn small', onClick: () => { state.notices.splice(i, 1); render(); } }, 'Close'))));
   }
 
   /** New work since the last look: tap to open it. */
   function newsBar() {
-    return state.news.map((n, i) => h('div', { class: 'card stack news', key: 'news-' + i },
+    return state.news.map((n, i) => h('div', { class: 'banner stack', key: 'news-' + i },
       h('strong', null, n.title), n.body ? h('span', { class: 'small muted' }, n.body) : null,
       h('div', { class: 'row' },
-        h('button', { class: 'btn primary', onClick: () => { state.news = []; open(n.sel); } }, 'Open'),
-        h('button', { class: 'btn', onClick: () => { state.news = []; render(); } }, 'Close'))));
+        h('button', { class: 'btn primary small', onClick: () => { state.news = []; open(n.sel); } }, 'Open'),
+        h('button', { class: 'btn small', onClick: () => { state.news = []; render(); } }, 'Close'))));
   }
 
   /** Once at the top: "turn on notifications" (until done, or Later). */
@@ -639,10 +640,10 @@ export function createStaff(opts) {
     const s = push ? push.state() : 'no';
     if ((s !== 'default' && s !== 'granted') || state.pushLater) return null;
     try { if (Number(localStorage.getItem('wt.pushLater') || 0) > Date.now() || localStorage.getItem('wt.pushOff.' + state.user.id)) return null; } catch { /* blocked */ }
-    return h('div', { class: 'card stack', key: 'push-banner' },
+    return h('div', { class: 'banner stack', key: 'push-banner' },
       h('span', null, '🔔 Get a message on this phone when a new task or update comes — like email.'),
       h('div', { class: 'row' },
-        h('button', { class: 'btn primary', onClick: notifyOn }, 'Turn on'),
+        h('button', { class: 'btn primary small', onClick: notifyOn }, 'Turn on'),
         h('button', { class: 'link', onClick: () => { try { localStorage.setItem('wt.pushLater', String(Date.now() + 3 * 86400000)); } catch { /* blocked */ } state.pushLater = true; render(); } }, 'Later')));
   }
 
@@ -662,19 +663,19 @@ export function createStaff(opts) {
       const icon = { task: '📋', message: '💬', update: '📝' };
       body = [h('div', { class: 'search-box' }, h('input', { class: 'search', type: 'search', key: 'staff-search', placeholder: 'Search tasks, messages, updates…', 'aria-label': 'Search', value: state.searchQ, onInput: (e, el) => search(el.value) })),
         !r ? h('p', { class: 'empty-list' }, 'Type 2 or more letters.') : r.error ? h('p', { class: 'empty-list' }, r.error) : !r.length ? h('p', { class: 'empty-list' }, 'Nothing found.')
-          : h('ul', { class: 'list-body' }, r.map((x, i) => h('li', { class: 'prow', key: 'sr-' + i },
+          : h('ul', { class: 'plist' }, r.map((x, i) => h('li', { class: 'prow', key: 'sr-' + i },
             h('span', { class: 'quick-tick-space' }),
             h('button', { class: 'prow-btn', onClick: () => open('task:' + x.taskId) },
               h('span', { class: 'prow-text' }, h('span', { class: 'prow-name' }, `${icon[x.kind] || ''} ${x.title}`),
                 h('span', { class: 'prow-next' }, `${x.who} · ${fmtDay(x.at)} — ${x.text}`))))))];
     } else if (state.section === 'next') {
-      body = [sec(`${d.other.length} coming next`), h('ul', { class: 'list-body' }, d.other.map((t) => row(t, [t.project, repeatLabel(t, td)].filter(Boolean).join(' · '), 'grey'))),
+      body = [sec(`${d.other.length} coming next`), h('ul', { class: 'plist' }, d.other.map((t) => row(t, [t.project, repeatLabel(t, td)].filter(Boolean).join(' · '), 'grey'))),
         d.other.length ? null : h('p', { class: 'empty-list' }, 'Nothing coming next.')];
     } else if (state.section === 'sugg') {
       const s = d.suggestions || [];
       const waiting = state.outbox.filter((x) => x.kind === 'suggest');
       body = [sec(`${s.length + waiting.length} suggestion${s.length + waiting.length === 1 ? '' : 's'}`),
-        h('ul', { class: 'list-body' }, s.map((t) => row(t, t.status === 'suggested' ? 'Waiting for a yes' : 'Not now' + (t.lastMessage ? ` — ${t.lastMessage.text}` : ''), t.status === 'suggested' ? 'yellow' : 'grey')),
+        h('ul', { class: 'plist' }, s.map((t) => row(t, t.status === 'suggested' ? 'Waiting for a yes' : 'Not now' + (t.lastMessage ? ` — ${t.lastMessage.text}` : ''), t.status === 'suggested' ? 'yellow' : 'grey')),
           waiting.map((x) => h('li', { class: 'prow', key: 'ws-' + x.id }, h('span', { class: 'quick-tick-space' }), h('div', { class: 'prow-btn' }, h('span', { class: 'dot grey' }),
             h('span', { class: 'prow-text' }, h('span', { class: 'prow-name' }, x.title), h('span', { class: 'prow-next' }, '⏳ Waiting to send')))))),
         s.length || waiting.length ? null : h('p', { class: 'empty-list' }, 'No suggestions yet. Tap 💡 Suggest a task in the menu.')];
@@ -683,9 +684,9 @@ export function createStaff(opts) {
       const projs = myProjects(d);
       body = [
         d.stale ? h('p', { class: 'empty-list' }, `📴 Saved copy from ${fmtDay(d.today)} — today's updates are not shown yet.`) : null,
-        projs.length ? [sec('📁 My projects'), h('ul', { class: 'list-body' }, projs.map(projectRow))] : null,
+        projs.length ? [sec('📁 My projects'), h('ul', { class: 'plist' }, projs.map(projectRow))] : null,
         sec(`${fmtDay(td)} · ${sent} of ${d.tasks.length} sent`, h('span', { class: 'tag' }, `by ${d.fillBy}`)),
-        h('ul', { class: 'list-body' }, d.tasks.map((t) => {
+        h('ul', { class: 'plist' }, d.tasks.map((t) => {
           const waiting = !!waitingFor(t.id);
           const late = t.repeat === 'once' && t.dueDate && t.dueDate < td;
           const sub = waiting ? '⏳ Waiting to send' : t.today ? `✓ Sent ${fmtTime(t.today.at)}${t.today.state === 'stuck' ? ' · stuck' : t.today.state === 'finished' ? ' · finished' : ''}`
@@ -698,6 +699,9 @@ export function createStaff(opts) {
     }
     return h('div', { class: 'col-inner' }, head, top, body);
   }
+
+  /** A part of the page with its small grey title, as on the owner's project page. */
+  const block = (title, ...children) => h('section', { class: 'block' }, h('h3', null, title), ...children);
 
   function chips(t, td) {
     const c = (text, cls = '') => h('span', { class: 'info-chip static' + cls }, text);
@@ -723,7 +727,7 @@ export function createStaff(opts) {
 
   function photos(kind, list) {
     if (!list || !list.length) return null;
-    return h('div', { class: 'thumbs' }, list.map((id) => {
+    return h('div', { class: 'row' }, list.map((id) => {
       const src = pic(kind, id);
       return h('img', { key: kind + id, alt: src === '' ? 'Photo missing' : 'Photo', class: 'diary-photo', src: src || undefined, onClick: () => { if (src) viewer(src, 'Photo', true); } });
     }));
@@ -732,8 +736,8 @@ export function createStaff(opts) {
   /** 📎 Instruction photos / PDFs from the manager. Tap to open. */
   function files(t) {
     if (!t.files || !t.files.length) return null;
-    return h('div', { class: 'files' }, h('div', { class: 'small muted' }, '📎 Instructions'), h('div', { class: 'thumbs' }, t.files.map((f) => {
-      if (!f.image) return h('button', { class: 'file-chip', key: 'f' + f.id, title: f.name, onClick: () => openFile(f) }, '📄 ' + (f.name.length > 18 ? f.name.slice(0, 16) + '…' : f.name));
+    return block('📎 Instructions', h('div', { class: 'row' }, t.files.map((f) => {
+      if (!f.image) return h('button', { class: 'chip', key: 'f' + f.id, title: f.name, onClick: () => openFile(f) }, '📄 ' + (f.name.length > 18 ? f.name.slice(0, 16) + '…' : f.name));
       const src = pic('task.file', f.id);
       return h('img', { key: 'f' + f.id, alt: src === '' ? f.name + ' (missing)' : f.name, title: f.name, class: 'diary-photo', src: src || undefined, onClick: () => openFile(f) });
     })));
@@ -741,72 +745,70 @@ export function createStaff(opts) {
 
   function updateCard(t) {
     const waiting = waitingFor(t.id);
-    const head = (extra) => h('div', { class: 'row spread small' }, h('strong', null, "Today's update"), extra || null);
-    if (waiting && !state.editing[t.id]) {
-      return h('div', { class: 'card waiting' }, head(h('span', { class: 'tag amber' }, '⏳ Waiting to send')),
-        h('div', { class: 'row small' }, stateTag(waiting.state), (waiting.files || []).length ? h('span', { class: 'muted' }, `📷 ${waiting.files.length}`) : null),
+    if (waiting && !state.editing[t.id]) { // (the owner's box with the orange "being changed" border)
+      return block("Today's update", h('div', { class: 'update-form loose editing' },
+        h('div', { class: 'row' }, stateTag(waiting.state), h('span', { class: 'tag remind' }, '⏳ Waiting to send'), (waiting.files || []).length ? h('span', { class: 'muted small' }, `📷 ${waiting.files.length}`) : null),
         h('div', { class: 'pre' }, waiting.note),
-        h('p', { class: 'muted small' }, 'Kept on this phone. It is sent by itself when the internet is back.'));
+        h('span', { class: 'muted small' }, 'Kept on this phone. It is sent by itself when the internet is back.')));
     }
     if (t.status !== 'open' && !t.today) return null;
     const done = t.today && !state.editing[t.id];
     if (done) {
       const u = t.today;
-      return h('div', { class: 'card sent' }, head(h('span', { class: 'ok' }, `Sent ${fmtTime(u.at)}`)),
-        h('div', { class: 'row small' }, stateTag(u.state)), h('div', { class: 'pre' }, u.note), photos('photo', u.photos),
-        h('div', { class: 'row' }, h('button', { class: 'btn', onClick: () => { state.editing[t.id] = true; state.drafts[t.id] = { note: u.note, state: u.state }; render(); } }, '✎ Edit'),
-          (u.photos || []).length < 5 ? h('label', { class: 'btn' }, '📷 Add photo', h('input', { type: 'file', accept: 'image/*', multiple: true, class: 'hidden-file',
-            onChange: (e, el) => { const f = [...el.files].slice(0, 5); el.value = ''; addPhotos(t, f).then((m) => { if (m) toast(m, 5000); }); } })) : null));
+      return block("Today's update", h('div', { class: 'diary-line' },
+        h('span', { class: 'diary-icon' }, u.state === 'stuck' ? '⚠️' : u.state === 'finished' ? '✅' : '📝'),
+        h('div', { class: 'diary-text' }, h('strong', null, 'You '), u.state !== 'progress' ? [stateTag(u.state), ' '] : null, u.note, photos('photo', u.photos)),
+        h('span', { class: 'muted small' }, `Sent ${fmtTime(u.at)}`)),
+      h('div', { class: 'row' }, h('button', { class: 'btn small', onClick: () => { state.editing[t.id] = true; state.drafts[t.id] = { note: u.note, state: u.state }; render(); } }, '✎ Edit'),
+        (u.photos || []).length < 5 ? h('label', { class: 'btn small' }, '📷 Add photo', h('input', { type: 'file', accept: 'image/*', multiple: true, class: 'visually-hidden',
+          onChange: (e, el) => { const f = [...el.files].slice(0, 5); el.value = ''; addPhotos(t, f).then((m) => { if (m) toast(m, 5000); }); } })) : null));
     }
     const d = (state.drafts[t.id] ||= { note: '', state: 'progress' });
     const picked = state.files[t.id] || [];
-    const err = h('p', { class: 'err small', key: 'err-' + t.id, hidden: true });
+    const err = h('p', { class: 'warn', key: 'err-' + t.id, hidden: true });
     const say = (m) => { if (m) { err.textContent = m; err.hidden = false; } };
-    const pick = h('input', { type: 'file', accept: 'image/*', multiple: true, class: 'hidden-file', onChange: (e, el) => { state.files[t.id] = [...picked, ...el.files].slice(0, 5); el.value = ''; render(); } });
-    return h('div', { class: 'card' }, head(),
-      t.last ? h('p', { class: 'small muted' }, `Last time (${fmtDay(t.last.day)}): `, h('span', { class: 'pre' }, t.last.note)) : null,
-      h('textarea', { key: 'up-' + t.id, placeholder: 'What did you do today? (you can tap 🎤 on the keyboard to speak)', value: d.note, onInput: (e, el) => { d.note = el.value; err.hidden = true; } }),
-      h('div', { class: 'row', role: 'group', 'aria-label': 'How is it going' }, STATES.map(([k, label]) =>
-        h('button', { class: 'chip' + (d.state === k ? ' on ' + k : ''), type: 'button', onClick: () => { d.state = k; render(); } }, label))),
-      picked.length ? h('p', { class: 'small muted' }, `📷 ${picked.length} photo${picked.length === 1 ? '' : 's'} ready `, h('button', { class: 'link', onClick: () => { delete state.files[t.id]; render(); } }, 'Remove')) : null,
+    const pick = h('input', { type: 'file', accept: 'image/*', multiple: true, class: 'visually-hidden', onChange: (e, el) => { state.files[t.id] = [...picked, ...el.files].slice(0, 5); el.value = ''; render(); } });
+    return block("Today's update", h('div', { class: 'update-form loose' + (state.editing[t.id] ? ' editing' : '') },
+      t.last ? h('span', { class: 'small muted' }, `Last time (${fmtDay(t.last.day)}): `, h('span', { class: 'pre' }, t.last.note)) : null,
+      h('textarea', { key: 'up-' + t.id, placeholder: 'What happened today? (you can tap 🎤 on the keyboard to speak)', value: d.note, onInput: (e, el) => { d.note = el.value; err.hidden = true; } }),
+      h('div', { class: 'segmented', role: 'group', 'aria-label': 'How is it going' }, STATES.map(([k, label]) =>
+        h('button', { class: 'seg' + (d.state === k ? ' on' : ''), type: 'button', 'aria-pressed': String(d.state === k), onClick: () => { d.state = k; render(); } }, label))),
+      picked.length ? h('span', { class: 'small muted' }, `📷 ${picked.length} photo${picked.length === 1 ? '' : 's'} ready `, h('button', { class: 'link small', onClick: () => { delete state.files[t.id]; render(); } }, 'Remove')) : null,
       err,
       h('div', { class: 'row' },
-        h('button', { class: 'btn primary', disabled: state.sending[t.id] ? true : undefined, onClick: () => sendUpdate(t).then(say) }, state.sending[t.id] ? 'Sending…' : 'Send'),
-        picked.length < 5 ? h('label', { class: 'btn' }, '📷 Add photo', pick) : null,
-        state.editing[t.id] ? h('button', { class: 'btn', onClick: () => { delete state.editing[t.id]; delete state.drafts[t.id]; render(); } }, 'Cancel') : null));
+        h('button', { class: 'btn primary small', disabled: state.sending[t.id] ? true : undefined, onClick: () => sendUpdate(t).then(say) }, state.sending[t.id] ? 'Sending…' : 'Send'),
+        picked.length < 5 ? h('label', { class: 'btn small' }, '📷 Add photo', pick) : null,
+        state.editing[t.id] ? h('button', { class: 'btn small', onClick: () => { delete state.editing[t.id]; delete state.drafts[t.id]; render(); } }, 'Cancel') : null)));
   }
 
   function messages(taskId, comments) {
     const key = 'm' + taskId;
-    const err = h('p', { class: 'err small', key: 'merr-' + taskId, hidden: true });
+    const err = h('p', { class: 'warn', key: 'merr-' + taskId, hidden: true });
     const say = (m) => { if (m) { err.textContent = m; err.hidden = false; } };
-    const pick = h('input', { type: 'file', accept: 'image/*', class: 'hidden-file', onChange: (e, el) => { const f = el.files[0]; el.value = ''; if (f) sendMessagePhoto(taskId, f).then(say); } });
+    const pick = h('input', { type: 'file', accept: 'image/*', class: 'visually-hidden', onChange: (e, el) => { const f = el.files[0]; el.value = ''; if (f) sendMessagePhoto(taskId, f).then(say); } });
     const waiting = state.outbox.filter((x) => x.kind === 'comment' && x.taskId === taskId);
-    return [
-      h('h3', { class: 'part-title' }, '💬 Messages'),
-      comments.length ? comments.map((c) => h('div', { class: 'card msg' + (c.mine ? ' mine' : ''), key: 'c-' + c.id },
+    return block('💬 Messages', h('div', { class: 'banner team-msgs' },
+      comments.length ? comments.map((c) => h('div', { class: 'team-msg' + (c.mine ? ' mine' : ''), key: 'c-' + c.id },
         h('div', { class: 'row small' }, h('strong', null, c.mine ? 'You' : c.by), h('span', { class: 'muted' }, `${fmtDay(c.at)} ${fmtTime(c.at)}${c.editedAt ? ' · edited' : ''}`),
           c.mine && !String(c.text || '').startsWith('↔ Moved') ? h('span', { class: 'msg-acts' },
-            h('button', { class: 'link', title: 'Change', 'aria-label': 'Change this message', onClick: () => editMessage(c) }, '✎'),
-            h('button', { class: 'link', title: 'Delete', 'aria-label': 'Delete this message', onClick: () => deleteMessage(c) }, '🗑')) : null),
+            h('button', { class: 'link small', title: 'Change', 'aria-label': 'Change this message', onClick: () => editMessage(c) }, '✎'),
+            h('button', { class: 'link small', title: 'Delete', 'aria-label': 'Delete this message', onClick: () => deleteMessage(c) }, '✕')) : null),
         c.photo ? photos('comment.photo', [c.id]) : null,
-        c.text ? h('div', { class: 'pre' }, c.text) : null)) : (waiting.length ? null : h('p', { class: 'muted small' }, 'No messages yet.')),
-      waiting.map((x) => h('div', { class: 'card msg mine', key: 'wc-' + x.id },
-        h('div', { class: 'row small' }, h('strong', null, 'You'), h('span', { class: 'tag amber' }, '⏳ Waiting to send')), h('div', { class: 'pre' }, x.text))),
-      h('div', { class: 'card stack' },
-        h('textarea', { key: 'msg-' + taskId, placeholder: 'Ask or reply to your manager…', value: state.msgDrafts[taskId] || '', onInput: (e, el) => { state.msgDrafts[taskId] = el.value; err.hidden = true; } }),
-        err,
-        h('div', { class: 'row' },
-          h('button', { class: 'btn primary', disabled: state.sending[key] ? true : undefined, onClick: () => sendMessage(taskId).then(say) }, 'Send message'),
-          h('label', { class: 'btn', title: 'Send a photo (with the words in the box)' }, '📷 Photo', pick))),
-    ];
+        c.text ? h('div', { class: 'pre' }, c.text) : null)) : (waiting.length ? null : h('span', { class: 'muted small' }, 'No messages yet.')),
+      waiting.map((x) => h('div', { class: 'team-msg mine', key: 'wc-' + x.id },
+        h('div', { class: 'row small' }, h('strong', null, 'You'), h('span', { class: 'tag remind' }, '⏳ Waiting to send')), h('div', { class: 'pre' }, x.text))),
+      h('textarea', { key: 'msg-' + taskId, placeholder: 'Ask or reply to your manager…', value: state.msgDrafts[taskId] || '', onInput: (e, el) => { state.msgDrafts[taskId] = el.value; err.hidden = true; } }),
+      err,
+      h('div', { class: 'row' },
+        h('button', { class: 'btn primary small', disabled: state.sending[key] ? true : undefined, onClick: () => sendMessage(taskId).then(say) }, 'Send message'),
+        h('label', { class: 'btn small', title: 'Send a photo (with the words in the box)' }, '📷 Photo', pick))));
   }
 
   function diary(t, updates, td) {
     const n = state.diaryDays;
     const { rows, more } = rules.diaryRows(t, updates, td, { staff: true, n, fillBy: (state.data && state.data.fillBy) || '18:00', nowHm: nowHm() });
-    return [
-      h('h3', { class: 'part-title' }, '📅 Earlier days'),
+    return h('section', { class: 'block' },
+      h('div', { class: 'diary-head' }, h('h3', null, "📅 What's happening")),
       rows.length ? h('ul', { class: 'diary-days' }, rows.map(({ day, kind, ups }) => h('li', { class: 'diary-day', key: 'd-' + day },
         h('div', { class: 'diary-date' }, day === td ? 'Today' : LONG_DAYS[new Date(day + 'T00:00:00Z').getUTCDay()], h('div', { class: 'muted small' }, fmtDay(day))),
         h('div', { class: 'diary-items' }, kind === 'ups' ? ups.map((u) => h('div', { class: 'diary-line' },
@@ -816,8 +818,7 @@ export function createStaff(opts) {
           : kind === 'off' ? h('span', { class: 'muted' }, 'Off')
             : kind === 'wait' ? h('span', { class: 'diary-none wait' }, 'Waiting for today\'s update')
               : h('span', { class: 'diary-none' }, 'No progress'))))) : h('p', { class: 'muted small' }, 'Nothing yet.'),
-      more ? h('button', { class: 'link small', onClick: () => { state.diaryDays = n + 14; render(); } }, 'Show older days') : null,
-    ];
+      more ? h('button', { class: 'link small', onClick: () => { state.diaryDays = n + 14; render(); } }, 'Show older days') : null);
   }
 
   function taskPage() {
@@ -825,7 +826,7 @@ export function createStaff(opts) {
     const td = today();
     return [
       chips(t, td),
-      t.details ? h('div', { class: 'task-details pre' }, t.details) : null,
+      t.details ? h('p', { class: 'pre muted' }, t.details) : null,
       files(t),
       updateCard(t),
       messages(t.id, comments),
@@ -838,51 +839,50 @@ export function createStaff(opts) {
     const done = ((state.detail && state.detail.tasks) || []).filter((t) => t.status === 'done' && !String(t.stepRef || '').endsWith(':whole'));
     const k = done.length;
     const sentSub = (t) => (t.today ? `✓ Sent ${fmtTime(t.today.at)}` : 'Send today\'s update');
-    const err = h('p', { class: 'err small', key: 'serr', hidden: true });
+    const err = h('p', { class: 'warn', key: 'serr', hidden: true });
     const ref = state.sel.slice(8);
     const waiting = state.outbox.filter((x) => x.kind === 'step' && x.projectRef === ref);
     return [
-      done.length ? [sec(`✓ ${done.length} done`), h('ul', { class: 'list-body' }, done.map((t, i) => row(t, `Step ${i + 1} · done ${t.doneAt ? fmtDay(t.doneAt) : ''}`, 'green')))] : null,
+      done.length ? [sec(`✓ ${done.length} done`), h('ul', { class: 'plist' }, done.map((t, i) => row(t, `Step ${i + 1} · done ${t.doneAt ? fmtDay(t.doneAt) : ''}`, 'green')))] : null,
       !pr ? h('p', { class: 'muted' }, done.length ? 'All your steps are done ✓. Your manager decides what comes next.' : 'This project is not on your list any more.')
         : [h('p', { class: 'muted' }, pr.real.length ? 'Do the steps in order. Every day, open the current step and send what you did. Found more work? Add a step below.'
           : 'No steps yet. Add the steps you will do, in order. Until then, send your daily update on the whole project.'),
-        h('ul', { class: 'list-body' }, (pr.real.length ? pr.real : pr.steps).map((t, i) => row(t,
+        h('ul', { class: 'plist' }, (pr.real.length ? pr.real : pr.steps).map((t, i) => row(t,
           !pr.real.length ? sentSub(t) : t === pr.current ? `Step ${k + i + 1} · current · ${sentSub(t)}` : `Step ${k + i + 1} · next${t.fromStaff ? ' · added by you' : ''}`,
           t === pr.current || !pr.real.length ? (t.today ? 'green' : 'red') : 'grey')),
           waiting.map((x) => h('li', { class: 'prow', key: 'wstep-' + x.id }, h('span', { class: 'quick-tick-space' }), h('div', { class: 'prow-btn' }, h('span', { class: 'dot grey' }),
             h('span', { class: 'prow-text' }, h('span', { class: 'prow-name' }, x.title), h('span', { class: 'prow-next' }, '⏳ Waiting to send')))))),
-        h('div', { class: 'card stack' },
-          h('label', null, 'Add a step', h('input', { key: 'step-' + ref, placeholder: 'e.g. Order the spare servo motor', maxlength: '300', value: state.stepDrafts[ref] || '', onInput: (e, el) => { state.stepDrafts[ref] = el.value; } })),
-          err,
-          h('button', { class: 'btn primary', onClick: () => addStep(ref).then((m) => { if (m) { err.textContent = m; err.hidden = false; } }) }, '+ Add step'))],
+        h('form', { class: 'add-step', onSubmit: (e) => { e.preventDefault(); addStep(ref).then((m) => { if (m) { err.textContent = m; err.hidden = false; } }); } },
+          h('input', { key: 'step-' + ref, placeholder: '+ Add the next step…', 'aria-label': 'Add a step', maxlength: '300', enterkeyhint: 'enter', autocomplete: 'off', value: state.stepDrafts[ref] || '', onInput: (e, el) => { state.stepDrafts[ref] = el.value; err.hidden = true; } })),
+        err],
     ];
   }
 
   function suggestPage() {
     const f = (state.suggestForm ||= { title: '', details: '', repeat: 'once', clientId: newClientId() }); // one id per form: a retry is kept once
-    const err = h('p', { class: 'err small', key: 'sgerr', hidden: true });
+    const err = h('p', { class: 'warn', key: 'sgerr', hidden: true });
     return [
       h('p', { class: 'muted' }, 'Your manager says yes or no. If yes, it comes on your list.'),
-      h('div', { class: 'card stack' },
+      h('div', { class: 'block stack' },
         h('label', null, 'Task', h('input', { key: 'sg-title', placeholder: 'Clean the dryer filters every week', value: f.title, onInput: (e, el) => { f.title = el.value; } })),
         h('label', null, 'Details', h('textarea', { key: 'sg-details', placeholder: 'Why it is needed (optional)', value: f.details, onInput: (e, el) => { f.details = el.value; } })),
         h('label', null, 'How often', h('select', { key: 'sg-repeat', value: f.repeat, onChange: (e, el) => { f.repeat = el.value; } },
           h('option', { value: 'once' }, 'One time'), h('option', { value: 'daily' }, 'Every day'), h('option', { value: 'weekly' }, 'Once a week'))),
         err,
         h('div', { class: 'row' },
-          h('button', { class: 'btn primary', onClick: () => suggest({ ...f }).then((m) => { if (m) { err.textContent = m; err.hidden = false; } else state.suggestForm = null; }) }, 'Send to my manager'),
-          h('button', { class: 'btn', onClick: () => { state.suggestForm = null; back(); } }, 'Cancel'))),
+          h('button', { class: 'btn primary small', onClick: () => suggest({ ...f }).then((m) => { if (m) { err.textContent = m; err.hidden = false; } else state.suggestForm = null; }) }, 'Send to my manager'),
+          h('button', { class: 'btn small', onClick: () => { state.suggestForm = null; back(); } }, 'Cancel'))),
     ];
   }
 
   function passwordPage() {
     const f = (state.pwForm ||= { old: '', nw: '' });
-    const err = h('p', { class: 'err small', key: 'pwerr', hidden: true });
-    return h('div', { class: 'card stack' },
+    const err = h('p', { class: 'warn', key: 'pwerr', hidden: true });
+    return h('div', { class: 'block stack' },
       h('label', null, 'Current password', h('input', { key: 'pw-old', type: 'password', autocomplete: 'current-password', value: f.old, onInput: (e, el) => { f.old = el.value; } })),
       h('label', null, 'New password (8 letters or more)', h('input', { key: 'pw-new', type: 'password', autocomplete: 'new-password', value: f.nw, onInput: (e, el) => { f.nw = el.value; } })),
       err,
-      h('button', { class: 'btn primary', onClick: () => changePassword(f.old, f.nw).then((m) => { if (m) { err.textContent = m; err.hidden = false; } else state.pwForm = null; }) }, 'Change password'));
+      h('button', { class: 'btn primary small', onClick: () => changePassword(f.old, f.nw).then((m) => { if (m) { err.textContent = m; err.hidden = false; } else state.pwForm = null; }) }, 'Change password'));
   }
 
   function notifyPage() {
@@ -891,10 +891,10 @@ export function createStaff(opts) {
       h('ul', null, ['A new task, or a whole project given to you', 'A new step added to your project', 'A message from your manager'].map((w) => h('li', null, w)))];
     if (s === 'on') {
       parts.push(h('p', { class: 'ok' }, '✓ On for this phone.'), h('div', { class: 'row' },
-        h('button', { class: 'btn', onClick: () => push.test().then(() => toast('🔔 Test sent. It comes in a few seconds.'), (e) => toast(e.message, 5000)) }, 'Send me a test'),
-        h('button', { class: 'btn', onClick: notifyOff }, 'Turn off')));
+        h('button', { class: 'btn small', onClick: () => push.test().then(() => toast('🔔 Test sent. It comes in a few seconds.'), (e) => toast(e.message, 5000)) }, 'Send me a test'),
+        h('button', { class: 'btn small', onClick: notifyOff }, 'Turn off')));
     } else if (s === 'default' || s === 'granted') {
-      parts.push(h('button', { class: 'btn primary', onClick: notifyOn }, '🔔 Turn on notifications'));
+      parts.push(h('button', { class: 'btn primary small', onClick: notifyOn }, '🔔 Turn on notifications'));
     } else if (s === 'denied') {
       parts.push(h('p', { class: 'warn' }, 'Notifications are blocked for Work Task on this phone. To allow them:'),
         h('ol', null,
@@ -905,21 +905,25 @@ export function createStaff(opts) {
       parts.push(h('p', { class: 'warn' }, 'On iPhone, notifications work only from the Home Screen app:'),
         h('ol', null, h('li', null, 'Open worktask.in in Safari.'), h('li', null, 'Tap Share → Add to Home Screen.'), h('li', null, 'Open Work Task from the Home Screen and turn notifications on here.')));
     } else parts.push(h('p', { class: 'muted' }, 'This browser cannot show notifications.'));
-    return h('div', { class: 'card stack' }, parts);
+    return h('div', { class: 'block stack' }, parts);
   }
 
   function detail() {
     const sel = state.sel;
     if (!sel) return h('div', { class: 'empty' }, h('p', null, 'Pick a task on the left.'));
-    let title = '', body;
+    let title = '', body, dot = ''; // the dot before the title, as on the owner's task page
     if (sel === 'suggest') { title = '💡 Suggest a task'; body = suggestPage(); }
     else if (sel === 'password') { title = 'Change password'; body = passwordPage(); }
     else if (sel === 'notify') { title = '🔔 Notifications'; body = notifyPage(); }
     else if (!state.detail) body = h('p', { class: 'muted' }, state.detailFailed ? [state.detailFailed, ' ', h('button', { class: 'link', onClick: loadDetail }, 'Try again')] : 'Loading…');
-    else if (sel.startsWith('task:')) { title = state.detail.task.title; body = taskPage(); }
+    else if (sel.startsWith('task:')) {
+      const t = state.detail.task;
+      title = t.title; body = taskPage();
+      dot = t.status !== 'open' ? 'grey' : t.today ? 'green' : waitingFor(t.id) ? 'yellow' : 'red';
+    }
     else { const pr = myProjects(state.data).find((x) => x.ref === sel.slice(8)); title = '📁 ' + (pr ? pr.name : 'Project'); body = projectPage(); }
     return h('div', { class: 'detail-inner', key: 'detail-' + sel },
-      h('div', { class: 'detail-top' }, h('button', { class: 'icon back', 'aria-label': 'Back', onClick: back }, '←'), h('h2', { class: 'detail-title' }, title)),
+      h('div', { class: 'detail-top' }, h('button', { class: 'icon back', 'aria-label': 'Back', onClick: back }, '←'), dot ? h('span', { class: 'dot ' + dot, 'aria-label': dot }) : null, h('h2', null, title)),
       body);
   }
 

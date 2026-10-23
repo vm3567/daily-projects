@@ -61,11 +61,7 @@ async function askWho() {
 
 /** A team member: the staff view, in the same layout and look as this app (the rules come from Work Task's logic.js). */
 async function startStaff(user, openTask = 0) {
-  if (!document.querySelector('link[data-team-look]')) { // the same look as Work Task: its styles on top of these
-    const link = document.createElement('link');
-    link.rel = 'stylesheet'; link.href = '../styles.css'; link.dataset.teamLook = '';
-    document.head.appendChild(link);
-  }
+  // (staff see this app's own design: only its styles, never Work Task's on top)
   root.replaceChildren(h('div', { class: 'loading' }, 'Loading…'));
   const [{ createStaff, staffApi, shrinkPhoto, browserPush }, { idbOutbox }, rules] = await Promise.all([import('./ui/staff.js'), import('./ui/staffbox.js'), import('../logic.js')]);
   let staff = null;

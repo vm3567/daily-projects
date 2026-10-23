@@ -1060,7 +1060,7 @@ test('📂 Projects page: a click on a project row selects it and stays on the p
   assert.match(mainsSrc, /ctx\.ui\.view === 'mains' && ctx\.showHere \? ctx\.showHere\(c\.id\)/, 'a task in the TASKS table while on the Projects page');
   const here = app.slice(app.indexOf('  showHere: (id) => {'), app.indexOf('  openProject: (id) => {'));
   assert.match(here, /select\(id\);/);
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-28'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-29'/, 'phones get the new copy');
 });
 
 test('📂 project page: "✕ Remove" on a task row takes it out of this project only — the task is kept (and stays in its other projects)', () => {
@@ -1823,7 +1823,7 @@ test('🔌 app wiring (app.js): "🔌 From apps" after ✉ Replies with the wait
   assert.match(app, /function go\(view\) \{\n\s*if \(view !== 'settings'\) forgetOnce\(\);/);
   assert.match(app, /if \(onServer\) loadApps\(appsCtx, force \|\| ui\.view === 'apps'\);/);
   assert.match(app, /replies: '✉ Replies', apps: '🔌 From apps', mains: '📂 Projects' \}\[ui\.view\]/, 'its page title');
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-28'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-29'/, 'phones get the new copy');
 });
 
 test('🔌 the PHP connector (team/connector/worktask-connector.php): the same text the app downloads, placeholders only (no real key), valid PHP 7.4+ (php -l), with wt_push / wt_withdraw / wt_decisions / wt_receive_decision', async () => {
@@ -2335,11 +2335,12 @@ test('one app — staff view: a task page shows chips, today\'s update box, mess
   s.open('task:12');
   await new Promise((r) => setTimeout(r, 0));
   const page = s.view().textContent;
-  for (const bit of ['Pack the samples', '⏰ Late — was by', "Today's update", 'Working on it', 'Stuck', 'Finished', 'Send', '💬 Messages', 'Please send a photo', '📅 Earlier days']) assert.ok(page.includes(bit), bit);
+  for (const bit of ['Pack the samples', '⏰ Late — was by', "Today's update", 'Working on it', 'Stuck', 'Finished', 'Send', '💬 Messages', 'Please send a photo', "📅 What's happening"]) assert.ok(page.includes(bit), bit);
   s.open('project:p1');
   await new Promise((r) => setTimeout(r, 0));
   const proj = s.view().textContent;
-  for (const bit of ['📁 Kiln trial', '✓ 1 done', 'Buy clay', 'Step 2 · current', 'Order clay', 'Step 3 · next', 'Fire the second batch', '+ Add step']) assert.ok(proj.includes(bit), bit);
+  for (const bit of ['📁 Kiln trial', '✓ 1 done', 'Buy clay', 'Step 2 · current', 'Order clay', 'Step 3 · next', 'Fire the second batch']) assert.ok(proj.includes(bit), bit);
+  assert.ok(rFind(s.view(), (n) => n.nodeName === 'INPUT' && n.getAttribute('placeholder') === '+ Add the next step…'), 'the owner\'s add-step box');
 });
 
 test('one app wiring (app.js): who signed in picks the screens — staff get the staff view, another manager Work Task, the owner this app (never held up once known; no answer = the owner\'s app)', () => {
@@ -2354,7 +2355,8 @@ test('one app wiring (app.js): who signed in picks the screens — staff get the
   assert.ok(!/^import .*ui\/staff\.js/m.test(app) && !/^import .*\.\.\/logic\.js/m.test(app));
   assert.match(app, /await Promise\.all\(\[import\('\.\/ui\/staff\.js'\), import\('\.\/ui\/staffbox\.js'\), import\('\.\.\/logic\.js'\)\]\)/);
   assert.ok(!/^import .*ui\/staffbox\.js/m.test(app), 'the offline sender loads only for staff too');
-  assert.match(app, /link\.rel = 'stylesheet'; link\.href = '\.\.\/styles\.css';/, 'the same look as Work Task for staff');
+  // (the owner asked: staff see the owner's own design — Work Task's styles are never loaded on top)
+  assert.ok(!/\.\.\/styles\.css/.test(app), 'never Work Task\'s styles');
   assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /'ui\/staff\.js'/, 'kept for offline');
 });
 
@@ -2607,7 +2609,7 @@ test('one app wiring (step 2): offline sending, the shared outbox, #open from a 
   assert.match(box, /indexedDB\.open\('worktask', 1\)/, 'Work Task\'s own outbox (both apps send what waits)');
   assert.match(box, /createObjectStore\('outbox', \{ keyPath: 'id', autoIncrement: true \}\)/);
   const sw = readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8');
-  assert.match(sw, /const TEAM_FILES = \['\.\.\/logic\.js', '\.\.\/styles\.css'\];/);
+  assert.match(sw, /const TEAM_FILES = \['\.\.\/logic\.js'\];/, 'Work Task\'s rules only (its styles are not used: staff see the owner\'s design)');
   assert.match(sw, /Promise\.all\(TEAM_FILES\.map\(\(u\) => c\.add\(u\)\.catch\(\(\) => \{\}\)\)\)/, 'best effort: only worktask.in has them');
   assert.match(sw, /'ui\/staff\.js', 'ui\/staffbox\.js'/);
 });
@@ -2708,4 +2710,26 @@ test('one app wiring (step 3): Ctrl+V and the 20 s check are hooked up for staff
   const src = readFileSync(new URL('../docs/ui/staff.js', import.meta.url), 'utf8');
   assert.match(src, /const n = \(state\.data\.tasks \|\| \[\]\)\.filter\(\(t\) => !t\.today\)\.length;/);
   assert.match(src, /\(n \? navigator\.setAppBadge\(n\) : navigator\.clearAppBadge\(\)\)/);
+});
+
+test('one app — the staff view has the owner\'s design: only this app\'s styles, its own building blocks (sections, the blue update box, segmented choice, team messages, tags); staff-only extras never touch the owner\'s screens', async () => {
+  const css = readFileSync(new URL('../docs/styles.css', import.meta.url), 'utf8');
+  const src = readFileSync(new URL('../docs/ui/staff.js', import.meta.url), 'utf8');
+  // every style the staff view uses is in this app's style file
+  const used = new Set([...src.matchAll(/class: '([^']+)'/g)].flatMap((m) => m[1].split(' ')).filter(Boolean));
+  for (const c of used) assert.ok(new RegExp('\\.' + c.replace(/-/g, '\\-') + '([^a-zA-Z0-9_-]|$)', 'm').test(css), 'styled by this app: .' + c);
+  // the extras are only inside the staff view (.layout.staff), so the owner's screens are unchanged
+  const extra = css.slice(css.indexOf('/* ---------------------------------------------------------------- the staff view'));
+  for (const rule of extra.split('\n').filter((l) => /^[^ /*].*\{/.test(l))) assert.match(rule, /^\.layout\.staff /, 'scoped: ' + rule.slice(0, 60));
+  // the owner's building blocks
+  const { s } = fakeStaff2({ 'task.get': () => ({ ok: true, task: staffData().tasks[0], updates: [], comments: [{ id: 1, text: 'Hi', mine: true, at: '2026-10-22 09:00:00' }] }) });
+  await s.load();
+  s.open('task:11'); await tick();
+  const v = s.view();
+  const has = (cls) => rFind(v, (n) => (' ' + (n.className || '') + ' ').includes(' ' + cls + ' '));
+  for (const cls of ['block', 'update-form', 'segmented', 'seg', 'team-msgs', 'team-msg', 'info-chips', 'diary-head', 'plist']) assert.ok(has(cls), 'uses the owner\'s .' + cls);
+  for (const gone of ['card', 'list-body', 'chip on']) assert.ok(!has(gone), 'no Work Task-only .' + gone);
+  assert.ok(rFind(v, (n) => n.nodeName === 'TEXTAREA' && /^What happened today\?/.test(n.getAttribute('placeholder') || '')), 'the owner\'s words in the update box');
+  const top = rFind(v, (n) => n.className === 'detail-top');
+  assert.ok(rFind(top, (n) => /\bdot red\b/.test(n.className || '')), 'the dot before the title, as on the owner\'s task page');
 });

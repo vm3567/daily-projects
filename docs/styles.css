@@ -1147,3 +1147,19 @@ img.rich-photo { width: 72px; height: 72px; object-fit: cover; border-radius: 6p
 .tag.app-status.rejected { color: var(--red); background: #fff3f3; border-color: #fbd0d0; }
 @media (max-width: 600px) { .once-row { grid-template-columns: 1fr auto; } .once-label { grid-column: 1 / -1; } }
 @media (prefers-color-scheme: dark) { .conn-once { background: #2b2311; border-color: #5c4813; } .once-value, .conn-guide pre { background: transparent; } }
+
+/* ---------------------------------------------------------------- the staff view (one app: ui/staff.js)
+   Staff see this app's own design. Only the few pieces this app had no style for, and only inside the staff view
+   (.layout.staff), so the owner's screens never change. */
+.layout.staff .list-sec { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin: 14px 16px 2px; font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+.layout.staff .list-sec .tag { text-transform: none; letter-spacing: 0; }
+.layout.staff .pre { white-space: pre-wrap; word-break: break-word; }
+.layout.staff .stack { display: flex; flex-direction: column; gap: 10px; }
+.layout.staff .banner.stack { gap: 6px; margin: 10px 14px 0; color: var(--text); }
+.layout.staff .team-msg.mine { background: var(--brand-soft); border-color: #c7d7fb; }
+.layout.staff .msg-acts { margin-left: auto; display: inline-flex; gap: 6px; }
+.layout.staff .search-box { margin: 12px 14px 4px; }
+.layout.staff .search-box .search { width: 100%; }
+.layout.staff .update-form textarea, .layout.staff .team-msgs textarea { width: 100%; min-height: 64px; }
+.layout.staff .update-form .segmented { align-self: flex-start; }
+.layout.staff .detail-top h2 { flex: 1 1 0; min-width: 0; }
