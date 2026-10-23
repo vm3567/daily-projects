@@ -181,6 +181,9 @@ export function msgBoxLeft(draft, sentText) {
   return d.startsWith(t) ? d.slice(t.length).replace(/^\s+/, '') : d;
 }
 
+/** An update sent (or queued) while the person kept typing in its box: the words to keep in the box, opened again as a change ('' = just what went). */
+export const updateBoxLeft = (draftNote, sentNote) => { const d = String(draftNote || ''); return d.trim() && d !== String(sentNote || '') ? d : ''; };
+
 /** An update Send whose button was redrawn meanwhile: redraw (the new Send button is no longer grey) if the task is still open, on any list. */
 export const redrawAfterSend = ({ view = '', sel = '', taskId }) => view === 'today' || sel === 'task:' + taskId;
 

@@ -590,6 +590,20 @@ export function fmtMinutes(m) {
   return h ? (r ? `${h}h ${r}m` : `${h}h`) : `${r}m`;
 }
 
+/** A "+ Add time" answer in minutes, or null when it is not understood: 45, 45m, 45 min, 1.5h, 2 hours, 1h 30m, 1:30. */
+export function parseDuration(v) {
+  const t = String(v ?? '').trim().toLowerCase();
+  const n = '(\\d+(?:\\.\\d+)?|\\.\\d+)';
+  const mins = '(?:m|min|mins|minute|minutes)';
+  let m;
+  let out = null;
+  if ((m = /^(\d+):([0-5]\d)$/.exec(t))) out = +m[1] * 60 + +m[2];
+  else if ((m = new RegExp(`^${n}\\s*(?:h|hr|hrs|hour|hours)(?:\\s*${n}\\s*${mins}?)?$`).exec(t))) out = +m[1] * 60 + (m[2] ? +m[2] : 0);
+  else if ((m = new RegExp(`^${n}\\s*${mins}?$`).exec(t))) out = +m[1];
+  out = Math.round(out); // anything left over (like "2 apples") matched nothing: null → 0
+  return Number.isFinite(out) && out > 0 ? out : null;
+}
+
 /** Monday of the India week that contains `day`. */
 export function weekStart(day) {
   const dow = (new Date(day + 'T00:00:00Z').getUTCDay() + 6) % 7; // Monday = 0

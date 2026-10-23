@@ -73,3 +73,16 @@ test('Morning plan keeps only real projects and at most 5 items', async () => {
     assert.equal(plan.items[1].projectId, null, 'unknown project id dropped');
   } finally { calls.restore(); }
 });
+
+test('weekly review keeps the newest events when the week spans two months (this month is loaded first)', async () => {
+  const calls = claudeSays({ moved: [], stuck: [], fix: [] });
+  try {
+    const ev = (tag, i, ms) => ({ id: tag + i, projectId: 'p1', projectName: 'Kiln trial', kind: 'step_ticked', detail: `${tag}-${i}`, at: new Date(Date.now() - ms).toISOString() });
+    const newer = Array.from({ length: 100 }, (_, i) => ev('newer', i, 3600000));
+    const older = Array.from({ length: 100 }, (_, i) => ev('older', i, 3 * 86400000));
+    await ai.weeklyReview('claude', 'key-for-tests', { projects: [project] }, { this: newer, last: older });
+    const prompt = JSON.parse(calls[0].opts.body).messages[0].content;
+    for (const e of newer) assert.ok(prompt.includes(`${e.detail}\n`), `${e.detail} reaches the prompt`);
+    assert.ok(prompt.indexOf('older-99') < prompt.indexOf('newer-0'), 'in time order');
+  } finally { calls.restore(); }
+});

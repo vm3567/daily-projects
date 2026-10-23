@@ -187,13 +187,24 @@ function conn_push(array $c, array $in): array {
   // a task: what changed goes to that task as a note (never a second task)
   $changes = conn_changes($old, $title, $details, $link, $fields);
   // the note first, the saved words after: a note that could not be written is written when the app sends it again
-  if ($old['dp_task_id'] && $changes && !conn_task_note($old['dp_task_id'], "🔌 {$c['name']} updated this:\n" . implode("\n", $changes), $c['name'], $link))
+  // (the link chip is touched only when the link changed: '' takes it away)
+  $chip = ($old['link'] ?? '') !== $link ? $link : null;
+  $note = "🔌 {$c['name']} updated this:\n" . implode("\n", $changes);
+  if ($old['dp_task_id'] && $changes && !conn_task_note($old['dp_task_id'], $note, $c['name'], $chip))
     throw new ApiError('The task could not be updated just now. Send the same again in a minute.', 503);
   // a task the app took back before it was made, sent again: it is wanted again (made below), like an approval sent again
   q("UPDATE conn_items SET title = ?, details = ?, link = ?, fields = ?, updated_at = ?, status = IF(status = 'withdrawn' AND dp_task_id IS NULL, 'pending', status) WHERE id = ?", [$title, $details, $link ?: null, $fjson, now(), $id]);
   $it = one('SELECT * FROM conn_items WHERE id = ?', [$id]);
-  if (!$it['dp_task_id']) conn_make_task($it, $c); // not made yet (the projects were not ready): made now, with the newest words
+  $mine = false;
+  if (!$it['dp_task_id']) conn_make_task($it, $c, $mine); // not made yet (the projects were not ready): made now, with the newest words
   $it = one('SELECT * FROM conn_items WHERE id = ?', [$id]);
+  // the 5-minute job made the task meanwhile, from the words read before these: the task hears what changed
+  if (!$old['dp_task_id'] && $it['dp_task_id'] && !$mine && $changes && !conn_task_note($it['dp_task_id'], $note, $c['name'], $chip)) {
+    // not written: the old words go back (only when nothing newer came), so sending the same again writes the note
+    q('UPDATE conn_items SET title = ?, details = ?, link = ?, fields = ? WHERE id = ? AND title = ? AND details <=> ? AND link <=> ? AND fields <=> ?',
+      [$old['title'], $old['details'], $old['link'], $old['fields'], $id, $title, $details, $link ?: null, $fjson]);
+    throw new ApiError('The task could not be updated just now. Send the same again in a minute.', 503);
+  }
   return ['id' => $id, 'status' => $it['status']];
 }
 
@@ -265,8 +276,12 @@ function conn_task_id(array $it): string {
   return 'ct' . (int)$it['id'] . '-' . substr(hash('sha256', $it['conn_id'] . '|' . $it['external_id'] . '|' . $it['created_at']), 0, 8);
 }
 
-/** Make the Daily Projects task for a 'task' item (once). False when the projects are not ready (tried again by the job). */
-function conn_make_task(array $it, array $c): bool {
+/**
+ * Make the Daily Projects task for a 'task' item (once). False when the projects are not ready (tried again by the job).
+ * $mine: true only when this call put the task in (from $it's words), not another maker.
+ */
+function conn_make_task(array $it, array $c, ?bool &$mine = null): bool {
+  $mine = false;
   if ($it['dp_task_id']) return true;
   $fresh = one('SELECT status, dp_task_id FROM conn_items WHERE id = ?', [$it['id']]);
   if (!$fresh || $fresh['dp_task_id'] || $fresh['status'] !== 'pending') return true; // made already, or the app took it back
@@ -303,6 +318,7 @@ function conn_make_task(array $it, array $c): bool {
     return false;
   }
   if (!$made && !$there) return false;
+  $mine = $made && !$there;
   $st = q("UPDATE conn_items SET dp_task_id = ?, status = 'done', updated_at = ? WHERE id = ? AND dp_task_id IS NULL AND status = 'pending'", [$taskId, now(), $it['id']]);
   if ($st->rowCount() !== 1) {
     // the app took it back while the task was being made: it stays withdrawn, and the task says so
@@ -316,7 +332,7 @@ function conn_make_task(array $it, array $c): bool {
  * A note from the app on its task (not your work: the dot does not change). Nothing when the task was deleted.
  * True when it is written (or there is no task any more); false when the projects could not be saved just now.
  */
-function conn_task_note(string $taskId, string $text, string $app, string $link = ''): bool {
+function conn_task_note(string $taskId, string $text, string $app, ?string $link = null): bool {
   try {
     ol_write(function (object $data, array &$hist) use ($taskId, $text, $app, $link): bool {
       foreach ((is_array($data->projects ?? null) ? $data->projects : []) as $p) {
@@ -324,9 +340,9 @@ function conn_task_note(string $taskId, string $text, string $app, string $link 
         $at = ol_iso_now();
         if (!isset($p->workNotes) || !is_array($p->workNotes)) $p->workNotes = [];
         array_unshift($p->workNotes, (object)['id' => ol_rand_id('an'), 'text' => mb_substr($text, 0, 5000), 'stepId' => null, 'createdAt' => $at, 'updatedAt' => $at, 'app' => true]);
-        if ($link !== '') { // the link chip follows the app's newest link
+        if ($link !== null) { // the link chip follows the app's newest link ('' = the app took the link away: no chip)
           $links = array_values(array_filter(is_array($p->links ?? null) ? $p->links : [], fn($l) => !is_object($l) || ($l->id ?? '') !== $taskId . '-link'));
-          $links[] = (object)['id' => $taskId . '-link', 'title' => mb_substr('Open in ' . $app, 0, 200), 'url' => $link];
+          if ($link !== '') $links[] = (object)['id' => $taskId . '-link', 'title' => mb_substr('Open in ' . $app, 0, 200), 'url' => $link];
           $p->links = $links;
         }
         $hist[date('Y-m', strtotime($at))][] = (object)['id' => ol_rand_id('ak'), 'projectId' => $taskId, 'projectName' => (string)($p->name ?? ''), 'kind' => 'app_note',

@@ -146,9 +146,15 @@ function ol_fetch(string $token, string $since): array {
   return array_values(array_filter($all, fn($m) => is_string($m['id'] ?? null) && $m['id'] !== ''));
 }
 
+/** Emails moved into the Inbox later (from Junk or another folder: their received time is old), changed after `since`, received after `from`. */
+function ol_fetch_moved(string $token, string $since, string $from): array {
+  $all = ol_list($token, 'inbox', 'id,subject,from,receivedDateTime,lastModifiedDateTime,bodyPreview,webLink,conversationId', 'lastModifiedDateTime', $since, " and receivedDateTime gt $from");
+  return array_values(array_filter($all, fn($m) => is_string($m['id'] ?? null) && $m['id'] !== ''));
+}
+
 /** Emails in a folder (inbox, sentitems) whose $field (receivedDateTime, sentDateTime) is after `since`, oldest first. */
-function ol_list(string $token, string $folder, string $select, string $field, string $since): array {
-  $q = ['$select' => $select, '$orderby' => "$field asc", '$filter' => "$field gt " . $since, '$top' => '50'];
+function ol_list(string $token, string $folder, string $select, string $field, string $since, string $more = ''): array {
+  $q = ['$select' => $select, '$orderby' => "$field asc", '$filter' => "$field gt " . $since . $more, '$top' => '50'];
   $url = ol_graph_base() . '/v1.0/me/mailFolders/' . $folder . '/messages?' . http_build_query($q, '', '&', PHP_QUERY_RFC3986);
   $all = [];
   for ($page = 0; $url !== '' && $page < OL_PAGES; $page++) {
@@ -641,10 +647,19 @@ function ol_check(bool $now = false): void {
     $since = setting('ol_since') ?: gmdate('Y-m-d\TH:i:s\Z', time() - 86400);
     // a few minutes back, in case two emails came in the same second (each email is still put in once)
     $msgs = ol_fetch($token, gmdate('Y-m-d\TH:i:s\Z', (int)strtotime($since) - 300));
-    ol_add($msgs);
+    // an email moved into the Inbox later keeps its old received time: looked for by when it last changed (its own
+    // watermark), only among the last 3 days' emails (an old email marked as read never floods in); ol_seen adds each once
+    if (setting('ol_mod_since') === '') { set_setting('ol_mod_since', gmdate('Y-m-d\TH:i:s\Z')); set_setting('ol_mod_from', $since); }
+    $modSince = setting('ol_mod_since');
+    $from = max(time() - 3 * 86400, (int)strtotime(setting('ol_mod_from')));
+    $moved = ol_fetch_moved($token, gmdate('Y-m-d\TH:i:s\Z', (int)strtotime($modSince) - 300), gmdate('Y-m-d\TH:i:s\Z', $from));
+    ol_add(array_merge($msgs, $moved));
     $last = strtotime($since);
     foreach ($msgs as $m) $last = max($last, (int)strtotime((string)($m['receivedDateTime'] ?? '')));
     set_setting('ol_since', gmdate('Y-m-d\TH:i:s\Z', $last));
+    $lastMod = strtotime($modSince);
+    foreach ($moved as $m) $lastMod = max($lastMod, (int)strtotime((string)($m['lastModifiedDateTime'] ?? '')));
+    set_setting('ol_mod_since', gmdate('Y-m-d\TH:i:s\Z', $lastMod));
     ol_check_sent($token); // replies you sent in Outlook tick their emails as replied
     set_setting('ol_error', '');
   } catch (OlError $e) {
@@ -768,7 +783,7 @@ function ol_callback(array $get): array {
     set_setting('ol_at', '0'); // look at once (the next request)
     // the first time: only the last 24 hours (after a long break too: never a flood of old emails)
     $since = strtotime(setting('ol_since')) ?: 0;
-    if ($since < time() - 3 * 86400) set_setting('ol_since', gmdate('Y-m-d\TH:i:s\Z', time() - 86400));
+    if ($since < time() - 3 * 86400) { set_setting('ol_since', gmdate('Y-m-d\TH:i:s\Z', time() - 86400)); set_setting('ol_mod_since', ''); }
     audit((int)$saved['user'], 'outlook_on', '');
     return [true, 'Outlook connected ✓' . ($account !== '' ? " ($account)" : '') . ' — you can close this.'];
   } catch (OlError $e) {

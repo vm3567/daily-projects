@@ -14,10 +14,11 @@ self.addEventListener('activate', (e) => {
 // The code files kept here are always ONE matched set: written only all at once (install, or when version.txt
 // says a new version was uploaded), never one file at a time.
 const STAMP = 'kept-version.txt'; // the version of the kept set
+// resolves true when the kept set was of an older version (a page that got its code from it runs old code)
 const keepSet = (stamp) => caches.open(CACHE).then((c) => c.match(STAMP).then((old) => (old ? old.text() : null)).then((was) => {
-  if (was === stamp) return undefined;
+  if (was === stamp) return false;
   const save = () => c.put(STAMP, new Response(stamp));
-  return was === null ? save() : c.addAll(SHELL.map((u) => new Request(u, { cache: 'reload' }))).then(save); // all or nothing
+  return was === null ? save().then(() => false) : c.addAll(SHELL.map((u) => new Request(u, { cache: 'reload' }))).then(save).then(() => true, () => true); // all or nothing
 }));
 // weak signal: a code file waits this long for the network, then this version's kept copy is used
 const CODE_WAIT = 8000;
@@ -33,7 +34,9 @@ self.addEventListener('fetch', (e) => {
   if (url.pathname === '/version.txt') {
     let text = null;
     const got = fetch(url.href, { cache: 'no-store' }).then((r) => { text = r.ok ? r.clone().text() : null; return r; });
-    e.waitUntil(got.then(() => text).then((t) => (t && t.trim() ? keepSet(t.trim()) : undefined)).catch(() => {}));
+    // the pages that got their code from the kept (old) set run old code, but their first stamp is already the new one: tell them (they offer the reload)
+    const oldPages = () => Promise.all([...pageWay].filter(([, way]) => way === 'kept').map(([id]) => self.clients.get(id).then((c) => c && c.postMessage({ type: 'new-version' }))));
+    e.waitUntil(got.then(() => text).then((t) => (t && t.trim() ? keepSet(t.trim()) : false)).then((wasOld) => (wasOld ? oldPages() : undefined)).catch(() => {}));
     e.respondWith(got);
     return;
   }

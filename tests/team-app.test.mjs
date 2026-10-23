@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { addDay, weekdayOf, dueOn, itemKey, diaryRows, fieldChanged, lateValue, afterFlush, boxStillThere, updateSaveBody, redrawHow, projectRowState, giveBackShow, keptNotice, noticeHow, pasteWaits, msgBoxSent, msgBoxLeft, redrawAfterSend, taskSaveBody, giveId, aboutShort, projectAboutOf, morningMail, morningOrder, morningSummary, sentTag, sentTime, escHtml, followupRule, followupRows, followupGroups, followupSummary, roundKey, roundSaved, roundPlan, roundMark, parseQuickTask, outlookLine } from '../team/public_html/logic.js';
+import { addDay, weekdayOf, dueOn, itemKey, diaryRows, fieldChanged, lateValue, afterFlush, boxStillThere, updateSaveBody, redrawHow, projectRowState, giveBackShow, keptNotice, noticeHow, pasteWaits, msgBoxSent, msgBoxLeft, updateBoxLeft, redrawAfterSend, taskSaveBody, giveId, aboutShort, projectAboutOf, morningMail, morningOrder, morningSummary, sentTag, sentTime, escHtml, followupRule, followupRows, followupGroups, followupSummary, roundKey, roundSaved, roundPlan, roundMark, parseQuickTask, outlookLine } from '../team/public_html/logic.js';
 const APP = readFileSync(new URL('../team/public_html/app.js', import.meta.url), 'utf8');
 
 // Wed 21 Oct 2026 is "today" in these checks; 18 Oct is a Sunday.
@@ -748,8 +748,9 @@ async function swHarness({ netNever = false, netFail = false, net = null } = {})
   const handlers = {};
   const timers = [];
   const fetches = [];
+  const posted = []; // messages sent to the open pages
   const ctx = {
-    self: { addEventListener: (t, f) => { handlers[t] = f; }, clients: { matchAll: async () => [], claim: async () => {} }, skipWaiting: async () => {}, registration: {} },
+    self: { addEventListener: (t, f) => { handlers[t] = f; }, clients: { matchAll: async () => [], claim: async () => {}, get: async (id) => ({ id, postMessage: (m) => posted.push({ id, ...m }) }) }, skipWaiting: async () => {}, registration: {} },
     location: { origin: ORIGIN },
     caches: { open: async (n) => cacheObj(n), match: async (r) => { for (const n of Object.keys(stores)) { const x = store(n).get(key(r)); if (x) return x; } return undefined; }, keys: async () => Object.keys(stores), delete: async (n) => delete stores[n] },
     fetch: (r, o) => { fetches.push({ url: key(r), cache: o && o.cache }); return net ? net(key(r)) : netNever ? new Promise(() => {}) : netFail ? Promise.reject(new TypeError('offline')) : Promise.resolve(new Response('net ' + key(r))); },
@@ -761,7 +762,7 @@ async function swHarness({ netNever = false, netFail = false, net = null } = {})
   vm.runInNewContext(src, ctx);
   const cacheName = /const CACHE = '([^']+)'/.exec(src)[1];
   return {
-    cacheName, store, handlers, fetches,
+    cacheName, store, handlers, fetches, posted,
     /** One request; resolves to the body text, or 'PENDING' if nothing answered after the timers up to `upTo` ms fired. */
     async ask(path, mode = 'no-cors', { upTo = 4000, clientId = '', waits = [] } = {}) {
       let answer;
@@ -939,4 +940,66 @@ test('review r15: words typed in the message box while a message is sending stay
   const send = APP.slice(APP.indexOf('function messagesBlock('), APP.indexOf("'Send message');"));
   assert.ok(!/delete state\.drafts\['m' \+ taskId\]/.test(send), 'the draft is never simply wiped after a send');
   assert.equal((send.match(/keepTypedAfter\(taskId, text\);/g) || []).length, 2, 'online and offline');
+});
+
+test('review r16: the "Finished" after the photos goes on the day the server saved the first part for (a wrong phone date is put right)', () => {
+  const send = APP.slice(APP.indexOf('async function sendItem('), APP.indexOf('/** The task as this screen last saw it'));
+  assert.match(send, /it\.day = out\.update\.day;/);
+  assert.match(send, /if \(it\.thenFinish\) await api\('update\.save', updateSaveBody\(\{ taskId: it\.taskId, note: it\.note, day: it\.day \|\| day,/);
+});
+
+test('review r16: words typed in the update box while Send is running are kept (the box stays open as a change), online and when kept on the phone', () => {
+  assert.equal(updateBoxLeft('Fired kiln 3', 'Fired kiln 3'), '', 'just what went: the box closes');
+  assert.equal(updateBoxLeft('Fired kiln 3, temp 1180C, crack on tile 4', 'Fired kiln 3'), 'Fired kiln 3, temp 1180C, crack on tile 4', 'more typed: all of it stays, to send again as the change');
+  assert.equal(updateBoxLeft('  ', 'Fired kiln 3'), '', 'emptied meanwhile: nothing to keep');
+  assert.equal(updateBoxLeft(undefined, 'x'), '');
+  const fnSrc = APP.slice(APP.indexOf('function keepTypedUpdate('), APP.indexOf('function updateForm('));
+  const state = { drafts: { 7: { note: 'Fired kiln 3, temp 1180C', state: 'progress' } }, editing: {} };
+  new Function('state', 'updateBoxLeft', fnSrc + '; return keepTypedUpdate;')(state, updateBoxLeft)(7, state.drafts[7], 'Fired kiln 3');
+  assert.deepEqual(state.drafts[7], { note: 'Fired kiln 3, temp 1180C', state: 'progress' }, 'the typed words have a draft behind them');
+  assert.equal(state.editing[7], true, 'the box stays open (a second Send changes today\'s update)');
+  state.drafts[8] = { note: 'done', state: 'finished' }; state.editing[8] = true;
+  new Function('state', 'updateBoxLeft', fnSrc + '; return keepTypedUpdate;')(state, updateBoxLeft)(8, state.drafts[8], 'done');
+  assert.ok(!(8 in state.drafts) && !(8 in state.editing), 'nothing more typed: emptied as before');
+  const send = APP.slice(APP.indexOf('function updateForm('), APP.indexOf("}, 'Send');", APP.indexOf('function updateForm(')));
+  assert.ok(!/delete state\.drafts\[t\.id\]/.test(send), 'the draft is never simply wiped after a send');
+  assert.equal((send.match(/keepTypedUpdate\(t\.id, d, sentNote\);/g) || []).length, 2, 'online and offline');
+  assert.match(send, /api\('update\.save', updateSaveBody\(\{ taskId: t\.id, note: sentNote,/, 'what went is the text taken when Send was tapped');
+  assert.equal((send.match(/note: sentNote, state: d\.state/g) || []).length, 2, 'the phone keeps that same text, not later typing');
+});
+
+test('review r16: a photo message — words typed during the upload stay in the draft and the box, and the caption that went is not sent again', async () => {
+  const src = APP.slice(APP.indexOf('function keepTypedAfter('), APP.indexOf('function messagesBlock(')) + APP.slice(APP.indexOf('async function sendMsgPhoto('), APP.indexOf('// Ctrl+V on an open task'));
+  const state = { drafts: { m5: 'see crack' }, sending: {}, sel: 'task:5', detail: { comments: [] } };
+  const box = { value: 'see crack', dataset: { init: '' } };
+  let renders = 0;
+  const api = async () => { box.value = state.drafts.m5 = 'see crack - replace the lid by Friday'; return { comments: [{ id: 1 }] }; }; // typed while it uploads
+  class FormData { append() {} }
+  const send = new Function('state', 'api', 'toast', 'FormData', 'newClientId', 'document', 'formHasText', 'render', 'OfflineError', 'msgBoxSent', 'msgBoxLeft',
+    src + '; return sendMsgPhoto;')(state, api, () => {}, FormData, () => 'c1', { contains: () => true }, () => false, () => { renders++; }, class extends Error {}, msgBoxSent, msgBoxLeft);
+  await send(5, { name: 'p.jpg', size: 1, type: 'image/jpeg' }, 'see crack', box);
+  assert.equal(state.drafts.m5, '- replace the lid by Friday', 'the later words keep a draft (a redraw does not wipe them)');
+  assert.equal(box.value, '- replace the lid by Friday', 'the caption that went leaves the box');
+  state.drafts.m5 = 'see crack'; box.value = 'see crack';
+  await send(5, { name: 'p.jpg', size: 1, type: 'image/jpeg' }, '', box); // a photo with no words: all typed is kept
+  assert.equal(state.drafts.m5, 'see crack - replace the lid by Friday');
+  assert.equal(box.value, 'see crack - replace the lid by Friday');
+});
+
+test('review r16 sw: a page that got old code from the kept set is told a new version is ready when version.txt shows a new one', async () => {
+  let slow = true;
+  const h = await swHarness({ net: (u) => (u.endsWith('version.txt') ? Promise.resolve(new Response('v2\n')) : slow ? new Promise(() => {}) : Promise.resolve(new Response('net ' + u))) });
+  h.store(h.cacheName).set('https://worktask.in/kept-version.txt', new Response('v1'));
+  for (const f of ['/app.js', '/logic.js']) h.store(h.cacheName).set('https://worktask.in' + f, new Response('old ' + f));
+  assert.equal(await h.ask('/app.js', 'no-cors', { upTo: 8000, clientId: 'p1' }), 'old /app.js', 'weak signal: the kept (v1) code');
+  slow = false;
+  assert.equal(await h.ask('/app.js', 'no-cors', { clientId: 'p2' }), 'net https://worktask.in/app.js', 'another page got the new code');
+  const waits = [];
+  assert.equal(await h.ask('/version.txt', 'no-cors', { clientId: 'p2', waits }), 'v2\n', 'the first stamp the page sees is already the new one');
+  await Promise.all(waits);
+  assert.deepEqual(h.posted, [{ id: 'p1', type: 'new-version' }], 'only the page running the old code is told (it offers the reload)');
+  waits.length = 0; h.posted.length = 0;
+  await h.ask('/version.txt', 'no-cors', { clientId: 'p1', waits }); await Promise.all(waits);
+  assert.deepEqual(h.posted, [], 'no new version since: nothing more');
+  assert.match(APP, /d\.type === 'new-version'\) \{\n\s+codeStamp = 'old'; checkNewVersion\(\);/, 'the page then shows "New version ready"');
 });

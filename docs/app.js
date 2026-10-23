@@ -509,16 +509,20 @@ function personTeamLink(person) {
 async function giveStepsTo(items, user, person) {
   const first = person.name.split(/\s+/)[0];
   const giving = (team.giving ||= new Set());
+  const ids = (team.giveIds ||= new Map()); // one id per step and person until it is given: a retry after a lost reply is the same give
   let given = 0;
   const failed = [];
   for (const { project, step } of items) {
     if (giving.has(step.id)) continue; // a second tap while it is on its way
     giving.add(step.id);
+    const key = step.id + ' ' + user.id;
+    if (!ids.has(key)) ids.set(key, 'give-' + newId() + newId());
     try {
       const out = await teamApi('task.save', {
         assigneeId: user.id, title: step.text, details: '', project: project.name, projectRef: project.id, stepRef: step.id,
-        repeat: 'daily', skipSunday: true, clientId: 'give-' + newId() + newId(),
+        repeat: 'daily', skipSunday: true, clientId: ids.get(key),
       });
+      ids.delete(key); // given: a later give (after a cancel) is a new task
       if (out.task) team.byStep.set(step.id, out.task); // shows "👥 on …'s list" at once
       given++;
     } catch (e) {
@@ -1575,6 +1579,7 @@ function sendSignIn(person, username, password, isNew) {
 async function giveSignIn(person, email = '') {
   const base = (person.name.trim().split(/\s+/)[0] || 'user').toLowerCase().replace(/[^a-z0-9._-]/g, '') || 'user';
   const password = firstPassword();
+  let checked = false;
   for (const extra of ['', '1', '2', '3', String(Date.now() % 1000)]) {
     let name = (base + extra).slice(0, 40);
     if (name.length < 3) name = (name + 'user').slice(0, 40);
@@ -1584,7 +1589,12 @@ async function giveSignIn(person, email = '') {
       sendSignIn(person, out.user.username, password, true);
       return;
     } catch (e) {
-      if (!/taken/i.test(e.message)) { toast(e.message, 6000); return; }
+      if (!/taken/i.test(e.message)) { toast(e.message, 6000); refreshTeamPeople(); return; } // it may be made with the reply lost: reload the sign-ins
+      if (checked) continue;
+      checked = true; // taken: by this person (an earlier try whose reply was lost)? Then a new password, not a second account
+      let mine = null;
+      try { const users = (await teamApi('users.list')).users || []; team.accounts = users; mine = teamMemberFor(person, users.filter((u) => !u.owner)); } catch (e2) { toast(e2.message, 6000); return; } // cannot tell: never make a second one blind
+      if (mine) { render(); toast(`${person.name} already has a Work Task sign-in: @${mine.username}`, 6000); newPasswordFor(person, mine); return; }
     }
   }
   toast('Could not find a free username. Add them in Team → People.', 6000);
@@ -3043,7 +3053,8 @@ const projectSteps = (p) => {
   const today = todayIndia();
   // a step made into its own project ("Make it a project") whose team task is still open: kept, so the person's task stays
   const movedButGiven = (x) => keepMovedStep(x, team.byStep.get(x.id), !!team.listAt);
-  const open = p.steps.filter((x) => (!x.done || movedButGiven(x)) && !(x.snoozedUntil && x.snoozedUntil > today)).map((x) => ({ stepRef: x.id, title: x.text, details: x.note || '', dueDate: x.dueDate || null }));
+  // (moved: the server only keeps the task it already has for it, never makes a new one)
+  const open = p.steps.filter((x) => (!x.done || movedButGiven(x)) && !(x.snoozedUntil && x.snoozedUntil > today)).map((x) => ({ stepRef: x.id, title: x.text, details: x.note || '', dueDate: x.dueDate || null, ...(x.done && x.movedTo ? { moved: true } : {}) }));
   if (open.length || p.steps.length) return open; // (steps all done or snoozed: nothing to do; the whole-project task is only for no steps at all)
   // no steps at all: the person still gets the project, as one task with its name, until steps are added
   return [{ stepRef: wholeRef(p.id), title: p.name, details: p.status || '' }];
@@ -3326,6 +3337,7 @@ function start() {
     render();
   });
   store.addEventListener('remote', () => toast('↻ Updated with changes from your other device'));
+  store.addEventListener('refused', (e) => toast(`The server refused one change (it holds code-like text), so it was not saved: ${e.detail.what}. Your other changes are saved.`, 10000));
   store.addEventListener('blocked', (e) => {
     toast(e.detail.status === 'offline' ? 'No connection — changes not saved. Try again when online.' : 'Please wait…');
     render(); // put ticked boxes and menus back to the real data

@@ -674,6 +674,8 @@ test('make it a project wiring (app.js): Undo also takes the new project away; a
   // the rule itself (keep while the task is open, and while the team list is not loaded) is checked in core.test.mjs
   assert.match(steps, /const movedButGiven = \(x\) => keepMovedStep\(x, team\.byStep\.get\(x\.id\), !!team\.listAt\);/);
   assert.match(steps, /\(!x\.done \|\| movedButGiven\(x\)\)/, 'the person\'s task is not cancelled by the move');
+  // a moved step is sent marked moved: the server keeps the task it has, but never makes a new one (or opens a cancelled one)
+  assert.match(steps, /\.\.\.\(x\.done && x\.movedTo \? \{ moved: true \} : \{\}\)/);
   const DETAIL = readFileSync(new URL('../docs/ui/detail.js', import.meta.url), 'utf8');
   assert.match(DETAIL, /setTimeout\(\(\) => \{ const f = document\.querySelector\('\.title-input'\); if \(f\) \{ f\.focus\(\); f\.select\(\); \} \}, 30\);/, 'the new project\'s name is ready to change');
 });
@@ -1923,4 +1925,113 @@ test('review r15: a box left focused (not typed in) takes another device\'s newe
     morph(input, h('input', { value: 'Kiln trial' }));
     assert.equal(input.value, 'Kiln trial');
   } finally { document.activeElement = was; }
+});
+
+test('+ Add time: "2 hours" adds 120 minutes; an answer it cannot read saves nothing and says how to type it', () => {
+  const s = sampleState();
+  const ui = { selected: 'p1', update: {}, showTime: 'p1' };
+  const acts = [];
+  const toasts = [];
+  const ctx = Object.assign(fakeCtx(s, ui), { act: (type, args) => acts.push([type, args]), toast: (m) => toasts.push(m) });
+  const realPrompt = globalThis.prompt;
+  try {
+    for (const answer of ['2 hours', '1h 30m', '2 apples']) {
+      globalThis.prompt = () => answer;
+      btn(renderDetail(ctx), '+ Add time').__on.click();
+    }
+  } finally { globalThis.prompt = realPrompt; }
+  assert.deepEqual(acts, [['addTime', { projectId: 'p1', minutes: 120 }], ['addTime', { projectId: 'p1', minutes: 90 }]]);
+  assert.match(toasts.at(-1), /Type a number of minutes/);
+});
+
+test('photo shrink: a wide PNG (a Mac window screenshot with a clear shadow) gets a white background before it is drawn into the JPEG, not black', async () => {
+  const { uploadBlob } = await import('../docs/ui/files.js');
+  const calls = [];
+  const c2d = {
+    set fillStyle(v) { calls.push(['fillStyle', v]); },
+    fillRect: (...a) => calls.push(['fillRect', ...a]),
+    drawImage: (img, ...a) => calls.push(['drawImage', ...a]),
+  };
+  const canvas = { getContext: () => c2d, toBlob: (r, type) => r(new Blob(['jpg'], { type })) };
+  const realCreate = document.createElement;
+  const realBitmap = globalThis.createImageBitmap;
+  globalThis.createImageBitmap = async () => ({ width: 3000, height: 1500, close() {} });
+  document.createElement = (t) => (t === 'canvas' ? canvas : realCreate(t));
+  try {
+    const store = { isOffline: () => false, canEdit: () => true, repo: { createBlobBase64: async () => 'sha1' } };
+    const out = await uploadBlob({ store, toast: () => {} }, new File(['png'], 'Screenshot.png', { type: 'image/png' }));
+    assert.equal(out.name, 'Screenshot.jpg');
+    const draw = calls.findIndex((c) => c[0] === 'drawImage');
+    const fill = calls.findIndex((c) => c[0] === 'fillRect');
+    assert.ok(fill >= 0 && fill < draw, 'the canvas is filled before the picture is drawn');
+    assert.deepEqual(calls[fill], ['fillRect', 0, 0, 2000, 1000]);
+    assert.deepEqual(calls.filter((c) => c[0] === 'fillStyle' && calls.indexOf(c) < fill).at(-1), ['fillStyle', '#fff'], 'with white');
+  } finally { document.createElement = realCreate; globalThis.createImageBitmap = realBitmap; }
+});
+
+// Runs one function from app.js with stand-ins for what it uses (app.js itself needs a real browser).
+async function appFunctions(from, to, deps) {
+  const { readFileSync } = await import('node:fs');
+  const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
+  const src = app.slice(app.indexOf(from), app.indexOf(to));
+  const names = Object.keys(deps);
+  const fns = [...src.matchAll(/^(?:async )?function (\w+)\(/gm)].map((m) => m[1]);
+  return new Function(...names, `${src}\nreturn { ${fns.join(', ')} };`)(...names.map((n) => deps[n]));
+}
+
+test('people give: a retry after a lost reply sends the same clientId (one task on their list); after it is given, a new give gets a new id', async () => {
+  const sent = [];
+  let lose = true;
+  const team = { byStep: new Map() };
+  const deps = {
+    team, newId, toast: () => {}, render: () => {}, teamMorning: () => {}, loadTeam: () => {},
+    teamApi: async (action, args) => { sent.push(args.clientId); if (lose) { lose = false; throw new Error('No connection'); } return { task: { id: 1 } }; },
+  };
+  const { giveStepsTo } = await appFunctions('async function giveStepsTo(', 'function refreshTeamPeople(', deps);
+  const items = [{ project: { id: 'p1', name: 'Kiln' }, step: { id: 's1', text: 'Send quote' } }];
+  const ravi = { id: 7 };
+  await giveStepsTo(items, ravi, { name: 'Ravi' }); // the server made it, the reply was lost
+  await giveStepsTo(items, ravi, { name: 'Ravi' }); // tapped again
+  assert.equal(sent.length, 2);
+  assert.equal(sent[1], sent[0], 'the same id: the server gives back the task it already made');
+  assert.match(sent[0], /^[A-Za-z0-9-]{8,60}$/, 'an id the server accepts');
+  await giveStepsTo(items, { id: 8 }, { name: 'Anil' });
+  assert.notEqual(sent[2], sent[0], 'another person: another give');
+  await giveStepsTo(items, ravi, { name: 'Ravi' });
+  assert.notEqual(sent[3], sent[0], 'given already (then cancelled): a new give is a new task');
+});
+
+test('Give a Work Task sign-in: a retry after a lost reply does not make a second account (ravi1); it offers a new password for the one made', async () => {
+  const { teamMemberFor } = await import('../docs/rules.js');
+  const accounts = [{ id: 1, owner: true, name: 'Owner', username: 'owner' }];
+  const made = [];
+  const reset = [];
+  const toasts = [];
+  let refreshed = 0;
+  let lose = true;
+  const team = {};
+  const deps = {
+    team, teamMemberFor, toast: (m) => toasts.push(m), render: () => {}, refreshTeamPeople: () => { refreshed++; },
+    sendSignIn: () => {}, firstPassword: () => 'kiln-clay-427', openSheet: () => {}, confirm: () => true,
+    teamApi: async (action, args) => {
+      if (action === 'users.list') return { users: accounts };
+      if (action === 'user.reset') { reset.push(args.id); return {}; }
+      if (accounts.some((u) => u.username === args.username)) throw new Error('This username is taken.');
+      accounts.push({ id: accounts.length + 1, name: args.name, username: args.username });
+      made.push(args.username);
+      if (lose) { lose = false; throw new Error('No connection'); }
+      return { user: accounts.at(-1) };
+    },
+  };
+  const { giveSignIn } = await appFunctions('async function giveSignIn(', 'function personMenu(', deps);
+  const ravi = { name: 'Ravi' };
+  await giveSignIn(ravi); // made on the server, the reply was lost
+  assert.equal(refreshed, 1, 'the sign-ins are loaded again (the menu then shows the account)');
+  await giveSignIn(ravi); // tapped again before that came back
+  assert.deepEqual(made, ['ravi'], 'only one account');
+  assert.deepEqual(reset, [2], 'a new first password for the account that was made');
+  assert.match(toasts.at(-1), /already has a Work Task sign-in: @ravi/);
+  accounts.push({ id: 9, name: 'Meena Rao', username: 'meena' });
+  await giveSignIn({ name: 'Meena Das' }); // a different Meena: 'meena' is someone else's, so the next number
+  assert.deepEqual(made, ['ravi', 'meena1']);
 });

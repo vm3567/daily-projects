@@ -241,19 +241,22 @@ function handle(string $a, array $in): array {
     }
     case 'update.save': {
       $t = one(TASK_SELECT . ' WHERE t.id = ?', [(int)($in['taskId'] ?? 0)]);
+      // the phone's clock may be off: its time when it sent this (sentAt) puts writtenAt on the server's clock
+      $sent = is_string($in['sentAt'] ?? null) && strtotime($in['sentAt']);
+      $skew = $sent ? max(-86400, min(86400, time() - (int)strtotime($in['sentAt']))) : 0;
+      $wrote = is_string($in['writtenAt'] ?? null) && strtotime($in['writtenAt']) ? date('Y-m-d H:i:s', min(time(), (int)strtotime($in['writtenAt']) + $skew)) : null;
       // written offline and sent later: it counts for the day it was written (up to 2 days back)
+      // (that day by the server's clock when the phone said both times; the phone's own day only when it did not)
       $uday = $day;
-      if (is_string($in['day'] ?? null) && preg_match('/^\d{4}-\d{2}-\d{2}$/', $in['day']) && $in['day'] < $day) {
+      $wday = $sent && $wrote ? substr($wrote, 0, 10) : ($in['day'] ?? null);
+      if (is_string($wday) && preg_match('/^\d{4}-\d{2}-\d{2}$/', $wday) && $wday < $day) {
         // older than 2 days: say so, never quietly save it as today's update
-        if ($in['day'] < date('Y-m-d', strtotime($day . ' -2 days'))) throw new ApiError('This update was written more than 2 days ago, so it was not saved. Please write it again.');
-        $uday = $in['day'];
+        if ($wday < date('Y-m-d', strtotime($day . ' -2 days'))) throw new ApiError('This update was written more than 2 days ago, so it was not saved. Please write it again.');
+        $uday = $wday;
       }
       // a closed task can only be changed by the person who finished it today (to fix or undo their own Finished);
       // never when the manager cancelled it, took it back, or marked it done (closed_by is set only by their own Finished)
       // (the newest update: a Finished written offline yesterday and sent today is still theirs to undo)
-      // the phone's clock may be off: its time when it sent this (sentAt) puts writtenAt on the server's clock
-      $skew = is_string($in['sentAt'] ?? null) && strtotime($in['sentAt']) ? max(-86400, min(86400, time() - (int)strtotime($in['sentAt']))) : 0;
-      $wrote = is_string($in['writtenAt'] ?? null) && strtotime($in['writtenAt']) ? date('Y-m-d H:i:s', min(time(), (int)strtotime($in['writtenAt']) + $skew)) : null;
       if ($wrote && substr($wrote, 0, 10) !== $uday) $wrote = null; // the time it was written must be on the day it is for
       // (an undo written offline within 12 hours of their Finished counts too, even if it arrives later)
       $mine = $t && $t['status'] === 'done' && $t['done_at'] && (int)($t['closed_by'] ?? 0) === $me['id']
@@ -1089,6 +1092,8 @@ function project_sync(array $me, array $in, string $ref, string $day): array {
       }
       continue;
     }
+    // a step made into its own project (moved): only a task it already has stays; never made again, nor a cancelled one opened again
+    if (!empty($st['moved']) && !one("SELECT id FROM tasks WHERE step_ref = ? AND status = 'open' AND seq IS NULL", [$stepRef])) continue;
     // the project with no steps was finished as one task: done, never made again (the owner decides to finish the project)
     if ($stepRef === "$ref:whole" && one("SELECT id FROM tasks WHERE project_ref = ? AND step_ref = ? AND status = 'done'", [$ref, $stepRef])) continue;
     // just finished by the person (the manager's step will tick itself in a moment): do not make it again.

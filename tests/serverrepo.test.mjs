@@ -28,7 +28,7 @@ test('server storage: another device first = ClashError; signed out = AuthError;
   fakeFetch(() => json(401, { ok: false, error: 'Please sign in again.' }));
   await assert.rejects(r.headCommit(), AuthError);
   fakeFetch(() => json(403, { ok: false, error: 'These projects belong to someone else.' }));
-  await assert.rejects(r.headCommit(), (e) => e instanceof GitHubError && !(e instanceof AuthError) && /someone else/.test(e.message));
+  await assert.rejects(r.headCommit(), (e) => e instanceof GitHubError && !(e instanceof AuthError) && /someone else/.test(e.message) && !e.refused);
   fakeFetch(() => { throw new TypeError('Failed to fetch'); });
   await assert.rejects(r.headCommit(), NetworkError);
 });
@@ -36,7 +36,7 @@ test('server storage: another device first = ClashError; signed out = AuthError;
 test('server storage: a firewall 403 page is "refused", not "signed out" (no sign-in loop)', async () => {
   const r = new ServerRepo('tok');
   fakeFetch(() => new Response('<html><body>403 Forbidden</body></html>', { status: 403, headers: { 'Content-Type': 'text/html' } }));
-  await assert.rejects(r.commit('p', 't', [], 'm'), (e) => e instanceof GitHubError && !(e instanceof AuthError) && e.status === 403 && /refused/.test(e.message));
+  await assert.rejects(r.commit('p', 't', [], 'm'), (e) => e instanceof GitHubError && !(e instanceof AuthError) && e.status === 403 && /refused/.test(e.message) && e.refused === true);
 });
 
 test('server storage: files come back as bytes', async () => {

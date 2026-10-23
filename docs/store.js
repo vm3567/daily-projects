@@ -3,19 +3,36 @@
 
 import { applyOp, applyOps, emptyData, makeOp, opMonth, commitMessage, clone } from './ops.js';
 
-/** History months an operation touches (its own, plus the month of a change it undoes). */
-const monthsOfOp = (op) => [opMonth(op), op.args && op.args.undoMonth].filter(Boolean);
-import { todayIndia, monthOf, normalizeParents } from './rules.js';
+/** History months an operation touches (its own, the month of a change it undoes, and where an untick's tick line is). */
+const monthsOfOp = (op) => [opMonth(op), op.args && op.args.undoMonth, ...((op.args && op.args.tickMonths) || [])].filter(Boolean);
+import { todayIndia, indiaDate, monthOf, normalizeParents } from './rules.js';
 import { AuthError, NetworkError, ClashError } from './github.js';
 import { SAVE_DELAY_MS } from './config.js';
 
 const PENDING_KEY = 'dp.pending';
+const REFUSED_KEY = 'dp.refused'; // changes the host's firewall would not take, kept on the device (never sent again)
 const SNAPSHOT_KEY = 'dp.snapshot'; // last data seen from GitHub, so the app can open without internet
 const DATA_PATH = 'data.json';
 const historyPath = (m) => `history/${m}.json`;
 
 function readPending() {
   try { return JSON.parse(localStorage.getItem(PENDING_KEY) || '[]'); } catch { return []; }
+}
+
+/** Months a ticked step's tick line can be in: from when it was done (a team tick is dated earlier) to its last change. */
+function tickMonthsOf(data, a) {
+  const p = data.projects.find((x) => x.id === a.projectId);
+  const s = p && p.steps.find((x) => x.id === a.stepId);
+  if (!s || !s.done || !s.doneAt) return [];
+  const months = [];
+  let m = monthOf(indiaDate(s.doneAt));
+  const last = monthOf(indiaDate(s.updatedAt && s.updatedAt > s.doneAt ? s.updatedAt : s.doneAt));
+  while (m <= last && months.length < 12) {
+    months.push(m);
+    const [y, mo] = m.split('-').map(Number);
+    m = mo === 12 ? `${y + 1}-01` : `${y}-${String(mo + 1).padStart(2, '0')}`;
+  }
+  return months;
 }
 
 function filesOf(data) {
@@ -201,6 +218,8 @@ export class Store extends EventTarget {
       this.emit('blocked', { status: this.status });
       return null;
     }
+    // an untick removes the step's tick line: the save must load the month it was ticked in
+    if (type === 'untickStep') args = { ...args, tickMonths: tickMonthsOf(this.view.data, args) };
     const op = makeOp(type, args);
     const ok = applyOp(this.view, op);
     if (!ok) { this.emit('change', { reason: 'noop' }); return null; } // redraw so controls show the real data
@@ -247,7 +266,8 @@ export class Store extends EventTarget {
     if (this.saving || !this.pending.length || !this.base) return;
     this.saving = true;
     this.setStatus('saving');
-    const ops = this.pending.slice();
+    // after a firewall refusal, changes go one at a time, so only the one holding the refused text is set aside
+    const ops = this.oneByOne ? this.pending.slice(0, 1) : this.pending.slice();
     try {
       let done = false;
       for (let attempt = 0; attempt < 3 && !done; attempt++) {
@@ -283,14 +303,36 @@ export class Store extends EventTarget {
       this.pending = this.pending.filter((o) => !sent.has(o.id));
       this.persistPending();
       this.recompute();
+      if (!this.pending.length) this.oneByOne = false;
       this.setStatus(this.pending.length ? 'saving' : 'saved');
       this.emit('change', { reason: 'saved' });
     } catch (e) {
-      this.handleError(e);
+      if (e && e.refused && ops.length > 1) {
+        this.oneByOne = true;
+        this.setStatus('saving'); // try again, one change at a time
+      } else if (e && e.refused) this.setAside(ops[0]);
+      else this.handleError(e);
     } finally {
       this.saving = false;
       if (this.pending.length && this.status === 'saving') this.scheduleSave(300);
     }
+  }
+
+  /** A change the firewall refuses on its own can never be saved: keep a copy on the device, save the rest. */
+  setAside(op) {
+    try {
+      const kept = JSON.parse(localStorage.getItem(REFUSED_KEY) || '[]');
+      localStorage.setItem(REFUSED_KEY, JSON.stringify([...kept, op].slice(-50)));
+    } catch { /* storage full or blocked */ }
+    const what = commitMessage([op], this.view ? this.view.data : this.base.data);
+    this.sentIds.add(op.id); // never put back in the shared queue
+    this.pending = this.pending.filter((o) => o.id !== op.id);
+    this.persistPending();
+    if (!this.pending.length) this.oneByOne = false;
+    this.recompute();
+    this.setStatus(this.pending.length ? 'saving' : 'saved');
+    this.emit('refused', { op, what });
+    this.emit('change', { reason: 'refused' });
   }
 
   /** Get the latest data if another device saved. With changes waiting, send them first. */

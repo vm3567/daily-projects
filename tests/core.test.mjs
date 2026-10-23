@@ -2461,3 +2461,19 @@ test('review r15: a monthly repeat follows a due date you moved (31st moved to t
   applyOp(s, t3);
   assert.equal(s.data.projects[0].steps.find((x) => x.id === t3.id + 'r').dueDate, '2026-05-05', 'stays on the 5th');
 });
+
+test('+ Add time answer: hours, minutes, "1h 30m" and "1:30" are read whole; anything not understood is refused (not read as a few minutes)', async () => {
+  const { parseDuration } = await import('../docs/rules.js');
+  assert.equal(parseDuration('2 hours'), 120);
+  assert.equal(parseDuration('1h 30m'), 90);
+  assert.equal(parseDuration('1h30m'), 90);
+  assert.equal(parseDuration('1:30'), 90);
+  assert.equal(parseDuration('1hr'), 60);
+  assert.equal(parseDuration('2 hrs'), 120);
+  assert.equal(parseDuration('1.5h'), 90);
+  assert.equal(parseDuration('1.5 H'), 90);
+  assert.equal(parseDuration('45'), 45);
+  assert.equal(parseDuration(' 45 min '), 45);
+  assert.equal(parseDuration('20m'), 20);
+  for (const bad of ['abc', '2 apples', '', '0', '-5', '1:75', '1h 30x', '2 hours later', null]) assert.equal(parseDuration(bad), null, `${bad} is refused`);
+});

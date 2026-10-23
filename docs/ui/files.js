@@ -24,7 +24,10 @@ async function shrinkImage(file) {
     const canvas = document.createElement('canvas');
     canvas.width = IMAGE_MAX_WIDTH;
     canvas.height = Math.round(bmp.height * scale);
-    canvas.getContext('2d').drawImage(bmp, 0, 0, canvas.width, canvas.height);
+    const c2d = canvas.getContext('2d');
+    c2d.fillStyle = '#fff'; // a JPEG has no see-through parts: a PNG's clear border would come out black
+    c2d.fillRect(0, 0, canvas.width, canvas.height);
+    c2d.drawImage(bmp, 0, 0, canvas.width, canvas.height);
     bmp.close?.();
     const blob = await new Promise((r) => canvas.toBlob(r, 'image/jpeg', 0.85));
     if (!blob) return file;
