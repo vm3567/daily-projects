@@ -698,7 +698,7 @@ export function createStaff(opts) {
   function updateCard(t) {
     const waiting = waitingFor(t.id);
     if (waiting && !state.editing[t.id]) { // (the owner's box with the orange "being changed" border)
-      return block("Today's update", h('div', { class: 'update-form loose editing' },
+      return todayBox(h('div', { class: 'update-form loose editing' },
         h('div', { class: 'row' }, stateTag(waiting.state), h('span', { class: 'tag remind' }, '⏳ Waiting to send'), (waiting.files || []).length ? h('span', { class: 'muted small' }, `📷 ${waiting.files.length}`) : null),
         h('div', { class: 'pre' }, waiting.note),
         h('span', { class: 'muted small' }, 'Kept on this phone. It is sent by itself when the internet is back.')));
@@ -707,11 +707,9 @@ export function createStaff(opts) {
     const done = t.today && !state.editing[t.id];
     if (done) {
       const u = t.today;
-      return block("Today's update", h('div', { class: 'diary-line' },
-        h('span', { class: 'diary-icon' }, u.state === 'stuck' ? '⚠️' : u.state === 'finished' ? '✅' : '📝'),
-        h('div', { class: 'diary-text' }, h('strong', null, 'You '), u.state !== 'progress' ? [stateTag(u.state), ' '] : null, u.note, photos('photo', u.photos)),
-        h('span', { class: 'muted small' }, `Sent ${fmtTime(u.at)}`)),
-      h('div', { class: 'row' }, h('button', { class: 'btn small', onClick: () => { state.editing[t.id] = true; state.drafts[t.id] = { note: u.note, state: u.state }; render(); } }, '✎ Edit'),
+      // what was sent is the "Today" row under it (as on the owner's page): here only the buttons to change it
+      return todayBox(h('div', { class: 'row' }, h('span', { class: 'info-chip static good' }, `✓ Today's update sent ${fmtTime(u.at)}`),
+        h('button', { class: 'btn small', onClick: () => { state.editing[t.id] = true; state.drafts[t.id] = { note: u.note, state: u.state }; render(); } }, '✎ Edit'),
         (u.photos || []).length < 5 ? h('label', { class: 'btn small' }, '📷 Add photo', h('input', { type: 'file', accept: 'image/*', multiple: true, class: 'visually-hidden',
           onChange: (e, el) => { const f = [...el.files].slice(0, 5); el.value = ''; addPhotos(t, f).then((m) => { if (m) toast(m, 5000); }); } })) : null));
     }
@@ -720,7 +718,7 @@ export function createStaff(opts) {
     const err = errLine('err-' + t.id);
     const say = (m) => err.say(m);
     const pick = h('input', { type: 'file', accept: 'image/*', multiple: true, class: 'visually-hidden', onChange: (e, el) => { state.files[t.id] = [...picked, ...el.files].slice(0, 5); el.value = ''; render(); } });
-    return block("Today's update", h('div', { class: 'update-form loose' + (state.editing[t.id] ? ' editing' : '') },
+    return todayBox(h('div', { class: 'update-form loose' + (state.editing[t.id] ? ' editing' : '') },
       t.last ? h('span', { class: 'small muted' }, `Last time (${fmtDay(t.last.day)}): `, h('span', { class: 'pre' }, t.last.note)) : null,
       h('textarea', { key: 'up-' + t.id, placeholder: 'What happened today? (you can tap 🎤 on the keyboard to speak)', value: d.note, onInput: (e, el) => { d.note = el.value; err.clear(); } }),
       h('div', { class: 'segmented', role: 'group', 'aria-label': 'How is it going' }, STATES.map(([k, label]) =>
@@ -743,8 +741,10 @@ export function createStaff(opts) {
     });
   }
 
-  function diary(t, updates, td) {
-    return diaryBlock({ rules, t, updates, td, staff: true, meId: state.user.id, n: state.diaryDays, fillBy: (state.data && state.data.fillBy) || '18:00', photos,
+  // today's update: in the box under "What's happening", as on the owner's page
+  const todayBox = (...children) => h('div', { class: 'today-box' }, ...children);
+  function diary(t, updates, td, box = null) {
+    return diaryBlock({ box, todayInRows: true, rules, t, updates, td, staff: true, meId: state.user.id, n: state.diaryDays, fillBy: (state.data && state.data.fillBy) || '18:00', photos,
       onMore: () => { state.diaryDays += 14; render(); } });
   }
 
@@ -755,9 +755,8 @@ export function createStaff(opts) {
       chips(t, td),
       t.details ? h('p', { class: 'pre muted' }, t.details) : null,
       files(t),
-      updateCard(t),
       messages(t.id, comments),
-      t.status === 'suggested' || (t.status !== 'open' && !updates.length) ? null : diary(t, updates, td),
+      t.status === 'suggested' || (t.status !== 'open' && !updates.length) ? updateCard(t) : diary(t, updates, td, updateCard(t)),
     ];
   }
 

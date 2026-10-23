@@ -905,9 +905,9 @@ export function createTeam(opts) {
 
   function taskActions(t) {
     if (t.status === 'suggested') return null;
-    if (t.status !== 'open') return h('button', { class: 'btn small', onClick: () => setStatus(t, 'open') }, 'Open again');
-    return [h('button', { class: 'btn small', onClick: () => setStatus(t, 'done') }, '✓ Mark done'),
-      h('button', { class: 'btn small icon-btn' + (state.taskMenu === t.id ? ' on' : ''), 'aria-label': 'More actions', title: 'Edit, move, instructions, cancel', onClick: () => { state.taskMenu = state.taskMenu === t.id ? 0 : t.id; render(); } }, '⋯')];
+    if (t.status !== 'open') return h('button', { class: 'btn', onClick: () => setStatus(t, 'open') }, 'Open again');
+    return [h('button', { class: 'btn', onClick: () => setStatus(t, 'done') }, 'Finish task'),
+      h('button', { class: 'btn icon-btn' + (state.taskMenu === t.id ? ' on' : ''), 'aria-label': 'More actions', title: 'Edit, move, instructions, cancel', onClick: () => { state.taskMenu = state.taskMenu === t.id ? 0 : t.id; render(); } }, '⋯')];
   }
 
   function taskMenu(t) {
@@ -1066,7 +1066,7 @@ export function createTeam(opts) {
     }
     const about = state.detail && sel.startsWith('task:') ? rules.projectAboutOf([state.detail.task]) : state.detail && sel.startsWith('project:') ? rules.projectAboutOf([...(state.detail.tasks || [])].reverse()) : '';
     return h('div', { class: 'detail-inner', key: 'detail-' + sel },
-      h('div', { class: 'detail-top' }, h('button', { class: 'icon back', 'aria-label': 'Back', onClick: back }, '←'), dot ? h('span', { class: 'dot ' + dot, 'aria-label': dot }) : null, h('h2', null, title), actions),
+      h('div', { class: 'detail-top' }, h('button', { class: 'icon back', 'aria-label': 'Back', onClick: back }, '←'), dot ? h('span', { class: 'dot ' + dot, 'aria-label': dot }) : null, h('h2', null, title), actions ? h('div', { class: 'state-buttons' }, actions) : null), // (the buttons under the title, as on the owner's page)
       about ? h('p', { class: 'muted' }, (sel.startsWith('task:') ? '📁 ' : '') + about) : null,
       body);
   }

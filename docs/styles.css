@@ -751,6 +751,10 @@ kbd.hint {
 .stand .muted { color: #92400e; }
 .detail-top .title-input { flex: 1 1 280px; min-width: 220px; }
 .state-buttons { flex-wrap: wrap; justify-content: flex-end; }
+/* every page the same as the owner's (team pages, staff view): the title takes the line, its buttons go under it */
+.detail-top h2 { flex: 1 1 280px; min-width: 0; }
+.detail-top h2 ~ .state-buttons { flex-basis: 100%; justify-content: flex-start; }
+.today-box { margin: 10px 0 8px; }
 .edit-title { opacity: .45; font-size: 18px; }
 .detail-top:hover .edit-title, .edit-title:focus { opacity: 1; }
 .title-input { cursor: text; }

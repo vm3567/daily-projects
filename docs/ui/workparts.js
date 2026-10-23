@@ -99,21 +99,37 @@ export function filesBlock(t, { pic, openFile, onRemove = null }) {
 
 /**
  * 📅 What's happening on a task, day by day (the rule: logic.js diaryRows): every update with its time, Sunday = Off,
- * a due day with nothing = No progress. staff: their own words say "You", today has its own box above.
+ * a due day with nothing = No progress. staff: their own words say "You". Drawn exactly like the owner's
+ * "What's happening" (ui/detail.js): the last-7-days strip, box (today's update form) under the heading, the day in
+ * bold with its date under it, the time on the right, the same day tags.
  */
-export function diaryBlock({ rules, t, updates, td, staff, meId, n, fillBy, photos, onMore }) {
-  const { rows, more } = rules.diaryRows(t, updates, td, { staff, n, fillBy, nowHm: nowHm() });
-  return h('section', { class: 'block' },
-    h('div', { class: 'diary-head' }, h('h3', null, "📅 What's happening")),
+export function diaryBlock({ rules, t, updates, td, staff, meId, n, fillBy, photos, onMore, box = null, todayInRows = false }) {
+  // todayInRows: today's update is a "Today" row too (the box above only writes or changes it)
+  const { rows, more } = rules.diaryRows(t, updates, td, { staff: staff && !todayInRows, n, fillBy, nowHm: nowHm() });
+  const SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const dayOfWeek = (day) => new Date(day + 'T00:00:00Z').getUTCDay();
+  const back = (day, k) => new Date(Date.parse(day + 'T00:00:00Z') - k * 864e5).toISOString().slice(0, 10);
+  const byDay = new Map(rows.map((r) => [r.day, r.kind]));
+  const STATE = { ups: 'ok', off: 'off', wait: 'wait', miss: 'miss' }, WHAT = { ok: 'updated', off: 'off', wait: 'waiting', miss: 'no progress', none: '—' };
+  const week = [];
+  for (let i = 6; i >= 0; i--) {
+    const day = back(td, i), st = STATE[byDay.get(day)] || (dayOfWeek(day) === 0 ? 'off' : 'none');
+    week.push(h('span', { class: `wk ${st}`, key: 'wk-' + day, title: `${SHORT[dayOfWeek(day)]} ${fmtDay(day)}: ${WHAT[st]}` }, SHORT[dayOfWeek(day)][0]));
+  }
+  return h('section', { class: 'block diary' },
+    h('div', { class: 'diary-head' }, h('h3', null, "📅 What's happening"), h('div', { class: 'week', title: 'Last 7 days' }, week)),
+    box,
     rows.length ? h('ul', { class: 'diary-days' }, rows.map(({ day, kind, ups }) => h('li', { class: 'diary-day', key: 'd-' + day },
-      h('div', { class: 'diary-date' }, day === td ? 'Today' : LONG_DAYS[new Date(day + 'T00:00:00Z').getUTCDay()], h('div', { class: 'muted small' }, fmtDay(day))),
-      h('div', { class: 'diary-items' }, kind === 'ups' ? ups.map((u) => h('div', { class: 'diary-line' },
-        h('span', { class: 'diary-icon' }, u.state === 'stuck' ? '⚠️' : u.state === 'finished' ? '✅' : '📝'),
-        h('div', { class: 'diary-text' }, h('strong', null, (staff && u.byId === meId ? 'You' : u.by) + ' '), u.state !== 'progress' ? [stateTag(u.state), ' '] : null, u.note, photos('photo', u.photos)),
-        h('span', { class: 'muted small' }, fmtTime(u.at))))
-        : kind === 'off' ? h('span', { class: 'muted' }, 'Off')
-          : kind === 'wait' ? h('span', { class: 'diary-none wait' }, 'Waiting for today\'s update')
-            : h('span', { class: 'diary-none' }, 'No progress'))))) : h('p', { class: 'muted small' }, 'Nothing yet.'),
+      h('div', { class: 'diary-date' }, h('strong', null, day === td ? 'Today' : LONG_DAYS[dayOfWeek(day)]),
+        h('span', { class: 'muted small' }, day === td ? `${SHORT[dayOfWeek(day)]} ${fmtDay(day)}` : fmtDay(day))),
+      h('div', { class: 'diary-items' }, kind === 'ups' ? ups.map((u) => h('div', { class: 'diary-entry', key: 'u-' + u.at },
+        h('div', { class: 'diary-line' },
+          h('span', { class: 'diary-icon' }, u.state === 'stuck' ? '⚠️' : u.state === 'finished' ? '✅' : '📝'),
+          h('div', { class: 'diary-text' }, h('strong', null, (staff && u.byId === meId ? 'You' : u.by) + ' '), u.state !== 'progress' ? [stateTag(u.state), ' '] : null, `“${u.note}”`, photos('photo', u.photos))),
+        h('span', { class: 'diary-time' }, fmtTime(u.at))))
+        : kind === 'off' ? h('span', { class: 'day-tag off' }, 'Off')
+          : kind === 'wait' ? h('span', { class: 'day-tag wait' }, 'Waiting for today\'s update')
+            : [h('span', { class: 'day-tag miss' }, 'No progress'), h('span', { class: 'muted small' }, staff ? ' no update' : ' no update from anyone')])))) : h('p', { class: 'muted small' }, 'Nothing yet.'),
     more ? h('button', { class: 'link small', onClick: onMore }, 'Show older days') : null);
 }
 

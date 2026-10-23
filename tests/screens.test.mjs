@@ -2355,7 +2355,8 @@ test('one app — staff view: a task page shows chips, today\'s update box, mess
   s.open('task:12');
   await new Promise((r) => setTimeout(r, 0));
   const page = s.view().textContent;
-  for (const bit of ['Pack the samples', '⏰ Late — was by', "Today's update", 'Working on it', 'Stuck', 'Finished', 'Send', '💬 Messages', 'Please send a photo', "📅 What's happening"]) assert.ok(page.includes(bit), bit);
+  for (const bit of ['Pack the samples', '⏰ Late — was by', 'Working on it', 'Stuck', 'Finished', 'Send', '💬 Messages', 'Please send a photo', "📅 What's happening"]) assert.ok(page.includes(bit), bit);
+  assert.ok(page.indexOf("📅 What's happening") < page.indexOf('Working on it'), 'today\'s update box is under "What\'s happening", as on the owner\'s page (owner, 23 Oct: every page the same)');
   s.open('project:p1');
   await new Promise((r) => setTimeout(r, 0));
   const proj = s.view().textContent;
@@ -2837,10 +2838,10 @@ test('one app — team pages: a task\'s page (who, Mark done, ⋯ Edit / Move / 
   t.go('today'); await tick();
   t.open('task:22'); await tick(); await tick();
   let v = t.view();
-  for (const bit of ['👤 Valar', '⏰ Late — was by', '📎 Instructions', 'guide.pdf', '💬 Messages', 'Please hurry', "📅 What's happening", '✓ Mark done']) assert.ok(v.textContent.includes(bit), bit);
+  for (const bit of ['👤 Valar', '⏰ Late — was by', '📎 Instructions', 'guide.pdf', '💬 Messages', 'Please hurry', "📅 What's happening", 'Finish task']) assert.ok(v.textContent.includes(bit), bit);
   assert.ok(rFind(v, (n) => n.nodeName === 'TEXTAREA' && /^Reply or give an instruction/.test(n.getAttribute('placeholder') || '')));
   assert.ok(rFind(v, (n) => n.nodeName === 'BUTTON' && n.getAttribute('aria-label') === 'Remove guide.pdf'), 'the manager can take an instruction file off');
-  btn(v, '✓ Mark done').__on.click(); await tick();
+  btn(v, 'Finish task').__on.click(); await tick();
   assert.deepEqual(calls.filter((c) => c.a === 'task.status').map((c) => c.body), [{ id: 22, status: 'done' }]);
   rFind(v, (n) => n.nodeName === 'BUTTON' && n.getAttribute('aria-label') === 'More actions').__on.click();
   v = t.view();
@@ -3322,4 +3323,27 @@ test('🔔 in the app (23 Oct): the bell counts what is not seen, lists the newe
   assert.match(app, /if \(onServer && !isMock\) startBell\(\);/);
   assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /'ui\/bell\.js'/);
   assert.match(readFileSync(new URL('../docs/styles.css', import.meta.url), 'utf8'), /body\.has-bell \.detail-top \{ padding-right: 56px; \}/, 'it never covers a header\'s buttons');
+});
+
+test('every page the same as the owner\'s (23 Oct): "What\'s happening" on the team pages and the staff view is drawn like the owner\'s — 7-day strip, the box under the heading, day + date, time on the right, the same day tags; buttons under the title', async () => {
+  const { diaryBlock } = await import('../docs/ui/workparts.js');
+  const { readFileSync } = await import('node:fs');
+  const TODAY = '2026-10-21', TEAM = readFileSync(new URL('../docs/ui/team.js', import.meta.url), 'utf8');
+  const rules = await import('../team/public_html/logic.js');
+  const t = { status: 'open', repeat: 'daily', skipSunday: true, startDate: '2026-10-15', createdAt: '2026-10-15 09:00:00' };
+  const ups = [{ day: TODAY, note: 'plates kept for drying', state: 'progress', at: `${TODAY} 14:24:00`, by: 'Valar', byId: 3, photos: [] }];
+  const all = (n, f, out = []) => { if (f(n)) out.push(n); (n.childNodes || []).forEach((c) => all(c, f, out)); return out; };
+  const cls = (n, c) => (n.className || '').split(' ').includes(c);
+  const box = document.createElement('div');
+  const el = diaryBlock({ rules, t, updates: ups, td: TODAY, staff: true, meId: 3, n: 14, fillBy: '18:00', photos: () => null, onMore: () => {}, box, todayInRows: true });
+  assert.ok(cls(el, 'diary'), 'the owner\'s diary section');
+  assert.equal(all(el, (n) => cls(n, 'wk')).length, 7, 'the last-7-days strip');
+  assert.ok(el.childNodes.includes(box), 'the update box is under the heading');
+  const today = all(el, (n) => cls(n, 'diary-day'))[0];
+  assert.match(today.textContent, /^Today.*Wed 21 Oct/, 'the day in bold, its date under it');
+  assert.ok(all(today, (n) => cls(n, 'diary-time')).length === 1, 'the time on the right');
+  assert.match(today.textContent, /You “plates kept for drying”/, 'staff: their own words say You; today is a row too');
+  assert.ok(all(el, (n) => cls(n, 'day-tag') && cls(n, 'miss')).length > 0 && all(el, (n) => cls(n, 'day-tag') && cls(n, 'off')).length > 0, 'No progress / Off tags');
+  assert.match(TEAM, /h\('h2', null, title\), actions \? h\('div', \{ class: 'state-buttons' \}, actions\) : null\)/, 'team pages: the buttons under the title');
+  assert.match(readFileSync(new URL('../docs/styles.css', import.meta.url), 'utf8'), /\.detail-top h2 ~ \.state-buttons \{ flex-basis: 100%; justify-content: flex-start; \}/);
 });
