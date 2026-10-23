@@ -3213,3 +3213,48 @@ test('review r4-2 (whole code): the server\'s own notes (a move, a chase) show n
   assert.match(out, /pushManager\.getSubscription\(\)/);
   assert.match(out, /a=logout'[^\n]*body: JSON\.stringify\(\{ endpoint \}\)/);
 });
+
+test('review r4-4 (whole code): an error under a form shows even after the screen was drawn again, and stays through later redraws until it is cleared', async () => {
+  const { h, morph, errLine } = await import('../docs/ui/dom.js');
+  // a little more of a page than the pretend DOM above: enough for morph() (attributes, moving and removing children)
+  class El {
+    constructor(tag) { this.nodeName = tag.toUpperCase(); this.nodeType = 1; this.childNodes = []; this.attributes = []; this.dataset = {}; this.style = { cssText: '' }; this.className = ''; this.value = ''; }
+    appendChild(c) { return this.insertBefore(c, null); }
+    insertBefore(c, at) { if (c.parentNode) c.parentNode.childNodes.splice(c.parentNode.childNodes.indexOf(c), 1); const i = at ? this.childNodes.indexOf(at) : -1; this.childNodes.splice(i < 0 ? this.childNodes.length : i, 0, c); c.parentNode = this; return c; }
+    remove() { if (this.parentNode) this.parentNode.childNodes.splice(this.parentNode.childNodes.indexOf(this), 1); this.parentNode = null; }
+    replaceWith(n) { this.parentNode.insertBefore(n, this); this.remove(); }
+    setAttribute(n, v) { this.removeAttribute(n); this.attributes.push({ name: n, value: String(v) }); }
+    removeAttribute(n) { this.attributes = this.attributes.filter((x) => x.name !== n); }
+    getAttribute(n) { const a = this.attributes.find((x) => x.name === n); return a ? a.value : null; }
+    hasAttribute(n) { return this.attributes.some((x) => x.name === n); }
+    get hidden() { return this.hasAttribute('hidden'); }
+    set hidden(v) { if (v) this.setAttribute('hidden', ''); else this.removeAttribute('hidden'); }
+    set textContent(t) { this.childNodes = [{ nodeType: 3, nodeValue: String(t), remove() {} }]; }
+    get textContent() { return this.childNodes.map((c) => (c.nodeType === 3 ? c.nodeValue : c.textContent)).join(''); }
+  }
+  const realDoc = globalThis.document, RealNode = globalThis.Node;
+  globalThis.Node = El;
+  globalThis.document = { createElement: (t) => new El(t), createTextNode: (t) => ({ nodeType: 3, nodeValue: t, remove() { if (this.parentNode) this.parentNode.childNodes.splice(this.parentNode.childNodes.indexOf(this), 1); } }), activeElement: null };
+  try {
+  const draw = () => { const err = errLine('t-err'); return { err, el: h('div', null, h('input', { key: 'box' }), err) }; };
+  const page = draw().el;
+  const again = draw();
+  morph(page, again.el); // e.g. a photo picked: the page keeps its own error line
+  again.err.say('📷 Add a photo to finish this task.');
+  const line = () => page.childNodes[1];
+  assert.equal(line().textContent, '📷 Add a photo to finish this task.', 'written into the line on the page');
+  assert.equal(line().hidden, false);
+  const later = draw();
+  morph(page, later.el); // the next redraw (new work every 20 s) keeps it
+  assert.equal(line().textContent, '📷 Add a photo to finish this task.');
+  assert.ok(!line().hasAttribute('hidden'), 'still shown');
+  later.err.clear(); // typing again
+  assert.equal(line().hidden, true);
+  morph(page, draw().el);
+  assert.ok(line().hasAttribute('hidden'), 'and stays gone');
+  for (const f of ['staff.js', 'team.js', 'workparts.js']) {
+    const src = (await import('node:fs')).readFileSync(new URL('../docs/ui/' + f, import.meta.url), 'utf8');
+    assert.doesNotMatch(src, /err\.(textContent|hidden) =/, f + ': every form error goes through errLine');
+  }
+  } finally { globalThis.document = realDoc; globalThis.Node = RealNode; }
+});

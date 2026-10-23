@@ -5,7 +5,7 @@
 // page pieces as the staff view (ui/workparts.js) and Work Task's rules (logic.js, passed in as `rules`).
 // The owner opens it from "👥 Team" in Daily Projects (and goes back with "📋 My projects"); another manager gets only this.
 
-import { h, morph } from './dom.js';
+import { h, morph, errLine } from './dom.js';
 import { createOutbox } from './staffbox.js';
 import { fmtDay, fmtTime, LONG_DAYS, stateTag, newClientId, istDay, daysBetween, repeatLabel, block, sec, taskRow, chipsFor, makePics, photosRow, filesBlock, diaryBlock, messagesBlock, phoneBack } from './workparts.js';
 
@@ -647,7 +647,7 @@ export function createTeam(opts) {
   /** Work in one line: the box, then a preview card with ✓ Give it / ✎ Change. */
   function quickBox(people) {
     const q = state.quick || (state.quick = { text: '', sig: '', cid: '' });
-    const err = h('p', { class: 'warn', key: 'qerr', hidden: true });
+    const err = errLine('qerr');
     const r = q.text.trim() ? rules.parseQuickTask(q.text, people, today()) : null;
     if (r && !r.error) { const sig = JSON.stringify([r.person.id, r.title, r.dueDate]); if (q.sig !== sig) { q.sig = sig; q.cid = newClientId(); } } // one id per preview: a second tap gives it once
     return h('div', { class: 'stack staff-pad', key: 'quick' },
@@ -660,7 +660,7 @@ export function createTeam(opts) {
         h('div', null, h('span', { class: 'muted small' }, 'By: '), r.dueDate ? fmtDay(r.dueDate) : 'No by-date (one time)'),
         err,
         h('div', { class: 'row' },
-          h('button', { class: 'btn primary small', onClick: () => giveQuick(r).then((m) => { if (m) { err.textContent = m; err.hidden = false; } }) }, '✓ Give it'),
+          h('button', { class: 'btn primary small', onClick: () => giveQuick(r).then((m) => { err.say(m); }) }, '✓ Give it'),
           h('button', { class: 'btn small', onClick: () => { state.prefill = { title: r.title, assigneeId: r.person.id, repeat: 'once', dueDate: r.dueDate }; state.quick = null; open('give'); } }, '✎ Change'))));
   }
 
@@ -801,7 +801,7 @@ export function createTeam(opts) {
     const mpOf = (u) => (morning && u.active && u.role === 'staff' ? morning.people.find((x) => x.id === u.id) : null);
     const sentCount = morning ? morning.people.filter((mp) => rules.sentTime(sentAtOf(mp.id, mp.sentAt), td)).length : 0;
     const f = (state.personForm ||= { name: '', username: '', password: tempPassword(), role: 'staff', email: '', touched: false });
-    const err = h('p', { class: 'warn', key: 'perr', hidden: true });
+    const err = errLine('perr');
     const share = state.newPerson ? (() => {
       const p = state.newPerson;
       const text = `Work Task (daily updates)\nLink: ${opts.appLink || location.origin + '/'}\nUsername: ${p.username}\nPassword: ${p.password}\nAfter signing in, choose your own password.`;
@@ -848,7 +848,7 @@ export function createTeam(opts) {
         h('label', null, 'Role', h('select', { key: 'np-role', value: f.role, onChange: (e, el) => { f.role = el.value; } }, h('option', { value: 'staff' }, 'Staff (sees only own tasks)'), h('option', { value: 'admin' }, 'Manager (sees everything)'))),
         h('label', null, 'Email (optional, for the morning email)', h('input', { key: 'np-mail', type: 'email', maxlength: '120', autocapitalize: 'none', spellcheck: 'false', placeholder: 'suresh@company.com', value: f.email, onInput: (e, el) => { f.email = el.value; } })),
         err,
-        h('button', { class: 'btn primary small', onClick: () => addPerson(f).then((m) => { if (m) { err.textContent = m; err.hidden = false; } }) }, 'Add person'))));
+        h('button', { class: 'btn primary small', onClick: () => addPerson(f).then((m) => { err.say(m); }) }, 'Add person'))));
   }
 
   function settingsPage() {
@@ -962,7 +962,7 @@ export function createTeam(opts) {
       };
     }
     const f = state.giveForm;
-    const err = h('p', { class: 'warn', key: 'gerr', hidden: true });
+    const err = errLine('gerr');
     const set = (k) => (e, el) => { f[k] = el.type === 'checkbox' ? el.checked : el.value; if (k === 'how') render(); };
     const people = [...state.people];
     if (t && !people.some((p) => p.id === t.assignee.id)) people.push({ id: t.assignee.id, name: t.assignee.name + ' (switched off)' }); // kept, so a small change does not force someone else
@@ -988,20 +988,20 @@ export function createTeam(opts) {
             id: t ? t.id : 0, assigneeId: Number(f.assigneeId), title: f.title, details: f.details, project: f.project,
             repeat: f.how === 'daily7' ? 'daily' : f.how, skipSunday: f.how === 'daily' || (f.how === 'once' && (!t || t.skipSunday)), weekday: Number(f.weekday), dueDate: f.dueDate,
             projectRef: f.projectRef, stepRef: f.stepRef, needsPhoto: !!f.needsPhoto, startDate: f.startDate || (t && t.startDate && t.startDate > td ? td : ''),
-          }, f.files).then((m) => { if (m) { err.textContent = m; err.hidden = false; } }) }, editing ? 'Save' : 'Give task'),
+          }, f.files).then((m) => { err.say(m); }) }, editing ? 'Save' : 'Give task'),
           h('button', { class: 'btn small', onClick: () => { state.prefill = null; state.giveForm = null; if (editing) open('task:' + t.id); else if (!(state.fromProjects && toProjects())) back(); } }, 'Cancel')))),
     ];
   }
 
   function passwordPage() {
     const f = (state.pwForm ||= { old: '', nw: '', again: '' });
-    const err = h('p', { class: 'warn', key: 'pwerr', hidden: true });
+    const err = errLine('pwerr');
     return h('div', { class: 'block stack' },
       h('label', null, 'Current password', h('input', { key: 'pw-old', type: 'password', autocomplete: 'current-password', value: f.old, onInput: (e, el) => { f.old = el.value; } })),
       h('label', null, 'New password (8 letters or more)', h('input', { key: 'pw-new', type: 'password', autocomplete: 'new-password', value: f.nw, onInput: (e, el) => { f.nw = el.value; } })),
       h('label', null, 'New password again', h('input', { key: 'pw-again', type: 'password', autocomplete: 'new-password', value: f.again, onInput: (e, el) => { f.again = el.value; } })),
       err,
-      h('button', { class: 'btn primary small', onClick: () => changePassword(f.old, f.nw, f.again).then((m) => { if (m) { err.textContent = m; err.hidden = false; } else state.pwForm = null; }) }, 'Change password'));
+      h('button', { class: 'btn primary small', onClick: () => changePassword(f.old, f.nw, f.again).then((m) => { err.say(m); if (!m) state.pwForm = null; }) }, 'Change password'));
   }
 
   function notifyPage() {

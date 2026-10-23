@@ -2,7 +2,7 @@
 // (ui/team.js): one task page, one message box, one day-by-day history — so a change here reaches everyone.
 // The rules behind them (the history rows, what is late) come from Work Task's logic.js, passed in as `rules`.
 
-import { h, fmtDay as dayOf } from './dom.js';
+import { h, fmtDay as dayOf, errLine } from './dom.js';
 
 // the server's times are India time as "2026-10-22 10:30:00"
 export const fmtDay = (d) => (d ? dayOf(String(d).slice(0, 10)) : '');
@@ -123,8 +123,8 @@ export function diaryBlock({ rules, t, updates, td, staff, meId, n, fillBy, phot
  * onSend / onPhoto resolve to '' or the words to show under the box.
  */
 export function messagesBlock({ taskId, comments, waiting = [], draft, sending, placeholder, onInput, onSend, onPhoto, onEdit, onDelete, photos }) {
-  const err = h('p', { class: 'warn', key: 'merr-' + taskId, hidden: true });
-  const say = (m) => { if (m) { err.textContent = m; err.hidden = false; } };
+  const err = errLine('merr-' + taskId);
+  const say = (m) => err.say(m);
   const pick = h('input', { type: 'file', accept: 'image/*', class: 'visually-hidden', onChange: (e, el) => { const f = el.files[0]; el.value = ''; if (f) onPhoto(f).then(say); } });
   return block('💬 Messages', h('div', { class: 'banner team-msgs' },
     comments.length ? comments.map((c) => h('div', { class: 'team-msg' + (c.mine ? ' mine' : ''), key: 'c-' + c.id },
@@ -136,7 +136,7 @@ export function messagesBlock({ taskId, comments, waiting = [], draft, sending, 
       c.text ? h('div', { class: 'pre' }, c.text) : null)) : (waiting.length ? null : h('span', { class: 'muted small' }, 'No messages yet.')),
     waiting.map((x) => h('div', { class: 'team-msg mine', key: 'wc-' + x.id },
       h('div', { class: 'row small' }, h('strong', null, 'You'), h('span', { class: 'tag remind' }, '⏳ Waiting to send')), h('div', { class: 'pre' }, x.text))),
-    h('textarea', { key: 'msg-' + taskId, placeholder, value: draft || '', onInput: (e, el) => { onInput(el.value); err.hidden = true; } }),
+    h('textarea', { key: 'msg-' + taskId, placeholder, value: draft || '', onInput: (e, el) => { onInput(el.value); err.clear(); } }),
     err,
     h('div', { class: 'row' },
       h('button', { class: 'btn primary small', disabled: sending ? true : undefined, onClick: () => onSend().then(say) }, 'Send message'),

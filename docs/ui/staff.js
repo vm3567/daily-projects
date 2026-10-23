@@ -6,7 +6,7 @@
 // item is refused) come from Work Task's logic.js, passed in as `rules`, so both apps follow the same rules.
 // Sending while offline: ui/staffbox.js (Work Task's own outbox on this site, shared by both apps).
 
-import { h, morph } from './dom.js';
+import { h, morph, errLine } from './dom.js';
 import { createOutbox } from './staffbox.js';
 import { fmtDay, fmtTime, STATES, stateTag, newClientId, istDay, repeatLabel, block, chipsFor, makePics, photosRow, filesBlock, diaryBlock, messagesBlock } from './workparts.js';
 
@@ -709,12 +709,12 @@ export function createStaff(opts) {
     }
     const d = (state.drafts[t.id] ||= { note: '', state: 'progress' });
     const picked = state.files[t.id] || [];
-    const err = h('p', { class: 'warn', key: 'err-' + t.id, hidden: true });
-    const say = (m) => { if (m) { err.textContent = m; err.hidden = false; } };
+    const err = errLine('err-' + t.id);
+    const say = (m) => err.say(m);
     const pick = h('input', { type: 'file', accept: 'image/*', multiple: true, class: 'visually-hidden', onChange: (e, el) => { state.files[t.id] = [...picked, ...el.files].slice(0, 5); el.value = ''; render(); } });
     return block("Today's update", h('div', { class: 'update-form loose' + (state.editing[t.id] ? ' editing' : '') },
       t.last ? h('span', { class: 'small muted' }, `Last time (${fmtDay(t.last.day)}): `, h('span', { class: 'pre' }, t.last.note)) : null,
-      h('textarea', { key: 'up-' + t.id, placeholder: 'What happened today? (you can tap 🎤 on the keyboard to speak)', value: d.note, onInput: (e, el) => { d.note = el.value; err.hidden = true; } }),
+      h('textarea', { key: 'up-' + t.id, placeholder: 'What happened today? (you can tap 🎤 on the keyboard to speak)', value: d.note, onInput: (e, el) => { d.note = el.value; err.clear(); } }),
       h('div', { class: 'segmented', role: 'group', 'aria-label': 'How is it going' }, STATES.map(([k, label]) =>
         h('button', { class: 'seg' + (d.state === k ? ' on' : ''), type: 'button', 'aria-pressed': String(d.state === k), onClick: () => { d.state = k; render(); } }, label))),
       picked.length ? h('span', { class: 'small muted' }, `📷 ${picked.length} photo${picked.length === 1 ? '' : 's'} ready `, h('button', { class: 'link small', onClick: () => { delete state.files[t.id]; render(); } }, 'Remove')) : null,
@@ -758,7 +758,7 @@ export function createStaff(opts) {
     const done = ((state.detail && state.detail.tasks) || []).filter((t) => t.status === 'done' && !String(t.stepRef || '').endsWith(':whole'));
     const k = done.length;
     const sentSub = (t) => (t.today ? `✓ Sent ${fmtTime(t.today.at)}` : 'Send today\'s update');
-    const err = h('p', { class: 'warn', key: 'serr', hidden: true });
+    const err = errLine('serr');
     const ref = state.sel.slice(8);
     const waiting = state.outbox.filter((x) => x.kind === 'step' && x.projectRef === ref);
     return [
@@ -771,15 +771,15 @@ export function createStaff(opts) {
           t === pr.current || !pr.real.length ? (t.today ? 'green' : 'red') : 'grey')),
           waiting.map((x) => h('li', { class: 'prow', key: 'wstep-' + x.id }, h('span', { class: 'quick-tick-space' }), h('div', { class: 'prow-btn' }, h('span', { class: 'dot grey' }),
             h('span', { class: 'prow-text' }, h('span', { class: 'prow-name' }, x.title), h('span', { class: 'prow-next' }, '⏳ Waiting to send')))))),
-        h('form', { class: 'add-step', onSubmit: (e) => { e.preventDefault(); addStep(ref).then((m) => { if (m) { err.textContent = m; err.hidden = false; } }); } },
-          h('input', { key: 'step-' + ref, placeholder: '+ Add the next step…', 'aria-label': 'Add a step', maxlength: '300', enterkeyhint: 'enter', autocomplete: 'off', value: state.stepDrafts[ref] || '', onInput: (e, el) => { state.stepDrafts[ref] = el.value; err.hidden = true; } })),
+        h('form', { class: 'add-step', onSubmit: (e) => { e.preventDefault(); addStep(ref).then((m) => { err.say(m); }); } },
+          h('input', { key: 'step-' + ref, placeholder: '+ Add the next step…', 'aria-label': 'Add a step', maxlength: '300', enterkeyhint: 'enter', autocomplete: 'off', value: state.stepDrafts[ref] || '', onInput: (e, el) => { state.stepDrafts[ref] = el.value; err.clear(); } })),
         err],
     ];
   }
 
   function suggestPage() {
     const f = (state.suggestForm ||= { title: '', details: '', repeat: 'once', clientId: newClientId() }); // one id per form: a retry is kept once
-    const err = h('p', { class: 'warn', key: 'sgerr', hidden: true });
+    const err = errLine('sgerr');
     return [
       h('p', { class: 'muted' }, 'Your manager says yes or no. If yes, it comes on your list.'),
       h('div', { class: 'block stack' },
@@ -789,19 +789,19 @@ export function createStaff(opts) {
           h('option', { value: 'once' }, 'One time'), h('option', { value: 'daily' }, 'Every day'), h('option', { value: 'weekly' }, 'Once a week'))),
         err,
         h('div', { class: 'row' },
-          h('button', { class: 'btn primary small', onClick: () => suggest({ ...f }).then((m) => { if (m) { err.textContent = m; err.hidden = false; } else state.suggestForm = null; }) }, 'Send to my manager'),
+          h('button', { class: 'btn primary small', onClick: () => suggest({ ...f }).then((m) => { err.say(m); if (!m) state.suggestForm = null; }) }, 'Send to my manager'),
           h('button', { class: 'btn small', onClick: () => { state.suggestForm = null; back(); } }, 'Cancel'))),
     ];
   }
 
   function passwordPage() {
     const f = (state.pwForm ||= { old: '', nw: '' });
-    const err = h('p', { class: 'warn', key: 'pwerr', hidden: true });
+    const err = errLine('pwerr');
     return h('div', { class: 'block stack' },
       h('label', null, 'Current password', h('input', { key: 'pw-old', type: 'password', autocomplete: 'current-password', value: f.old, onInput: (e, el) => { f.old = el.value; } })),
       h('label', null, 'New password (8 letters or more)', h('input', { key: 'pw-new', type: 'password', autocomplete: 'new-password', value: f.nw, onInput: (e, el) => { f.nw = el.value; } })),
       err,
-      h('button', { class: 'btn primary small', onClick: () => changePassword(f.old, f.nw).then((m) => { if (m) { err.textContent = m; err.hidden = false; } else state.pwForm = null; }) }, 'Change password'));
+      h('button', { class: 'btn primary small', onClick: () => changePassword(f.old, f.nw).then((m) => { err.say(m); if (!m) state.pwForm = null; }) }, 'Change password'));
   }
 
   function notifyPage() {

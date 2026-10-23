@@ -2881,6 +2881,15 @@ test('review r4-2 (whole code): "Seen" with a task that moved away still marks t
   assert.equal(sqlOut(`SELECT COUNT(*) FROM wt.task_reads WHERE task_id = ${gone.id} AND user_id = ${id.suresh}`).trim(), '0', 'never the other one');
 });
 
+test('review r4-4 (whole code): the Outlook draft cleaner also removes on...= handlers after a "/" or right after a quoted value (a browser runs those too)', { skip }, async () => {
+  const bad = ['<img src="x"/onerror="fetch(1)">', '<img src="x"onerror="fetch(1)">', "<img src='x'/onload=fetch(1)>", '<a/onclick="fetch(1)" href="https://worktask.in">x</a>', '<img src="x" onerror="fetch(1)">'];
+  const out = JSON.parse(await phpRun(`echo json_encode(array_map('ol_clean_html', json_decode(base64_decode('${Buffer.from(JSON.stringify(bad)).toString('base64')}'), true)));`));
+  for (const [i, o] of out.entries()) assert.doesNotMatch(o, /on(error|load|click)\s*=/i, `blocked: ${bad[i]} → ${o}`);
+  assert.equal(out[3], '<a/ href="https://worktask.in">x</a>', 'the rest of the tag stays');
+  const good = JSON.parse(await phpRun(`echo json_encode([ol_clean_html('<a href="https://worktask.in/x">a</a>'), ol_clean_html('<td class="one">Late</td>')]);`));
+  assert.deepEqual(good, ['<a href="https://worktask.in/x">a</a>', '<td class="one">Late</td>']);
+});
+
 test('review round 1 (whole code): importing a data folder with more than 500 files works (it goes in parts of 500; data.json last), every file is there', { skip }, async () => {
   const src = join(dir, 'import-big'); mkdirSync(join(src, 'files', 'x1'), { recursive: true });
   const n = 520;
