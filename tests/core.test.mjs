@@ -23,18 +23,24 @@ test('India date is used, not UTC', () => {
   assert.equal(daysBetween('2026-10-01', '2026-10-03'), 2);
 });
 
-test('daily dots: red each new day, yellow when opened, green only after a real update', async () => {
-  const { daysWithoutWork, greenByTeamOnly } = await import('../docs/rules.js');
+test('dots by "move every N days" (owner asked 23 Oct): green while a real update is within N days, yellow after N, red after 2 × N or a passed date; only real updates count', async () => {
+  const { daysWithoutWork, greenByTeamOnly, moveEveryOf, colourWhy } = await import('../docs/rules.js');
   const s = withProject('2026-10-01');
   const p = s.data.projects[0];
-  assert.notEqual(dotColour(p, '2026-10-01'), 'green', 'creating a project and adding steps is not an update');
-  assert.equal(dotColour(p, '2026-10-02'), 'red', 'resets at midnight');
+  assert.equal(moveEveryOf(p), 3, 'not set: every 3 days');
+  assert.equal(dotColour(p, '2026-10-01'), 'green', 'a new task is on track');
+  assert.equal(dotColour(p, '2026-10-03'), 'green', '2 days: still within 3');
+  assert.equal(dotColour(p, '2026-10-04'), 'yellow', '3 days: slipping');
+  assert.equal(dotColour(p, '2026-10-07'), 'red', '6 days: stuck');
+  assert.match(colourWhy(p, '2026-10-07'), /No update for 6 days · should move every 3 days/);
+  // every day: what counts as a real update
+  assert.ok(applyOp(s, op('setMoveEvery', { projectId: 'p1', days: 1 }, '2026-10-01')));
+  assert.equal(dotColour(p, '2026-10-02'), 'yellow', 'every day: 1 day without an update is slipping');
+  assert.equal(dotColour(p, '2026-10-03'), 'red');
   applyOp(s, op('markOpened', { projectId: 'p1' }, '2026-10-02'));
-  assert.equal(dotColour(p, '2026-10-02'), 'yellow', 'opened');
-  assert.equal(applyOp(s, op('markOpened', { projectId: 'p1' }, '2026-10-02', '11:00:00')), false, 'once a day');
   applyOp(s, op('setProjectField', { projectId: 'p1', field: 'priority', value: 'high' }, '2026-10-02'));
   applyOp(s, op('addStep', { projectId: 'p1', stepId: 's9', text: 'More' }, '2026-10-02'));
-  assert.equal(dotColour(p, '2026-10-02'), 'yellow', 'edits are not an update');
+  assert.equal(dotColour(p, '2026-10-02'), 'yellow', 'opening and edits are not an update');
   applyOp(s, op('addWorkNote', { projectId: 'p1', noteId: 'n1', text: 'Called Ravi' }, '2026-10-02'));
   assert.equal(dotColour(p, '2026-10-02'), 'green', 'a written update');
   applyOp(s, op('deleteWorkNote', { projectId: 'p1', noteId: 'n1' }, '2026-10-02', '12:00:00'));
@@ -42,15 +48,50 @@ test('daily dots: red each new day, yellow when opened, green only after a real 
   applyOp(s, op('tickStep', { projectId: 'p1', stepId: 's1' }, '2026-10-03'));
   assert.equal(dotColour(p, '2026-10-03'), 'green', 'a ticked step');
   applyOp(s, op('addTime', { projectId: 'p1', minutes: 30 }, '2026-10-04'));
-  assert.equal(dotColour(p, '2026-10-04'), 'green', 'time worked today');
+  assert.equal(dotColour(p, '2026-10-04'), 'green', 'time worked');
   applyOp(s, op('okForToday', { projectId: 'p1' }, '2026-10-05')); // old changes from before still replay…
-  assert.notEqual(dotColour(p, '2026-10-05'), 'green', '…but "OK for today" no longer makes it green');
+  assert.notEqual(dotColour(p, '2026-10-05'), 'green', '…but "OK for today" is not an update');
   assert.ok(applyOp(s, op('teamWorked', { projectId: 'p1', day: '2026-10-06' }, '2026-10-06')));
   assert.equal(dotColour(p, '2026-10-06'), 'green', 'the team sent an update');
   assert.ok(greenByTeamOnly(p, '2026-10-06'), 'shown with 👥');
   assert.equal(applyOp(s, op('teamWorked', { projectId: 'p1', day: '2026-10-06' }, '2026-10-06', '12:00:00')), false, 'once a day');
   assert.equal(applyOp(s, op('teamWorked', { projectId: 'p1', day: '2026-10-09' }, '2026-10-06')), false, 'never a future day');
   assert.equal(daysWithoutWork(p, '2026-10-09'), 3);
+  // dates: a target date passed is red at once; one within 2 days is at least yellow
+  applyOp(s, op('setMoveEvery', { projectId: 'p1', days: 30 }, '2026-10-06'));
+  assert.equal(dotColour(p, '2026-10-07'), 'green');
+  applyOp(s, op('setProjectField', { projectId: 'p1', field: 'deadline', value: '2026-10-09' }, '2026-10-06'));
+  assert.equal(dotColour(p, '2026-10-07'), 'yellow', 'target in 2 days');
+  assert.equal(dotColour(p, '2026-10-10'), 'red', 'target passed');
+  assert.match(colourWhy(p, '2026-10-10'), /Target date passed/);
+  // values
+  assert.equal(applyOp(s, op('setMoveEvery', { projectId: 'p1', days: 0 }, '2026-10-06')), false);
+  assert.equal(applyOp(s, op('setMoveEvery', { projectId: 'p1', days: 91 }, '2026-10-06')), false);
+  assert.equal(applyOp(s, op('setMoveEvery', { projectId: 'p1', days: 2.5 }, '2026-10-06')), false);
+  assert.ok(applyOp(s, op('setMoveEvery', { projectId: 'p1', days: null }, '2026-10-06')));
+  assert.equal(moveEveryOf(p), 3, 'back to 3');
+});
+
+test('"Move every" on a 📂 project goes to everything inside it (every level); a task put in later takes it unless it has its own; it is not work', async () => {
+  const { moveEveryOf, lastWorkDate } = await import('../docs/rules.js');
+  const s = { data: emptyData(), history: {} };
+  for (const [id, name] of [['a', 'A'], ['b', 'B'], ['c', 'C']]) applyOp(s, op('createProject', { projectId: id, name }, '2026-10-01'));
+  applyOp(s, op('createMainProject', { projectId: 'm', name: 'Kilns', childId: 'a' }, '2026-10-01'));
+  applyOp(s, op('createMainProject', { projectId: 'big', name: 'Plant', childId: 'm' }, '2026-10-01'));
+  const P2 = (id) => s.data.projects.find((p) => p.id === id);
+  assert.ok(applyOp(s, op('setMoveEvery', { projectId: 'big', days: 7 }, '2026-10-02')));
+  assert.deepEqual(['big', 'm', 'a'].map((id) => moveEveryOf(P2(id))), [7, 7, 7], 'every level');
+  assert.equal(moveEveryOf(P2('b')), 3, 'not inside: unchanged');
+  assert.equal(lastWorkDate(P2('a')), null, 'not work');
+  applyOp(s, op('setMoveEvery', { projectId: 'a', days: 1 }, '2026-10-02'));
+  assert.equal(moveEveryOf(P2('a')), 1, 'a task can have its own after');
+  applyOp(s, op('addToProject', { projectId: 'b', parentId: 'm' }, '2026-10-02'));
+  assert.equal(moveEveryOf(P2('b')), 7, 'put in later: takes the project\'s');
+  applyOp(s, op('setMoveEvery', { projectId: 'c', days: 2 }, '2026-10-02'));
+  applyOp(s, op('addToProject', { projectId: 'c', parentId: 'm' }, '2026-10-02'));
+  assert.equal(moveEveryOf(P2('c')), 2, 'its own stays');
+  applyOp(s, op('createProject', { projectId: 'd', name: 'D', parentId: 'm' }, '2026-10-02'));
+  assert.equal(moveEveryOf(P2('d')), 7, '"+ New task here" takes it too');
 });
 
 test('a step ticked for the team is their work on their day, not your work today', async () => {
@@ -86,7 +127,10 @@ test('team work on an earlier day (page closed that day) counts for that day box
 test('old data without lastActivityDate still works (uses lastTickDate)', () => {
   const p = { state: 'active', deadline: null, lastTickDate: '2026-10-05', activeSince: '2026-10-01' };
   assert.equal(dotColour(p, '2026-10-05'), 'green');
-  assert.equal(dotColour(p, '2026-10-06'), 'red');
+  // (rule changed 23 Oct: by "move every 3 days", not a daily reset)
+  assert.equal(dotColour(p, '2026-10-06'), 'green', 'its tick day is still counted');
+  assert.equal(dotColour(p, '2026-10-08'), 'yellow');
+  assert.equal(dotColour(p, '2026-10-11'), 'red');
 });
 
 test('paused is grey; opening a paused project does not mark it', () => {
@@ -262,7 +306,7 @@ test('chased: note, restarts waiting count, green, once a day', async () => {
   const p = s.data.projects[0];
   const st = p.steps.find((x) => x.id === 's2');
   assert.equal(waitingDays(st, '2026-10-04'), 3);
-  assert.equal(dotColour(p, '2026-10-04'), 'red');
+  assert.equal(dotColour(p, '2026-10-04'), 'yellow', '3 days with no update (rule changed 23 Oct: move every 3 days)');
   assert.equal(applyOp(s, op('chased', { projectId: 'p1', stepId: 's2' }, '2026-10-04')), true);
   assert.equal(waitingDays(st, '2026-10-04'), 0);
   assert.equal(dotColour(p, '2026-10-04'), 'green');
@@ -295,7 +339,7 @@ test('undo puts the project back and removes the history line', () => {
   applyOp(s, t);
   applyOp(s, op('restoreProject', { project: before, undoOpId: t.id }, '2026-10-02', '10:01:00'));
   assert.equal(s.data.projects[0].steps[0].done, false);
-  assert.equal(dotColour(s.data.projects[0], '2026-10-02'), 'red');
+  assert.equal(dotColour(s.data.projects[0], '2026-10-04'), 'yellow', 'the tick is gone: 3 days with no update (rule changed 23 Oct)');
   assert.ok(!s.history['2026-10'].some((e) => e.id === t.id));
   // undo a delete puts it back at its place
   const snap = clone(s.data.projects[0]);
@@ -1618,7 +1662,7 @@ test('📂 setParent (the older change, still replayed): a task into one project
   const ev = allEvents(s);
   assert.ok(ev.some((e) => e.projectId === 'k1' && e.kind === 'main_changed' && e.detail === 'Added to 📂 Kilns'), 'line on the task');
   assert.ok(ev.some((e) => e.projectId === 'm' && e.kind === 'main_changed' && e.detail === 'Kiln 1 added'), 'line on the project');
-  assert.equal(dotColour(P(s, 'k1'), '2026-10-02'), 'red', 'not work: the dot stays red');
+  assert.equal(dotColour(P(s, 'k1'), '2026-10-04'), 'yellow', 'not work: 3 days with no update (rule changed 23 Oct: move every 3 days)');
   assert.equal(P(s, 'k1').workDate, before.workDate);
   assert.equal(applyOp(s, op('setParent', { projectId: 'k1', parentId: 'm' }, '2026-10-02', '11:00:00')), false, 'already in it');
   assert.equal(applyOp(s, op('setParent', { projectId: 'k1', parentId: null }, '2026-10-02', '12:00:00')), true);
@@ -1780,7 +1824,7 @@ test('📂 rules: childrenOf, parentsOf, isMainProject, mainColour (worst; resti
   const s = withMains('2026-10-01');
   applyOp(s, op('addToProject', { projectId: 'k1', parentId: 'm' }, '2026-10-01'));
   applyOp(s, op('addToProject', { projectId: 'k2', parentId: 'm' }, '2026-10-01', '10:01:00'));
-  const d = '2026-10-02';
+  const d = '2026-10-07'; // (rule changed 23 Oct: 6 days with no update = red)
   assert.deepEqual(childrenOf(s.data, 'm').map((p) => p.id).sort(), ['k1', 'k2']);
   assert.equal(parentOf(s.data, P(s, 'k1')).id, 'm');
   assert.deepEqual(parentsOf(s.data, P(s, 'x')), []);
@@ -1790,7 +1834,7 @@ test('📂 rules: childrenOf, parentsOf, isMainProject, mainColour (worst; resti
   applyOp(s, op('addWorkNote', { projectId: 'm', noteId: 'n1', text: 'Plan' }, d));
   assert.equal(mainColour(P(s, 'm'), childrenOf(s.data, 'm'), d), 'red');
   assert.equal(mainSummary(childrenOf(s.data, 'm'), d), '2 tasks · 2 red');
-  applyOp(s, op('markOpened', { projectId: 'k1' }, d));
+  applyOp(s, op('addWorkNote', { projectId: 'k1', noteId: 'n0', text: 'Looked' }, '2026-10-04')); // 3 days ago: yellow
   applyOp(s, op('addWorkNote', { projectId: 'k2', noteId: 'n2', text: 'Done' }, d));
   assert.equal(mainColour(P(s, 'm'), childrenOf(s.data, 'm'), d), 'yellow');
   assert.equal(mainSummary(childrenOf(s.data, 'm'), d), '2 tasks · 1 yellow');
@@ -1809,7 +1853,7 @@ test('📂 a red task in two projects makes both red; colour counts and Today co
   applyOp(s, op('addToProject', { projectId: 'k1', parentId: 'm' }, '2026-10-01'));
   applyOp(s, op('addToProject', { projectId: 'k1', parentId: 'sa' }, '2026-10-01', '10:01:00'));
   applyOp(s, op('addToProject', { projectId: 'k2', parentId: 'sa' }, '2026-10-01', '10:02:00'));
-  const d = '2026-10-02';
+  const d = '2026-10-07'; // (rule changed 23 Oct: 6 days with no update = red)
   applyOp(s, op('addWorkNote', { projectId: 'k2', noteId: 'n2', text: 'Done' }, d)); // k2 green, k1 red
   assert.equal(dotColour(P(s, 'k1'), d), 'red');
   assert.equal(mainColour(P(s, 'm'), childrenOf(s.data, 'm'), d), 'red');
@@ -1824,7 +1868,7 @@ test('📂 colour counts and the day score count each task once (never a project
   const { colourCounts, dayScore } = await import('../docs/rules.js');
   const s = withMains('2026-10-01');
   applyOp(s, op('addToProject', { projectId: 'k1', parentId: 'm' }, '2026-10-01'));
-  const d = '2026-10-02';
+  const d = '2026-10-07'; // (rule changed 23 Oct: 6 days with no update = red)
   applyOp(s, op('addWorkNote', { projectId: 'm', noteId: 'n1', text: 'Plan' }, d));
   // m has no step of its own, so like on Today it is left out of the counts (and never counted as its red roll-up)
   assert.deepEqual(colourCounts(s.data, d), { green: 0, yellow: 0, red: 3 });
@@ -1879,7 +1923,7 @@ test('main projects: a main with no step of its own (left off Today) is not coun
 });
 
 test('main projects: a main with no step of its own takes its colour only from its projects (an empty new main is not red)', async () => {
-  const { mainColour, childrenOf, dotColour, todayIndia } = await import('../docs/rules.js');
+  const { mainColour, childrenOf, dotColour, todayIndia, addDays } = await import('../docs/rules.js');
   const s = { data: emptyData(), history: {} };
   const day = todayIndia();
   applyOp(s, op('createProject', { projectId: 'k1', name: 'MOR test' }, day));
@@ -1889,6 +1933,7 @@ test('main projects: a main with no step of its own takes its colour only from i
   const kids = childrenOf(s.data, 'm');
   assert.equal(mainColour(m, kids, day), dotColour(kids[0], day), 'same colour as its only project');
   applyOp(s, op('addStep', { projectId: 'm', stepId: 'b', text: 'Plan all tests' }, day));
+  applyOp(s, op('setStepField', { projectId: 'm', stepId: 'b', field: 'dueDate', value: addDays(day, -1) }, day)); // its own step is late: red
   assert.equal(mainColour(s.data.projects.find((p) => p.id === 'm'), kids, day), 'red', 'with a step of its own, its own colour counts again (worst wins)');
 });
 
@@ -2114,7 +2159,7 @@ test('🔌 a task an app sent (server-made, with an "app" note and an app_task h
   };
   const s = { data: { ...emptyData(), projects: [task] }, history: { '2026-10': [{ id: 'ak1', projectId: 'ct1', projectName: 'Check kiln 3', kind: 'app_task', detail: 'From Purchase: Check kiln 3', at }] } };
   assert.equal(lastWorkDate(task), null, 'the app\'s note is not your work');
-  assert.notEqual(dotColour(task, '2026-10-05'), 'green');
+  assert.notEqual(dotColour(task, '2026-10-08'), 'green', 'no work of yours in 3 days (rule changed 23 Oct: move every 3 days)');
   assert.deepEqual(dayScore(s.data, s.history, '2026-10-05'), { green: 0, total: 1 });
   applyOp(s, op('addWorkNote', { projectId: 'ct1', noteId: 'n2', text: 'Spoke to the shift lead' }, '2026-10-05', '11:00:00'));
   assert.equal(lastWorkDate(task), '2026-10-05', 'your own note on it is');
@@ -2894,7 +2939,7 @@ test('Stage: setStage saves the stage (and "waiting for", up to 80 letters, with
 test('Stage: choosing a stage is not work — the dot does not turn green', () => {
   const s = withProject('2026-10-01');
   applyOp(s, op('setStage', { projectId: 'p1', stage: 'inprogress' }, '2026-10-05'));
-  assert.equal(dotColour(s.data.projects[0], '2026-10-05'), 'red');
+  assert.equal(dotColour(s.data.projects[0], '2026-10-05'), 'yellow', '4 days with no update (rule changed 23 Oct: move every 3 days)');
 });
 
 test('Stage: stageOf — the chosen stage wins; else finished = done, a team member stuck = waiting (for what they wrote), any real update = in progress, else not started', async () => {

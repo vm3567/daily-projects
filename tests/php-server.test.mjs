@@ -1283,7 +1283,7 @@ test('outlook: each new email thread → one task "📧 subject" (mail + email t
   const { dayScore, lastWorkDate, repliesOf, dotColour } = await import('../docs/rules.js');
   assert.equal(dayScore(data, history, istDay(0)).green, 0, 'emails are not your work');
   assert.equal(lastWorkDate(t1), null);
-  assert.notEqual(dotColour(t1, istDay(0)), 'green');
+  assert.notEqual(dotColour(t1, istDay(-3)), 'green', 'no work of yours in 3 days (rule changed 23 Oct: move every 3 days)');
   const waiting = repliesOf(data, istDay(0)).waiting;
   const w1 = waiting.find((m) => m.id === t1.id);
   assert.ok(w1 && waiting.some((m) => m.id === t2.id), 'the ✉ Replies page lists the tasks waiting for your reply');

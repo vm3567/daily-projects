@@ -1060,7 +1060,7 @@ test('📂 Projects page: a click on a project row selects it and stays on the p
   assert.match(mainsSrc, /ctx\.ui\.view === 'mains' && ctx\.showHere \? ctx\.showHere\(c\.id\)/, 'a task in the TASKS table while on the Projects page');
   const here = app.slice(app.indexOf('  showHere: (id) => {'), app.indexOf('  openProject: (id) => {'));
   assert.match(here, /select\(id\);/);
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-42'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-43'/, 'phones get the new copy');
 });
 
 test('📂 project page: "✕ Remove" on a task row takes it out of this project only — the task is kept (and stays in its other projects)', () => {
@@ -1846,7 +1846,7 @@ test('🔌 app wiring (app.js): "🔌 From apps" after ✉ Replies with the wait
   assert.match(app, /function go\(view\) \{\n\s*if \(view !== 'settings'\) forgetOnce\(\);/);
   assert.match(app, /if \(onServer\) loadApps\(appsCtx, force \|\| ui\.view === 'apps'\);/);
   assert.match(app, /replies: '✉ Replies', apps: '🔌 From apps', mains: '📂 Projects' \}\[ui\.view\]/, 'its page title');
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-42'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-43'/, 'phones get the new copy');
 });
 
 test('🔌 the PHP connector (team/connector/worktask-connector.php): the same text the app downloads, placeholders only (no real key), valid PHP 7.4+ (php -l), with wt_push / wt_withdraw / wt_decisions / wt_receive_decision', async () => {
@@ -3881,4 +3881,30 @@ test('Review fixes (23 Oct): staff / manager menus close on a click elsewhere; M
   big.team = { userId: 7, name: 'Ravi' };
   s.data.projects.find((p) => p.id === 'p1').team = { userId: 7, name: 'Ravi', viaProject: 'big' };
   assert.match(takeBackQuestion(s.data, big), /The 1 task that went with it comes back too/);
+});
+
+test('🔁 Move every (owner asked 23 Oct): a chip on the task page ("🔁 every 3 days") opens 1 2 3 5 7 14 30 days; picking saves it; the dot says why; Today says "on track"; the right-click menu has the same choices', () => {
+  const s = mainsState(); // p1 'Kiln' in 📂 Kilns
+  const ctx = liveCtx(s, { selected: 'p1', update: {} });
+  ctx.toast = (t) => ctx.calls.push(['toast', t]);
+  let el = renderDetail(ctx);
+  const chip = rFind(el, (n) => n.nodeName === 'BUTTON' && /info-chip/.test(n.className || '') && n.textContent === '🔁 every 3 days');
+  assert.ok(chip, 'the chip, with the 3-day start');
+  chip.__on.click();
+  el = renderDetail(ctx);
+  const picks = rAll(rFind(el, (n) => /every-picker/.test(n.className || '')), (n) => n.nodeName === 'BUTTON');
+  assert.deepEqual(picks.map((b) => b.textContent), ['1 day', '2 days', '3 days', '5 days', '7 days', '14 days', '30 days']);
+  assert.equal(picks[2].getAttribute('aria-pressed'), 'true', 'the one now');
+  picks[4].__on.click();
+  assert.deepEqual(ctx.calls.find((c) => c[0] === 'setMoveEvery'), ['setMoveEvery', { projectId: 'p1', days: 7 }]);
+  assert.equal(s.data.projects.find((p) => p.id === 'p1').moveEvery, 7);
+  assert.ok(ctx.calls.some((c) => c[0] === 'toast' && c[1] === 'Kiln: should move every 7 days'));
+  assert.equal(ctx.ui.everyOpen, null, 'closed');
+  const dot = rFind(renderDetail(ctx), (n) => n.nodeName === 'SPAN' && /^dot /.test(n.className || ''));
+  assert.match(dot.getAttribute('title'), /should move every 7 days/, 'the dot says why');
+  const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
+  assert.ok(app.includes("!p.misc && p.state !== 'finished' ? everyButtons(p) : null,"), 'right-click: the same choices');
+  assert.ok(app.includes("store.dispatch('setMoveEvery', { projectId: p.id, days: n })"));
+  assert.ok(app.includes("' on track (green)'") && app.includes('On track (${done.length})'), 'Today: "on track", not "done today"');
+  assert.ok(!readFileSync(new URL('../docs/ui/detail.js', import.meta.url), 'utf8').includes('Not looked at today'), 'no old daily words');
 });

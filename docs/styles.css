@@ -934,6 +934,10 @@ a.tag.me:hover { color: var(--brand); border-color: var(--brand); }
 .row-menu { max-height: calc(100vh - 16px); overflow-y: auto; max-width: 290px; }
 .row-menu-stages { display: flex; flex-wrap: wrap; gap: 4px; padding: 4px 6px 8px; border-bottom: 1px solid #f1f5f9; margin-bottom: 4px; }
 .row-menu-stages .stage-chip { font-size: 12px; padding: 2px 8px; }
+.every-picker { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; width: 100%; margin-top: 6px; }
+.every-picker .chip.on, .row-menu-every .chip.on { background: var(--brand-soft); border-color: var(--brand); font-weight: 600; }
+.row-menu-every { align-items: center; }
+.row-menu-every .chip { font-size: 12px; padding: 2px 7px; }
 .row-menu-stages .stage-chip.on { outline: 2px solid currentColor; outline-offset: 1px; }
 .move-box-wrap { position: fixed; inset: 0; z-index: 70; background: rgba(15, 23, 42, .25); display: flex; align-items: flex-start; justify-content: center; padding: 12vh 16px 16px; }
 .main-box.move-box { width: 100%; max-width: 420px; margin: 0; background: #fff; box-shadow: 0 16px 40px rgba(15, 23, 42, .25); }

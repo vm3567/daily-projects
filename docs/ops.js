@@ -9,7 +9,7 @@
 // applyOp(state, op) changes the state in place and returns true, or returns false
 // when the operation must be skipped (for example, its item no longer exists).
 
-import { WORK, indiaDate, monthOf, laterDate, addDays, REPEATS, nextRepeatDate, waitingAgain, WEEKDAYS, indiaDateTime, validRemindOnce, remindOnceText, canPutUnder, parentIdsOf, normalizeParents, isMainProject, descendantIds, THREAD_MAX, timerOn, MISC_ID, STAGES, STAGE_LABELS, cleanWaitingFor } from './rules.js';
+import { WORK, indiaDate, monthOf, laterDate, addDays, REPEATS, nextRepeatDate, waitingAgain, WEEKDAYS, indiaDateTime, validRemindOnce, remindOnceText, canPutUnder, parentIdsOf, normalizeParents, isMainProject, descendantIds, MOVE_EVERY_DEFAULT, THREAD_MAX, timerOn, MISC_ID, STAGES, STAGE_LABELS, cleanWaitingFor } from './rules.js';
 import { AI_DAILY_LIMIT, BRIEF_CLAIM_MINUTES } from './config.js';
 import { sanitizeRich, htmlToText, isRich, RICH_MAX } from './rich.js';
 
@@ -338,6 +338,11 @@ function teamTime(v, op) {
 }
 
 /** The projects a task is in (parentIds; an older parentId is folded in). An empty list: the field goes. */
+/** A task put into a project with a "move every" takes it, unless it has its own (owner asked 23 Oct). */
+function inheritEvery(child, main) {
+  if (child && main && Number.isInteger(main.moveEvery) && !Number.isInteger(child.moveEvery)) child.moveEvery = main.moveEvery;
+}
+
 function setParents(p, ids) {
   const list = [...new Set(ids.filter((x) => typeof x === 'string' && x && x !== p.id))];
   delete p.parentId;
@@ -380,6 +385,7 @@ const handlers = {
     if (main && canPutUnder(data, project, main)) {
       project.parentIds = [main.id];
       main.isMain = true;
+      inheritEvery(project, main);
       addEvent(state, { ...op, id: op.id + 'm' }, main, 'main_changed', `${project.name} added`);
     }
     return true;
@@ -408,6 +414,7 @@ const handlers = {
     if (now.includes(main.id) || !canPutUnder(data, p, main)) return false;
     setParents(p, [...now, main.id]);
     main.isMain = true;
+    inheritEvery(p, main);
     p.updatedAt = op.at;
     addEvent(state, op, p, 'main_changed', `Added to 📂 ${main.name}`);
     addEvent(state, { ...op, id: op.id + 'm' }, main, 'main_changed', `${p.name} added`);
@@ -454,6 +461,7 @@ const handlers = {
     setParents(p, [main.id]);
     dropFromOrder(data, p.id, now.filter((x) => x !== main.id));
     main.isMain = true;
+    inheritEvery(p, main);
     p.updatedAt = op.at;
     addEvent(state, op, p, 'main_changed', `Added to 📂 ${main.name}`);
     addEvent(state, { ...op, id: op.id + 'm' }, main, 'main_changed', `${p.name} added`);
@@ -731,6 +739,28 @@ const handlers = {
     }
     p.updatedAt = op.at;
     addEvent(state, op, p, 'edited', stage ? `Stage: ${STAGE_LABELS[stage].replace(/^\S+ /, '')}${wf ? ` (${wf})` : ''}` : 'Stage: automatic');
+    return true;
+  },
+
+  /**
+   * "Move every N days" (1–90; null = back to 3): how often it should have a real update; its dot follows it.
+   * On a 📂 project: the project and everything inside it, every level (each can be changed after). Not work.
+   */
+  setMoveEvery(state, op, a) {
+    const { data } = state;
+    const p = findProject(data, a.projectId);
+    const days = a.days === null || a.days === undefined ? null : a.days;
+    if (!p || (days !== null && !(Number.isInteger(days) && days >= 1 && days <= 90))) return false;
+    const list = [p, ...(isMainProject(data, p) ? data.projects.filter((x) => descendantIds(data, p.id).has(x.id)) : [])];
+    let changed = false;
+    for (const x of list) {
+      if ((x.moveEvery ?? null) === days) continue;
+      if (days === null) delete x.moveEvery; else x.moveEvery = days;
+      changed = true;
+    }
+    if (!changed) return false;
+    p.updatedAt = op.at;
+    addEvent(state, op, p, 'edited', `Move every: ${days === null ? MOVE_EVERY_DEFAULT : days} day${(days || MOVE_EVERY_DEFAULT) === 1 ? '' : 's'}${list.length > 1 ? ` (and the ${list.length - 1} inside)` : ''}`);
     return true;
   },
 
@@ -1630,7 +1660,7 @@ export const CARRIED = new Set(['createProject', 'createMainProject', 'addToProj
   'setRemindOnce', 'wake', 'remindStep', 'addLink', 'markOpened', 'okForToday', 'undoOkForToday', 'moveProject', 'pause', 'unpause', 'reopen',
   'addStep', 'tickStep', 'untickStep', 'moveStep', 'chased', 'addWorkNote', 'addTag', 'renameTag', 'addInbox', 'updateInbox', 'addMailNote',
   'setReply', 'replyLater', 'inboxToStep', 'stepToProject', 'inboxToProject', 'addPerson', 'renamePerson', 'setPersonContact', 'markPersonSent',
-  'startTimer', 'stopTimer', 'addTime', 'setStage']);
+  'startTimer', 'stopTimer', 'addTime', 'setStage', 'setMoveEvery']);
 export const NOT_CARRIED = new Set(['deleteProject', 'restoreProject', 'deleteStep', 'setProjectTeam', 'addFile', 'setAiKey', 'setAiProvider',
   'removeFromProject', 'setParent', 'removeLink', 'editLink', 'finish', 'teamWorked', 'deleteWorkNote', 'editWorkNote', 'setProjectField', 'setStepField',
   'removeFile', 'setTimer', 'deleteTag', 'clearReply', 'markReplySent', 'undoReplySent', 'mailReplied', 'removeInbox', 'inboxUndo', 'deletePerson',

@@ -46,11 +46,12 @@ export function laterDate(a, b) {
 }
 
 /**
- * Daily dot colour for a project (resets every midnight, India time):
- *   red    = not looked at today
- *   yellow = opened today, nothing done yet
- *   green  = a real update today (written update, ticked step, follow-up, time, or the team's update)
- *   grey   = paused or finished
+ * Dot colour (owner asked 23 Oct: by how often each task or project should move, not "touched today"):
+ *   green  = on track: a real update (written update, ticked step, follow-up, time, or the team's update)
+ *            within its "move every N days" (moveEvery; 3 when not set)
+ *   yellow = slipping: no update for N days, or its target date / a step's due date is within 2 days
+ *   red    = stuck: no update for 2 × N days, or its target date / a step's due date has passed
+ *   grey   = paused, snoozed or finished
  */
 /** A step set to "remind me" on a later date: hidden until that day. */
 export function stepWaitsForReminder(step, today = todayIndia()) {
@@ -177,9 +178,44 @@ export function isSnoozed(project, today = todayIndia()) {
 
 export function dotColour(project, today = todayIndia()) {
   if (project.state !== 'active' || isSnoozed(project, today)) return 'grey';
-  if (lastWorkDate(project) === today) return 'green'; // only a real update makes it green (there is no "OK for today")
-  if (project.lastOpenedDate === today) return 'yellow';
-  return 'red';
+  if (datePassed(project, today)) return 'red';
+  const every = moveEveryOf(project);
+  const days = daysWithoutWork(project, today);
+  if (days >= every * 2) return 'red';
+  if (days >= every || dateSoon(project, today)) return 'yellow';
+  return 'green';
+}
+
+/** "Move every N days": how often a task or project should have a real update (owner sets it; 3 when not set). */
+export const MOVE_EVERY_DEFAULT = 3;
+export const MOVE_EVERY_PICKS = [1, 2, 3, 5, 7, 14, 30];
+export function moveEveryOf(p) {
+  const n = p ? p.moveEvery : null;
+  return Number.isInteger(n) && n >= 1 && n <= 90 ? n : MOVE_EVERY_DEFAULT;
+}
+export const everyText = (n) => (n === 1 ? 'every day' : `every ${n} days`);
+
+const openSteps = (p) => (p.steps || []).filter((s) => !s.done);
+/** Its target date, or an open step's due date, has passed. */
+function datePassed(p, today) {
+  return (!!p.deadline && p.deadline < today) || openSteps(p).some((s) => s.dueDate && s.dueDate < today);
+}
+/** Its target date, or an open step's due date, is today or in the next 2 days. */
+function dateSoon(p, today) {
+  const soon = addDays(today, 2);
+  return (!!p.deadline && p.deadline <= soon) || openSteps(p).some((s) => s.dueDate && s.dueDate <= soon);
+}
+
+/** Why the dot has its colour, in a few words (the dot's tooltip and the task page). */
+export function colourWhy(p, today = todayIndia()) {
+  if (p.state === 'finished') return 'Finished';
+  if (p.state !== 'active') return 'Paused';
+  if (isSnoozed(p, today)) return 'Snoozed';
+  if (p.deadline && p.deadline < today) return `Target date passed (${p.deadline})`;
+  if (datePassed(p, today)) return 'A step\'s due date has passed';
+  const days = daysWithoutWork(p, today);
+  const last = days === 0 ? 'Updated today' : `No update for ${days} day${days === 1 ? '' : 's'}`;
+  return `${last} · should move ${everyText(moveEveryOf(p))}${dateSoon(p, today) && days < moveEveryOf(p) ? ' · a date is near' : ''}`;
 }
 
 /**

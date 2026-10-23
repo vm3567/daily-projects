@@ -21,7 +21,7 @@ import { MockRepo } from './mockrepo.js';
 import { device } from './device.js';
 import { DATA_OWNER, DATA_REPO, DATA_BRANCH, MOVED_TO, REFRESH_MS, AI_DAILY_LIMIT, BRIEF_CLAIM_MINUTES, WAIT_RED_DAYS, NO_WORK_NOTE_DAYS } from './config.js';
 import { dotColour, greenByTeamOnly, isSnoozed, restUntil, restReason, onlyDaysLabel, openIdFromHash, awakeProjects, activeProjects, nextStep, todayIndia, isSundayIndia, colourCounts, isOverdue, indiaDate, waitingDays, daysWithoutWork, dayScore, greenStreak, addDays, monthOf, fmtMinutes, takeBackWaits, staffStepAction, pasteGoesToProject, singleStepClose, versionRequest, askDiaryAgain, pasteInForm, diaryLoadedAt, photoNeedsFetch, teamUndoKey, teamActionUndone, teamProgressOf, projectKeyIgnored, teamMovedTo, serverHolder, keepMovedStep, teamMemberFor, repliesOf, mailThreads, replyMailto, MAILTO_BODY_MAX, emailPath, pasteReason } from './rules.js';
-import { stageOf, stageCounts, byStage, STAGES, STAGE_LABELS } from './rules.js';
+import { stageOf, stageCounts, byStage, STAGES, STAGE_LABELS, moveEveryOf, everyText, MOVE_EVERY_PICKS } from './rules.js';
 import { stageChip, stageFilterBar } from './ui/stage.js';
 import { whoFromUser, signInTag, timerOn, projectGiveChanges, UNDO_GRACE_MS, MISC_ID } from './rules.js';
 import { signInCard, firstPasswordCard } from './ui/signin.js';
@@ -1784,6 +1784,18 @@ function stageButtons(p) {
   }, STAGE_LABELS[s])));
 }
 
+/** The menu's "🔁 Move every" line: 1 2 3 5 7 14 30 days (the one now is marked). */
+function everyButtons(p) {
+  const now = moveEveryOf(p);
+  const main = isMainProject(store.view.data, p);
+  return h('div', { class: 'row-menu-stages row-menu-every', role: 'group', 'aria-label': 'Should move every' },
+    h('span', { class: 'muted small' }, '🔁 Move every'),
+    MOVE_EVERY_PICKS.map((n) => h('button', {
+      class: 'chip' + (n === now ? ' on' : ''), type: 'button', role: 'menuitemradio', 'aria-checked': String(n === now), title: n === 1 ? 'Every day' : `Every ${n} days`,
+      onClick: () => { ui.rowMenu = null; if (store.dispatch('setMoveEvery', { projectId: p.id, days: n })) toast(`${p.name}: should move ${everyText(n)}${main ? ' (and everything inside it)' : ''}`); render(); },
+    }, n === 1 ? '1d' : `${n}d`)));
+}
+
 /** The small menu that opens when you right-click a task or project (a list, a project's task table), a step or an Inbox item. */
 function rowMenu() {
   const m = ui.rowMenu;
@@ -1802,6 +1814,7 @@ function rowMenu() {
   const el = h('div', { class: 'row-menu', role: 'menu', key: 'row-menu', 'aria-label': `Actions for ${p.name}` },
     h('div', { class: 'row-menu-title' }, p.name),
     task && p.state !== 'finished' ? stageButtons(p) : null,
+    !p.misc && p.state !== 'finished' ? everyButtons(p) : null,
     due ? item('✓', `Tick: ${due.text}`, () => quickTick(p, due)) : null,
     p.state === 'active' ? item('+', 'Add a step', () => { select(p.id); focusKey('add-step-' + p.id); }) : null,
     p.state === 'active' ? item('📝', 'Write an update', () => { select(p.id); focusKey('wn-' + p.id); }) : null,
@@ -2101,7 +2114,7 @@ function weekBars() {
     })));
 }
 
-/** "3 of 7 done today" with a thin bar. */
+/** "3 of 7 on track (green)" with a thin bar. */
 function progressLine(today) {
   const active = todayList(store.view.data, todayIndia()); // as Today: an empty 📂 project is left out
   if (!active.length) return null;
@@ -2112,7 +2125,7 @@ function progressLine(today) {
   return h('div', { class: 'progress', key: 'progress' },
     h('div', { class: 'progress-row' },
       h('div', { class: 'progress-text' },
-        h('strong', null, `${done} of ${active.length}`), done === active.length ? ' done today — all green! 🎉' : ' done today',
+        h('strong', null, `${done} of ${active.length}`), done === active.length ? ' on track — all green! 🎉' : ' on track (green)',
         streakBadge()),
       h('div', { class: 'progress-btns' },
         h('button', { class: 'btn small', title: "Everything you did today, ready to send", onClick: openSummary }, '📋 Summary'),
@@ -2248,7 +2261,7 @@ function renderListColumn() {
     empty);
 }
 
-/** Today: projects not yet green, then a folded "Done today (n)" group. Other views: one list. */
+/** Today: the ones not green (slipping or stuck), then a folded "On track (n)" group. Other views: one list. */
 function splitToday(list, today) {
   if (ui.view !== 'today' || ui.search) return { open: list, done: [] };
   return { open: list.filter((p) => dotColour(p, today) !== 'green'), done: list.filter((p) => dotColour(p, today) === 'green') };
@@ -2268,11 +2281,11 @@ function listParts(list, today) {
     if (ui.showSnoozed) parts.push(h('ul', { class: 'plist-done', key: 'plist-snoozed' }, snoozed.sort((a, b) => (restUntil(a, today) < restUntil(b, today) ? -1 : 1)).map((p) => projectRow(p, today))));
   }
   if (!done.length) return parts;
-  if (!open.length) parts.push(h('p', { class: 'all-green', key: 'all-green' }, 'Everything is green for today 🎉'));
+  if (!open.length) parts.push(h('p', { class: 'all-green', key: 'all-green' }, 'Everything is on track 🎉'));
   parts.push(h('button', {
     class: 'done-toggle', key: 'done-toggle', 'aria-expanded': String(!!ui.showDoneToday),
     onClick: () => { ui.showDoneToday = !ui.showDoneToday; render(); },
-  }, `${ui.showDoneToday ? '▾' : '▸'} Done today (${done.length})`));
+  }, `${ui.showDoneToday ? '▾' : '▸'} On track (${done.length})`));
   if (ui.showDoneToday) parts.push(h('ul', { class: 'plist-done', key: 'plist-done' }, done.map((p) => projectRow(p, today))));
   return parts;
 }

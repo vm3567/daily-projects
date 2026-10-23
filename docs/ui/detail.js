@@ -13,14 +13,13 @@ import { richArea, richView, addDraftPhotos, readDraft, clearDraft, photoArgs, f
 import { enterAction, richFileIds, textToHtml } from '../rich.js';
 import { projectEmailCards, emailThreadBlock } from './replies.js';
 import { mainBox, mainChip, subProjectsBlock, openMainBox } from './mains.js';
-import { isMainProject, timerOn, childrenOf, projectTasks } from '../rules.js';
+import { isMainProject, timerOn, childrenOf, projectTasks, moveEveryOf, everyText, colourWhy, MOVE_EVERY_PICKS } from '../rules.js';
 import { stageLine } from './stage.js';
 
 /** 'project' for a 📂 project, 'task' for everything else (what the app once called a project). */
 const kindWord = (ctx, p) => (isMainProject(ctx.store.view.data, p) ? 'project' : 'task');
 
 const REPEAT_WORD = { daily: 'every day', weekly: 'every week', monthly: 'every month' };
-const COLOUR_WORD = { green: 'Done for today', yellow: 'Opened today', red: 'Not looked at today', grey: 'Paused or finished' };
 const HISTORY_WORDS = {
   created: 'Task created', edited: 'Changed', renamed: 'Renamed', group_changed: 'Moved to group',
   step_added: 'Step added', step_edited: 'Step changed', step_ticked: 'Step done', step_unticked: 'Step un-ticked',
@@ -937,6 +936,8 @@ function infoChips(ctx, p, today) {
     out.push(chip(onlyDaysChip(p), 'Comes up only on these days / phone reminder — tap to change',
       () => { ui.onlyDaysOpen = ui.onlyDaysOpen === p.id ? null : p.id; ctx.render(); }));
   }
+  // 🔁 how often it should move (its dot follows it); a 📂 project's choice goes to everything inside it
+  if (!p.misc && p.state !== 'finished') out.push(chip(`🔁 ${everyText(moveEveryOf(p))}`, `${colourWhy(p, today)} — tap to change how often it should move`, () => { ui.everyOpen = ui.everyOpen === p.id ? null : p.id; ctx.render(); }));
   if (tagName(data, p)) out.push(chip(`🏷 ${tagName(data, p)}`, 'Tag — tap to change', editMeta));
   out.push(chip(p.priority[0].toUpperCase() + p.priority.slice(1), 'Priority — tap to change', editMeta, p.priority === 'high' ? ' bad' : ''));
   out.push(chip(p.deadline ? `${overdue ? 'Overdue' : 'Target'} ${fmtDay(p.deadline)}` : '+ Target date', 'Target date — tap to change', editMeta, overdue ? ' bad' : ''));
@@ -949,7 +950,25 @@ function infoChips(ctx, p, today) {
     out.push(total ? chip(`⏱ ${fmtMinutes(total)}`, `Time on this ${kindWord(ctx, p)} — tap for details`, () => { ui.showTime = ui.showTime === p.id ? null : p.id; ctx.render(); })
       : chip('⏱ Add time', 'Add time worked (not timed)', () => addTimePrompt(ctx, p)));
   }
-  return h('div', { class: 'info-chips', key: 'ic-' + p.id }, out, peopleChips(ctx, p));
+  return h('div', { class: 'info-chips', key: 'ic-' + p.id }, out, peopleChips(ctx, p), everyPicker(ctx, p));
+}
+
+/** "Move every…": 1, 2, 3, 5, 7, 14, 30 days (the one now is marked). On a 📂 project it says it goes to its tasks too. */
+export function everyPicker(ctx, p) {
+  const { ui, store } = ctx;
+  if (ui.everyOpen !== p.id) return null;
+  const now = moveEveryOf(p);
+  const main = isMainProject(store.view.data, p);
+  const set = (n) => {
+    ui.everyOpen = null;
+    if (store.dispatch('setMoveEvery', { projectId: p.id, days: n }) && ctx.toast) ctx.toast(`${p.name}: should move ${everyText(n)}${main ? ' (and everything inside it)' : ''}`);
+    ctx.render();
+  };
+  return h('div', { class: 'every-picker', key: 'every-' + p.id, role: 'group', 'aria-label': 'How often should it move?' },
+    h('span', { class: 'muted small' }, main ? 'Move every (for everything inside too):' : 'Should move every:'),
+    MOVE_EVERY_PICKS.map((n) => h('button', {
+      class: 'chip' + (n === now ? ' on' : ''), type: 'button', key: 'ev-' + n, 'aria-pressed': String(n === now), onClick: () => set(n),
+    }, n === 1 ? '1 day' : `${n} days`)));
 }
 
 /** 🗑 Delete for any project: one question, then an Undo button for a few seconds. */
@@ -1083,7 +1102,7 @@ export function renderDetail(ctx) {
   },
     h('div', { class: 'detail-top' },
       h('button', { class: 'icon back', 'aria-label': 'Back to list', onClick: () => { ui.mobile = 'list'; ctx.render(); } }, '←'),
-      h('span', { class: `dot ${colour}`, title: COLOUR_WORD[colour] }),
+      h('span', { class: `dot ${colour}`, title: colourWhy(p, today) }), // why it has this colour
       autoField('input', { class: 'title-input', value: p.name, 'aria-label': `${kindWord(ctx, p) === 'task' ? 'Task' : 'Project'} name`, title: `Click to change the ${kindWord(ctx, p)} name`, key: 'name-' + p.id },
         (v) => store.dispatch('setProjectField', { projectId: p.id, field: 'name', value: v })),
       h('button', {
