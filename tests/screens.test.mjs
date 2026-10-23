@@ -12,6 +12,7 @@ class Node {
     this.dataset = {}; this.style = { cssText: '' }; this.className = ''; this.value = ''; this.checked = false;
   }
   appendChild(c) { this.childNodes.push(c); c.parentNode = this; return c; }
+  replaceChildren(...cs) { this.childNodes = []; cs.forEach((c) => this.appendChild(typeof c === 'string' ? { nodeType: 3, nodeValue: c } : c)); }
   setAttribute(n, v) { this.attributes.push({ name: n, value: v }); }
   getAttribute(n) { const a = this.attributes.find((x) => x.name === n); return a ? a.value : null; }
   hasAttribute(n) { return !!this.attributes.find((x) => x.name === n); }
@@ -1059,7 +1060,7 @@ test('📂 Projects page: a click on a project row selects it and stays on the p
   assert.match(mainsSrc, /ctx\.ui\.view === 'mains' && ctx\.showHere \? ctx\.showHere\(c\.id\)/, 'a task in the TASKS table while on the Projects page');
   const here = app.slice(app.indexOf('  showHere: (id) => {'), app.indexOf('  openProject: (id) => {'));
   assert.match(here, /select\(id\);/);
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-33'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-34'/, 'phones get the new copy');
 });
 
 test('📂 project page: "✕ Remove" on a task row takes it out of this project only — the task is kept (and stays in its other projects)', () => {
@@ -1844,7 +1845,7 @@ test('🔌 app wiring (app.js): "🔌 From apps" after ✉ Replies with the wait
   assert.match(app, /function go\(view\) \{\n\s*if \(view !== 'settings'\) forgetOnce\(\);/);
   assert.match(app, /if \(onServer\) loadApps\(appsCtx, force \|\| ui\.view === 'apps'\);/);
   assert.match(app, /replies: '✉ Replies', apps: '🔌 From apps', mains: '📂 Projects' \}\[ui\.view\]/, 'its page title');
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-33'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-34'/, 'phones get the new copy');
 });
 
 test('🔌 the PHP connector (team/connector/worktask-connector.php): the same text the app downloads, placeholders only (no real key), valid PHP 7.4+ (php -l), with wt_push / wt_withdraw / wt_decisions / wt_receive_decision', async () => {
@@ -3033,7 +3034,7 @@ test('one app wiring (step 4 part 2): no sign-in → this app\'s sign-in card, t
   assert.ok(!/location\.href = '\.\.\/'/.test(app), 'nothing goes to the old Work Task page');
   assert.match(app, /import \{ signInCard, firstPasswordCard \} from '\.\/ui\/signin\.js';/);
   const fns = app.slice(app.indexOf('// ---------------------------------------------------------------- signing in'), app.indexOf('// ---------------------------------------------------------------- one app for everyone'));
-  assert.match(fns, /function showCard\(el\) \{ const s = signScreen\(\); root\.hidden = true; s\.hidden = false; s\.replaceChildren\(el\); \}/, 'the card covers the app (nothing of it shows or is drawn over it)');
+  assert.match(fns, /function showCard\(el\) \{ const s = signScreen\(\); root\.hidden = true; s\.hidden = false; s\.replaceChildren\(el\); if \(bell\) bell\.el\.hidden = true; \}/, 'the card covers the app (nothing of it shows or is drawn over it; the 🔔 hides too)');
   assert.match(fns, /onSignedIn: \(\{ token, user \}\) => \{ keepSignIn\(token, user\); hideCard\(\); then\(user\); \}/);
   assert.match(fns, /localStorage\.setItem\(SERVER_TOKEN_KEY, token\);\n\s*localStorage\.removeItem\(WHO_KEY\);/, 'the new sign-in is kept; who it is is asked again');
   assert.match(fns, /if \(localStorage\.getItem\(LAST_USER_KEY\) !== String\(user\.id\)\) \{\n\s*for \(const k of Object\.keys\(localStorage\)\) if \(k\.startsWith\('wt\.c\.'\)\) localStorage\.removeItem\(k\);/, 'someone else on this phone: the last person\'s saved lists go');
@@ -3280,4 +3281,45 @@ test('review r4-5 (whole code): an answer in the team box goes on the newest mes
   form.__on.submit({ preventDefault() {}, target: form });
   await new Promise((r) => setTimeout(r, 0));
   assert.deepEqual(calls, [[7, [6, 7], 45]], 'to Valar; Ravi\'s question (task 8) is not marked read');
+});
+
+test('🔔 in the app (23 Oct): the bell counts what is not seen, lists the newest, and a tap opens its task (the phone notification\'s address) and marks it seen; on every screen', async () => {
+  const { createBell, bellHash, bellCount, bellWhen } = await import('../docs/ui/bell.js');
+  assert.equal(bellHash('/projects/#team-task=41'), '#team-task=41');
+  assert.equal(bellHash('/projects/#open=kp1'), '#open=kp1');
+  assert.equal(bellHash('/projects/#apps'), '#apps');
+  assert.equal(bellHash('/'), '', 'nothing to open: the list is enough');
+  assert.equal(bellHash('/projects/#team-task=4;evil'), '');
+  assert.deepEqual([bellCount(0), bellCount(3), bellCount(140)], ['', '3', '99+']);
+  assert.match(bellWhen('2026-10-23 10:05:00', '2026-10-23'), /^10:05/);
+  assert.match(bellWhen('2026-10-21 10:05:00', '2026-10-23'), /^21 Oct 10:05/);
+  // the bell itself, with a pretend server and page
+  const calls = [];
+  const list = [{ id: 7, kind: 'msg', title: '💬 Valar · Kiln', body: 'Is it at 1150?', url: '/projects/#team-task=41', at: '2026-10-23 10:05:00', read: false },
+    { id: 6, kind: 'task', title: '📥 New task for you', body: 'Pack', url: '/', at: '2026-10-22 09:00:00', read: true }];
+  const post = async (a, body) => { calls.push([a, body]); return a === 'notifs.list' ? { notifs: list.map((x) => ({ ...x })), unread: 1 } : {}; };
+  const on = {};
+  const win = { location: { hash: '' }, addEventListener: () => {}, document: { visibilityState: 'visible', addEventListener: (t, f) => { on[t] = f; } } };
+  const bell = createBell({ post, every: 0, today: () => '2026-10-23', win });
+  await new Promise((r) => setTimeout(r, 0));
+  const find = (node, f) => (f(node) ? node : (node.childNodes || []).map((c) => find(c, f)).find(Boolean));
+  const btn = () => find(bell.el, (n) => n.nodeName === 'BUTTON' && (n.className || '').startsWith('bell-btn'));
+  assert.equal(btn().textContent, '🔔1', 'one not seen');
+  await btn().__on.click();
+  await new Promise((r) => setTimeout(r, 0));
+  const items = [];
+  (function walk(n) { if ((n.className || '').startsWith('bell-item')) items.push(n); (n.childNodes || []).forEach(walk); })(bell.el);
+  assert.deepEqual(items.map((n) => n.className), ['bell-item new', 'bell-item'], 'newest first; the new one stands out');
+  assert.match(items[0].textContent, /Valar · Kiln.*Is it at 1150\?/);
+  await items[0].__on.click();
+  assert.equal(win.location.hash, '#team-task=41', 'its task opens');
+  assert.deepEqual(calls.at(-1), ['notifs.read', { ids: [7] }]);
+  assert.equal(btn().textContent, '🔔', 'nothing new now');
+  // wiring: the owner, a manager and a team member all get it (signed in on worktask.in); it is kept for offline
+  const { readFileSync } = await import('node:fs');
+  const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
+  assert.equal((app.match(/startBell\(\);/g) || []).length, 3, 'staff view, team pages, owner');
+  assert.match(app, /if \(onServer && !isMock\) startBell\(\);/);
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /'ui\/bell\.js'/);
+  assert.match(readFileSync(new URL('../docs/styles.css', import.meta.url), 'utf8'), /body\.has-bell \.detail-top \{ padding-right: 56px; \}/, 'it never covers a header\'s buttons');
 });

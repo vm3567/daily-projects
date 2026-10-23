@@ -22,6 +22,7 @@ import { DATA_OWNER, DATA_REPO, DATA_BRANCH, MOVED_TO, REFRESH_MS, AI_DAILY_LIMI
 import { dotColour, greenByTeamOnly, isSnoozed, restUntil, restReason, onlyDaysLabel, openIdFromHash, awakeProjects, activeProjects, nextStep, todayIndia, isSundayIndia, colourCounts, isOverdue, indiaDate, waitingDays, daysWithoutWork, dayScore, greenStreak, addDays, monthOf, fmtMinutes, takeBackWaits, staffStepAction, pasteGoesToProject, singleStepClose, versionRequest, askDiaryAgain, pasteInForm, diaryLoadedAt, photoNeedsFetch, teamUndoKey, teamActionUndone, teamProgressOf, projectKeyIgnored, teamMovedTo, serverHolder, keepMovedStep, teamMemberFor, repliesOf, mailThreads, replyMailto, MAILTO_BODY_MAX, emailPath, pasteReason } from './rules.js';
 import { whoFromUser, signInTag, timerOn, projectGiveChanges, UNDO_GRACE_MS } from './rules.js';
 import { signInCard, firstPasswordCard } from './ui/signin.js';
+import { createBell } from './ui/bell.js';
 import { parentIdsOf, isMainProject, mainProjects, activeTasks, todayWithoutEmptyMains, todayList, stepTargets, mainSummary, childrenOf, deleteQuestion, pickEnterTarget } from './rules.js';
 import { newId, clone, opMonth, cleanLink, carriedOps, orderPosOf } from './ops.js';
 import * as ai from './ai.js';
@@ -42,8 +43,22 @@ function toSignIn() { signInAgain(); }
 // The sign-in card sits where the owner's key screen does; the person's own screens stay hidden behind it.
 const LAST_USER_KEY = 'wt.lastUser';
 const signScreen = () => document.getElementById('keyscreen');
-function showCard(el) { const s = signScreen(); root.hidden = true; s.hidden = false; s.replaceChildren(el); }
-function hideCard() { const s = signScreen(); s.hidden = true; s.replaceChildren(); root.hidden = false; }
+function showCard(el) { const s = signScreen(); root.hidden = true; s.hidden = false; s.replaceChildren(el); if (bell) bell.el.hidden = true; }
+function hideCard() { const s = signScreen(); s.hidden = true; s.replaceChildren(); root.hidden = false; if (bell) bell.el.hidden = false; }
+
+/** 🔔 Notifications inside the app (ui/bell.js), on top of whichever screens are open: worktask.in, signed in. */
+let bell = null;
+function startBell() {
+  if (bell || !onServer || !serverToken()) return;
+  bell = createBell({ post: async (a, body) => {
+    const r = await fetch('../api/?a=' + a, { method: 'POST', cache: 'no-store', headers: { Authorization: 'Bearer ' + serverToken(), 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
+    const out = await r.json();
+    if (!out || !out.ok) throw new Error((out && out.error) || 'Something went wrong.');
+    return out;
+  } });
+  document.body.appendChild(bell.el);
+  document.body.classList.add('has-bell'); // (room for it in the headers: styles.css)
+}
 async function postNoToken(a, body, token = '') {
   const r = await fetch(`../api/?a=${a}`, { method: 'POST', cache: 'no-store', headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}) }, body: JSON.stringify(body) });
   let out = null; try { out = await r.json(); } catch { /* not an answer */ }
@@ -249,6 +264,7 @@ async function startManager(user, teamTask = 0) {
   space = 'team';
   const how = teamHowFromHash() || (teamTask ? { sel: 'task:' + teamTask } : {});
   teamView.start({ ...how, fromProjects: false }); // (they have no projects page to go back to)
+  startBell();
   window.addEventListener('hashchange', () => { const h2 = teamHowFromHash(); if (h2) teamView.start({ ...h2, fromProjects: false }); }); // a notification tapped while open
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') teamView.act.reload(); });
   document.addEventListener('paste', (e) => pasteToView(teamView, e, TEAM_BOX));
@@ -282,6 +298,7 @@ async function startStaff(user, openTask = 0) {
   staffView = staff;
   if (openTask) { if (teamTaskInHash() === openTask) history.replaceState(null, '', location.pathname + location.search); staff.open('task:' + openTask); } // a phone notification: that task (taken off the address, so a reload does not open it again)
   staff.start();
+  startBell();
   window.addEventListener('hashchange', () => { // a notification tapped while open
     const id = teamTaskInHash();
     if (location.hash) history.replaceState(null, '', location.pathname + location.search);
@@ -3653,6 +3670,7 @@ function startOwner() {
   });
   render();
   if (onServer && !isMock) takeTeamFromHash(); // "#team…": the team pages of this app (from 👥, a team task chip, Give to team)
+  if (onServer && !isMock) startBell();
   store.init().then(() => { if (store.status === 'saved') dataFreshAt = Date.now(); render(); if (ui.capture) focusKey('capture-input'); voiceReady = true; runVoice(); loadTeam(true); if (onServer) loadApps(appsCtx, true); shareLocalKeys(); markShownOpened(); makeBrief(); recordPastScores(); });
   if (started) return;
   started = true;

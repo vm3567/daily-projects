@@ -378,6 +378,7 @@ function handle(string $a, array $in): array {
       $photos = photos_of(array_map(fn($u) => (int)$u['id'], $ups));
       $out = ['task' => tasks_out([$t], $day)[0], 'updates' => array_map(fn($u) => update_out($u, $photos), $ups), 'comments' => comments_of((int)$t['id'])];
       mark_read([(int)$t['id']], $me['id']);
+      notifs_read_task($me['id'], (int)$t['id']); // its 🔔 notifications are seen too
       return $out;
     }
     case 'comment.add': { // a message on a task: between the manager and the person doing it

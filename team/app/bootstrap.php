@@ -280,6 +280,19 @@ function migrate(PDO $pdo): void {
     "ALTER TABLE updates ADD COLUMN written_at DATETIME NULL",
     // v36: which sign-in linked a phone's notifications, so signing out on that phone stops them there (only there)
     "ALTER TABLE push_subs ADD COLUMN token_id INT NULL",
+    // v37: the 🔔 list in the app — every notification is also kept here, so one missed on the phone (or never sent:
+    // no phone linked) is still seen; read_at = opened from the list, or its task was opened
+    "CREATE TABLE IF NOT EXISTS notifs (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      user_id INT NOT NULL,
+      kind VARCHAR(12) NOT NULL,
+      title VARCHAR(160) NOT NULL,
+      body VARCHAR(300) NOT NULL,
+      url VARCHAR(255) NOT NULL,
+      at DATETIME NOT NULL,
+      read_at DATETIME NULL,
+      INDEX (user_id, id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
   ];
   $pdo->exec($steps[0]);
   $done = (int)($pdo->query("SELECT v FROM settings WHERE k = 'schema'")->fetchColumn() ?: 0);

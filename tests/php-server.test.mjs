@@ -1960,7 +1960,7 @@ test('connections: Rotate key — the old key stops at once, the new key and a n
   const log = sqlOut("SELECT GROUP_CONCAT(action, ' ', detail SEPARATOR '\\n') FROM wt.audit WHERE action LIKE 'conn\\_%'");
   for (const a of ['conn_create #', 'conn_rotate #', 'conn_delete #', 'conn_update #', 'conn_decide #']) assert.ok(log.includes(a), a);
   assert.ok(!/wt[cs]_[0-9a-f]{20}/.test(log), 'no key or secret in the log');
-  assert.equal(sqlOut("SELECT v FROM wt.settings WHERE k = 'schema'").trim(), '36', 'the tables steps ran (v36: push_subs.token_id — which sign-in linked a phone)');
+  assert.equal(sqlOut("SELECT v FROM wt.settings WHERE k = 'schema'").trim(), '37', 'the tables steps ran (v37: notifs — the 🔔 list in the app)');
 });
 
 // ---------------------------------------------------------------- review round 12 (connect.php / outlook.php)
@@ -2904,6 +2904,41 @@ test('review r4-5 (whole code): instruction files sent at the same moment never 
     assert.ok(race.filter((r) => !r.ok).every((r) => /Up to 10 files/.test(r.error)));
   } finally { many.kill(); }
   assert.equal(sqlOut(`SELECT COUNT(*) FROM wt.task_files WHERE task_id = ${t.id}`).trim(), '10');
+});
+
+test('🔔 in the app (23 Oct): every notification is also kept in the person\'s list — a message shows there (even with no phone linked), opening its task or tapping it marks it seen, only their own', { skip }, async () => {
+  const t = (await call('task.save', { assigneeId: id.suresh, title: 'Bell check', repeat: 'once' }, tok.boss)).task;
+  const list = async (who) => call('notifs.list', {}, tok[who]);
+  const before = (await list('boss')).unread;
+  assert.ok((await call('comment.add', { taskId: t.id, text: 'Is the clay here?' }, tok.suresh)).ok);
+  let b = await list('boss');
+  assert.equal(b.unread, before + 1, 'the manager has one more');
+  const n = b.notifs[0];
+  assert.deepEqual([n.title, n.body, n.url, n.read], ['💬 Suresh · Bell check', 'Is the clay here?', `/projects/#team-task=${t.id}`, false]);
+  assert.ok(!(await list('suresh')).notifs.some((x) => x.body === 'Is the clay here?'), 'never to the one who wrote it');
+  const s = await list('suresh');
+  assert.ok(s.notifs.some((x) => x.title === '📥 New task for you' && x.url === `/projects/#team-task=${t.id}`), 'the new task is in Suresh\'s list');
+  // someone else cannot mark mine as seen
+  assert.ok((await call('notifs.read', { ids: [n.id] }, tok.suresh)).ok);
+  assert.equal((await list('boss')).notifs[0].read, false);
+  // opening the task = seen
+  await call('task.get', { id: t.id }, tok.boss);
+  b = await list('boss');
+  assert.equal(b.notifs.find((x) => x.id === n.id).read, true);
+  assert.equal(b.unread, before);
+  // tapped in the list = seen; "Mark all as seen"
+  await call('comment.add', { taskId: t.id, text: 'second' }, tok.suresh);
+  await call('comment.add', { taskId: t.id, text: 'third' }, tok.suresh);
+  b = await list('boss');
+  assert.ok((await call('notifs.read', { ids: [b.notifs[0].id] }, tok.boss)).ok);
+  assert.equal((await list('boss')).unread, before + 1);
+  assert.ok((await call('notifs.read', { all: true }, tok.boss)).ok);
+  assert.equal((await list('boss')).unread, 0);
+  // a change that was rolled back leaves nothing in the list (the same as the phone)
+  const out = await phpRun(`$GLOBALS['me'] = ['id' => 0];
+    try { in_tx_with_alerts(function () { notify([${id.boss}], 'task', 'Never happened', 'x'); throw new RuntimeException('deadlock'); }); } catch (Throwable $e) { }
+    push_flush(); echo one("SELECT COUNT(*) AS n FROM notifs WHERE title = 'Never happened'")['n'];`);
+  assert.equal(out.trim(), '0');
 });
 
 test('review round 1 (whole code): importing a data folder with more than 500 files works (it goes in parts of 500; data.json last), every file is there', { skip }, async () => {

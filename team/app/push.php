@@ -107,6 +107,7 @@ function push_merge(array $list): array {
 function push_flush(): void {
   $out = $GLOBALS['push_out'] ?? [];
   $GLOBALS['push_out'] = [];
+  try { notifs_keep($out); } catch (Throwable $e) { error_log('notifs: ' . $e->getMessage()); } // (the phones still get theirs)
   if (!$out || !function_exists('curl_multi_init')) return;
   $ids = array_keys($out);
   $in = implode(',', array_fill(0, count($ids), '?'));
@@ -147,7 +148,20 @@ function push_flush(): void {
   curl_multi_close($mh);
 }
 
-/** The API part: the public key, and this phone's address on / off. */
+/** Each notification also goes in the person's 🔔 list in the app (each one, never merged; the phone test is not kept). */
+function notifs_keep(array $out): void {
+  foreach ($out as $uid => $list) foreach ($list as $m) {
+    if (($m['tag'] ?? '') === 'test') continue;
+    q('INSERT INTO notifs (user_id, kind, title, body, url, at) VALUES (?, ?, ?, ?, ?, ?)',
+      [(int)$uid, mb_substr((string)$m['kind'], 0, 12), mb_substr((string)$m['title'], 0, 160), mb_substr((string)$m['body'], 0, 300), mb_substr((string)$m['url'], 0, 255), now()]);
+  }
+}
+/** "Seen" in the 🔔 list: what opening this task answers (task.get). */
+function notifs_read_task(int $userId, int $taskId): void {
+  q('UPDATE notifs SET read_at = ? WHERE user_id = ? AND read_at IS NULL AND url = ?', [now(), $userId, '/projects/#team-task=' . $taskId]);
+}
+
+/** The API part: the public key, and this phone's address on / off; the 🔔 list. */
 function push_handle(string $a, array $in, array $me): ?array {
   switch ($a) {
     case 'push.key':
@@ -166,6 +180,18 @@ function push_handle(string $a, array $in, array $me): ?array {
     case 'push.unsubscribe':
       q('DELETE FROM push_subs WHERE ep_hash = ? AND user_id = ?', [hash('sha256', (string)($in['endpoint'] ?? '')), $me['id']]);
       return ['on' => false];
+    case 'notifs.list': { // the newest 50, and how many are not seen yet
+      if (mt_rand(1, 20) === 1) q('DELETE FROM notifs WHERE user_id = ? AND at < ?', [$me['id'], date('Y-m-d H:i:s', strtotime('-90 days'))]); // kept 90 days
+      $rows = all('SELECT * FROM notifs WHERE user_id = ? ORDER BY id DESC LIMIT 50', [$me['id']]);
+      $unread = (int)(one('SELECT COUNT(*) AS n FROM notifs WHERE user_id = ? AND read_at IS NULL', [$me['id']])['n'] ?? 0);
+      return ['notifs' => array_map(fn($r) => ['id' => (int)$r['id'], 'kind' => $r['kind'], 'title' => $r['title'], 'body' => $r['body'], 'url' => $r['url'], 'at' => $r['at'], 'read' => $r['read_at'] !== null], $rows), 'unread' => $unread];
+    }
+    case 'notifs.read': { // ids: these; all: every one of mine
+      $ids = array_slice(array_map('intval', (array)($in['ids'] ?? [])), 0, 200);
+      if (!empty($in['all'])) q('UPDATE notifs SET read_at = ? WHERE user_id = ? AND read_at IS NULL', [now(), $me['id']]);
+      elseif ($ids) q('UPDATE notifs SET read_at = ? WHERE user_id = ? AND read_at IS NULL AND id IN (' . implode(',', array_fill(0, count($ids), '?')) . ')', [now(), $me['id'], ...$ids]);
+      return [];
+    }
     case 'push.test': {
       $n = (int)(one('SELECT COUNT(*) AS n FROM push_subs WHERE user_id = ?', [$me['id']])['n'] ?? 0);
       if (!$n) throw new ApiError('Notifications are not on for this phone yet.');
