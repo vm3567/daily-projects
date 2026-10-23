@@ -214,3 +214,13 @@ test('new-task --finished saves work already done as a finished task in the 📂
   assert.notEqual(open.state, 'finished');
   assert.ok((done.parentIds || [done.parentId]).includes(main.id), 'in the project');
 });
+
+test('rename gives a task a new name (keeps its id, steps and project); an empty name is refused', () => {
+  tracker('new-task', 'Old name here', '--steps', 'Step A');
+  const before = data().projects.find((p) => p.name === 'Old name here');
+  tracker('rename', 'Old name here', '✅ New problem title');
+  const after = data().projects.find((p) => p.id === before.id);
+  assert.equal(after.name, '✅ New problem title');
+  assert.equal(after.steps.length, 1);
+  assert.throws(() => tracker('rename', 'New problem title', '  '), /Give the task and its new name/);
+});

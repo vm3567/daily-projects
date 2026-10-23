@@ -11,6 +11,7 @@
 //   node tools/tracker.mjs add-steps <project> "<step>" ["<step>" ...]
 //   node tools/tracker.mjs tick <project> "<step text or id>"
 //   node tools/tracker.mjs set-about <project> "<short description>"
+//   node tools/tracker.mjs rename <task> "<new name>"
 //   node tools/tracker.mjs add-to <task> <project> [--create]   (📂 a task can be in several projects)
 //   node tools/tracker.mjs remove-from <task> <project>        (takes it out of that project)
 //   node tools/tracker.mjs set-main <task> <project | none> [--create]   (older name of add-to; "none" = out of every project)
@@ -448,6 +449,15 @@ try {
         const p = findProject(state.data, query);
         return [makeOp('addWorkNote', { projectId: p.id, noteId: newId(), text })];
       }, 'Work note');
+      break;
+    }
+    case 'rename': {
+      const [query, name] = args;
+      if (!query || !(name || '').trim()) throw new Error('Give the task and its new name.');
+      commitOps((state) => {
+        const p = findProject(state.data, query);
+        return [makeOp('setProjectField', { projectId: p.id, field: 'name', value: name.trim() })];
+      }, 'Rename');
       break;
     }
     case 'add-inbox': { // e.g. an email read in the browser: lands in 📥 Inbox, the owner decides later
