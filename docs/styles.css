@@ -1058,7 +1058,7 @@ a.team-line.msg { background: #eef4ff; border-color: #93b4f8; color: #1e40af; fo
 .main-card-list { margin-top: 6px; }
 .main-card-row { width: 100%; text-align: left; border: 0; background: none; padding: 4px 6px; border-radius: 7px; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .main-card-row:hover { background: var(--panel); }
-@media (max-width: 640px) { .sub-table th:nth-child(4), .sub-table td:nth-child(4) { display: none; } .main-box { width: 100%; } }
+@media (max-width: 640px) { .sub-table th:nth-child(5), .sub-table td:nth-child(5) { display: none; } .main-box { width: 100%; } }
 .add-tasks { margin: 8px 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); }
 .add-tasks-list { list-style: none; margin: 6px 0; padding: 0; max-height: 260px; overflow-y: auto; }
 .add-tasks-row { display: flex; align-items: center; gap: 8px; padding: 6px 2px; cursor: pointer; font-size: 14px; }
@@ -1075,9 +1075,14 @@ a.team-line.msg { background: #eef4ff; border-color: #93b4f8; color: #1e40af; fo
 .pick-bar { position: relative; z-index: 1; }
 .quick-links { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 8px; }
 .quick-link { cursor: pointer; text-decoration: none; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sub-move { white-space: nowrap; }
-.sub-move .icon.tiny { padding: 2px 5px; visibility: visible; } /* (tiny icons are hidden elsewhere until hover) */
-.sub-move .icon.tiny[disabled] { opacity: .3; }
+/* drag a task row by its grip to move it in the project (mouse and finger) */
+.sub-table td.sub-grip-cell { width: 1%; padding: 2px 0; vertical-align: middle; }
+.sub-grip { touch-action: none; cursor: grab; user-select: none; -webkit-user-select: none; background: none; border: 0; color: #6b7280; font-size: 18px; font-weight: 700; letter-spacing: -3px; padding: 6px 8px; min-width: 32px; min-height: 32px; border-radius: 4px; }
+.sub-grip:hover, .sub-grip:focus-visible { color: var(--text, inherit); background: var(--panel); }
+.sub-row.dragging { position: relative; z-index: 2; background: var(--bg, #fff); box-shadow: 0 6px 18px rgba(0,0,0,.18); opacity: .95; cursor: grabbing; }
+.sub-row.dragging .sub-grip { cursor: grabbing; }
+.sub-row.drop-line-above > td { box-shadow: inset 0 3px 0 #1976d2; }
+.sub-row.drop-line-below > td { box-shadow: inset 0 -3px 0 #1976d2; }
 .sub-done .sub-name { color: #2e7d32; }
 .tag.done-tag { background: #e8f5e9; color: #2e7d32; border-color: #a5d6a7; }
 

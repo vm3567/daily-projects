@@ -1032,7 +1032,7 @@ test('📂 Projects page: a click on a project row selects it and stays on the p
   assert.match(mainsSrc, /ctx\.ui\.view === 'mains' && ctx\.showHere \? ctx\.showHere\(c\.id\)/, 'a task in the TASKS table while on the Projects page');
   const here = app.slice(app.indexOf('  showHere: (id) => {'), app.indexOf('  openProject: (id) => {'));
   assert.match(here, /select\(id\);/);
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-24'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-25'/, 'phones get the new copy');
 });
 
 test('📂 project page: "✕ Remove" on a task row takes it out of this project only — the task is kept (and stays in its other projects)', () => {
@@ -1155,25 +1155,119 @@ test('a task or project page shows its links and files as chips near the top (�
   assert.ok(quick);
 });
 
-test('📂 project page: ▲ ▼ on each task row move it in the project (saved), Copy list follows that order', async () => {
-  const s = mainsState();
-  const ui = { selected: 'm', update: {} };
-  const ctx = liveCtx(s, ui);
-  ctx.store.dispatch = (type, args) => applyOps(s, [makeOp(type, args)]).length > 0;
-  const names = () => rAll(renderDetail(ctx), (n) => n.className === 'sub-row').map((r) => rAll(r, (x) => /sub-name/.test(x.className || ''))[0].textContent);
-  const first = names();
-  const down = rAll(rAll(renderDetail(ctx), (n) => n.className === 'sub-row')[0], (n) => n.nodeName === 'BUTTON' && n.textContent === '▼')[0];
-  down.__on.click({ stopPropagation() {} });
-  assert.deepEqual(names(), [first[1], first[0], ...first.slice(2)], 'moved down one place');
-  const { readFileSync } = await import('node:fs');
-  assert.match(readFileSync(new URL('../docs/ui/mains.js', import.meta.url), 'utf8'), /ctx\.copyList\(orderedTasks\(ctx\.store\.view\.data, p\)/);
-});
-
-test('📂 project page: after ▲ (or ▼) the keyboard focus goes back to the same button (the redraw moved its row); at the top, to its ▼', async () => {
+// Drag-to-move (owner asked, 23 Oct): a ⋮⋮ grip on each task row replaces the ▲ ▼ buttons.
+function threeTasks() {
   const s = mainsState();
   applyOps(s, [makeOp('createProject', { projectId: 'c3', name: 'Kiln 3', groupId: s.data.groups[0].id, parentId: 'm' })]);
+  return s;
+}
+const isSubRow = (n) => /(^| )sub-row( |$)/.test(n.className || '');
+const rowIds = (page) => rAll(page, isSubRow).map((r) => r.dataset.key.replace(/^sub-/, ''));
+/** Gives the pretend rows a place on screen (40px each) and the grips what Pointer Events need. */
+function dragKit(page) {
+  const rows = rAll(page, isSubRow);
+  rows.forEach((r, i) => { r.getBoundingClientRect = () => ({ top: i * 40, height: 40 }); });
+  const grip = (i) => {
+    const g = rFind(rows[i], (n) => n.dataset && /^grip-/.test(n.dataset.key || ''));
+    g.__l = {}; g.captured = false;
+    g.addEventListener = (t, f) => { g.__l[t] = f; };
+    g.removeEventListener = (t) => { delete g.__l[t]; };
+    g.setPointerCapture = () => { g.captured = true; };
+    g.releasePointerCapture = () => { g.captured = false; };
+    return g;
+  };
+  return { rows, grip };
+}
+function withDocListeners(fn) {
+  const docL = {};
+  document.addEventListener = (t, f) => { docL[t] = f; };
+  document.removeEventListener = (t) => { delete docL[t]; };
+  try { return fn(docL); } finally { delete document.addEventListener; delete document.removeEventListener; }
+}
+const down = (y) => ({ button: 0, pointerId: 1, clientY: y, preventDefault() {} });
+
+test('📂 project page: each task row has a ⋮⋮ grip (aria-label "Drag to move <name>") and no ▲ ▼ buttons; ✕ Remove stays', () => {
+  const s = threeTasks();
+  const page = renderDetail(liveCtx(s, { selected: 'm', update: {} }));
+  const rows = rAll(page, isSubRow);
+  assert.equal(rows.length, 3);
+  for (const r of rows) {
+    const id = r.dataset.key.replace(/^sub-/, '');
+    const name = s.data.projects.find((x) => x.id === id).name;
+    const g = rFind(r, (n) => n.dataset && n.dataset.key === 'grip-' + id);
+    assert.ok(g, 'a grip on ' + name);
+    assert.equal(g.nodeName, 'BUTTON', 'a button, so the keyboard can reach it');
+    assert.equal(g.getAttribute('aria-label'), `Drag to move ${name}`);
+    assert.equal(g.textContent, '⋮⋮');
+    assert.ok(g.__on.pointerdown && g.__on.keydown, 'drag and keys wired');
+    assert.equal(r.childNodes[0].childNodes[0], g, 'the grip is on the left (first cell)');
+    assert.ok(!rAll(r, (n) => n.nodeName === 'BUTTON' && (n.textContent === '▲' || n.textContent === '▼')).length, 'no ▲ ▼');
+    assert.ok(rAll(r, (n) => n.textContent === '✕ Remove').length, '✕ Remove stays');
+  }
+  assert.ok(!rAll(page, (n) => n.dataset && /^mv-(up|down)-/.test(n.dataset.key || '')).length, 'no old ▲ ▼ keys anywhere');
+});
+
+test('📂 project page: dragging a task by its grip moves it (one setTaskOrder with the full new order, saved); a blue line shows where it lands; Copy list follows that order', async () => {
+  const s = threeTasks();
   const ctx = liveCtx(s, { selected: 'm', update: {} });
-  ctx.store.dispatch = (type, args) => applyOps(s, [makeOp(type, args)]).length > 0;
+  let page = renderDetail(ctx);
+  let renders = 0;
+  ctx.render = () => { renders++; page = renderDetail(ctx); };
+  const before = rowIds(page);
+  withDocListeners((docL) => {
+    const { rows, grip } = dragKit(page);
+    const g = grip(0);
+    g.__on.pointerdown(down(20), g);
+    assert.ok(g.captured, 'the pointer is captured, so the drag keeps going outside the grip');
+    assert.ok(docL.keydown, 'Escape is listened for while dragging');
+    g.__l.pointermove({ clientY: 70 });
+    assert.ok(/dragging/.test(rows[0].className), 'the dragged row looks lifted');
+    assert.equal(rows[0].style.transform, 'translateY(50px)', 'and follows the pointer');
+    assert.ok(/drop-line-above/.test(rows[2].className), 'the blue line: between the 2nd and 3rd rows');
+    g.__l.pointermove({ clientY: 110 });
+    assert.ok(!/drop-line/.test(rows[2].className.replace('drop-line-below', '')) && /drop-line-below/.test(rows[2].className), 'now below the last row');
+    assert.equal(renders, 0, 'nothing is redrawn during the drag');
+    assert.equal(ctx.calls.length, 0, 'nothing saved during the drag');
+    g.__l.pointerup({ clientY: 110 });
+    assert.ok(!/dragging|drop-line/.test(rows.map((r) => r.className).join(' ')), 'lift and line cleaned up');
+    assert.equal(rows[0].style.transform, '');
+    assert.ok(!g.__l.pointermove && !docL.keydown, 'listeners removed after the drop');
+  });
+  assert.deepEqual(ctx.calls, [['setTaskOrder', { projectId: 'm', order: [before[1], before[2], before[0]] }]], 'one save with the full new order');
+  assert.equal(renders, 1, 'drawn once, on the drop');
+  assert.deepEqual(rowIds(page), [before[1], before[2], before[0]], 'the first task is now last');
+  const { readFileSync } = await import('node:fs');
+  assert.match(readFileSync(new URL('../docs/ui/mains.js', import.meta.url), 'utf8'), /ctx\.copyList\(orderedTasks\(ctx\.store\.view\.data, p\)/, 'Copy list uses the same order');
+});
+
+test('📂 project page: a drag dropped in the same place, a tiny wobble, Escape, or a cancelled touch saves nothing', () => {
+  const s = threeTasks();
+  const ctx = liveCtx(s, { selected: 'm', update: {} });
+  let renders = 0;
+  ctx.render = () => { renders++; };
+  const page = renderDetail(ctx);
+  withDocListeners((docL) => {
+    const { rows, grip } = dragKit(page);
+    let g = grip(1); // row 2 (middle 60): drop at 70 → still between rows 1 and 3
+    g.__on.pointerdown(down(60), g); g.__l.pointermove({ clientY: 70 });
+    assert.ok(!/drop-line/.test(rows.map((r) => r.className).join(' ')), 'no line where it already is');
+    g.__l.pointerup({ clientY: 70 });
+    g = grip(0); g.__on.pointerdown(down(20), g); g.__l.pointerup({ clientY: 22 }); // a tap / wobble
+    g = grip(0); g.__on.pointerdown(down(20), g); g.__l.pointermove({ clientY: 110 });
+    docL.keydown({ key: 'Escape', preventDefault() {}, stopPropagation() {} });
+    assert.ok(!/dragging|drop-line/.test(rows.map((r) => r.className).join(' ')), 'Escape puts the row back');
+    assert.ok(!g.__l.pointerup, 'and ends the drag');
+    g = grip(0); g.__on.pointerdown(down(20), g); g.__l.pointermove({ clientY: 110 }); g.__l.pointercancel({ clientY: 110 });
+    g = grip(0); g.__on.pointerdown({ ...down(20), button: 2 }, g);
+    assert.ok(!g.__l.pointermove, 'a right-click does not start a drag');
+  });
+  assert.equal(ctx.calls.length, 0, 'nothing dispatched');
+  assert.equal(renders, 0);
+});
+
+test('📂 project page: on the grip, Alt+↓ / Alt+↑ (or plain ↓ ↑) move the task one place and the focus comes back to that task\'s grip', () => {
+  const s = threeTasks();
+  const ctx = liveCtx(s, { selected: 'm', update: {} });
   let page = renderDetail(ctx);
   ctx.render = () => { page = renderDetail(ctx); };
   const focused = [];
@@ -1181,25 +1275,45 @@ test('📂 project page: after ▲ (or ▼) the keyboard focus goes back to the 
   document.querySelector = (sel) => {
     const m = /data-key="([^"]+)"/.exec(sel);
     const el = m && rFind(page, (n) => n.dataset && n.dataset.key === m[1]);
-    if (el) { el.disabled = el.hasAttribute('disabled'); el.focus = () => focused.push(m[1]); }
+    if (el) el.focus = () => focused.push(m[1]);
     return el || null;
   };
+  const key = (id, k, alt) => {
+    let stopped = false; let prevented = false;
+    rFind(page, (n) => n.dataset && n.dataset.key === 'grip-' + id).__on.keydown({ key: k, altKey: !!alt, preventDefault() { prevented = true; }, stopPropagation() { stopped = true; } });
+    return { stopped, prevented };
+  };
   try {
-    const rows = () => rAll(page, (n) => n.className === 'sub-row');
-    const second = rows()[1].dataset.key.replace(/^sub-/, '');
-    assert.ok(rows().length >= 3, 'three tasks in the sample project');
-    const third = rows()[2].dataset.key.replace(/^sub-/, '');
-    rFind(rows()[1], (n) => n.nodeName === 'BUTTON' && n.textContent === '▲').__on.click({ stopPropagation() {} });
-    assert.deepEqual(focused, [`mv-down-${second}`], 'now at the top: ▲ is off, so the focus goes to its ▼');
-    rFind(rows()[2], (n) => n.nodeName === 'BUTTON' && n.textContent === '▲').__on.click({ stopPropagation() {} });
-    assert.equal(focused.at(-1), `mv-up-${third}`, 'the same ▲ again, so Enter moves it once more');
+    const [a, b, c] = rowIds(page);
+    const k = key(a, 'ArrowDown', true);
+    assert.deepEqual(rowIds(page), [b, a, c], 'Alt+↓ moved it one place down');
+    assert.deepEqual(focused, ['grip-' + a], 'focus back on the same task\'s grip');
+    assert.ok(k.prevented && k.stopped, 'the page does not scroll and the list\'s own ↑ ↓ does not also run');
+    key(a, 'ArrowDown');
+    assert.deepEqual(rowIds(page), [b, c, a], 'plain ↓ too');
+    key(a, 'ArrowUp', true);
+    assert.deepEqual(rowIds(page), [b, a, c], 'Alt+↑ back up');
+    assert.equal(focused.at(-1), 'grip-' + a);
+    const n = ctx.calls.length;
+    key(b, 'ArrowUp');
+    assert.equal(ctx.calls.length, n, 'the first cannot go up: nothing saved');
+    key(b, 'Enter');
+    assert.equal(ctx.calls.length, n, 'other keys do nothing');
+    assert.ok(ctx.calls.every(([t]) => t === 'setTaskOrder'));
   } finally { document.querySelector = saved; }
 });
 
-test('📂 project page: the ▲ ▼ buttons are always visible (not hidden like other tiny icons)', async () => {
+test('📂 project page: the grip is always visible, does not scroll the phone while dragging (touch-action: none), and the blue line / lifted row are CSS classes', async () => {
   const { readFileSync } = await import('node:fs');
   const css = readFileSync(new URL('../docs/styles.css', import.meta.url), 'utf8');
-  assert.match(css, /\.sub-move \.icon\.tiny \{[^}]*visibility: visible;/);
+  assert.match(css, /\.sub-grip \{[^}]*touch-action: none;/);
+  assert.match(css, /\.sub-row\.drop-line-above > td \{[^}]*#1976d2/);
+  assert.match(css, /\.sub-row\.drop-line-below > td \{[^}]*#1976d2/);
+  assert.match(css, /\.sub-row\.dragging \{[^}]*box-shadow/);
+  assert.ok(!/\.sub-move/.test(css), 'old ▲ ▼ styles gone');
+  assert.match(css, /\.sub-table th:nth-child\(5\), \.sub-table td:nth-child\(5\) \{ display: none; \}/, 'on a phone the Last update column (now 5th, after the grip) is hidden');
+  const dom = readFileSync(new URL('../docs/ui/dom.js', import.meta.url), 'utf8');
+  assert.match(dom, /const EVENTS = \[[^\]]*'pointerdown'/, 'pointerdown reaches the grip in the real page');
 });
 
 test('📂 project page: a finished task shows green (green dot, green name, "✓ finished"), its Now cell calm grey', async () => {
@@ -1652,7 +1766,7 @@ test('🔌 From apps: waiting approvals grouped by app (newest first) with the f
   assert.ok(cnx.renderFromApps(empty).textContent.includes('Nothing waiting for you ✓'));
 });
 
-test('🔌 app wiring (app.js): "🔌 From apps" after ✉ Replies with the waiting count (worktask.in only), its page, the Settings section, #apps from a phone alert, the key forgotten when leaving Settings; offline copy daily-projects-app-24', async () => {
+test('🔌 app wiring (app.js): "🔌 From apps" after ✉ Replies with the waiting count (worktask.in only), its page, the Settings section, #apps from a phone alert, the key forgotten when leaving Settings; offline copy daily-projects-app-25', async () => {
   const { readFileSync } = await import('node:fs');
   const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
   assert.match(app, /item\('replies', '✉ Replies', readyCount\(data, today\)\),[^\n]*\n\s*onServer \? item\('apps', '🔌 From apps', appsPending\(\)\) : null,/, 'right after ✉ Replies, with the count');
@@ -1664,7 +1778,7 @@ test('🔌 app wiring (app.js): "🔌 From apps" after ✉ Replies with the wait
   assert.match(app, /function go\(view\) \{\n\s*if \(view !== 'settings'\) forgetOnce\(\);/);
   assert.match(app, /if \(onServer\) loadApps\(appsCtx, force \|\| ui\.view === 'apps'\);/);
   assert.match(app, /replies: '✉ Replies', apps: '🔌 From apps', mains: '📂 Projects' \}\[ui\.view\]/, 'its page title');
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-24'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-25'/, 'phones get the new copy');
 });
 
 test('🔌 the PHP connector (team/connector/worktask-connector.php): the same text the app downloads, placeholders only (no real key), valid PHP 7.4+ (php -l), with wt_push / wt_withdraw / wt_decisions / wt_receive_decision', async () => {

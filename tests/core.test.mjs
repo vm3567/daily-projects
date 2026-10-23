@@ -1913,7 +1913,7 @@ test('📂 "Add tasks" list: tasks in no project come first, then tasks already 
   assert.equal(names[2], 'Alpha in Kilns', 'the task already in Kilns comes after');
 });
 
-test('📂 task order in a project: setTaskOrder keeps your order (new tasks after, red first), ▲ ▼ swap neighbours; not work', async () => {
+test('📂 task order in a project: setTaskOrder keeps your order (new tasks after, red first), ↑ ↓ on the grip swap neighbours; not work', async () => {
   const { orderedTasks, movedOrder, dayScore } = await import('../docs/rules.js');
   const s = { data: emptyData(), history: {} };
   const g = s.data.groups[0].id;
@@ -1933,6 +1933,26 @@ test('📂 task order in a project: setTaskOrder keeps your order (new tasks aft
   applyOp(s, op('createProject', { projectId: 'd', name: 'D new', groupId: g }, '2026-10-22'));
   applyOp(s, op('addToProject', { projectId: 'd', parentId: 'm' }, '2026-10-22'));
   assert.equal(orderedTasks(s.data, main(), '2026-10-22').at(-1).id, 'd', 'a new task goes after the arranged ones');
+});
+
+test('📂 drag-to-move a task: dropSlot finds the gap under the pointer; droppedOrder gives the full new order, null for the same place', async () => {
+  const { dropSlot, droppedOrder } = await import('../docs/rules.js');
+  const mids = [20, 60, 100];
+  assert.equal(dropSlot(mids, 5), 0, 'above the first row');
+  assert.equal(dropSlot(mids, 40), 1);
+  assert.equal(dropSlot(mids, 99), 2);
+  assert.equal(dropSlot(mids, 150), 3, 'below the last row');
+  const list = ['a', 'b', 'c', 'd'].map((id) => ({ id }));
+  assert.deepEqual(droppedOrder(list, 'a', 4), ['b', 'c', 'd', 'a'], 'first to last');
+  assert.deepEqual(droppedOrder(list, 'a', 2), ['b', 'a', 'c', 'd'], 'one place down');
+  assert.deepEqual(droppedOrder(list, 'd', 0), ['d', 'a', 'b', 'c'], 'last to first');
+  assert.deepEqual(droppedOrder(list, 'c', 1), ['a', 'c', 'b', 'd']);
+  assert.equal(droppedOrder(list, 'b', 1), null, 'the gap above itself: same place');
+  assert.equal(droppedOrder(list, 'b', 2), null, 'the gap below itself: same place');
+  assert.equal(droppedOrder(list, 'x', 0), null, 'not in the list');
+  assert.equal(droppedOrder(list, 'a', 9), null, 'no such gap');
+  assert.equal(droppedOrder(list, 'a', 1.5), null);
+  assert.deepEqual(list.map((x) => x.id), ['a', 'b', 'c', 'd'], 'the list itself is not changed');
 });
 
 // ---------- Rich updates (owner asked, 22 Oct): tables, lists, bold, photos in "What happened today?" ----------

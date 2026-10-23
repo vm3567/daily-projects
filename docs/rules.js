@@ -1015,3 +1015,25 @@ export function movedOrder(list, id, dir) {
   [ids[i], ids[j]] = [ids[j], ids[i]];
   return ids;
 }
+
+/**
+ * Drag-to-move on a 📂 project's task rows: which gap the dragged row lands in.
+ * `mids` = the middle (y) of each row, top to bottom; `y` = where the finger / mouse is.
+ * Returns 0 (above the first row) … mids.length (below the last row).
+ */
+export function dropSlot(mids, y) {
+  let slot = 0;
+  for (const m of mids) if (y > m) slot++;
+  return slot;
+}
+
+/** The new full order (ids) after dropping task `id` into gap `slot` (0 … list.length); null when it would stay where it is. */
+export function droppedOrder(list, id, slot) {
+  const ids = list.map((x) => x.id);
+  const i = ids.indexOf(id);
+  if (i < 0 || !Number.isInteger(slot) || slot < 0 || slot > ids.length) return null;
+  if (slot === i || slot === i + 1) return null; // the same place
+  ids.splice(i, 1);
+  ids.splice(slot > i ? slot - 1 : slot, 0, id);
+  return ids;
+}

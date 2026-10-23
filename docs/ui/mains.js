@@ -3,7 +3,7 @@
 // on a task, the small project chips under a task's row in the lists, and the "📂 Projects" page.
 
 import { h, fmtDay } from './dom.js';
-import { dotColour, nextStep, todayIndia, indiaDate, childrenOf, parentsOf, isMainProject, mainProjects, mainColour, mainSummary, mainChoices, addHereChoices, orderedTasks, movedOrder } from '../rules.js';
+import { dotColour, nextStep, todayIndia, indiaDate, childrenOf, parentsOf, isMainProject, mainProjects, mainColour, mainSummary, mainChoices, addHereChoices, orderedTasks, movedOrder, dropSlot, droppedOrder } from '../rules.js';
 import { newId } from '../ops.js';
 import { newTaskBox, createTaskWithNote, findEditor } from './richedit.js';
 
@@ -167,39 +167,114 @@ function lastUpdate(p) {
 
 const short = (t, n = 60) => (t.length > n ? t.slice(0, n - 1) + '…' : t);
 
+const hasClass = (el, c) => (' ' + (el.className || '') + ' ').includes(' ' + c + ' ');
+function setClass(el, c, on) {
+  if (!el || hasClass(el, c) === !!on) return;
+  el.className = on ? ((el.className || '') + ' ' + c).trim() : (' ' + el.className + ' ').replace(' ' + c + ' ', ' ').trim();
+}
+
+/**
+ * Drag a task row by its ⋮⋮ grip (Pointer Events: mouse and touch alike). While dragging nothing is redrawn:
+ * the row is lifted and follows the pointer, and a blue line shows where it will land. Letting go calls
+ * done(order) once with the new full order; the same place (or Escape, or a cancelled touch) calls nothing.
+ */
+export function startTaskDrag(e, grip, kids, c, done) {
+  if (!e || !grip || (e.button !== undefined && e.button !== 0)) return null;
+  let row = grip.parentNode;
+  while (row && row.nodeName !== 'TR') row = row.parentNode;
+  const body = row && row.parentNode;
+  if (!body || typeof grip.addEventListener !== 'function') return null;
+  const rows = body.childNodes.filter ? body.childNodes.filter((n) => n.nodeName === 'TR') : [...body.childNodes].filter((n) => n.nodeName === 'TR');
+  const box = (r) => (typeof r.getBoundingClientRect === 'function' ? r.getBoundingClientRect() : { top: 0, height: 0 });
+  const mids = rows.map((r) => { const b = box(r); return b.top + b.height / 2; });
+  const startY = e.clientY;
+  let slot = null; let moved = false; let over = false;
+  if (e.preventDefault) e.preventDefault(); // no text selection while dragging
+  try { if (typeof grip.setPointerCapture === 'function' && e.pointerId !== undefined) grip.setPointerCapture(e.pointerId); } catch { /* not supported: still works while the pointer stays near */ }
+  const clearLine = () => rows.forEach((r) => { setClass(r, 'drop-line-above', false); setClass(r, 'drop-line-below', false); });
+  const showLine = () => {
+    clearLine();
+    const i = kids.findIndex((x) => x.id === c.id);
+    if (slot === null || slot === i || slot === i + 1) return; // the same place: no line
+    if (slot < rows.length) setClass(rows[slot], 'drop-line-above', true);
+    else setClass(rows[rows.length - 1], 'drop-line-below', true);
+  };
+  const onMove = (ev) => {
+    if (over) return;
+    const dy = ev.clientY - startY;
+    if (!moved && Math.abs(dy) < 4) return; // a small wobble is not a drag
+    moved = true;
+    setClass(row, 'dragging', true);
+    if (row.style) row.style.transform = `translateY(${dy}px)`;
+    slot = dropSlot(mids, ev.clientY);
+    showLine();
+  };
+  const finish = (ev, drop) => {
+    if (over) return;
+    over = true;
+    grip.removeEventListener('pointermove', onMove);
+    grip.removeEventListener('pointerup', onUp);
+    grip.removeEventListener('pointercancel', onCancel);
+    if (typeof document !== 'undefined' && document.removeEventListener) document.removeEventListener('keydown', onEsc, true);
+    try { if (typeof grip.releasePointerCapture === 'function' && e.pointerId !== undefined) grip.releasePointerCapture(e.pointerId); } catch { /* already let go */ }
+    clearLine();
+    setClass(row, 'dragging', false);
+    if (row.style) row.style.transform = '';
+    if (!drop || !moved) return;
+    const order = droppedOrder(kids, c.id, dropSlot(mids, ev.clientY));
+    if (order) done(order);
+  };
+  const onUp = (ev) => finish(ev, true);
+  const onCancel = (ev) => finish(ev, false);
+  const onEsc = (ev) => { if (ev.key === 'Escape') { if (ev.preventDefault) ev.preventDefault(); if (ev.stopPropagation) ev.stopPropagation(); finish(ev, false); } };
+  grip.addEventListener('pointermove', onMove);
+  grip.addEventListener('pointerup', onUp);
+  grip.addEventListener('pointercancel', onCancel);
+  if (typeof document !== 'undefined' && document.addEventListener) document.addEventListener('keydown', onEsc, true);
+  return { cancel: () => finish(null, false) };
+}
+
 /** On a project's page: TASKS (N) — dot, name (+ 👥 person), Now, Last update; and the two buttons. */
 export function subProjectsBlock(ctx, p, today = todayIndia()) {
   const { store } = ctx;
   const data = store.view.data;
   if (!isMainProject(data, p)) return null;
-  const kids = orderedTasks(data, p, today); // your order (▲ ▼), new ones after
-  // the redraw moves the rows, which drops the keyboard focus: put it back on the same button (or its pair at the top / end)
-  const refocus = (c, dir) => {
+  const kids = orderedTasks(data, p, today); // your order (drag the ⋮⋮ grip), new ones after
+  // the redraw moves the rows, which drops the keyboard focus: put it back on the same task's grip
+  const refocus = (c) => {
     if (typeof document === 'undefined' || typeof document.querySelector !== 'function') return;
-    const find = (d) => document.querySelector(`[data-key="mv-${d}-${c.id}"]`);
-    let el = find(dir < 0 ? 'up' : 'down');
-    if (!el || el.disabled) el = find(dir < 0 ? 'down' : 'up');
+    const el = document.querySelector(`[data-key="grip-${c.id}"]`);
     if (el && typeof el.focus === 'function') el.focus();
   };
-  const move = (c, dir) => { const order = movedOrder(kids, c.id, dir); if (order) { ctx.store.dispatch('setTaskOrder', { projectId: p.id, order }); ctx.render(); refocus(c, dir); } };
+  const save = (c, order) => { if (!order) return; ctx.store.dispatch('setTaskOrder', { projectId: p.id, order }); ctx.render(); refocus(c); };
+  const gripKey = (c, e) => {
+    if (!e || (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') || e.ctrlKey || e.metaKey) return;
+    if (e.preventDefault) e.preventDefault(); // no page scroll,
+    if (e.stopPropagation) e.stopPropagation(); // and not the list's own ↑ ↓
+    save(c, movedOrder(kids, c.id, e.key === 'ArrowUp' ? -1 : 1));
+  };
   return h('section', { class: 'block sub-projects', key: 'subs-' + p.id },
     h('h3', null, `TASKS (${kids.length})`),
     kids.length ? h('table', { class: 'sub-table' },
-      h('thead', null, h('tr', null, h('th', null, ''), h('th', null, 'Task'), h('th', null, 'Now'), h('th', null, 'Last update'), h('th', null, ''), h('th', null, ''))),
+      h('thead', null, h('tr', null, h('th', null, ''), h('th', null, ''), h('th', null, 'Task'), h('th', null, 'Now'), h('th', null, 'Last update'), h('th', null, ''), h('th', null, ''))),
       h('tbody', null, kids.map((c) => {
         const ns = c.state === 'active' ? nextStep(c, today) : null;
         const lu = lastUpdate(c);
         const done = c.state === 'finished'; // a finished task shows in green (owner asked, 22 Oct)
         return h('tr', { class: 'sub-row' + (done ? ' sub-done' : ''), key: 'sub-' + c.id, onClick: () => (ctx.ui.view === 'mains' && ctx.showHere ? ctx.showHere(c.id) : ctx.openProject(c.id)) },
+          // hold the grip and drag the row up or down (mouse or finger); or ↑ ↓ (Alt+↑ ↓) on it
+          h('td', { class: 'sub-grip-cell' }, h('button', {
+            class: 'sub-grip', type: 'button', key: 'grip-' + c.id, title: 'Drag to move (or ↑ ↓)', 'aria-label': `Drag to move ${c.name}`,
+            onClick: (e) => { if (e && e.stopPropagation) e.stopPropagation(); },
+            onPointerdown: (e, el) => startTaskDrag(e, el || (e && e.currentTarget), kids, c, (order) => save(c, order)),
+            onKeydown: (e) => gripKey(c, e),
+          }, '⋮⋮')),
           h('td', null, h('span', { class: `dot ${done ? 'green' : dotColour(c, today)}` })),
           h('td', null, h('button', { class: 'link sub-name', type: 'button' }, c.name), c.team ? h('span', { class: 'muted small' }, ` 👥 ${c.team.name}`) : null,
             c.state !== 'active' ? h('span', { class: done ? 'tag done-tag' : 'tag' }, done ? '✓ finished' : c.state) : null),
           h('td', { class: c.state !== 'active' ? 'muted' : ns ? '' : 'warn' }, c.state !== 'active' ? '—' : ns ? short(ns.text) : 'No next step'),
           h('td', { class: 'muted small' }, lu ? `${fmtDay(lu.day)} · ${short(lu.text, 50)}` : '—'),
           // takes the task out of this project only (the task itself stays, with Undo)
-          h('td', { class: 'sub-move' },
-            h('button', { class: 'icon tiny', type: 'button', key: 'mv-up-' + c.id, title: 'Move up', 'aria-label': `Move ${c.name} up`, disabled: kids[0] === c ? true : undefined, onClick: (e) => { if (e && e.stopPropagation) e.stopPropagation(); move(c, -1); } }, '▲'),
-            h('button', { class: 'icon tiny', type: 'button', key: 'mv-down-' + c.id, title: 'Move down', 'aria-label': `Move ${c.name} down`, disabled: kids[kids.length - 1] === c ? true : undefined, onClick: (e) => { if (e && e.stopPropagation) e.stopPropagation(); move(c, 1); } }, '▼')),
           h('td', null, h('button', {
             class: 'link small sub-remove', type: 'button', title: `Take ${c.name} out of this project (the task is kept)`,
             onClick: (e) => { if (e && e.stopPropagation) e.stopPropagation(); ctx.act('removeFromProject', { projectId: c.id, parentId: p.id }, `${c.name} taken out of 📂 ${p.name} (the task is kept)`); },
