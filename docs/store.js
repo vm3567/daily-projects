@@ -5,7 +5,7 @@ import { applyOp, applyOps, emptyData, makeOp, opMonth, commitMessage, clone, se
 
 /** History months an operation touches (its own, the month of a change it undoes, and where an untick's tick line is). */
 const monthsOfOp = (op) => [opMonth(op), op.args && op.args.undoMonth, ...((op.args && op.args.tickMonths) || [])].filter(Boolean);
-import { todayIndia, indiaDate, monthOf, normalizeParents } from './rules.js';
+import { todayIndia, indiaDate, monthOf, normalizeParents, dropGroups } from './rules.js';
 import { AuthError, NetworkError, ClashError } from './github.js';
 import { SAVE_DELAY_MS } from './config.js';
 
@@ -123,7 +123,7 @@ export class Store extends EventTarget {
 
     const snap = await this.repo.snapshot();
     const dataSha = snap.entries.get(DATA_PATH);
-    const data = normalizeParents(dataSha ? JSON.parse(await this.repo.blobText(dataSha)) : emptyData()); // older data: parentId → parentIds
+    const data = dropGroups(normalizeParents(dataSha ? JSON.parse(await this.repo.blobText(dataSha)) : emptyData())); // older data: parentId → parentIds; groups gone
     const base = { data, history: {}, commit: snap.commit, tree: snap.tree, entries: snap.entries };
     await this.ensureMonths(base, keepMonths);
     if (this.baseSeq !== seq) return; // never put back older data over it (a just-saved change would vanish)
@@ -161,7 +161,7 @@ export class Store extends EventTarget {
     let snap = null;
     try { snap = JSON.parse(localStorage.getItem(SNAPSHOT_KEY) || 'null'); } catch { snap = null; }
     if (!snap || !snap.data) return false;
-    this.base = { data: normalizeParents(snap.data), history: snap.history || {}, commit: snap.commit, tree: snap.tree, entries: new Map(snap.entries || []) };
+    this.base = { data: dropGroups(normalizeParents(snap.data)), history: snap.history || {}, commit: snap.commit, tree: snap.tree, entries: new Map(snap.entries || []) };
     this.snapshotAt = snap.at;
     this.recompute();
     this.setStatus(quiet ? 'checking' : 'offline', quiet ? '' : 'No connection');

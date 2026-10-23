@@ -23,5 +23,5 @@ $e = fn(string $s) => htmlspecialchars($s, ENT_QUOTES);
 <body><main class="card stack">
 <h1><?= $ok ? '📧 Outlook connected ✓' : '📧 Outlook not connected' ?></h1>
 <p><?= $e($words) ?></p>
-<p><a href="/?team">← Back to Work Task</a></p>
+<p><a href="/projects/#team">← Back to the app</a></p>
 </main></body></html>

@@ -1,11 +1,10 @@
-// Time report: a group, a date range, a pie chart by tag (or by project), in % or hours,
+// Time report: a date range, a pie chart by tag (or by project), in % or hours,
 // and a PNG image (PowerPoint size) to download or copy.
 
 import { h } from './dom.js';
-import { todayIndia, addDays, timeSplit, percents, fmtMinutes, weekStart, monthOf } from '../rules.js';
+import { todayIndia, addDays, timeSplit, percents, fmtMinutes, weekStart, monthOf, timerOn } from '../rules.js';
 import { workDoneByTag } from '../reports.js';
 import { device } from '../device.js';
-import { groupHasTimer } from '../ops.js';
 
 const COLOURS = ['#2563eb', '#16a34a', '#f59e0b', '#dc2626', '#7c3aed', '#0891b2', '#db2777', '#65a30d', '#ea580c', '#475569'];
 const NO_TAG_COLOUR = '#cbd5e1';
@@ -195,20 +194,17 @@ const PRESETS_OK = ['thisWeek', 'lastWeek', 'thisMonth', 'lastMonth'];
 export function renderTimeReport(ctx) {
   const { store, ui } = ctx;
   const data = store.view.data;
-  const groups = data.groups.filter(groupHasTimer);
-  if (!groups.length) return h('div', { class: 'report' }, h('p', { class: 'muted' }, 'No group has the timer on. Turn it on in Settings.'));
+  if (!timerOn(data)) return h('div', { class: 'report' }, h('p', { class: 'muted' }, 'The timer is off. Turn it on in Settings → Tags and timer.'));
   if (!ui.timeReport) {
     const saved = device.report();
     ui.timeReport = {
-      groupId: saved.groupId || groups[0].id, preset: startPreset(todayIndia(), saved.preset),
+      preset: startPreset(todayIndia(), saved.preset),
       by: saved.by === 'project' ? 'project' : 'tag', mode: saved.mode === 'hours' ? 'hours' : 'pct', custom: {},
     };
   }
   const tr = ui.timeReport;
-  if (!groups.some((g) => g.id === tr.groupId)) tr.groupId = groups[0].id;
-  const group = groups.find((g) => g.id === tr.groupId);
   const [from, to] = rangeFor(tr.preset, todayIndia(), tr.custom);
-  const rows = timeSplit(data, group.id, from, to, tr.by);
+  const rows = timeSplit(data, from, to, tr.by);
   // the history months this period needs (for "Work done")
   const need = new Set();
   for (let d = from; d <= to; d = addDays(d, 27)) need.add(monthOf(d));
@@ -220,18 +216,18 @@ export function renderTimeReport(ctx) {
       store.loadMonth(m).catch(() => loading.delete(m));
     }
   }
-  const work = workDoneByTag(data, store.view.history, group.id, from, to);
-  const tagRows = tr.by === 'tag' ? rows : timeSplit(data, group.id, from, to, 'tag');
+  const work = workDoneByTag(data, store.view.history, from, to);
+  const tagRows = tr.by === 'tag' ? rows : timeSplit(data, from, to, 'tag');
   const tagColours = {};
   tagRows.forEach((r, i) => { tagColours[r.key] = colourFor(r, i); });
   const pcts = percents(rows);
   const total = rows.reduce((n, r) => n + r.minutes, 0);
   const period = from === to ? fmtDate(from) : `${fmtDate(from)} – ${fmtDate(to)}`;
-  const title = `${group.name} — time by ${tr.by === 'tag' ? 'tag' : 'task'}`;
+  const title = `Time by ${tr.by === 'tag' ? 'tag' : 'task'}`;
   const set = (k, v) => {
     if (k === 'preset' && v === 'custom') tr.custom = { from, to }; // start from the dates on screen, so changing one box works
     tr[k] = v;
-    device.setReport({ groupId: tr.groupId, preset: tr.preset, by: tr.by, mode: tr.mode }); // opens the same way next time
+    device.setReport({ preset: tr.preset, by: tr.by, mode: tr.mode }); // opens the same way next time
     ctx.render();
   };
   const seg = (k, opts) => h('div', { class: 'segmented' }, opts.map(([v, label]) => h('button', {
@@ -241,18 +237,18 @@ export function renderTimeReport(ctx) {
   const download = async () => {
     const blob = await reportPng({ title, period, rows, pcts, mode: tr.mode });
     const url = URL.createObjectURL(blob);
-    const a = h('a', { href: url, download: `${group.name}-time-${from}-to-${to}.png` });
+    const a = h('a', { href: url, download: `time-${from}-to-${to}.png` });
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 10000);
     ctx.toast('Image downloaded — insert it in PowerPoint', 2500);
   };
-  const fullTitle = `${group.name} — time and work done`;
-  const statuses = data.projects.filter((p) => p.groupId === group.id && p.state === 'active' && p.status).map((p) => ({ name: p.name, status: p.status }));
+  const fullTitle = 'Time and work done';
+  const statuses = data.projects.filter((p) => p.state === 'active' && p.status).map((p) => ({ name: p.name, status: p.status }));
   const fullPng = () => fullReportPng({ title: fullTitle, period, rows: tagRows, pcts: percents(tagRows), work, tagColours, statuses });
   const downloadFull = async () => {
     const blob = await fullPng();
     const url = URL.createObjectURL(blob);
-    const a = h('a', { href: url, download: `${group.name}-report-${from}-to-${to}.png` });
+    const a = h('a', { href: url, download: `report-${from}-to-${to}.png` });
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 10000);
     ctx.toast('Report image downloaded — insert it in PowerPoint', 2500);
@@ -275,7 +271,6 @@ export function renderTimeReport(ctx) {
 
   return h('div', { class: 'report' },
     h('div', { class: 'report-controls' },
-      h('label', null, 'Group ', h('select', { value: tr.groupId, onChange: (e, el) => set('groupId', el.value) }, groups.map((g) => h('option', { value: g.id }, g.name)))),
       h('label', null, 'Period ', h('select', { value: tr.preset, onChange: (e, el) => set('preset', el.value) },
         h('option', { value: 'thisWeek' }, 'This week'), h('option', { value: 'lastWeek' }, 'Last week'),
         h('option', { value: 'thisMonth' }, 'This month'), h('option', { value: 'lastMonth' }, 'Last month'),
@@ -298,7 +293,7 @@ export function renderTimeReport(ctx) {
             h('strong', null, tr.mode === 'pct' ? `${pcts[i]}%` : fmtMinutes(row.minutes)),
             h('span', { class: 'muted small' }, tr.mode === 'pct' ? fmtMinutes(row.minutes) : `${pcts[i]}%`));
         })))
-        : h('p', { class: 'muted' }, `No time logged in ${group.name} for this period.`),
+        : h('p', { class: 'muted' }, 'No time logged for this period.'),
       total ? h('div', { class: 'row report-actions' },
         h('button', { class: 'btn primary', onClick: download }, '⬇ Download image'),
         h('button', { class: 'btn', onClick: copy }, '📋 Copy image'),
@@ -320,6 +315,6 @@ export function renderTimeReport(ctx) {
         h('button', { class: 'btn primary', onClick: downloadFull }, '⬇ Full report image'),
         h('button', { class: 'btn', onClick: copyFull }, '📋 Copy full report'),
         h('span', { class: 'muted small' }, 'Time by tag + work done + status, PowerPoint size'))),
-    (group.tags || []).length ? null
-      : h('p', { class: 'muted small' }, `Tip: give ${group.name} some tags in Settings (or inside a task) to see time by tag.`));
+    (data.tags || []).length ? null
+      : h('p', { class: 'muted small' }, 'Tip: make some tags in Settings → Tags and timer (or inside a task) to see time by tag.'));
 }

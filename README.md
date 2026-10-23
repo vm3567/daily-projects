@@ -78,15 +78,15 @@ Also: each red/yellow row has a one-tap **✓ OK** (or **Chased** when waiting),
 - In a project press **▶ Start** — it becomes **⏸ 0:23**. The running timer also shows at the top of every screen; tap **⏸ Stop** there.
 - Starting another project stops the first one. Pausing or finishing a project stops its timer. A timer left on is cut to 10 hours.
 - Forgot to time it? **+ Add time** (minutes, or hours like 1.5h). **Entries** shows each one with 🗑 (Undo available).
-- Each project shows **Today · This week · Total**. The **Dashboard** shows **Time this week** by group and project, compared with last week. **Today's summary** shows the time per project.
+- Each project shows **Today · This week · Total**. The **Dashboard** shows **Time this week** by project, compared with last week. **Today's summary** shows the time per project.
 
 ---
 
 ## Tags and the Time report
 
-- **Timer** works in **Acton** and **Ceramic Ninja** (not Personal). Change it per group in **Settings → Groups and tags**.
-- **Tags belong to a group** (e.g. Acton: Kiln, Glaze, Quality). Add / rename / delete them in Settings, or pick **+ New tag…** inside a project. One tag per project: tap the line under the project name (group · tag · priority) to set it.
-- **Time report** (left menu, or 🔍 → "Time report"): pick the **group**, the **period** (this week, last week, this month, last month, or your own dates), **By tag / By project**, **% / Hours**. A pie chart shows where the time went.
+- **Timer**: switch it on or off for everything in **Settings → Tags and timer**.
+- **Tags** are one list (e.g. Kiln, Glaze, Quality). Add / rename / delete them in Settings, or pick **+ New tag…** inside a project. One tag per project: tap the line under the project name (tag · priority · target date) to set it. (There are no groups.)
+- **Time report** (left menu, or 🔍 → "Time report"): pick the **period** (this week, last week, this month, last month, or your own dates), **By tag / By project**, **% / Hours**. A pie chart shows where the time went.
 - **⬇ Download image** saves a PowerPoint-size (16:9) picture; **📋 Copy image** lets you paste it straight into PowerPoint or WhatsApp.
 - **Work done** (under the pie): the steps you finished in that period, grouped by tag.
 - **⬇ Full report image** / **📋 Copy full report**: one picture with the time pie on the left and the work done on the right — the monthly owner report. Pick **Last month**, then download.

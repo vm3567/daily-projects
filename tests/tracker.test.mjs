@@ -32,11 +32,11 @@ before(() => {
 
 after(() => rmSync(dir, { recursive: true, force: true }));
 
-test('new project with group and steps, then add, tick and note', () => {
-  tracker('new-project', 'Electric kiln', '--group', 'Acton', '--priority', 'high', '--steps', 'Check heaters', 'Call service');
+test('new project with steps, then add, tick and note', () => {
+  tracker('new-project', 'Electric kiln', '--priority', 'high', '--steps', 'Check heaters', 'Call service');
   let p = data().projects[0];
   assert.equal(p.name, 'Electric kiln');
-  assert.equal(data().groups.find((g) => g.id === p.groupId).name, 'Acton');
+  assert.ok(!('groupId' in p) && !(data().groups || []).length, 'no groups (owner, 23 Oct)');
   assert.equal(p.steps.length, 2);
   tracker('add-steps', 'kiln', 'Order new element');
   tracker('tick', 'kiln', 'heaters');
@@ -95,8 +95,9 @@ test('summary, today list and show are readable', () => {
   assert.match(show, /Element 3 is broken/);
 });
 
-test('unknown group or project gives a clear error', () => {
-  assert.throws(() => tracker('new-project', 'X', '--group', 'Nope'), /No group called "Nope"/);
+test('an old --group or an unknown project gives a clear error', () => {
+  // (groups are gone, owner 23 Oct: an old /add habit is told so, never a task made in a wrong way)
+  assert.throws(() => tracker('new-project', 'X', '--group', 'Nope'), /There are no groups any more: leave out --group\./);
   assert.throws(() => tracker('add-steps', 'nothing-like-this', 'a'), /No task or project matches/);
 });
 
@@ -119,7 +120,7 @@ test('restore: shows first, changes only with --yes, keeps today\'s AI keys', ()
 
 test('"📅 Only on": on a rest day the project is left out of list --today and summary counts it as resting; show says the days', async () => {
   const { todayIndia, weekdayOf } = await import('../docs/rules.js');
-  tracker('new-project', 'Weekly glaze check', '--group', 'Acton', '--steps', 'Check glaze');
+  tracker('new-project', 'Weekly glaze check', '--steps', 'Check glaze');
   const today = todayIndia();
   const rest = [0, 1, 2, 3, 4, 5, 6].filter((n) => n !== weekdayOf(today)).slice(0, 1); // one day that is not today
   const d = data();
@@ -135,14 +136,13 @@ test('"📅 Only on": on a rest day the project is left out of list --today and 
 });
 
 test('📂 add-to puts a task into a project (by name; a task can be in several), --create makes the project, remove-from takes it out of one; set-main is the older name ("none" = out of all); summary / show / list say it', () => {
-  tracker('new-task', 'Dryer 1', '--group', 'Acton', '--steps', 'Check fan');
-  tracker('new-project', 'Dryer 2', '--group', 'Personal', '--steps', 'Check belt'); // the older name still works
+  tracker('new-task', 'Dryer 1', '--steps', 'Check fan');
+  tracker('new-project', 'Dryer 2', '--steps', 'Check belt'); // the older name still works
   assert.throws(() => tracker('add-to', 'Dryer 1', 'Dryers'), /No task or project matches "Dryers"/, 'no --create: never made by guess');
   assert.match(tracker('add-to', 'Dryer 1', 'Dryers', '--create'), /New project Dryers; Dryer 1 is in it/);
   const P = (name) => data().projects.find((p) => p.name === name);
   const main = P('Dryers');
   assert.ok(main && main.isMain, 'made as a project');
-  assert.equal(main.groupId, P('Dryer 1').groupId, 'in the same group as the task');
   assert.deepEqual(P('Dryer 1').parentIds, [main.id]);
   tracker('set-main', 'Dryer 2', 'dryers'); // the older name = add-to
   assert.deepEqual(P('Dryer 2').parentIds, [main.id], 'an existing project, by a part of its name');
@@ -171,8 +171,8 @@ test('📂 add-to puts a task into a project (by name; a task can be in several)
 
 test('review r14: add-to / set-main never turn a plain task into a 📂 project (only projects hold tasks; --create makes a new one); new-task --project into a finished project says so', () => {
   const P = (name) => data().projects.find((p) => p.name === name);
-  tracker('new-task', 'Kiln repair', '--group', 'Acton', '--steps', 'Order bricks first');
-  tracker('new-task', 'Order bricks', '--group', 'Acton');
+  tracker('new-task', 'Kiln repair', '--steps', 'Order bricks first');
+  tracker('new-task', 'Order bricks');
   assert.throws(() => tracker('add-to', 'Order bricks', 'Kiln repair'), /Kiln repair is a task, not a 📂 project/, 'a plain task is refused');
   assert.throws(() => tracker('set-main', 'Order bricks', 'Kiln rep'), /Kiln repair is a task, not a 📂 project/, 'the older name too');
   assert.ok(!P('Kiln repair').isMain, 'the plain task stays a task');

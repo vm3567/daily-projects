@@ -37,9 +37,8 @@ function sampleState() {
   const now = new Date();
   const at = (minAgo) => new Date(now - minAgo * 60000).toISOString();
   const s = { data: emptyData(), history: {} };
-  const g = s.data.groups[0].id;
   applyOps(s, [
-    makeOp('createProject', { projectId: 'p1', name: 'Kiln', groupId: g }, at(300)),
+    makeOp('createProject', { projectId: 'p1', name: 'Kiln' }, at(300)),
     makeOp('addStep', { projectId: 'p1', stepId: 's1', text: 'Call @Ravi' }, at(299)),
     makeOp('addStep', { projectId: 'p1', stepId: 's2', text: 'Fire samples' }, at(298)),
     makeOp('addPerson', { personId: 'r', name: 'Ravi' }, at(297)),
@@ -50,7 +49,7 @@ function sampleState() {
     makeOp('addTime', { projectId: 'p1', minutes: 45 }, at(100)),
     makeOp('startTimer', { projectId: 'p1' }, at(20)),
     makeOp('addLink', { projectId: 'p1', linkId: newId(), title: 'Spec', url: 'https://example.com' }, at(10)),
-    makeOp('addTag', { groupId: g, tagId: 'kiln', name: 'Kiln' }, at(9)),
+    makeOp('addTag', { tagId: 'kiln', name: 'Kiln' }, at(9)),
     makeOp('setProjectField', { projectId: 'p1', field: 'tagId', value: 'kiln' }, at(8)),
   ]);
   return s;
@@ -101,9 +100,12 @@ test('people list and person page draw', () => {
 
 test('time report draws (pie, legend in % and hours) and date ranges are right', () => {
   const s = sampleState();
-  const ui = { timeReport: { groupId: s.data.groups[0].id, preset: 'thisWeek', by: 'tag', mode: 'pct', custom: {} } };
+  const ui = { timeReport: { preset: 'thisWeek', by: 'tag', mode: 'pct', custom: {} } };
   const text = renderTimeReport(fakeCtx(s, ui)).textContent;
-  assert.ok(text.includes('time by tag'));
+  assert.ok(text.includes('Time by tag'), 'no group name in the title (groups are gone, owner 23 Oct)');
+  assert.ok(!text.includes('Group '), 'no group picker');
+  const empty = renderTimeReport(fakeCtx(s, { timeReport: { ...ui.timeReport, preset: 'custom', custom: { from: '2020-01-01', to: '2020-01-02' } } })).textContent;
+  assert.ok(empty.includes('No time logged for this period.') && !empty.includes('Acton'), 'no group name when empty either');
   assert.ok(text.includes('Kiln'));
   assert.ok(text.includes('100%'));
   ui.timeReport.mode = 'hours';
@@ -132,7 +134,7 @@ test('time report opens on "Last month" in the first week of a month, else on wh
 test('project page: "Save + done" button, and the next project offer when green', () => {
   const s = sampleState();
   applyOps(s, [
-    makeOp('createProject', { projectId: 'p2', name: 'Glaze trial', groupId: s.data.groups[0].id }),
+    makeOp('createProject', { projectId: 'p2', name: 'Glaze trial' }),
     makeOp('okForToday', { projectId: 'p1' }),
   ]);
   const ctx = fakeCtx(s, { selected: 'p1', update: {} });
@@ -298,7 +300,7 @@ test('person page: "📋 Send again" and a green "✓ Sent today 9:05" once sent
 
 test('person page: projects given here show as "📁 Projects given to …" with the next step, and the list counts them', () => {
   const s = sampleState();
-  applyOps(s, [makeOp('createProject', { projectId: 'p9', name: 'Basin mould', groupId: s.data.groups[0].id }),
+  applyOps(s, [makeOp('createProject', { projectId: 'p9', name: 'Basin mould' }),
     makeOp('addStep', { projectId: 'p9', stepId: 'g1', text: 'Cast 3 trial moulds' }),
     makeOp('setProjectTeam', { projectId: 'p9', userId: 7, name: 'ravi' })]);
   const ctx = fakeCtx(s, { person: 'r' });
@@ -837,11 +839,10 @@ function mainsState() {
   const s = sampleState(); // p1 'Kiln' (has steps)
   const now = Date.now();
   const at = (minAgo) => new Date(now - minAgo * 60000).toISOString();
-  const g = s.data.groups[0].id;
   applyOps(s, [
-    makeOp('createMainProject', { projectId: 'm', name: 'Kilns', groupId: g, childId: 'p1' }, at(90)),
-    makeOp('createProject', { projectId: 'c2', name: 'Kiln 2', groupId: g, parentId: 'm' }, at(80)),
-    makeOp('createProject', { projectId: 'o', name: 'Office move', groupId: g }, at(70)),
+    makeOp('createMainProject', { projectId: 'm', name: 'Kilns', childId: 'p1' }, at(90)),
+    makeOp('createProject', { projectId: 'c2', name: 'Kiln 2', parentId: 'm' }, at(80)),
+    makeOp('createProject', { projectId: 'o', name: 'Office move' }, at(70)),
     makeOp('setProjectTeam', { projectId: 'c2', userId: 7, name: 'Ravi' }, at(60)),
   ]);
   return s;
@@ -861,9 +862,8 @@ function liveCtx(s, ui = {}) {
 test('✅ Tasks list: tasks only (📂 projects left out), a task in two projects listed once, with a small chip for each project under its row', async () => {
   const { activeTasks } = await import('../docs/rules.js');
   const s = mainsState();
-  const g = s.data.groups[0].id;
   applyOps(s, [
-    makeOp('createMainProject', { projectId: 'sa', name: 'Supplier approval', groupId: g }),
+    makeOp('createMainProject', { projectId: 'sa', name: 'Supplier approval' }),
     makeOp('addToProject', { projectId: 'p1', parentId: 'sa' }),
   ]);
   assert.deepEqual(activeTasks(s.data).map((p) => p.id).sort(), ['c2', 'o', 'p1'], 'the projects Kilns and Supplier approval are not tasks; Kiln is there once');
@@ -878,8 +878,7 @@ test('✅ Tasks list: tasks only (📂 projects left out), a task in two project
 
 test('📂 smart box: ⋯ → "📂 Add to a project…"; projects only (typed any case), ↓ / Enter adds; it stays open to add more; ✓ on the ones it is in, tap again takes it out; a create line; Esc closes', () => {
   const s = mainsState();
-  const g = s.data.groups[0].id;
-  applyOps(s, [makeOp('createMainProject', { projectId: 'sa', name: 'Supplier approval', groupId: g })]);
+  applyOps(s, [makeOp('createMainProject', { projectId: 'sa', name: 'Supplier approval' })]);
   const ui = { selected: 'o', update: {}, projMenu: 'o' };
   const ctx = liveCtx(s, ui);
   btn(renderDetail(ctx), '📂 Add to a project…').__on.click();
@@ -954,7 +953,7 @@ test('📂 project page: TASKS (N) table (dot, name + 👥, Now / "No next step"
 
 test('📂 a task shows a chip "📂 Kilns ›" for each project it is in (opens it); others do not', () => {
   const s = mainsState();
-  applyOps(s, [makeOp('createMainProject', { projectId: 'sa', name: 'Supplier approval', groupId: s.data.groups[0].id, childId: 'p1' })]);
+  applyOps(s, [makeOp('createMainProject', { projectId: 'sa', name: 'Supplier approval', childId: 'p1' })]);
   const ctx = liveCtx(s, { selected: 'p1', update: {} });
   const page = renderDetail(ctx);
   assert.ok(btn(page, '📂 Supplier approval ›'), 'a chip for each project');
@@ -1016,7 +1015,7 @@ test('📂 app wiring (app.js): ✅ Tasks and 📂 Projects menu items (keys; li
 
 test('📧 a task made from an email: EMAIL THREAD under the steps (📧 them / ↩ you, date, first lines, Open ↗), the Reply ready box, and the ✉ Replies page lists it', () => {
   const s = sampleState();
-  applyOps(s, [makeOp('createProject', { projectId: 'et', name: '📧 Price list', groupId: s.data.groups[0].id })]);
+  applyOps(s, [makeOp('createProject', { projectId: 'et', name: '📧 Price list' })]);
   const t = s.data.projects.find((p) => p.id === 'et');
   const ago = (min) => new Date(Date.now() - min * 60000).toISOString();
   t.mail = { conversationId: 'C1', messageId: 'M2', fromName: 'Ravi', fromAddress: 'ravi@x.test', subject: 'Price list', at: ago(10) };
@@ -1060,7 +1059,7 @@ test('📂 Projects page: a click on a project row selects it and stays on the p
   assert.match(mainsSrc, /ctx\.ui\.view === 'mains' && ctx\.showHere \? ctx\.showHere\(c\.id\)/, 'a task in the TASKS table while on the Projects page');
   const here = app.slice(app.indexOf('  showHere: (id) => {'), app.indexOf('  openProject: (id) => {'));
   assert.match(here, /select\(id\);/);
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-26'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-31'/, 'phones get the new copy');
 });
 
 test('📂 project page: "✕ Remove" on a task row takes it out of this project only — the task is kept (and stays in its other projects)', () => {
@@ -1101,8 +1100,8 @@ test('✅ Tasks: "All tasks N" | "No project N" switch (both red first, remember
   assert.match(app, /opt\('all', `All tasks \$\{all\.length\}`\), opt\('loose', `No project \$\{loose\}`\)/);
   assert.match(app, /if \(ui\.view === 'all'\) return activeTasks\(store\.view\.data\)\.filter\(\(p\) => ui\.taskFilter !== 'loose' \|\| !parentIdsOf\(p\)\.length\);/, '"No project" = tasks in no project');
   assert.match(app, /taskListView\(\) && !ui\.search && !ui\.adding \? taskFilterSwitch\(\) : showSort/, 'the switch replaces My order / Red first on Tasks and in groups (owner asked, 22 Oct)');
-  assert.match(app, /function taskListView\(\) \{\n  return ui\.view === 'all' \|\| ui\.view\.startsWith\('group:'\);/);
-  assert.match(app, /&& \(ui\.taskFilter !== 'loose' \|\| !parentIdsOf\(p\)\.length\)\); \/\/ a group shows its tasks only/, 'No project works in a group too');
+  // (groups are gone, owner 23 Oct: ✅ Tasks only)
+  assert.match(app, /function taskListView\(\) \{\n  return ui\.view === 'all';/);
   assert.match(app, /if \(\(ui\.sort !== 'red' && !taskListView\(\)\) \|\| ui\.search\) return list;/, 'Tasks and groups are always red first');
   assert.match(app, /taskFilter: ui\.taskFilter,/, 'remembered');
 });
@@ -1136,18 +1135,39 @@ test('task lists: a task with no next step shows no red "No next step — add on
   assert.match(row, /class: 'quick-add', title: 'Add the first step'/, 'the + to add a step stays');
 });
 
-test('groups (Acton, Personal…) list tasks only — 📂 projects are not shown there, and the menu count counts tasks only', async () => {
+test('groups are gone (owner, 23 Oct): no Groups in the menu, no group pages, no group on a task or + New task, one tag list and one timer switch in Settings, no group in the Time report or the Dashboard', async () => {
   const { readFileSync } = await import('node:fs');
   const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
-  assert.match(app, /return all\.filter\(\(p\) => p\.groupId === id && p\.state === 'active' && !isMainProject\(store\.view\.data, p\)/);
-  assert.match(app, /count\(\(p\) => p\.groupId === g\.id && p\.state === 'active' && !isMainProject\(data, p\)\)/);
+  const detail = readFileSync(new URL('../docs/ui/detail.js', import.meta.url), 'utf8');
+  const dash = readFileSync(new URL('../docs/ui/dashboard.js', import.meta.url), 'utf8');
+  for (const gone of ["'groups-head'", 'function addGroup(', 'function editGroup(', "go('group:'", "'Group: '", "name: 'group'", '+ New task in ', 'groupHasTimer', 'mergeGroups', '.groups']) assert.ok(!app.includes(gone), 'gone: ' + gone);
+  for (const f of ['detail.js', 'timereport.js', 'dashboard.js', 'mains.js', 'people.js', 'richedit.js']) {
+    const src = readFileSync(new URL('../docs/ui/' + f, import.meta.url), 'utf8');
+    assert.ok(!/groupId|\.groups\b|groupHasTimer/.test(src), f + ': no groups');
+  }
+  assert.equal((app.match(/group:/g) || []).length, 1, 'only the old saved group page, which opens ✅ Tasks');
+  assert.match(app, /view: saved\.view && !String\(saved\.view\)\.startsWith\('group:'\) \? saved\.view : saved\.view \? 'all' : 'today'/);
+  assert.ok(!/'Group ',/.test(detail), 'no group box on a task');
+  assert.ok(!/time-groups/.test(dash), 'no time by group on the Dashboard');
+  assert.match(app, /h\('h3', null, 'Tags and timer'\)/);
+  assert.match(app, /checked: timerOn\(data\), onChange: \(e, el\) => store\.dispatch\('setTimer', \{ on: el\.checked \}\)/, 'one timer switch');
+  assert.match(app, /\(data\.tags \|\| \[\]\)\.map\(\(t\) => h\('span', \{ class: 'tag tag-chip'/, 'one tag list');
+  // drawn: the task page shows its tag, no group chip
+  const s = sampleState();
+  applyOps(s, [makeOp('setProjectField', { projectId: 'p1', field: 'tagId', value: 'kiln' })]);
+  const text = renderDetail(fakeCtx(s, { selected: 'p1', update: {} })).textContent;
+  assert.ok(text.includes('🏷 Kiln'), 'the tag shows');
+  assert.ok(!/Acton|No group/.test(text), 'no group');
 });
+
+
 
 test('menu order (owner, 22 Oct): Today, Tasks, Projects, Replies, Inbox, Groups, Paused, Finished, People, Settings, More ▸ (Diary, Dashboard, Time report); no people listed under People', async () => {
   const { readFileSync } = await import('node:fs');
   const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
-  const menu = app.slice(app.indexOf("h('ul', { class: 'menu-list' },"), app.indexOf('function addGroup('));
-  const order = ["item('today'", "item('all'", "item('mains'", "item('replies'", "item('inbox'", "'groups-head'", "item('paused'", "item('finished'", "item('people'", "item('settings'", "'more-menu'", "item('diary'", "item('dashboard'", "item('time'"];
+  const menu = app.slice(app.indexOf("h('ul', { class: 'menu-list' },"), app.indexOf('// ---------------------------------------------------------------- Today box'));
+  // (groups are gone, owner 23 Oct: no Groups between Inbox and Paused)
+  const order = ["item('today'", "item('all'", "item('mains'", "item('replies'", "item('inbox'", "item('paused'", "item('finished'", "item('people'", "item('settings'", "'more-menu'", "item('diary'", "item('dashboard'", "item('time'"];
   let at = -1;
   for (const bit of order) { const i = menu.indexOf(bit); assert.ok(i > at, `${bit} in its place`); at = i; }
   assert.ok(!menu.includes('menu-person'), 'People shows just its count');
@@ -1158,10 +1178,10 @@ test('menu order (owner, 22 Oct): Today, Tasks, Projects, Replies, Inbox, Groups
 test('✅ Tasks and groups: a select box on each row (instead of +), a bar "N selected · 📂 Add to project… · Select all · Clear" that puts all selected tasks into one project (or a new one); Today keeps its tick box', async () => {
   const { readFileSync } = await import('node:fs');
   const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
-  assert.match(app, /function canPickRows\(\) \{\n  return !ui\.search && \(ui\.view === 'all' \|\| ui\.view\.startsWith\('group:'\)\);/, 'Tasks and groups only (not Today)');
+  assert.match(app, /function canPickRows\(\) \{\n  return !ui\.search && ui\.view === 'all';/, 'Tasks only (not Today; groups are gone, owner 23 Oct)');
   assert.match(app, /picking\n      \? h\('input', \{\n        type: 'checkbox', class: 'row-pick'/, 'the select box takes the place of + and the tick');
   assert.match(app, /for \(const id of picked\) if \(store\.dispatch\('addToProject', \{ projectId: id, parentId: main\.id \}\)\) n\+\+;/, 'all selected go into the chosen project');
-  assert.match(app, /store\.dispatch\('createMainProject', \{ projectId, name, groupId: data\.groups\[0\] && data\.groups\[0\]\.id, childId: ids\[0\] \}\)/, 'or a new project made with them');
+  assert.match(app, /store\.dispatch\('createMainProject', \{ projectId, name, childId: ids\[0\] \}\)/, 'or a new project made with them');
   assert.match(app, /`\$\{picked\.size\} selected`/);
   assert.match(app, /pickBar\(list\),\n    \.\.\.listParts\(list, today\),/);
 });
@@ -1186,7 +1206,7 @@ test('a task or project page shows its links and files as chips near the top (�
 // Drag-to-move (owner asked, 23 Oct): a ⋮⋮ grip on each task row replaces the ▲ ▼ buttons.
 function threeTasks() {
   const s = mainsState();
-  applyOps(s, [makeOp('createProject', { projectId: 'c3', name: 'Kiln 3', groupId: s.data.groups[0].id, parentId: 'm' })]);
+  applyOps(s, [makeOp('createProject', { projectId: 'c3', name: 'Kiln 3', parentId: 'm' })]);
   return s;
 }
 const isSubRow = (n) => /(^| )sub-row( |$)/.test(n.className || '');
@@ -1383,7 +1403,7 @@ const clip = ({ html = '', text = '', files = [] }) => ({ files, getData: (t) =>
 test('rich box: pasting an update copied from another task brings its photo along (same picture, new id here); a photo found nowhere is left out with a note', async () => {
   const s = sampleState();
   applyOps(s, [
-    makeOp('createProject', { projectId: 'pB', name: 'Glaze', groupId: s.data.groups[0].id }),
+    makeOp('createProject', { projectId: 'pB', name: 'Glaze' }),
     makeOp('addFile', { projectId: 'p1', fileId: 'fA', name: 'kiln.jpg', sha: 'shaA', size: 9, type: 'image/jpeg' }),
     makeOp('addFile', { projectId: 'pB', fileId: 'fB', name: 'own.jpg', sha: 'shaB', size: 9, type: 'image/jpeg' }),
   ]);
@@ -1604,7 +1624,8 @@ test('"+ New task here" (📂 project) and "+ New task": a box with a name and t
   const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
   const form = app.slice(app.indexOf('function newProjectForm()'), app.indexOf('function statusText()'));
   assert.match(form, /newTaskBox\(ctx, d, \{/);
-  assert.match(form, /createTaskWithNote\(ctx, \{ name, groupId: d\.groupId \|\| defaultGroup, d, editor \}\)/);
+  assert.match(form, /createTaskWithNote\(ctx, \{ name, d, editor \}\)/); // (groups are gone: no group box)
+  assert.ok(!/name: 'group'/.test(form), 'no group box on + New task');
   assert.ok(!/prompt\(/.test(form));
   const mainsSrc = readFileSync(new URL('../docs/ui/mains.js', import.meta.url), 'utf8');
   assert.ok(!/prompt\(`New task in/.test(mainsSrc), 'no question box for a new task here');
@@ -1615,7 +1636,7 @@ test('new task box: Enter in the name creates the task when the notes are empty 
   const ctx = liveCtx(s, { selected: 'm', update: {} });
   const d = {};
   let made = null;
-  const box = richedit.newTaskBox(ctx, d, { key: 'new', onCancel: () => {}, onCreate: (name, editor) => { made = richedit.createTaskWithNote(ctx, { name, groupId: s.data.groups[0].id, d, editor }); } });
+  const box = richedit.newTaskBox(ctx, d, { key: 'new', onCancel: () => {}, onCreate: (name, editor) => { made = richedit.createTaskWithNote(ctx, { name, d, editor }); } });
   await withEditor({ 'new-rich': fakeEditor('') }, () => {
     const name = rFind(box, (n) => n.nodeName === 'INPUT' && keyOf(n) === 'new-name');
     name.__on.input(null, { value: 'Glaze check' });
@@ -1823,7 +1844,7 @@ test('🔌 app wiring (app.js): "🔌 From apps" after ✉ Replies with the wait
   assert.match(app, /function go\(view\) \{\n\s*if \(view !== 'settings'\) forgetOnce\(\);/);
   assert.match(app, /if \(onServer\) loadApps\(appsCtx, force \|\| ui\.view === 'apps'\);/);
   assert.match(app, /replies: '✉ Replies', apps: '🔌 From apps', mains: '📂 Projects' \}\[ui\.view\]/, 'its page title');
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-26'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-31'/, 'phones get the new copy');
 });
 
 test('🔌 the PHP connector (team/connector/worktask-connector.php): the same text the app downloads, placeholders only (no real key), valid PHP 7.4+ (php -l), with wt_push / wt_withdraw / wt_decisions / wt_receive_decision', async () => {
@@ -1858,7 +1879,7 @@ test('🔌 a task an app sent shows like any task: the "🔗 Open in <app>" chip
   const s = sampleState();
   const at = new Date().toISOString();
   s.data.projects.unshift({
-    id: 'ct1', groupId: s.data.groups[0].id, name: 'Check kiln 3', priority: 'medium', deadline: null, notes: '', about: 'The top zone runs hot.',
+    id: 'ct1', name: 'Check kiln 3', priority: 'medium', deadline: null, notes: '', about: 'The top zone runs hot.',
     links: [{ id: 'ct1-link', title: 'Open in Purchase', url: 'https://erp.example/t/1' }], state: 'active', lastTickDate: null,
     lastActivityDate: at.slice(0, 10), activeSince: at.slice(0, 10), stateChangedAt: at, createdAt: at, updatedAt: at, steps: [], files: [], fromApp: 'Purchase',
     workNotes: [{ id: 'an1', text: 'Line: 3\nShift: B', stepId: null, createdAt: at, updatedAt: at, app: true }],
@@ -1888,10 +1909,9 @@ test('🔌 From apps: ✕ Reject puts the cursor straight into the reason box', 
 // ---------------------------------------------------------------- review round 12 (Daily Projects screens)
 test('dashboard and the top bar\'s score leave out an empty 📂 project (as colourCounts), so one green task is an all-green day', () => {
   const s = { data: emptyData(), history: {} };
-  const g = s.data.groups[0].id;
   applyOps(s, [
-    makeOp('createMainProject', { projectId: 'e', name: 'Holder', groupId: g }),
-    makeOp('createProject', { projectId: 't', name: 'Task', groupId: g, parentId: 'e' }),
+    makeOp('createMainProject', { projectId: 'e', name: 'Holder' }),
+    makeOp('createProject', { projectId: 't', name: 'Task', parentId: 'e' }),
     makeOp('addStep', { projectId: 't', stepId: 'ts', text: 'Do it' }),
     makeOp('addWorkNote', { projectId: 't', noteId: 'n1', text: 'Did some' }),
   ]);
@@ -2196,9 +2216,8 @@ test('Give a Work Task sign-in: a retry after a lost reply does not make a secon
 
 test('people: "Add a task with Ravi" offers tasks only — a 📂 project (even one with an old @Ravi step) is never a chip or the Enter target', () => {
   const s = sampleState();
-  const g = s.data.groups[0].id;
   applyOps(s, [
-    makeOp('createMainProject', { projectId: 'm1', name: 'Kilns', groupId: g }),
+    makeOp('createMainProject', { projectId: 'm1', name: 'Kilns' }),
     makeOp('addStep', { projectId: 'm1', stepId: 'ms', text: 'Old step with @Ravi' }),
   ]);
   const el = renderPerson(fakeCtx(s, { person: 'r' }));
@@ -2224,4 +2243,945 @@ test('📂 app wiring (app.js): Inbox, Chrome clip and their suggestions offer t
   const act = body('inboxAct');
   assert.match(act, /const saved = clone\(item\)/, 'Undo keeps the whole item (mail, note, reply)');
   assert.match(act, /store\.dispatch\('inboxUndo', \{\n\s+item: saved, index,/, 'that saved item is what Undo sends');
+});
+
+// ---------------------------------------------------------------- one app: the staff view (ui/staff.js)
+const staffMod = await import('../docs/ui/staff.js');
+const teamRules = await import('../team/public_html/logic.js');
+const STAFF_DAY = '2026-10-22';
+function staffData() {
+  return {
+    today: STAFF_DAY, fillBy: '18:00',
+    tasks: [
+      { id: 11, title: 'Check kiln temperature', project: '', status: 'open', repeat: 'daily', skipSunday: true, today: null, unread: 1, needsPhoto: false },
+      { id: 12, title: 'Pack the samples', project: '', status: 'open', repeat: 'once', dueDate: '2026-10-20', today: null },
+      { id: 13, title: 'Order clay', project: 'Kiln trial', projectRef: 'p1', stepRef: 's1', seq: 1, status: 'open', today: { id: 90, note: 'Called Ravi', state: 'progress', at: '2026-10-22 10:30:00', photos: [] } },
+    ],
+    other: [{ id: 14, title: 'Fire the second batch', project: 'Kiln trial', projectRef: 'p1', stepRef: 's2', seq: 2, queued: true, status: 'open' }],
+    suggestions: [{ id: 15, title: 'Clean dryer filters', status: 'suggested' }],
+  };
+}
+function fakeStaff(answers = {}) {
+  const calls = [];
+  const api = async (a, body) => {
+    calls.push({ a, body });
+    if (!staffMod.STAFF_CALLS.includes(a)) throw new Error('not a staff call: ' + a);
+    if (answers[a]) return answers[a](body);
+    if (a === 'my.today') return staffData();
+    return { ok: true };
+  };
+  const toasts = [];
+  const s = staffMod.createStaff({ root: null, api, rules: teamRules, user: { id: 7, name: 'Valar', role: 'staff' }, toast: (t) => toasts.push(t) });
+  return { s, calls, toasts };
+}
+
+test('one app — staff view: the same layout as Daily Projects (menu, list, page), only their own work; none of the owner\'s screens', async () => {
+  const { s, calls } = fakeStaff();
+  await s.load();
+  const tree = s.view();
+  assert.match(tree.className, /\blayout\b/, 'the same layout classes as the owner\'s app');
+  const text = tree.textContent;
+  for (const bit of ['Today', 'Coming next', 'My suggestions', '📁 Kiln trial', '💡 Suggest a task', '👤 Valar', 'Sign out', 'Check kiln temperature', 'Pack the samples', '1 of 3 sent', 'by 18:00', '✓ Sent 10:30 am']) assert.ok(text.includes(bit), bit);
+  for (const gone of ['📥 Inbox', '✉ Replies', 'Settings', 'People', 'Groups', '🔌 From apps', 'Dashboard', 'Time report', '+ Give a task']) assert.ok(!text.includes(gone), 'no owner screen: ' + gone);
+  // dots as on the owner's Today: green = sent today, red = not yet
+  const kilnRow = rFind(tree, (n) => n.nodeName === 'LI' && n.textContent.includes('Check kiln temperature'));
+  assert.ok(rFind(kilnRow, (n) => /\bdot red\b/.test(n.className || '')), 'not sent yet: red');
+  assert.ok(kilnRow.textContent.includes('💬 New'), 'a new message shows on the row');
+  assert.ok(calls.every((c) => staffMod.STAFF_CALLS.includes(c.a)));
+});
+
+test('one app — staff view: the staff server calls never include the owner\'s projects (dp.*), Outlook or connections; staffApi refuses them before asking', async () => {
+  for (const a of staffMod.STAFF_CALLS) assert.ok(!/^(dp\.|outlook\.|conn\.|connect\.|users?\.|team\.|task\.save|task\.status|task\.move|tasks\.moveAll|project\.sync|followup|morning|people)/.test(a), 'a staff call only: ' + a);
+  const was = globalThis.fetch;
+  let asked = 0;
+  globalThis.fetch = async () => { asked++; return new Response('{"ok":true}'); };
+  try {
+    const api = staffMod.staffApi('tok');
+    for (const a of ['dp.load', 'dp.head', 'outlook.draft', 'users.list', 'task.save', 'project.sync']) await assert.rejects(api(a, {}), /Not allowed here/);
+    assert.equal(asked, 0, 'never even sent');
+    assert.ok((await api('my.today')).ok);
+    assert.equal(asked, 1);
+  } finally { globalThis.fetch = was; }
+});
+
+test('one app — staff view: Send writes today\'s update with Work Task\'s rule (clientId), words typed while sending stay; an empty box says so', async () => {
+  let release;
+  const { s, calls, toasts } = fakeStaff({ 'update.save': (body) => new Promise((r) => { release = () => r({ ok: true, update: { id: 99, note: body.note } }); }) });
+  await s.load();
+  const t = s.state.data.tasks[0];
+  assert.equal(await s.act.sendUpdate(t), 'Write what you did first.');
+  s.state.drafts[t.id] = { note: 'Kiln at 1150', state: 'stuck' };
+  const going = s.act.sendUpdate(t);
+  await new Promise((r) => setTimeout(r, 0));
+  s.state.drafts[t.id].note = 'Kiln at 1150\nand the fan is noisy'; // typed while it was sending
+  release();
+  assert.equal(await going, '');
+  const save = calls.find((c) => c.a === 'update.save');
+  assert.deepEqual({ taskId: save.body.taskId, note: save.body.note, state: save.body.state }, { taskId: 11, note: 'Kiln at 1150', state: 'stuck' });
+  assert.ok(save.body.clientId, 'a clientId, as Work Task sends (a retry is kept once)');
+  // Work Task's rule (updateBoxLeft): more typed than what went = the whole text stays, open as a change of today's update
+  assert.equal(s.state.drafts[t.id].note, 'Kiln at 1150\nand the fan is noisy', 'what was typed meanwhile stays in the box');
+  assert.equal(s.state.editing[t.id], true);
+  assert.ok(toasts.includes('Sent ✓'));
+});
+
+test('one app — staff view: a needed photo is asked for before Finished; messages and steps send with a clientId and keep later words; suggest goes for a yes', async () => {
+  const { s, calls } = fakeStaff({ 'comment.add': () => ({ ok: true, comments: [{ id: 1, text: 'Is the fan ok?', mine: true, at: '2026-10-22 11:30:00' }] }) });
+  await s.load();
+  const t = { ...s.state.data.tasks[0], needsPhoto: true };
+  s.state.drafts[t.id] = { note: 'Done', state: 'finished' };
+  assert.match(await s.act.sendUpdate(t), /Add a photo to finish/);
+  assert.ok(!calls.some((c) => c.a === 'update.save'), 'nothing sent without the photo');
+  s.state.msgDrafts[11] = 'Is the fan ok?';
+  assert.equal(await s.act.sendMessage(11), '');
+  const m = calls.find((c) => c.a === 'comment.add');
+  assert.equal(m.body.text, 'Is the fan ok?'); assert.ok(m.body.clientId);
+  assert.equal(s.state.msgDrafts[11], undefined, 'the box is empty after Send');
+  s.state.stepDrafts.p1 = 'Order the spare servo motor';
+  assert.equal(await s.act.addStep('p1'), '');
+  assert.deepEqual(calls.filter((c) => c.a === 'project.addStep').map((c) => [c.body.projectRef, c.body.title, !!c.body.clientId]), [['p1', 'Order the spare servo motor', true]]);
+  assert.equal(await s.act.suggest({ title: '  ', details: '', repeat: 'once' }), 'Write the task first.');
+  assert.equal(await s.act.suggest({ title: 'Clean dryer filters', details: '', repeat: 'weekly', clientId: 'x1' }), '');
+  assert.equal(s.state.section, 'sugg', 'then My suggestions is shown');
+});
+
+test('one app — staff view: a task page shows chips, today\'s update box, messages and earlier days (Work Task\'s diary rule); a project page its steps in order', async () => {
+  const { s } = fakeStaff({
+    'task.get': () => ({ ok: true, task: staffData().tasks[1], updates: [], comments: [{ id: 3, by: 'Boss', text: 'Please send a photo', mine: false, at: '2026-10-21 11:30:00' }] }),
+    'project.mine': () => ({ ok: true, tasks: [{ id: 10, title: 'Buy clay', status: 'done', projectRef: 'p1', stepRef: 's0', seq: 0, doneAt: '2026-10-20 17:00:00' }] }),
+  });
+  await s.load();
+  s.open('task:12');
+  await new Promise((r) => setTimeout(r, 0));
+  const page = s.view().textContent;
+  for (const bit of ['Pack the samples', '⏰ Late — was by', "Today's update", 'Working on it', 'Stuck', 'Finished', 'Send', '💬 Messages', 'Please send a photo', "📅 What's happening"]) assert.ok(page.includes(bit), bit);
+  s.open('project:p1');
+  await new Promise((r) => setTimeout(r, 0));
+  const proj = s.view().textContent;
+  for (const bit of ['📁 Kiln trial', '✓ 1 done', 'Buy clay', 'Step 2 · current', 'Order clay', 'Step 3 · next', 'Fire the second batch']) assert.ok(proj.includes(bit), bit);
+  assert.ok(rFind(s.view(), (n) => n.nodeName === 'INPUT' && n.getAttribute('placeholder') === '+ Add the next step…'), 'the owner\'s add-step box');
+});
+
+test('one app wiring (app.js): who signed in picks the screens — staff get the staff view, another manager Work Task, the owner this app (never held up once known; no answer = the owner\'s app)', () => {
+  const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
+  const st = app.slice(app.indexOf('function start() {'), app.indexOf('/** The owner\'s Daily Projects. */'));
+  // (step 4: a task link from a notification goes along to the staff view and the team pages: teamTask)
+  assert.match(st, /if \(known === 'staff'\) \{ startStaff\(undefined, teamTask\); return; \}/);
+  // (step 4: a manager who is not the owner gets the team pages of this app, no longer Work Task)
+  assert.match(st, /if \(known === 'manager'\) \{ startManager\(undefined, teamTask\); return; \}/);
+  assert.match(st, /askWho\(\)\.then\(\(r\) => routeWho\(r, teamTask\)\);/);
+  // (code-review 23 Oct: no answer in time no longer means the owner's app for anyone — a team member on a slow first
+  // start got the owner's app. Only this phone's own owner copy opens it; else "Try again")
+  const route = app.slice(app.indexOf('function routeWho('), app.indexOf('/** Signed in: their first password'));
+  assert.match(route, /if \(user && user\.mustChange\) openFor\(user, teamTask\);[^\n]*\n\s*else if \(who === 'staff'\) startStaff\(user, teamTask\);\s*else if \(who === 'manager'\) startManager\(user, teamTask\);\s*else if \(who === 'owner' \|\| ownerCopyHere\(\)\) startOwner\(\);[^\n]*\n\s*else if \(answered\) signInAgain\(\);[^\n]*\n\s*else noAnswerYet\(teamTask\);/, 'their first password first; not known: the owner\'s own phone opens as before, a dead sign-in signs in again, else try again');
+  assert.match(route, /const ownerCopyHere = \(\) => \{ try \{ return !!localStorage\.getItem\('dp\.snapshot'\); \}/);
+  assert.match(route, /'Cannot reach worktask\.in right now\. Check the internet\.'\), h\('button', \{ class: 'btn primary', onClick: again \}, 'Try again'\)/);
+  assert.match(app, /if \(!user\.owner\) localStorage\.removeItem\('dp\.snapshot'\);/, 'someone else signing in on this phone: the owner\'s copy goes (so it never opens the owner\'s app for them)');
+  // (step 4: signing in is inside this app now — the owner asked for one app)
+  assert.ok(st.indexOf("if (onServer && !isMock && !serverToken()) { root.replaceChildren(); showSignIn((user) => openFor(user, teamTask)); return; }") >= 0, 'signed out: this app\'s sign-in');
+  assert.ok(st.indexOf('showSignIn(') < st.indexOf('rememberedWho()'), 'signed out: to sign-in first');
+  assert.match(app, /const timer = setTimeout\(\(\) => stop\.abort\(\), 4000\);/, 'a slow answer never holds the owner up for long');
+  // the staff code and Work Task's rules load only for staff: the owner's start (offline too) never needs them
+  assert.ok(!/^import .*ui\/staff\.js/m.test(app) && !/^import .*\.\.\/logic\.js/m.test(app));
+  assert.match(app, /await Promise\.all\(\[import\('\.\/ui\/staff\.js'\), import\('\.\/ui\/staffbox\.js'\), import\('\.\.\/logic\.js'\)\]\)/);
+  assert.ok(!/^import .*ui\/staffbox\.js/m.test(app), 'the offline sender loads only for staff too');
+  // (the owner asked: staff see the owner's own design — Work Task's styles are never loaded on top)
+  assert.ok(!/\.\.\/styles\.css/.test(app), 'never Work Task\'s styles');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /'ui\/staff\.js'/, 'kept for offline');
+});
+
+// ---------------------------------------------------------------- one app, step 2: offline, files, messages, notifications
+const staffBox = await import('../docs/ui/staffbox.js');
+const tick = () => new Promise((r) => setTimeout(r, 0));
+function fakeStaff2(answers = {}, more = {}) {
+  const calls = [];
+  const box = staffBox.memOutbox();
+  const api = async (a, body, form) => {
+    calls.push({ a, body, form });
+    if (!staffMod.STAFF_CALLS.includes(a)) throw new Error('not a staff call: ' + a);
+    if (answers[a]) return answers[a](body);
+    if (a === 'my.today') return staffData();
+    return { ok: true };
+  };
+  const toasts = [], shown = [];
+  const s = staffMod.createStaff({ root: null, api, rules: teamRules, user: { id: 7, name: 'Valar', role: 'staff' }, box, lock: null,
+    toast: (t) => toasts.push(t), viewer: (url, name, image) => shown.push({ url, name, image }), shrink: async (f) => f, ...more });
+  return { s, calls, box, toasts, shown };
+}
+const offlineErr = () => Object.assign(new Error('You are offline.'), { offline: true });
+
+test('one app — offline sender (staffbox): Work Task\'s outbox and item shape; each kind sent as Work Task sends it (day it was written, clientIds, photos one by one, then Finished)', async () => {
+  const box = staffBox.memOutbox();
+  const calls = [];
+  const api = async (a, body, form) => {
+    calls.push({ a, body: form ? Object.fromEntries([...body.entries()].map(([k, v]) => [k, typeof v === 'string' ? v : 'file'])) : body });
+    if (a === 'update.save') return { ok: true, update: { id: 55, day: '2026-10-21', note: body.note } };
+    return { ok: true };
+  };
+  const at = new Date('2026-10-22T06:00:00Z');
+  const ob = staffBox.createOutbox({ box, api, rules: teamRules, userId: () => 7, signedIn: () => true, lock: null, now: () => at });
+  await ob.queue({ kind: 'update', taskId: 11, note: 'Packed 6 boxes', state: 'finished', needsPhoto: true, hadPhoto: false, files: [new Blob(['a']), new Blob(['b'])] });
+  await ob.queue({ kind: 'comment', taskId: 11, text: 'Boxes are short' });
+  await ob.queue({ kind: 'step', projectRef: 'p1', title: 'Order servo' });
+  await ob.queue({ kind: 'suggest', title: 'Clean filters', details: '', repeat: 'weekly' });
+  await box.add({ kind: 'comment', taskId: 99, text: 'someone else', userId: 8, at: at.toISOString(), clientId: 'x' });
+  const items = await ob.list();
+  assert.equal(items.length, 4, 'only this person\'s items');
+  assert.ok(items.every((x) => x.userId === 7 && x.clientId && x.at), 'the same shape as Work Task\'s items (userId, clientId, at)');
+  const r = await ob.flush();
+  assert.deepEqual(r, { sent: 4, gave: 0 });
+  const first = calls[0];
+  assert.equal(first.a, 'update.save');
+  assert.equal(first.body.state, 'progress', 'a photo is needed to finish: saved as working first');
+  assert.equal(first.body.day, '2026-10-22'); assert.equal(first.body.writtenAt, at.toISOString()); assert.ok(first.body.sentAt, 'the server puts a wrong phone clock right');
+  assert.deepEqual(calls.slice(1, 3).map((c) => [c.a, c.body.updateId, c.body.clientId]), [['photo.add', '55', `${items[0].clientId}-p0`], ['photo.add', '55', `${items[0].clientId}-p1`]]);
+  assert.deepEqual([calls[3].a, calls[3].body.state, calls[3].body.day], ['update.save', 'finished', '2026-10-21'], 'then Finished, on the day the server saved the first part for');
+  assert.deepEqual(calls.slice(4).map((c) => c.a), ['comment.add', 'project.addStep', 'suggest']);
+  assert.equal(calls[4].body.day, '2026-10-22', 'a message counts for the day it was written');
+  assert.equal((await ob.list()).length, 0);
+  assert.equal(box.items.size, 1, 'the other person\'s item stays');
+});
+
+test('one app — offline sender: still offline = kept; a server hiccup = kept and tried again; refused = given back (words not lost); signed out = kept; one sender at a time', async () => {
+  const box = staffBox.memOutbox();
+  let mode = 'offline';
+  const given = [];
+  const api = async () => {
+    if (mode === 'offline') throw Object.assign(new Error('offline'), { offline: true });
+    if (mode === 'retry') throw Object.assign(new Error('Busy'), { retry: true });
+    if (mode === 'auth') throw Object.assign(new Error('Sign in'), { auth: true });
+    throw new Error('This task is closed.');
+  };
+  const ob = staffBox.createOutbox({ box, api, rules: teamRules, userId: () => 7, signedIn: () => true, lock: null, giveBack: (it, why) => given.push([it.text, why]) });
+  await ob.queue({ kind: 'comment', taskId: 11, text: 'Hello' });
+  assert.deepEqual(await ob.flush(), { sent: 0, gave: 0 }); assert.equal((await ob.list()).length, 1, 'offline: kept');
+  mode = 'auth'; await ob.flush(); assert.equal((await ob.list()).length, 1, 'signed out: kept for after signing in');
+  mode = 'retry'; await ob.flush(); assert.equal((await ob.list())[0].tries, 1, 'a hiccup: kept, counted');
+  mode = 'refused'; assert.deepEqual(await ob.flush(), { sent: 0, gave: 1 });
+  assert.deepEqual(given, [['Hello', 'This task is closed.']], 'given back with the reason');
+  assert.equal((await ob.list()).length, 0);
+  // one sender at a time, also with the other app (the "wt-outbox" lock): busy = nothing sent now
+  const lock = { request: (name, o, fn) => { assert.equal(name, 'wt-outbox'); assert.equal(o.ifAvailable, true); return fn(null); } };
+  const ob2 = staffBox.createOutbox({ box, api, rules: teamRules, userId: () => 7, signedIn: () => true, lock });
+  assert.equal((await ob2.flush()).busy, true);
+});
+
+test('one app — staff view offline: Send / message / step / suggestion are kept on the phone (shown as waiting, the boxes empty) and go out when the internet is back', async () => {
+  let online = false;
+  const net = (fn) => (body) => { if (!online) throw offlineErr(); return fn(body); };
+  const { s, calls, box, toasts } = fakeStaff2({
+    'update.save': net((b) => ({ ok: true, update: { id: 77, day: STAFF_DAY, note: b.note } })),
+    'comment.add': net(() => ({ ok: true, comments: [] })), 'project.addStep': net(() => ({ ok: true })), suggest: net(() => ({ ok: true })),
+  });
+  await s.load();
+  const t = s.state.data.tasks[0];
+  s.state.drafts[t.id] = { note: 'Kiln at 1150', state: 'progress' };
+  s.state.files[t.id] = [new Blob(['photo'])];
+  assert.equal(await s.act.sendUpdate(t), '');
+  assert.equal(s.state.drafts[t.id], undefined, 'the box is empty (the words wait on the phone)');
+  assert.ok(toasts.some((x) => /Saved on this phone/.test(x)));
+  const kept = [...box.items.values()];
+  assert.deepEqual([kept[0].kind, kept[0].taskId, kept[0].note, kept[0].files.length, !!kept[0].clientId], ['update', 11, 'Kiln at 1150', 1, true]);
+  // the list and the task page say it waits
+  const row11 = rFind(s.view(), (n) => n.nodeName === 'LI' && n.textContent.includes('Check kiln temperature'));
+  assert.ok(row11.textContent.includes('⏳ Waiting to send'));
+  assert.ok(rFind(row11, (n) => /\bdot yellow\b/.test(n.className || '')), 'written, waiting: yellow');
+  assert.match(s.view().textContent, /⏳ 1 waiting to send/);
+  s.state.msgDrafts[11] = 'Fan is noisy'; assert.equal(await s.act.sendMessage(11), '');
+  s.state.stepDrafts.p1 = 'Order servo'; assert.equal(await s.act.addStep('p1'), '');
+  assert.equal(await s.act.suggest({ title: 'Clean filters', details: '', repeat: 'weekly', clientId: 'sg1' }), '');
+  assert.deepEqual([...box.items.values()].map((x) => x.kind), ['update', 'comment', 'step', 'suggest']);
+  assert.equal(s.state.msgDrafts[11], undefined); assert.equal(s.state.stepDrafts.p1, undefined);
+  assert.equal([...box.items.values()][3].clientId, 'sg1', 'the form\'s id is kept (a retry is kept once)');
+  // back online: all sent, the waiting list empties
+  online = true;
+  const r = await s.act.flush();
+  assert.equal(r.sent, 4);
+  assert.equal(box.items.size, 0);
+  assert.ok(calls.some((c) => c.a === 'photo.add'), 'the photo went too');
+});
+
+test('one app — staff view: a waiting item the server refuses gives the words back (in the box, and a notice that stays with Copy); an update the server keeps out as older says so', async () => {
+  const { s, box } = fakeStaff2({ 'comment.add': () => { throw new Error('This task is closed.'); } });
+  await s.load();
+  await box.add({ kind: 'comment', taskId: 11, text: 'My long message about the kiln', userId: 7, at: new Date().toISOString(), clientId: 'c1' });
+  await s.refreshOutbox();
+  await s.act.flush();
+  assert.equal(s.state.msgDrafts[11], 'My long message about the kiln', 'back in the message box');
+  assert.equal(s.state.notices.length, 1);
+  const page = s.view().textContent;
+  assert.match(page, /Could not send: This task is closed/);
+  assert.match(page, /My long message about the kiln/);
+  assert.ok(btn(s.view(), 'Copy') && btn(s.view(), 'Close'));
+  btn(s.view(), 'Close').__on.click();
+  assert.equal(s.state.notices.length, 0);
+  // the server keeps a late update out (a newer one of theirs is there): its words are shown, not lost silently
+  const { s: s2, box: box2 } = fakeStaff2({ 'update.save': (b) => ({ ok: true, history: 'older', update: { id: 5, note: 'newer words', day: STAFF_DAY } }) });
+  await s2.load();
+  await box2.add({ kind: 'update', taskId: 11, note: 'late offline words', state: 'progress', files: [], userId: 7, at: new Date().toISOString(), clientId: 'u1' });
+  await s2.refreshOutbox();
+  await s2.act.flush();
+  assert.match(s2.state.notices.map((n) => n.body).join(), /late offline words/);
+});
+
+test('one app — staffApi: offline, a list comes from the saved copy (the same copies Work Task keeps); hiccups, sign-out and refusals are told apart', async () => {
+  const mem = new Map();
+  const cache = { getItem: (k) => mem.get(k) ?? null, setItem: (k, v) => mem.set(k, v) };
+  const nets = [];
+  const api = staffMod.staffApi('tok', '../api/', { cache, onNet: (on) => nets.push(on) });
+  const was = globalThis.fetch;
+  try {
+    globalThis.fetch = async () => new Response(JSON.stringify({ ok: true, today: '2026-10-22', tasks: [] }), { status: 200 });
+    await api('my.today');
+    assert.ok(mem.has(staffMod.cacheKey('my.today', {})), 'kept as Work Task keeps it (wt.c.…)');
+    assert.equal(staffMod.cacheKey('my.today', {}), 'wt.c.my.today:{}');
+    globalThis.fetch = async () => { throw new TypeError('Failed to fetch'); };
+    const c = await api('my.today');
+    assert.equal(c.fromCache, true, 'offline: the saved copy');
+    await assert.rejects(api('comment.add', { taskId: 1, text: 'x' }), (e) => e.offline === true, 'a send offline: .offline (it is kept on the phone)');
+    assert.deepEqual(nets, [true, false, false]);
+    globalThis.fetch = async () => new Response('{"ok":false,"error":"Busy"}', { status: 503 });
+    await assert.rejects(api('comment.add', {}), (e) => e.retry === true);
+    globalThis.fetch = async () => new Response('{"ok":false,"error":"Please sign in."}', { status: 401 });
+    await assert.rejects(api('my.today'), (e) => e.auth === true);
+    globalThis.fetch = async () => new Response('{"ok":false,"error":"Choose your own password first."}', { status: 428 });
+    await assert.rejects(api('my.today'), (e) => e.auth === true && e.mustChange === true);
+    globalThis.fetch = async () => new Response('<html>403 Forbidden</html>', { status: 403 });
+    await assert.rejects(api('comment.add', {}), (e) => !e.offline && !e.retry && !e.auth && /refused/.test(e.message), 'a firewall page: refused (trying again will not help)');
+    globalThis.fetch = async () => new Response('{"ok":false,"error":"The message is empty."}', { status: 400 });
+    await assert.rejects(api('comment.add', {}), /The message is empty/);
+  } finally { globalThis.fetch = was; }
+});
+
+test('one app — staff view: instruction photos and PDFs open in the viewer; own messages can be changed or deleted (never someone else\'s or a move note); a photo message needs the internet', async () => {
+  const task = { ...staffData().tasks[0], files: [{ id: 3, name: 'drawing.png', image: true }, { id: 4, name: 'kiln-manual.pdf', image: false }] };
+  const comments = [{ id: 1, text: 'Please check', mine: false, by: 'Boss', at: '2026-10-22 09:00:00' }, { id: 2, text: 'On it', mine: true, at: '2026-10-22 09:05:00' },
+    { id: 9, text: '↔ Moved to you from Ravi', mine: true, at: '2026-10-22 08:00:00' }];
+  const answers = {
+    'task.get': () => ({ ok: true, task, updates: [], comments }),
+    'comment.edit': (b) => ({ ok: true, comments: comments.map((c) => (c.id === b.id ? { ...c, text: b.text, editedAt: 'x' } : c)) }),
+    'comment.delete': (b) => ({ ok: true, comments: comments.filter((c) => c.id !== b.id) }),
+    'comment.photo': () => ({ ok: true, comments }),
+  };
+  const { s, calls, shown } = fakeStaff2(answers, {
+    photo: async (kind, id) => `blob:${kind}/${id}`,
+    ask: { prompt: () => 'On it — 2 left', confirm: () => true },
+  });
+  await s.load();
+  s.open('task:11'); await tick();
+  const page = s.view();
+  assert.match(page.textContent, /📎 Instructions/);
+  assert.ok(btn(page, 'kiln-manual.pdf'), 'a PDF is a chip');
+  await s.act.openFile(task.files[1]);
+  await s.act.openFile(task.files[0]);
+  assert.deepEqual(shown, [{ url: 'blob:task.file/4', name: 'kiln-manual.pdf', image: false }, { url: 'blob:task.file/3', name: 'drawing.png', image: true }]);
+  // the picture is part of the drawn page once fetched (a redraw must not take it off again: it did in the browser)
+  await tick();
+  const thumb = rFind(s.view(), (n) => n.nodeName === 'IMG' && n.getAttribute('title') === 'drawing.png');
+  assert.equal(thumb.getAttribute('src'), 'blob:task.file/3');
+  // ✎ / 🗑 only on my own messages, never on a move note
+  const edits = rAll(page, (n) => n.nodeName === 'BUTTON' && n.getAttribute('aria-label') === 'Change this message');
+  assert.equal(edits.length, 1, 'only "On it"');
+  await s.act.editMessage(comments[1]);
+  assert.deepEqual(calls.filter((c) => c.a === 'comment.edit').map((c) => c.body), [{ id: 2, text: 'On it — 2 left' }]);
+  await s.act.deleteMessage(comments[1]);
+  assert.deepEqual(calls.filter((c) => c.a === 'comment.delete').map((c) => c.body), [{ id: 2 }]);
+  // 📷 with the words in the box: one call with the photo, the words, a clientId
+  s.state.msgDrafts[11] = 'Crack near the base';
+  const f = new Blob(['jpg'], { type: 'image/jpeg' }); f.name = 'p.jpg';
+  assert.equal(await s.act.sendMessagePhoto(11, f), '');
+  const ph = calls.find((c) => c.a === 'comment.photo');
+  assert.deepEqual([ph.form, ph.body.get('taskId'), ph.body.get('text'), !!ph.body.get('clientId')], [true, '11', 'Crack near the base', true]);
+  assert.equal(s.state.msgDrafts[11], undefined, 'the words went with the photo');
+  s.setOffline(true);
+  assert.match(await s.act.sendMessagePhoto(11, f), /need the internet/);
+});
+
+test('one app — staff view: 🔔 Notifications (menu, page, the banner once, Later) through Work Task\'s service worker', async () => {
+  let st = 'default';
+  const push = { state: () => st, sync: async () => {}, turnOn: async () => { st = 'on'; return 'on'; }, turnOff: async () => { st = 'granted'; }, test: async () => ({ ok: true }) };
+  const { s } = fakeStaff2({}, { push });
+  await s.load();
+  let v = s.view();
+  assert.ok(btn(v, '🔔 Notifications') && btn(v, '🔔 Notifications').textContent.includes('Off'));
+  assert.match(v.textContent, /Get a message on this phone when a new task/);
+  btn(v, 'Later').__on.click();
+  assert.ok(!/Get a message on this phone when a new task/.test(s.view().textContent), 'Later: the banner goes');
+  s.open('notify');
+  assert.ok(btn(s.view(), 'Turn on notifications'));
+  await s.act.notifyOn();
+  v = s.view();
+  assert.match(v.textContent, /On for this phone/);
+  assert.ok(btn(v, 'Send me a test') && btn(v, 'Turn off'));
+  assert.match(v.textContent, /Notifications are on/, 'said once');
+  await s.act.notifyOff();
+  assert.ok(btn(s.view(), 'Turn on notifications'));
+  // the browser part: only Work Task's own service worker (the site root) shows them; push.* are staff calls
+  const src = readFileSync(new URL('../docs/ui/staff.js', import.meta.url), 'utf8');
+  assert.match(src, /navigator\.serviceWorker\.getRegistration\('\.\.\/'\)\) \|\| await navigator\.serviceWorker\.register\('\.\.\/sw\.js', \{ scope: '\.\.\/' \}\)/);
+  for (const a of ['push.key', 'push.subscribe', 'push.unsubscribe', 'push.test']) assert.ok(staffMod.STAFF_CALLS.includes(a), a);
+  assert.match(src, /const offKey = \(\) => 'wt\.pushOff\.' \+ userId;/, 'the same "turned off here" mark as Work Task');
+});
+
+test('one app wiring (step 2): offline sending, the shared outbox, #open from a notification, signing out clears the saved copies; the offline copy keeps Work Task\'s rules and look', () => {
+  const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
+  const st = app.slice(app.indexOf('async function startStaff(user, openTask = 0) {'), app.indexOf('const saved = device.ui();'));
+  assert.match(st, /const push = browserPush\(api, user\.id\);/); assert.match(st, /box: idbOutbox\(\), shrink: shrinkPhoto, push \}\);/);
+  assert.match(st, /staffApi\(serverToken\(\), '\.\.\/api\/', \{ onNet: \(on\) => \{ if \(staff\) staff\.setOffline\(!on\); \} \}\)/);
+  // a notification's #open=<task> is read before the owner's reminder link takes the same hash away (it did in the browser)
+  const begin = app.slice(app.indexOf('function start() {'), app.indexOf("/** The owner's Daily Projects. */"));
+  // (step 4: "#team-task=<id>" too, the notifications' new link)
+  assert.ok(begin.indexOf('const teamTask = teamTaskInHash();') >= 0 && begin.indexOf('const teamTask') < begin.indexOf('takeOpenFromHash();'), 'read first');
+  assert.match(app, /const teamTaskInHash = \(\) => Number\(\(\/\^#\(\?:open\|team-task\)=\(\\d\+\)\$\/\.exec\(location\.hash\)/);
+  assert.match(st, /if \(openTask\) \{ if \(teamTaskInHash\(\) === openTask\) history\.replaceState\(null, '', location\.pathname \+ location\.search\); staff\.open\('task:' \+ openTask\); \}/, 'that task, taken off the address (a reload does not open it again)');
+  assert.match(st, /window\.addEventListener\('online', \(\) => \{ staff\.setOffline\(false\); staff\.act\.flush\(\); \}\);/);
+  assert.match(st, /setInterval\(\(\) => \{ if \(staff\.state\.outbox\.length\) staff\.act\.flush\(\); \}, 30000\);/);
+  // (signing out is shared by the staff view and the team pages now: serverTools)
+  const tools = app.slice(app.indexOf('function serverTools(api, more = {}) {'), app.indexOf('/** The team pages (ui/team.js)'));
+  assert.match(st, /const \{ photo, viewer, signOut \} = serverTools\(api, \{ waiting: \(\) => \(staff \? staff\.state\.outbox\.length : 0\), push: \(\) => push \}\);/);
+  assert.match(tools, /if \(k\.startsWith\('wt\.c\.'\)\) localStorage\.removeItem\(k\);/, 'signing out leaves no saved lists for the next person');
+  const box = readFileSync(new URL('../docs/ui/staffbox.js', import.meta.url), 'utf8');
+  assert.match(box, /indexedDB\.open\('worktask', 1\)/, 'Work Task\'s own outbox (both apps send what waits)');
+  assert.match(box, /createObjectStore\('outbox', \{ keyPath: 'id', autoIncrement: true \}\)/);
+  const sw = readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8');
+  assert.match(sw, /const TEAM_FILES = \['\.\.\/logic\.js'\];/, 'Work Task\'s rules only (its styles are not used: staff see the owner\'s design)');
+  assert.match(sw, /Promise\.all\(TEAM_FILES\.map\(\(u\) => c\.add\(u\)\.catch\(\(\) => \{\}\)\)\)/, 'best effort: only worktask.in has them');
+  assert.match(sw, /'ui\/staff\.js', 'ui\/staffbox\.js'/);
+});
+
+// ---------------------------------------------------------------- one app, step 3: what staff had in Work Task, now in the staff view
+test('one app — staff view: 🔍 Search (their own tasks, messages, updates; 2 letters or more) opens the task', async () => {
+  const { s, calls } = fakeStaff2({ search: (b) => ({ ok: true, results: [{ taskId: 12, title: 'Pack the samples', who: 'Valar', kind: 'message', text: 'brown boxes', at: '2026-10-22 10:00:00' }] }) }, { searchWait: 0 });
+  await s.load();
+  assert.ok(btn(s.view(), '🔍 Search'));
+  s.act.show('search');
+  assert.match(s.view().textContent, /Type 2 or more letters/);
+  s.act.search('b'); await tick(); await tick();
+  assert.ok(!calls.some((c) => c.a === 'search'), 'one letter: not asked');
+  s.act.search('brown'); await tick(); await tick();
+  assert.deepEqual(calls.filter((c) => c.a === 'search').map((c) => c.body), [{ q: 'brown' }]);
+  const v = s.view();
+  assert.match(v.textContent, /💬 Pack the samples/);
+  btn(v, 'Pack the samples').__on.click();
+  assert.equal(s.state.sel, 'task:12');
+});
+
+test('one app — staff view: 📷 more photos on today\'s sent update (up to 5; the rest wait on the phone when offline); Ctrl+V puts a photo in the update or, in the message box, sends it as a message', async () => {
+  let online = true;
+  const sent = { ...staffData().tasks[2], today: { id: 90, note: 'Called Ravi', state: 'progress', at: '2026-10-22 10:30:00', photos: [1, 2, 3, 4] } };
+  const { s, calls, box } = fakeStaff2({
+    'photo.add': () => { if (!online) throw offlineErr(); return { ok: true }; },
+    'task.get': () => ({ ok: true, task: sent, updates: [], comments: [] }),
+    'comment.photo': () => ({ ok: true, comments: [] }),
+  });
+  await s.load();
+  const img = (n) => Object.assign(new Blob(['x'], { type: 'image/png' }), { name: n });
+  assert.equal(await s.act.addPhotos(sent, [img('a'), img('b')]), '');
+  assert.deepEqual(calls.filter((c) => c.a === 'photo.add').map((c) => c.body.get('updateId')), ['90'], 'only 1 more fits (5 in all)');
+  online = false;
+  assert.equal(await s.act.addPhotos({ ...sent, today: { ...sent.today, photos: [] } }, [img('c'), img('d')]), '');
+  const kept = [...box.items.values()][0];
+  assert.deepEqual([kept.kind, kept.updateId, kept.files.length, kept.photoNo], ['photos', 90, 2, 0], 'offline: they wait on the phone, as in Work Task');
+  online = true;
+  // Ctrl+V
+  s.open('task:13'); await tick();
+  assert.equal(s.act.paste({ files: [img('p')], text: '', inMessageBox: false }), true);
+  assert.equal(s.act.paste({ files: [img('p')], text: 'cells from Excel', inMessageBox: false }), false, 'text with a picture of it: the text');
+  s.state.msgDrafts[13] = 'see this';
+  assert.equal(s.act.paste({ files: [img('m')], inMessageBox: true }), true);
+  await tick(); await tick();
+  assert.ok(calls.some((c) => c.a === 'comment.photo' && c.body.get('text') === 'see this'), 'in the message box: a photo message');
+  // the update waits on the phone: a pasted photo would go nowhere, so it is refused (pasteWaits, as in Work Task)
+  const { s: s2, box: box2, toasts } = fakeStaff2({ 'task.get': () => ({ ok: true, task: staffData().tasks[0], updates: [], comments: [] }) });
+  await s2.load();
+  await box2.add({ kind: 'update', taskId: 11, note: 'waiting', state: 'progress', files: [], userId: 7, at: new Date().toISOString(), clientId: 'w' });
+  await s2.refreshOutbox();
+  s2.open('task:11'); await tick();
+  s2.act.paste({ files: [img('p')], inMessageBox: false });
+  assert.ok(toasts.includes('Wait until your update is sent, then add the photo.'));
+  assert.equal(s2.state.files[11], undefined);
+  s2.state.editing[11] = true; // changing the update: the photo goes with it
+  s2.act.paste({ files: [img('p')], inMessageBox: false });
+  assert.equal(s2.state.files[11].length, 1);
+});
+
+test('one app — staff view: every 20 s new work comes in by itself — "New" on the rows and a bar to open it; never their own new step or suggestion; a saved copy never counts', async () => {
+  let next = staffData();
+  const { s } = fakeStaff2({ 'my.today': () => next, 'project.addStep': () => ({ ok: true, task: { id: 31 } }) });
+  await s.load();
+  // their own step (just added) and a suggestion they made are not news
+  s.state.stepDrafts.p1 = 'Mine'; await s.act.addStep('p1');
+  next = { ...staffData(), other: [...staffData().other, { id: 31, title: 'Mine', projectRef: 'p1', seq: 3, queued: true, status: 'open', createdBy: 7 }],
+    suggestions: [...staffData().suggestions, { id: 32, title: 'My idea', status: 'suggested', createdBy: 7 }] };
+  await s.act.liveCheck();
+  assert.equal(s.state.newIds.size, 0);
+  assert.equal(s.state.news.length, 0);
+  // the manager gives a new task
+  next = { ...next, tasks: [...next.tasks, { id: 40, title: 'Clean kiln 2', status: 'open', repeat: 'once', createdBy: 1 }] };
+  await s.act.liveCheck();
+  assert.ok(s.state.newIds.has(40));
+  const v = s.view();
+  assert.match(v.textContent, /📥 New task for you/);
+  assert.ok(rFind(v, (n) => n.nodeName === 'LI' && n.textContent.includes('Clean kiln 2') && n.textContent.includes('New')));
+  btn(v, 'Open').__on.click();
+  assert.equal(s.state.sel, 'task:40');
+  assert.ok(!s.state.newIds.has(40), 'opened: no longer New');
+  // two new steps in one project: said as steps of that project
+  next = { ...next, other: [...next.other, { id: 41, title: 'Glaze test', projectRef: 'p1', seq: 4, queued: true, status: 'open', createdBy: 1, project: 'Kiln trial' }, { id: 42, title: 'Report', projectRef: 'p1', seq: 5, queued: true, status: 'open', createdBy: 1, project: 'Kiln trial' }] };
+  await s.act.liveCheck();
+  assert.equal(s.state.news[0].title, '➕ 2 new steps in Kiln trial');
+  // offline (the saved copy): nothing is new
+  const before = s.state.data;
+  next = { ...staffData(), tasks: [{ id: 50, title: 'From the saved copy', status: 'open' }], fromCache: true };
+  await s.act.liveCheck();
+  assert.equal(s.state.data, before);
+});
+
+test('one app wiring (step 3): Ctrl+V and the 20 s check are hooked up for staff; the app icon shows tasks still to send', () => {
+  const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
+  const st = app.slice(app.indexOf('async function startStaff(user, openTask = 0) {'), app.indexOf('const saved = device.ui();'));
+  assert.match(st, /setInterval\(\(\) => \{ if \(document\.visibilityState === 'visible'\) staff\.act\.liveCheck\(\); \}, 20000\);/);
+  // (code-review 23 Oct: one paste helper for the staff view and the team pages)
+  assert.match(st, /document\.addEventListener\('paste', \(e\) => pasteToView\(staff, e, STAFF_BOX\)\);/);
+  assert.match(app, /const TEAM_BOX = \/\^Reply or give\/, STAFF_BOX = \/\^Ask or reply\/;/);
+  assert.match(app, /if \(view\.act\.paste\(\{ files: \[\.\.\.\(e\.clipboardData\.files \|\| \[\]\)\], text: e\.clipboardData\.getData\('text\/plain'\) \|\| '', inMessageBox \}\)\) e\.preventDefault\(\);/);
+  assert.equal((app.match(/\.act\.paste\(/g) || []).length, 1, 'one copy');
+  const src = readFileSync(new URL('../docs/ui/staff.js', import.meta.url), 'utf8');
+  assert.match(src, /const n = \(state\.data\.tasks \|\| \[\]\)\.filter\(\(t\) => !t\.today\)\.length;/);
+  assert.match(src, /\(n \? navigator\.setAppBadge\(n\) : navigator\.clearAppBadge\(\)\)/);
+});
+
+test('one app — the staff view has the owner\'s design: only this app\'s styles, its own building blocks (sections, the blue update box, segmented choice, team messages, tags); staff-only extras never touch the owner\'s screens', async () => {
+  const css = readFileSync(new URL('../docs/styles.css', import.meta.url), 'utf8');
+  const src = readFileSync(new URL('../docs/ui/staff.js', import.meta.url), 'utf8');
+  // every style the staff view uses is in this app's style file
+  const used = new Set([...src.matchAll(/class: '([^']+)'/g)].flatMap((m) => m[1].split(' ')).filter(Boolean));
+  for (const c of used) assert.ok(new RegExp('\\.' + c.replace(/-/g, '\\-') + '([^a-zA-Z0-9_-]|$)', 'm').test(css), 'styled by this app: .' + c);
+  // the extras are only inside the staff view (.layout.staff), so the owner's screens are unchanged
+  const extra = css.slice(css.indexOf('/* ---------------------------------------------------------------- the staff view'));
+  for (const rule of extra.split('\n').filter((l) => /^[^ /*].*\{/.test(l))) assert.match(rule, /^\.layout\.staff /, 'scoped: ' + rule.slice(0, 60));
+  // the owner's building blocks
+  const { s } = fakeStaff2({ 'task.get': () => ({ ok: true, task: staffData().tasks[0], updates: [], comments: [{ id: 1, text: 'Hi', mine: true, at: '2026-10-22 09:00:00' }] }) });
+  await s.load();
+  s.open('task:11'); await tick();
+  const v = s.view();
+  const has = (cls) => rFind(v, (n) => (' ' + (n.className || '') + ' ').includes(' ' + cls + ' '));
+  for (const cls of ['block', 'update-form', 'segmented', 'seg', 'team-msgs', 'team-msg', 'info-chips', 'diary-head', 'plist']) assert.ok(has(cls), 'uses the owner\'s .' + cls);
+  for (const gone of ['card', 'list-body', 'chip on']) assert.ok(!has(gone), 'no Work Task-only .' + gone);
+  assert.ok(rFind(v, (n) => n.nodeName === 'TEXTAREA' && /^What happened today\?/.test(n.getAttribute('placeholder') || '')), 'the owner\'s words in the update box');
+  const top = rFind(v, (n) => n.className === 'detail-top');
+  assert.ok(rFind(top, (n) => /\bdot red\b/.test(n.className || '')), 'the dot before the title, as on the owner\'s task page');
+});
+
+// ---------------------------------------------------------------- one app, step 4: the team pages (ui/team.js)
+const teamMod = await import('../docs/ui/team.js');
+const TD = '2026-10-22';
+function teamToday() {
+  const valar = { id: 7, name: 'Valar' }, ravi = { id: 8, name: 'Ravi' };
+  return {
+    today: TD, fillBy: '18:00', late: false, stuckSince: { 21: '2026-10-20' },
+    people: [{ ...valar, role: 'staff', lastUpdate: TD }, { ...ravi, role: 'staff', lastUpdate: '2026-10-19' }],
+    tasks: [
+      { id: 21, title: 'Fix kiln 2 fan', assignee: valar, status: 'open', repeat: 'daily', dueToday: true, stuck: true, today: { id: 1, note: 'Fan part missing', state: 'stuck', at: TD + ' 10:00:00', photos: [] } },
+      { id: 22, title: 'Pack samples', assignee: valar, status: 'open', repeat: 'once', dueDate: '2026-10-20', dueToday: true, today: null },
+      { id: 23, title: 'Sweep kiln room', assignee: ravi, status: 'open', repeat: 'daily', dueToday: true, today: null, unread: 1, lastMessage: { text: 'Done by noon?' } },
+    ],
+    stuck: [{ id: 21, title: 'Fix kiln 2 fan', assignee: valar, today: { note: 'Fan part missing' } }],
+    unread: [{ id: 23, title: 'Sweep kiln room', assignee: ravi, unread: 1, lastMessage: { text: 'Done by noon?' } }],
+    suggestions: [{ id: 24, title: 'Clean dryer filters', assignee: valar, status: 'suggested' }],
+  };
+}
+function fakeTeam(answers = {}, more = {}) {
+  const calls = [];
+  const box = staffBox.memOutbox();
+  const api = async (a, body, form) => {
+    calls.push({ a, body, form });
+    if (answers[a]) return answers[a](body);
+    if (a === 'team.today') return teamToday();
+    if (a === 'users.list') return { users: [{ id: 7, name: 'Valar', role: 'staff', active: true, username: 'valar' }, { id: 8, name: 'Ravi', role: 'staff', active: true, username: 'ravi' }, { id: 1, name: 'Boss', role: 'admin', active: true, username: 'boss' }] };
+    return { ok: true };
+  };
+  const toasts = [];
+  const t = teamMod.createTeam({ root: null, api, rules: teamRules, user: { id: 1, name: 'Boss', role: 'admin', owner: true }, box, lock: null, searchWait: 0,
+    toast: (x) => toasts.push(x), ask: { prompt: () => '', confirm: () => true }, ...more });
+  return { t, calls, toasts, box };
+}
+
+test('one app — team pages: Team today in the owner\'s design (progress line, Needs you, each person\'s tasks with dots, 📧 Morning email); the menu has every team page and, for the owner, 📋 My projects', async () => {
+  let back = 0;
+  const { t } = fakeTeam({}, { toProjects: () => { back++; } });
+  t.go('today'); await tick(); await tick();
+  const v = t.view();
+  const text = v.textContent;
+  for (const bit of ['📋 My projects', 'Team today', '🔁 Follow-up', 'Tasks', 'Done / cancelled', '📁 Projects', '📊 Weekly report', '🔍 Search', 'People', 'Settings', '+ Give a task',
+    '1 of 3', 'updates in today', 'Not yet: Valar, Ravi', 'Stuck: Valar (2 days)', 'No update for: Ravi (3 days)', '⚠︎ Needs you', 'Valar: Stuck — Fan part missing', 'Ravi: 💬 1 new', 'Valar: 💡 Suggestion', 'Pack samples', '⏰ Late (by', '📧 Morning email']) assert.ok(text.includes(bit), bit);
+  const has = (cls) => rFind(v, (n) => (' ' + (n.className || '') + ' ').includes(' ' + cls + ' '));
+  for (const cls of ['layout', 'progress', 'progress-bar', 'plist', 'prow', 'list-sec']) assert.ok(has(cls), 'the owner\'s .' + cls);
+  assert.ok(!has('card') && !has('summary') && !has('trow'), 'no Work Task-only styles');
+  const pack = rFind(v, (n) => n.nodeName === 'LI' && n.textContent.includes('Pack samples'));
+  assert.ok(rFind(pack, (n) => /\bdot red\b/.test(n.className || '')), 'late: red');
+  const sweep = rFind(v, (n) => n.nodeName === 'LI' && n.textContent.includes('Sweep kiln room') && !n.textContent.includes('Ravi:'));
+  assert.ok(rFind(sweep, (n) => /\bdot yellow\b/.test(n.className || '')), 'not yet (before the time): the owner\'s yellow');
+  btn(v, '📋 My projects').__on.click();
+  assert.equal(back, 1, 'back to the projects');
+  // another manager: no My projects
+  const { t: m } = fakeTeam({}, { user: { id: 2, name: 'Meena', role: 'admin', owner: false } });
+  m.go('today'); await tick(); await tick();
+  assert.ok(!m.view().textContent.includes('📋 My projects'));
+});
+
+test('one app — team pages: a task\'s page (who, Mark done, ⋯ Edit / Move / instruction file / Cancel, a suggestion\'s Yes / Not now, messages, what\'s happening) — each button does what Work Task did', async () => {
+  const task = { id: 22, title: 'Pack samples', assignee: { id: 7, name: 'Valar' }, status: 'open', repeat: 'once', dueDate: '2026-10-20', files: [{ id: 5, name: 'guide.pdf', image: false }], createdBy: 1 };
+  const { t, calls } = fakeTeam({ 'task.get': () => ({ ok: true, task, updates: [], comments: [{ id: 9, text: 'Please hurry', mine: true, at: TD + ' 09:00:00' }] }), 'task.move': () => ({ ok: true, moved: 1 }) });
+  t.go('today'); await tick();
+  t.open('task:22'); await tick(); await tick();
+  let v = t.view();
+  for (const bit of ['👤 Valar', '⏰ Late — was by', '📎 Instructions', 'guide.pdf', '💬 Messages', 'Please hurry', "📅 What's happening", '✓ Mark done']) assert.ok(v.textContent.includes(bit), bit);
+  assert.ok(rFind(v, (n) => n.nodeName === 'TEXTAREA' && /^Reply or give an instruction/.test(n.getAttribute('placeholder') || '')));
+  assert.ok(rFind(v, (n) => n.nodeName === 'BUTTON' && n.getAttribute('aria-label') === 'Remove guide.pdf'), 'the manager can take an instruction file off');
+  btn(v, '✓ Mark done').__on.click(); await tick();
+  assert.deepEqual(calls.filter((c) => c.a === 'task.status').map((c) => c.body), [{ id: 22, status: 'done' }]);
+  rFind(v, (n) => n.nodeName === 'BUTTON' && n.getAttribute('aria-label') === 'More actions').__on.click();
+  v = t.view();
+  for (const bit of ['✎ Edit task', '↔ Move to another person…', '📎 Add instruction photo / PDF', '✖ Cancel task']) assert.ok(v.textContent.includes(bit), bit);
+  btn(v, '↔ Move to another person…').__on.click();
+  v = t.view();
+  assert.match(v.textContent, /Move "Pack samples" to:/);
+  const moveBox = rFind(v, (n) => /\bbanner\b/.test(n.className || '') && n.textContent.includes('Move "Pack samples" to:'));
+  btn(moveBox, 'Ravi').__on.click(); await tick();
+  assert.deepEqual(calls.filter((c) => c.a === 'task.move').map((c) => c.body), [{ id: 22, toId: 8 }]);
+  // a message: comment.add with a clientId (kept once), the shared message box
+  t.state.msgDrafts[22] = 'Use the brown boxes';
+  assert.equal(await t.act.sendMessage(22), '');
+  const m = calls.find((c) => c.a === 'comment.add');
+  assert.deepEqual([m.body.taskId, m.body.text, !!m.body.clientId], [22, 'Use the brown boxes', true]);
+  // a suggestion: Yes / Not now
+  const sug = { id: 24, title: 'Clean dryer filters', assignee: { id: 7, name: 'Valar' }, status: 'suggested' };
+  const { t: t2, calls: c2 } = fakeTeam({ 'task.get': () => ({ ok: true, task: sug, updates: [], comments: [] }) }, { ask: { prompt: () => 'Next month', confirm: () => true } });
+  t2.open('task:24'); await tick(); await tick();
+  const v2 = t2.view();
+  assert.match(v2.textContent, /💡 Suggested by Valar/);
+  await t2.act.answerSuggestion(sug, true);
+  await t2.act.answerSuggestion(sug, false);
+  assert.deepEqual(c2.filter((c) => /task\.(approve|decline)/.test(c.a)).map((c) => [c.a, c.body]), [['task.approve', { id: 24 }], ['task.decline', { id: 24, reason: 'Next month' }]]);
+});
+
+test('one app — team pages: Give a task (the same id for the same words: given once; from "Give to team" it goes back to the projects); work in one line', async () => {
+  let back = 0;
+  const { t, calls } = fakeTeam({ 'task.save': (b) => ({ ok: true, task: { id: 40, assignee: { id: 7, name: 'Valar' }, title: b.title } }) }, { toProjects: () => { back++; } });
+  await t.start({ sel: 'give', prefill: { title: 'Order clay', project: 'Kiln trial', projectRef: 'p1', stepRef: 's1' }, fromProjects: true });
+  await tick(); await tick();
+  const v = t.view();
+  assert.match(v.textContent, /Give a task/);
+  assert.equal(t.state.giveForm.title, 'Order clay', 'filled in from the projects page');
+  t.state.giveForm.assigneeId = 7;
+  const fields = { id: 0, assigneeId: 7, title: 'Order clay', details: '', project: 'Kiln trial', repeat: 'daily', skipSunday: true, weekday: 1, dueDate: '', projectRef: 'p1', stepRef: 's1', needsPhoto: false, startDate: '' };
+  // a lost answer, then the same words again: the same clientId (the server makes it once)
+  const { t: lost, calls: lc } = fakeTeam({ 'task.save': () => { throw new Error('Server busy, try again.'); } });
+  await lost.act.saveTask(fields); await lost.act.saveTask(fields);
+  const ids = lc.filter((c) => c.a === 'task.save').map((c) => c.body.clientId);
+  assert.equal(ids.length, 2); assert.equal(ids[0], ids[1]);
+  assert.equal(await t.act.saveTask(fields), '');
+  assert.equal(back, 1, 'given from the projects page: back there');
+  assert.equal(calls.find((c) => c.a === 'task.save').body.stepRef, 's1');
+  // work in one line
+  const { t: q, calls: qc } = fakeTeam({ 'task.save': (b) => ({ ok: true, task: { id: 41, assignee: { id: 7, name: 'Valar' }, title: b.title } }) });
+  q.state.quick = { text: 'Valar: send kiln photos by Friday', sig: '', cid: 'q1' };
+  const r = teamRules.parseQuickTask(q.state.quick.text, [{ id: 7, name: 'Valar', role: 'staff' }], TD);
+  assert.equal(await q.act.giveQuick(r), '');
+  const s = qc.find((c) => c.a === 'task.save').body;
+  assert.deepEqual([s.assigneeId, s.title, s.repeat, s.dueDate, s.clientId], [7, 'Send kiln photos', 'once', '2026-10-23', 'q1']);
+  assert.equal(q.state.quick, null, 'the box empties');
+});
+
+test('one app — team pages: 🔁 Follow-up (worst first, Chase / Done / Take back, the round), Tasks, Projects, Weekly report, Search, People, Settings all draw', async () => {
+  const rows = [{ kind: 'task', taskId: 30, title: 'Fix fan', person: { id: 7, name: 'Valar' }, stuck: true, lastUpdate: { day: '2026-10-21', note: 'part missing' } },
+    { kind: 'task', taskId: 31, title: 'Glaze test', person: { id: 8, name: 'Ravi' }, silentDays: 0, lastUpdate: { day: TD, note: 'done half' } }];
+  const answers = {
+    'followup.list': () => ({ ok: true, today: TD, rows }),
+    'tasks.list': () => ({ ok: true, tasks: teamToday().tasks }),
+    'projects.overview': () => ({ ok: true, today: TD, projects: [{ ref: 'p1', name: 'Kiln trial', open: 2, done: 1, people: ['Valar'], lastUpdate: TD, current: { title: 'Order clay', sentToday: true }, stuck: false }] }),
+    'report.week': () => ({ ok: true, today: TD, from: '2026-10-16', end: TD, people: [{ name: 'Valar', workDays: 5, sentDays: 4, missed: ['2026-10-19'], updates: 6, stuck: 1, finished: 2, stepsAdded: 1 }] }),
+    search: () => ({ ok: true, results: [{ taskId: 21, title: 'Fix kiln 2 fan', who: 'Valar', kind: 'update', text: 'fan part', at: TD + ' 10:00:00' }] }),
+    'people.morning': () => ({ ok: true, people: [] }),
+  };
+  const { t, calls } = fakeTeam(answers, { user: { id: 2, name: 'Meena', role: 'admin', owner: false } });
+  t.go('followup'); await tick(); await tick();
+  let v = t.view();
+  assert.match(v.textContent, /2 given out/);
+  assert.ok(v.textContent.indexOf('Fix fan') < v.textContent.indexOf('Glaze test'), 'worst first');
+  for (const b of ['🔔 Chase', '✓ Done', '↩ Take back', '▶ Start round (2 min)']) assert.ok(btn(v, b), b);
+  await t.act.chase(t.state.data.rows[0] && teamRules.followupRows(rows, TD)[0]);
+  assert.deepEqual(calls.filter((c) => c.a === 'task.chase').map((c) => c.body), [{ id: 30 }]);
+  btn(v, '▶ Start round (2 min)').__on.click();
+  v = t.view();
+  assert.match(v.textContent, /Daily follow-up round/); assert.match(v.textContent, /Item 1 of 2/);
+  btn(v, '👍 OK').__on.click();
+  assert.match(t.view().textContent, /Item 2 of 2/);
+  for (const [view, bits] of [['tasks', ['Open', 'Done / cancelled', 'Fix kiln 2 fan']], ['projects', ['📁 Kiln trial', '1 of 3 done']], ['report', ['Week before', 'Valar', '4 of 5']], ['people', ['Add a person', 'Valar', '🔑 New password']], ['settings', ['Updates are due by']]]) {
+    t.go(view); await tick(); await tick();
+    const text = t.view().textContent;
+    for (const b of bits) assert.ok(text.includes(b), `${view}: ${b}`);
+  }
+  assert.ok(!t.view().textContent.includes('📧 Outlook'), 'Outlook is only for the owner');
+  t.go('search'); await tick();
+  t.act.search('fan'); await tick(); await tick();
+  assert.match(t.view().textContent, /📝 Fix kiln 2 fan/);
+});
+
+test('one app — team pages: the owner\'s Settings has 📧 Outlook (moved from Work Task); the client secret is never shown back', async () => {
+  const { t } = fakeTeam({ 'outlook.status': () => ({ ok: true, outlook: { clientId: 'cid-1', tenantId: 'tid-1', secretEnd: 'ab12', redirectUri: 'https://worktask.in/outlook.php', connected: true, account: 'boss@x.com', today: TD } }) });
+  t.go('settings');
+  for (let i = 0; i < 10 && !t.view().textContent.includes('ab12'); i++) await tick();
+  const v = t.view();
+  assert.match(v.textContent, /📧 Outlook/);
+  assert.match(v.textContent, /saved ✓ \(ends …ab12\)/);
+  const secret = rFind(v, (n) => n.nodeName === 'INPUT' && n.getAttribute('placeholder') === 'Client secret Value');
+  assert.equal(secret.value, '', 'never filled from the server');
+  for (const b of ['Connect again', 'Check now', 'Disconnect']) assert.ok(btn(v, b), b);
+});
+
+test('one app — team pages: every 20 s a new suggestion or a team update comes in as a bar to open; a message waits on the phone when offline', async () => {
+  let next = teamToday();
+  const { t, box } = fakeTeam({ 'team.today': () => next, 'comment.add': () => { throw Object.assign(new Error('offline'), { offline: true }); } });
+  t.go('today'); await tick(); await tick();
+  next = { ...teamToday(), suggestions: [...teamToday().suggestions, { id: 50, title: 'New idea', assignee: { id: 8, name: 'Ravi' }, status: 'suggested', createdBy: 8 }] };
+  next.tasks = [...next.tasks]; // (the suggestion is new)
+  await t.act.liveCheck();
+  assert.equal(t.state.news[0].title, '💡 Ravi suggests a task');
+  next = { ...next, tasks: next.tasks.map((x) => (x.id === 23 ? { ...x, today: { id: 9, note: 'Swept', state: 'finished', at: TD + ' 12:00:00', by: 'Ravi', byId: 8 } } : x)) };
+  await t.act.liveCheck();
+  assert.equal(t.state.news[0].title, '✅ Ravi finished a task');
+  t.state.msgDrafts[23] = 'Thanks';
+  assert.equal(await t.act.sendMessage(23), '');
+  assert.deepEqual([...box.items.values()].map((x) => [x.kind, x.taskId, x.text]), [['comment', 23, 'Thanks']], 'kept on the phone, sent when online');
+});
+
+test('one app wiring (step 4): 👥 Team, a team task chip and "Give to team" open the team pages inside this app (no more Work Task links); a manager who is not the owner gets them; the projects\' keys and redraws leave them alone', () => {
+  const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
+  const detailSrc = readFileSync(new URL('../docs/ui/detail.js', import.meta.url), 'utf8');
+  for (const [name, src] of [['app.js', app], ['detail.js', detailSrc]]) assert.ok(!/\.\.\/\?team|\.\.\/#task=|\.\.\/#new=/.test(src), name + ': no links to Work Task\'s team pages');
+  assert.match(app, /href: '#team'/);
+  assert.match(detailSrc, /href: `#team-task=\$\{t\.id\}`/);
+  assert.match(detailSrc, /'#team-new=' \+ encodeURIComponent/);
+  const hashFn = app.slice(app.indexOf('function teamHowFromHash() {'), app.indexOf('/** A manager who is not the owner'));
+  assert.match(hashFn, /if \(hsh === '#team'\) how = \{\};/);
+  assert.match(hashFn, /how = \{ sel: 'task:' \+ m\[1\], fromProjects: true \};/);
+  assert.match(hashFn, /how = \{ sel: 'give', prefill: p && typeof p === 'object' \? p : null, fromProjects: true \};/);
+  assert.match(app, /function render\(\) \{\n\s*if \(space === 'team'\) return;/, 'the projects never draw over the team pages');
+  assert.match(app, /function onKey\(e\) \{\n\s*if \(space === 'team'\) return;/, 'the projects\' keys are off on the team pages');
+  const st = app.slice(app.indexOf('function start() {'), app.indexOf("/** The owner's Daily Projects. */"));
+  assert.match(st, /if \(known === 'manager'\) \{ startManager\(undefined, teamTask\); return; \}/);
+  // one copy of a task page's pieces: both views use ui/workparts.js
+  for (const f of ['staff.js', 'team.js']) {
+    const src = readFileSync(new URL('../docs/ui/' + f, import.meta.url), 'utf8');
+    assert.match(src, /from '\.\/workparts\.js';/, f);
+    for (const own of ['function diaryRows', "h('ul', { class: 'diary-days' }", "class: 'banner team-msgs'"]) assert.ok(!src.includes(own), `${f} has no own copy of: ${own}`);
+  }
+  const sw = readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8');
+  assert.match(sw, /'ui\/team\.js'/); assert.match(sw, /'ui\/workparts\.js'/);
+});
+
+// ---------------------------------------------------------------- one app, step 4 part 2: signing in inside the one app
+const signMod = await import('../docs/ui/signin.js');
+const fakeForm = (vals) => ({ elements: Object.fromEntries(Object.entries(vals).map(([k, v]) => [k, { value: v }])), querySelector: () => ({ disabled: false }) });
+const submit = async (card, vals) => { await card.__on.submit({ preventDefault() {} }, fakeForm(vals)); };
+const shown = (card) => { const m = rFind(card, (n) => /\bkey-msg\b/.test(n.className || '')); const hid = m && (m.hidden === undefined ? m.hasAttribute('hidden') : m.hidden); return m && !hid ? m.textContent : ''; };
+
+test('one app — sign in: the key screen\'s card asks for the username and password, signs in with the server and hands over the sign-in; wrong words or no internet say so', async () => {
+  const posts = [];
+  let got = null;
+  const card = signMod.signInCard({ post: async (a, body) => { posts.push({ a, body }); return body.password === 'right-one' ? { status: 200, out: { ok: true, token: 't'.repeat(64), user: { id: 7, name: 'Valar', role: 'staff' } } } : { status: 401, out: { ok: false, error: 'Wrong username or password.' } }; }, onSignedIn: (x) => { got = x; } });
+  assert.equal(card.nodeName, 'FORM'); assert.match(card.className, /\bkey-card\b/, 'the owner\'s key screen card');
+  const text = card.textContent;
+  for (const bit of ['Work Task', 'Username', 'Password', 'Sign in']) assert.ok(text.includes(bit), bit);
+  assert.ok(rFind(card, (n) => n.nodeName === 'INPUT' && n.getAttribute('autocomplete') === 'current-password' && n.getAttribute('type') === 'password'), 'a password box the phone can fill');
+  await submit(card, { username: '', password: '' });
+  assert.equal(posts.length, 0, 'empty: nothing is sent'); assert.match(shown(card), /Type your username and password/);
+  await submit(card, { username: ' valar ', password: 'wrong' });
+  assert.deepEqual(posts[0], { a: 'login', body: { username: 'valar', password: 'wrong' } }, 'the username without spaces around it');
+  assert.equal(got, null); assert.equal(shown(card), 'Wrong username or password.');
+  await submit(card, { username: 'valar', password: 'right-one' });
+  assert.equal(got.token.length, 64); assert.equal(got.user.name, 'Valar');
+  const off = signMod.signInCard({ post: async () => { throw new TypeError('Failed to fetch'); }, onSignedIn: () => assert.fail('never') });
+  await submit(off, { username: 'valar', password: 'x' });
+  assert.match(shown(off), /No connection/);
+  assert.match(shown(signMod.signInCard({ post: async () => ({}), onSignedIn: () => {}, message: 'Please sign in again.' })), /Please sign in again/, 'the reason it is shown again');
+});
+
+test('one app — first password: chosen before anything else (8 or more, the same twice), then saved with the server', async () => {
+  const calls = [];
+  let done = null;
+  const api = async (a, body) => { calls.push({ a, body }); if (body.old !== 'from-manager') throw new Error('Your current password is not right.'); return { ok: true, user: { id: 7, mustChange: false } }; };
+  const card = signMod.firstPasswordCard({ api, user: { id: 7, name: 'Valar', mustChange: true }, onDone: (u) => { done = u; }, onSignOut: () => {} });
+  const text = card.textContent;
+  for (const bit of ['Choose your own password', 'Welcome, Valar!', 'Password from your manager', 'New password', 'New password again', 'Save password', 'Sign out']) assert.ok(text.includes(bit), bit);
+  await submit(card, { old: 'from-manager', new1: 'short', new2: 'short' });
+  assert.match(shown(card), /8 or more/); assert.equal(calls.length, 0);
+  await submit(card, { old: 'from-manager', new1: 'longer-one', new2: 'longer-two' });
+  assert.match(shown(card), /not the same/); assert.equal(calls.length, 0);
+  await submit(card, { old: 'guess', new1: 'longer-one', new2: 'longer-one' });
+  assert.match(shown(card), /not right/); assert.equal(done, null);
+  await submit(card, { old: 'from-manager', new1: 'longer-one', new2: 'longer-one' });
+  assert.deepEqual(calls[1], { a: 'password', body: { old: 'from-manager', new: 'longer-one' } });
+  assert.deepEqual(done, { id: 7, mustChange: false });
+});
+
+test('one app wiring (step 4 part 2): no sign-in → this app\'s sign-in card, then the person\'s own screens (their first password first); a sign-in that stops working shows it again; sign out comes back here', () => {
+  const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
+  assert.ok(!/\.\.\/\?next=projects/.test(app), 'never sent to Work Task\'s old sign-in page');
+  assert.ok(!/location\.href = '\.\.\/'/.test(app), 'nothing goes to the old Work Task page');
+  assert.match(app, /import \{ signInCard, firstPasswordCard \} from '\.\/ui\/signin\.js';/);
+  const fns = app.slice(app.indexOf('// ---------------------------------------------------------------- signing in'), app.indexOf('// ---------------------------------------------------------------- one app for everyone'));
+  assert.match(fns, /function showCard\(el\) \{ const s = signScreen\(\); root\.hidden = true; s\.hidden = false; s\.replaceChildren\(el\); \}/, 'the card covers the app (nothing of it shows or is drawn over it)');
+  assert.match(fns, /onSignedIn: \(\{ token, user \}\) => \{ keepSignIn\(token, user\); hideCard\(\); then\(user\); \}/);
+  assert.match(fns, /localStorage\.setItem\(SERVER_TOKEN_KEY, token\);\n\s*localStorage\.removeItem\(WHO_KEY\);/, 'the new sign-in is kept; who it is is asked again');
+  assert.match(fns, /if \(localStorage\.getItem\(LAST_USER_KEY\) !== String\(user\.id\)\) \{\n\s*for \(const k of Object\.keys\(localStorage\)\) if \(k\.startsWith\('wt\.c\.'\)\) localStorage\.removeItem\(k\);/, 'someone else on this phone: the last person\'s saved lists go');
+  assert.match(fns, /if \(user && user\.mustChange\) \{ showFirstPassword\(user, \(u\) => openFor\(u, teamTask\)\); return; \}/, 'their own password first');
+  assert.match(fns, /if \(who === 'staff'\) startStaff\(user, teamTask\);\n\s*else if \(who === 'manager'\) startManager\(user, teamTask\);\n\s*else startOwner\(\);/);
+  // (code-review 23 Oct: a sign-in that still works is never dropped — the right screens open again, once; never a reload loop)
+  assert.match(fns, /if \(user && user\.mustChange\) \{ showFirstPassword\(user, \(\) => location\.reload\(\)\); return; \}\n[^\n]*\n\s*if \(who && !reloadedJustNow\(\)\) \{ location\.reload\(\); return; \}\n\s*dropSignIn\(\);[^\n]*\n\s*showSignIn\(\(\) => location\.reload\(\), 'Please sign in again\.'\);/, 'stopped working: a new password if the manager reset it; still works: open again (once); else sign in again');
+  assert.match(fns, /if \(Date\.now\(\) - at < 60000\) return true;/, 'at most one reload a minute');
+  assert.match(app, /function toSignIn\(\) \{ signInAgain\(\); \}/, 'the owner\'s projects (what waits to be saved stays on this device)');
+  assert.match(app, /onAuth: \(\) => signInAgain\(\)/, 'the team pages');
+  assert.match(app, /const onAuth = \(\) => signInAgain\(\);/, 'the staff view');
+  const tools = app.slice(app.indexOf('function serverTools(api, more = {}) {'), app.indexOf('/** The team pages (ui/team.js)'));
+  assert.match(tools, /location\.replace\(location\.pathname\); \/\/ this app's sign-in/, 'signing out comes back to this app\'s sign-in');
+  assert.match(app.slice(app.indexOf('async function signOutServer()')), /location\.replace\(location\.pathname\); \/\/ this app's sign-in/, 'the owner too');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /'ui\/signin\.js'/, 'kept for offline');
+  assert.match(readFileSync(new URL('../docs/styles.css', import.meta.url), 'utf8'), /\.key-card \.sign-field \{/, 'in the key screen\'s own style');
+});
+
+test('one app wiring (step 4 part 3): a notification tapped while the app is open opens its task in the staff view or the team pages; arriving, the news is looked for at once', () => {
+  const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
+  const staff = app.slice(app.indexOf('async function startStaff('), app.indexOf('const saved = device.ui();'));
+  assert.match(staff, /window\.addEventListener\('hashchange', \(\) => \{[^]*const id = teamTaskInHash\(\);[^]*if \(id\) staff\.open\('task:' \+ id\);/, 'the staff view');
+  const mgr = app.slice(app.indexOf('async function startManager('), app.indexOf('const teamTaskInHash'));
+  assert.match(mgr, /const how = teamHowFromHash\(\) \|\| \(teamTask \? \{ sel: 'task:' \+ teamTask \} : \{\}\);/, 'a manager opens on the task (or Give a task) from the link');
+  assert.match(mgr, /window\.addEventListener\('hashchange', \(\) => \{ const h2 = teamHowFromHash\(\); if \(h2\) teamView\.start\(\{ \.\.\.h2, fromProjects: false \}\); \}\);/, 'the team pages');
+  assert.match(app, /else if \(d\.type === 'push'\) \{ if \(staffView\) staffView\.act\.liveCheck\(\); else if \(teamView\) teamView\.act\.liveCheck\(\); \}/);
+});
+
+test('one app — team pages: "turn on notifications" at the top (Later hides it for 3 days), 🎤 only where the browser can listen, the People card\'s about line and "no email — add one", and a message given back is "back in the box" only when the box was empty', async () => {
+  localStorage.removeItem('wt.pushLater'); localStorage.removeItem('wt.pushOff.1'); // (left by earlier checks)
+  let state = 'default';
+  const push = { state: () => state, sync: async () => {}, turnOn: async () => 'on' };
+  const { t } = fakeTeam({}, { push });
+  t.go('today'); await tick(); await tick();
+  let v = t.view();
+  assert.ok(v.textContent.includes('🔔 Get a message on this phone'), 'the banner');
+  btn(v, 'Later').__on.click();
+  assert.ok(!t.view().textContent.includes('🔔 Get a message on this phone'), 'Later: gone');
+  assert.ok(Number(localStorage.getItem('wt.pushLater')) > Date.now() + 2 * 86400000, 'for 3 days');
+  localStorage.removeItem('wt.pushLater'); state = 'on';
+  const { t: t2 } = fakeTeam({}, { push });
+  t2.go('today'); await tick(); await tick();
+  assert.ok(!t2.view().textContent.includes('🔔 Get a message on this phone'), 'already on: no banner');
+  // 🎤
+  t2.go('followup'); await tick(); await tick();
+  assert.ok(!btn(t2.view(), '🎤'), 'no 🎤 where the browser cannot listen');
+  globalThis.window = { SpeechRecognition: class { start() {} } };
+  try { assert.ok(btn(t2.view(), '🎤'), 'the 🎤 where it can'); } finally { delete globalThis.window; }
+  // People: the about line and the missing email
+  const { t: m } = fakeTeam({ 'users.list': () => ({ users: [{ id: 7, name: 'Valar', role: 'staff', active: true, username: 'valar' }] }), 'people.morning': () => ({ people: [{ id: 7, sentAt: null, items: [{ kind: 'project', title: 'Basin glaze', about: 'New glaze for line 2', now: 'Test 3 samples' }] }] }) }, { user: { id: 2, name: 'Meena', role: 'admin', owner: false } });
+  m.go('people'); await tick(); await tick();
+  v = m.view();
+  assert.ok(v.textContent.includes('New glaze for line 2'), 'the project\'s about line');
+  assert.ok(btn(v, 'no email — add one'), 'a missing email can be added from the card');
+  // a message given back
+  const { t: g, box } = fakeTeam({ 'comment.add': () => { throw new Error('This task is closed.'); } });
+  await box.add({ kind: 'comment', taskId: 5, text: 'Please hurry', clientId: 'c', userId: 1, at: new Date().toISOString() });
+  g.state.msgDrafts[5] = 'other words typed meanwhile';
+  await g.act.flush();
+  assert.equal(g.state.msgDrafts[5], 'other words typed meanwhile', 'the words being typed stay');
+  assert.ok(!/also back in the box/.test(g.state.notices.map((n) => n.body).join('\n')), 'never says it is back in the box when it is not');
+  const { t: g2, box: box2 } = fakeTeam({ 'comment.add': () => { throw new Error('This task is closed.'); } });
+  await box2.add({ kind: 'comment', taskId: 5, text: 'Please hurry', clientId: 'c', userId: 1, at: new Date().toISOString() });
+  await g2.act.flush();
+  assert.equal(g2.state.msgDrafts[5], 'Please hurry', 'an empty box gets the words back');
+});
+
+test('one app — signing out (staff view and team pages): asks first while items still wait to be sent, and stops this phone getting that person\'s notifications (without turning them off for their next sign-in)', async () => {
+  const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
+  const tools = app.slice(app.indexOf('function serverTools(api, more = {}) {'), app.indexOf('/** A photo or PDF on top of the page'));
+  assert.match(tools, /const n = more\.waiting \? more\.waiting\(\) : 0;\n\s*if \(n && !confirm\(`\$\{n\} item/, 'asks first');
+  assert.ok(tools.indexOf('p.unlink()') > 0 && tools.indexOf('p.unlink()') < tools.indexOf("api('logout')"), 'notifications off for this phone before the sign-in ends');
+  for (const who of ['async function teamPages(', 'async function startStaff(']) assert.match(app.slice(app.indexOf(who)), /serverTools\(api, \{ waiting: \(\) => \([a-z]+ \? [a-z]+\.state\.outbox\.length : 0\), push: \(\) => push \}\)/, who);
+  const { browserPush } = await import('../docs/ui/staff.js');
+  const calls = [];
+  let unsubscribed = 0;
+  const sub = { endpoint: 'https://fcm.googleapis.com/x', unsubscribe: async () => { unsubscribed++; } };
+  globalThis.window = { PushManager: 1, Notification: 1 };
+  globalThis.Notification = { permission: 'granted' };
+  const nav = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+  Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { userAgent: 'x', serviceWorker: { getRegistration: async () => ({ pushManager: { getSubscription: async () => sub } }) } } });
+  try {
+    const p = browserPush(async (a, b) => { calls.push({ a, b }); return {}; }, 7);
+    await p.unlink();
+    assert.deepEqual(calls, [{ a: 'push.unsubscribe', b: { endpoint: sub.endpoint } }]); assert.equal(unsubscribed, 1);
+    assert.equal(localStorage.getItem('wt.pushOff.7'), null, 'not "turned off by them": it links again at their next sign-in');
+    await p.turnOff();
+    assert.equal(localStorage.getItem('wt.pushOff.7'), '1', 'Turn off still stays off');
+  } finally { delete globalThis.window; delete globalThis.Notification; if (nav) Object.defineProperty(globalThis, 'navigator', nav); else delete globalThis.navigator; localStorage.removeItem('wt.pushOff.7'); }
+});
+
+test('giving a 📂 project (owner, 23 Oct): the give box lists its tasks — ticked ones go, untick the ones you do yourself, ones given to someone else stay with them; the app sends them and keeps them in step', async () => {
+  const s = sampleState();
+  applyOps(s, [
+    makeOp('createMainProject', { projectId: 'm', name: 'Kilns' }),
+    makeOp('createProject', { projectId: 't1', name: 'Fix fan', parentId: 'm' }),
+    makeOp('createProject', { projectId: 't2', name: 'Order bricks', parentId: 'm' }),
+    makeOp('createProject', { projectId: 't3', name: 'Call the fitter', parentId: 'm' }),
+    makeOp('setProjectTeam', { projectId: 't2', userId: 8, name: 'Ravi' }),
+    makeOp('setProjectTeam', { projectId: 't3', userId: null, keepOff: true }),
+  ]);
+  const ui = { selected: 'm', update: {}, giveOpen: 'm' };
+  const ctx = { ...fakeCtx(s, ui), onServer: true, teamPeople: () => [{ id: 7, name: 'Valar' }], teamBusy: () => false, giveProject: () => {}, setGivePhoto: () => {} };
+  const el = renderDetail(ctx);
+  const box = rFind(el, (n) => /\bgive-tasks\b/.test(n.className || ''));
+  assert.ok(box, 'the list of its tasks');
+  const row = (name) => rFind(box, (n) => n.nodeName === 'LABEL' && n.textContent.includes(name));
+  const tick = (name) => rFind(row(name), (n) => n.nodeName === 'INPUT');
+  assert.ok(tick('Fix fan') && tick('Fix fan').hasAttribute('checked'), 'a free task: ticked, it goes');
+  assert.ok(!tick('Order bricks') && row('Order bricks').textContent.includes('stays with Ravi'), 'given to Ravi on its own: stays, no box');
+  assert.ok(tick('Call the fitter') && !tick('Call the fitter').hasAttribute('checked') && row('Call the fitter').textContent.includes('stays with you'), 'kept before: unticked, stays with you');
+  const tick2 = (name) => { const b = rFind(renderDetail(ctx), (n) => /\bgive-tasks\b/.test(n.className || '')); rFind(rFind(b, (n) => n.nodeName === 'LABEL' && n.textContent.includes(name)), (n) => n.nodeName === 'INPUT').__on.change({}, { checked: false }); };
+  tick('Fix fan').__on.change({}, { checked: false });
+  assert.ok(ui.giveKeep.has('t1'), 'unticked: you keep it');
+  assert.match(box.textContent, /Tasks you add to it later go to the same person/);
+  // (code-review 23 Oct) a box opened on another project (even an empty one) starts from that project's own ticks
+  applyOps(s, [makeOp('createMainProject', { projectId: 'm2', name: 'Empty one' })]);
+  ui.selected = 'm2'; ui.giveOpen = 'm2';
+  renderDetail(ctx);
+  assert.equal(ui.giveKeepFor, 'm2'); assert.equal(ui.giveKeep.size, 0, 'nothing carried over from Kilns');
+  ui.selected = 'm'; ui.giveOpen = 'm'; ui.giveKeep = null;
+  renderDetail(ctx); tick2('Fix fan');
+  const { readFileSync } = await import('node:fs');
+  const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
+  const give = app.slice(app.indexOf('async function giveProject('), app.indexOf('/** "4 tasks go with it'));
+  assert.match(give, /\.\.\.\(main && person \? \{ giveTasks: true \} : \{\}\)/, 'giving a 📂 project gives its tasks again');
+  // (code-review 23 Oct: only this project's own ticks, and only its own tasks — never ticks left from another project's box)
+  assert.match(give, /if \(main && person && keep\) for \(const id of keep\) if \(kids\.has\(id\)\) store\.dispatch\('setProjectTeam', \{ projectId: id, userId: null, keepOff: true \}\);/, 'the ones you keep');
+  assert.match(give, /keep = ui\.giveKeepFor === p\.id \? ui\.giveKeep : null\) \{/, 'the ticks of this project\'s box only');
+  assert.match(give, /\.\.\.\(!main && !person \? \{ keepOff: true \} : \{\}\)/, 'a task taken back on its own stays off');
+  assert.match(give, /if \(main\) syncGivenProjects\(\);/, 'its tasks reach the person now');
+  // (taken back by you: the tasks that went with it leave the person's list at once, not a minute later at the next sync)
+  assert.match(give, /for \(const id of moved\.backIds\) \{[^]*await teamApi\('project\.sync', \{ projectRef: id, project: t \? t\.name : '', assigneeId: 0, steps: \[\], reason: 'taken'[^]*rememberSync\(id, null\);/);
+  assert.match(app, /if \(!c\.team\) out\.backIds\.push\(c\.projectId\);/);
+  assert.match(app, /followProjects\(\{ onlyFresh: true \}\); \/\/ a task added to \(or taken out of\) a given 📂 project follows it/, 'kept in step by the sync');
+  // (code-review 23 Oct: the background sync follows only on data just checked with the server — an old copy on a phone never re-gives)
+  assert.match(app, /if \(onlyFresh && \(store\.status !== 'saved' \|\| !dataFreshAt \|\| Date\.now\(\) - dataFreshAt > 2 \* 60000\)\) return out;/);
+  // (code-review 23 Oct: a task no longer given is taken off the person's list only once saved, after its Undo time, and
+  // only if no other device saved since — the server answers "stale" then)
+  assert.match(app, /if \(store\.pending\.length \|\| !saved \|\| saved\.team \|\| Date\.now\(\) - Date\.parse\(still\.updatedAt \|\| 0\) < UNDO_GRACE_MS\) continue;/);
+  assert.match(app, /reason: 'taken', ifHead: store\.base\.commit \}\);\n\s*if \(!out\.stale\) rememberSync\(ref, null\);/);
+  assert.match(app, /const out = await teamApi\('project\.sync', \{ projectRef: ref, project: still\.name, assigneeId: 0, steps: \[\], reason: 'taken', ifHead/, 'taken back: off the person\'s list');
+  assert.match(app, /if \(isMainProject\(store\.view\.data, p\)\) return \[\]; \/\/ a 📂 project: its tasks go/, 'a 📂 project is never one task with its name');
+  // the take back question
+  const { takeBackQuestion } = await import('../docs/ui/detail.js');
+  applyOps(s, [makeOp('setProjectTeam', { projectId: 'm', userId: 7, name: 'Valar' }), makeOp('setProjectTeam', { projectId: 't1', userId: 7, name: 'Valar', viaProject: 'm' })]);
+  assert.match(takeBackQuestion(s.data, s.data.projects.find((x) => x.id === 'm')), /The 1 task that went with it comes back too\. Tasks given to someone on their own stay with them\./);
+  // the chip on a task that went with its project
+  const t1 = renderDetail({ ...ctx, ui: { selected: 't1', update: {} } }).textContent;
+  assert.ok(t1.includes('👥 Valar (with 📂 Kilns)'));
 });

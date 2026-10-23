@@ -283,13 +283,12 @@ export function copyNotice(how) {
 }
 
 /**
- * Work finished in a group between two India dates, grouped by the project's tag:
+ * Work finished between two India dates, grouped by the project's tag:
  * [{ key, name, items: [{ text, project, day }] }], most items first, "No tag" last.
  */
-export function workDoneByTag(data, history, groupId, fromDay, toDay) {
-  const g = data.groups.find((x) => x.id === groupId);
-  const tags = (g && g.tags) || [];
-  const projects = new Map(data.projects.filter((p) => p.groupId === groupId).map((p) => [p.id, p]));
+export function workDoneByTag(data, history, fromDay, toDay) {
+  const tags = data.tags || [];
+  const projects = new Map(data.projects.map((p) => [p.id, p]));
   const groups = new Map();
   for (const e of Object.values(history).flat()) {
     if (e.kind !== 'step_ticked' || !projects.has(e.projectId)) continue;

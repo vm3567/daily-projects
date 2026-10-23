@@ -21,7 +21,7 @@ async function freshRepoWithProject() {
   const repo = new MemRepo();
   const s = new Store(repo);
   await s.init();
-  s.dispatch('createProject', { projectId: 'p1', name: 'Kiln trial', groupId: 'g1' });
+  s.dispatch('createProject', { projectId: 'p1', name: 'Kiln trial' });
   s.dispatch('addStep', { projectId: 'p1', stepId: 's1', text: 'Order clay' });
   s.dispatch('addStep', { projectId: 'p1', stepId: 's2', text: 'Call supplier' });
   await s.flush();
@@ -111,7 +111,7 @@ test('a change dated last month is saved into last month\'s history without losi
   const repo = new MemRepo();
   const data = emptyData();
   data.projects.push({
-    id: 'p1', groupId: 'g1', name: 'Old', priority: 'medium', deadline: null, notes: '', links: [], state: 'active',
+    id: 'p1', name: 'Old', priority: 'medium', deadline: null, notes: '', links: [], state: 'active',
     lastTickDate: null, activeSince: '2026-09-01', stateChangedAt: '2026-09-01T00:00:00Z', createdAt: '2026-09-01T00:00:00Z',
     updatedAt: '2026-09-01T00:00:00Z', steps: [{ id: 's1', text: 'A', done: false, doneAt: null, note: '', waiting: false, waitingOn: '' }], workNotes: [], files: [],
   });
@@ -131,7 +131,7 @@ test('unticking a step ticked in a month not loaded takes its tick line out of t
   const repo = new MemRepo();
   const data = emptyData();
   data.projects.push({
-    id: 'p1', groupId: 'g1', name: 'Quote', priority: 'medium', deadline: null, notes: '', links: [], state: 'active',
+    id: 'p1', name: 'Quote', priority: 'medium', deadline: null, notes: '', links: [], state: 'active',
     lastTickDate: '2025-09-28', activeSince: '2025-09-01', stateChangedAt: '2025-09-01T00:00:00Z', createdAt: '2025-09-01T00:00:00Z',
     updatedAt: '2025-09-28T06:00:00Z', steps: [{ id: 's1', text: 'Send quotation', done: true, doneAt: '2025-09-28T06:00:00Z', updatedAt: '2025-09-28T06:00:00Z', note: '', waiting: false, waitingOn: '' }], workNotes: [], files: [],
   });
@@ -342,7 +342,7 @@ test('two tabs: when the other tab already sent my change, my screen keeps showi
   localStorage.clear();
   const tabA = await device(repo.s);
   stop(tabA);
-  tabA.dispatch('createProject', { projectId: 'p9', name: 'New one', groupId: 'g1' });
+  tabA.dispatch('createProject', { projectId: 'p9', name: 'New one' });
   stop(tabA);
   // the other tab sent it and emptied the shared list; this tab hears about it
   localStorage.setItem('dp.pending', '[]');
@@ -380,7 +380,7 @@ test('Finish / Delete on an email task works right after an email came in, even 
     localStorage.clear();
     const s = new Store(new MemRepo());
     await s.init();
-    s.dispatch('createProject', { projectId: 'mt', name: '📧 Invoice', groupId: 'g1' });
+    s.dispatch('createProject', { projectId: 'mt', name: '📧 Invoice' });
     stop(s);
     // the server brought the email in at its time, 3 minutes later than this device's clock says now
     const addedAt = new Date(Date.now() + 3 * 60000).toISOString();

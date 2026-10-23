@@ -175,7 +175,7 @@ function taskBox(ctx, person, give = null) {
     const name = (prompt('Name of the new task:', '') || '').trim();
     if (!name) return;
     const projectId = newId();
-    if (store.dispatch('createProject', { projectId, name, groupId: data.groups[0] && data.groups[0].id })) add(projectId, name);
+    if (store.dispatch('createProject', { projectId, name })) add(projectId, name);
   };
   const chip = (on, label, onClick, title) => h('button', { class: 'chip' + (on ? ' on' : ''), type: 'button', title, onClick: () => { keep(); onClick(); ctx.render(); } }, label);
   return h('form', {

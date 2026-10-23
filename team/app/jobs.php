@@ -46,6 +46,7 @@ function server_steps(array $p, string $today): array {
   }
   if ($open) return $open;
   if ($steps) return []; // steps all done or snoozed: nothing to do (the whole-project task is only for a project with no steps at all)
+  if (!empty($p['isMain'])) return []; // a 📂 project: its tasks go to the person themselves, never one task with its name
   return [['stepRef' => $p['id'] . ':whole', 'title' => (string)($p['name'] ?? 'Project'), 'details' => (string)($p['status'] ?? '')]];
 }
 
@@ -145,7 +146,7 @@ function stuck_second_alerts(): void {
     [date('Y-m-d H:i:s', time() - 86400), date('Y-m-d H:i:s', time() - 7 * 86400)]);
   foreach ($rows as $r) {
     q('UPDATE updates SET alert2 = 1 WHERE id = ?', [$r['id']]);
-    notify(admin_ids(), 'stuck', "⚠️ {$r['name']} is still stuck (1 day, no answer)", $r['title'] . ': ' . $r['note'], '/#open=' . $r['task_id'], 'u' . $r['task_id']);
+    notify(admin_ids(), 'stuck', "⚠️ {$r['name']} is still stuck (1 day, no answer)", $r['title'] . ': ' . $r['note'], '/projects/#team-task=' . $r['task_id'], 'u' . $r['task_id']);
   }
 }
 

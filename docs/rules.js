@@ -282,6 +282,39 @@ export function parentIdsOf(p) {
  * Older saved data, read the new way (in place; done when data loads and before changes): parentId → parentIds,
  * and every object that holds tasks is marked isMain (so it stays a project when it is emptied).
  */
+/**
+ * Groups are gone (the owner asked, 23 Oct): an older data file is brought up to date when it is read. The tags of all
+ * groups become one list (the same name: one tag), the timer stays on if any group had it on, and every task loses its
+ * groupId (and the formerGroup kept for a few days). A file without groups is left as it is (only data.tags is made sure).
+ */
+export function dropGroups(data) {
+  if (!data || typeof data !== 'object') return data;
+  if (!Array.isArray(data.tags)) data.tags = [];
+  if (Array.isArray(data.groups) && data.groups.length) {
+    const map = new Map(); // old tag id -> the kept tag's id
+    for (const g of data.groups) {
+      for (const t of (g && Array.isArray(g.tags) ? g.tags : [])) {
+        if (!t || typeof t.name !== 'string') continue;
+        const same = data.tags.find((x) => x.name.toLowerCase() === t.name.toLowerCase());
+        if (!same) data.tags.push({ id: t.id, name: t.name });
+        else if (same.id !== t.id) map.set(t.id, same.id);
+      }
+    }
+    if (!data.settings || typeof data.settings !== 'object') data.settings = {};
+    if (typeof data.settings.timer !== 'boolean') { // (a group had the timer unless switched off; Personal was off by default)
+      data.settings.timer = data.groups.some((g) => g && (typeof g.timer === 'boolean' ? g.timer : String(g.name || '').trim().toLowerCase() !== 'personal'));
+    }
+    for (const p of data.projects || []) if (p && map.has(p.tagId)) p.tagId = map.get(p.tagId);
+  }
+  // always an empty list, never used: only so an older copy of the app still open on a phone does not break on it
+  data.groups = [];
+  for (const p of data.projects || []) if (p && typeof p === 'object') { delete p.groupId; delete p.formerGroup; }
+  return data;
+}
+
+/** The timer (and the Time report) is on unless switched off in Settings. */
+export const timerOn = (data) => !(data && data.settings && data.settings.timer === false);
+
 export function normalizeParents(data) {
   if (!data || !Array.isArray(data.projects)) return data;
   const ids = new Set(data.projects.filter((p) => p && typeof p === 'object').map((p) => p.id));
@@ -300,6 +333,31 @@ export function normalizeParents(data) {
 }
 
 /** The tasks in this project (any state; a deleted one is gone from the list). */
+/**
+ * Giving a 📂 project gives its tasks (owner, 23 Oct): each task in a given project that is not given to anyone goes to
+ * that project's person (its team.viaProject = the project). A task given on its own stays with its person; a task taken
+ * back on its own (teamOff) stays off. A task given through a project follows it: a new person, take back, or taken out
+ * of the project. Finished tasks are not given. Returns the changes: [{ projectId, team: { userId, name, needsPhoto,
+ * viaProject } | null }].
+ */
+export function projectGiveChanges(data) {
+  const byId = new Map(data.projects.map((p) => [p.id, p]));
+  const out = [];
+  for (const t of data.projects) {
+    if (isMainProject(data, t)) continue;
+    if (t.state === 'finished') continue; // finished: never given, moved or taken back (it stays as it ended)
+    if (t.team && !t.team.viaProject) continue; // given on its own: stays with its person
+    const given = parentIdsOf(t).map((id) => byId.get(id)).filter((m) => m && m.team && m.state !== 'finished');
+    const via = t.team && byId.get(t.team.viaProject);
+    const m = (via && given.includes(via) ? via : given[0]) || null;
+    if (!m) { if (t.team) out.push({ projectId: t.id, team: null }); continue; }
+    if (!t.team && t.teamOff) continue;
+    const want = { userId: m.team.userId, name: m.team.name, needsPhoto: !!m.team.needsPhoto, viaProject: m.id };
+    if (!t.team || t.team.userId !== want.userId || t.team.name !== want.name || !!t.team.needsPhoto !== want.needsPhoto || t.team.viaProject !== m.id) out.push({ projectId: t.id, team: want });
+  }
+  return out;
+}
+
 export function childrenOf(data, id) {
   return id ? data.projects.filter((p) => p.id !== id && parentIdsOf(p).includes(id)) : [];
 }
@@ -621,15 +679,13 @@ export function weekStart(day) {
 }
 
 /**
- * Time in a group between two India dates, split by tag (or by project).
+ * Time between two India dates, split by tag (or by project).
  * Returns [{ key, name, minutes }] biggest first; projects without a tag are "No tag".
  */
-export function timeSplit(data, groupId, fromDay, toDay, by = 'tag', now = new Date()) {
-  const g = data.groups.find((x) => x.id === groupId);
-  const tags = (g && g.tags) || [];
+export function timeSplit(data, fromDay, toDay, by = 'tag', now = new Date()) {
+  const tags = data.tags || [];
   const rows = new Map();
   for (const p of data.projects) {
-    if (p.groupId !== groupId) continue;
     const m = minutesBetween(p, fromDay, toDay, data.timer, now);
     if (!m) continue;
     let key;
@@ -1060,4 +1116,22 @@ export function droppedOrder(list, id, slot) {
   ids.splice(i, 1);
   ids.splice(slot > i ? slot - 1 : slot, 0, id);
   return ids;
+}
+
+/**
+ * Who signed in on worktask.in, for the one app: 'owner' (the Daily Projects owner: the full app), 'staff' (the staff
+ * view: only their own Work Task tasks), 'manager' (a manager who is not the owner: Work Task's manager screens).
+ * The server decides what each may reach; this only picks the screens.
+ */
+export function whoFromUser(u) {
+  if (!u) return '';
+  if (u.owner) return 'owner';
+  return u.role === 'admin' ? 'manager' : 'staff';
+}
+
+/** A short tag of a sign-in (never the sign-in itself), so a remembered "who" is used only for that same sign-in. */
+export function signInTag(token) {
+  let x = 2166136261;
+  for (const c of String(token || '')) { x ^= c.charCodeAt(0); x = Math.imul(x, 16777619) >>> 0; }
+  return token ? x.toString(36) : '';
 }

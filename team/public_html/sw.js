@@ -1,6 +1,7 @@
-// Work Task app shell: keeps the screens on the phone so the app opens fast and shows something
-// without internet. Data (api/) and the projects app (projects/, it has its own) are never kept here.
-const CACHE = 'worktask-v27';
+// Work Task's start page (it sends everyone to the one app, worktask.in/projects/) and the phone notifications.
+// Keeps the start page on the phone so an installed app opens without internet. Data (api/) and the one app
+// (projects/, it has its own) are never kept here.
+const CACHE = 'worktask-v28';
 const SHELL = ['./', 'index.html', 'app.js', 'logic.js', 'styles.css', 'projects/styles.css', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png'];
 
 self.addEventListener('install', (e) => {
@@ -88,9 +89,8 @@ self.addEventListener('push', (e) => {
   let m = {};
   try { m = e.data ? e.data.json() : {}; } catch { m = { title: 'Work Task', body: e.data ? e.data.text() : '' }; }
   e.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
-    const app = list.filter((c) => new URL(c.url).pathname === '/');
-    app.forEach((c) => c.postMessage({ type: 'push', msg: m }));
-    if (app.some((c) => c.visibilityState === 'visible' && c.focused)) return undefined; // they are looking at it: the bar is enough
+    // the one app, open: it looks for the news at once (the phone still shows the notification)
+    list.filter((c) => new URL(c.url).pathname.startsWith('/projects/')).forEach((c) => c.postMessage({ type: 'push', msg: m }));
     if (self.navigator.setAppBadge && m.kind === 'task') self.navigator.setAppBadge().catch(() => {}); // a dot on the app icon until it is opened
     return self.registration.showNotification(m.title || 'Work Task', {
       body: m.body || '', tag: m.tag || undefined, renotify: !!m.tag, icon: 'icons/icon-192.png', data: { url: m.url || '/' },
@@ -98,14 +98,22 @@ self.addEventListener('push', (e) => {
   }));
 });
 
+/** An old notification's address (worktask.in/#open=<id>, worktask.in/): the same place in the one app. */
+function oneApp(url) {
+  if (url.pathname !== '/') return url;
+  const n = /^#(?:open|task)=(\d+)$/.exec(url.hash);
+  return new URL(n ? '/projects/#team-task=' + n[1] : '/projects/', url.origin);
+}
 self.addEventListener('notificationclick', (e) => {
   e.notification.close();
   let url = new URL((e.notification.data && e.notification.data.url) || '/', self.location.origin);
   if (url.origin !== self.location.origin) url = new URL('/', self.location.origin); // only ever our own pages
+  url = oneApp(url);
   e.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
-    const c = url.pathname === '/' ? list.find((x) => new URL(x.url).pathname === '/') : null; // a projects reminder (/projects/#open=…) is for the projects page
+    // the one app is open: it opens that task (or project reminder) itself, without loading again
+    const c = url.pathname === '/projects/' && url.hash ? list.find((x) => new URL(x.url).pathname === '/projects/') : null;
     if (c) { c.postMessage({ type: 'open', hash: url.hash }); return c.focus(); }
-    // another page of this site is open (the owner's projects): use that window, or a new one if it cannot be moved
+    // another page of this site is open: use that window, or a new one if it cannot be moved
     const other = list.find((x) => new URL(x.url).origin === self.location.origin && 'navigate' in x);
     if (other) return other.navigate(url.href).then((w) => (w || other).focus()).catch(() => self.clients.openWindow(url.href));
     return self.clients.openWindow(url.href);

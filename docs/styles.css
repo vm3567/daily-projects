@@ -229,6 +229,7 @@ label.late { color: var(--red); }
 .key-card input { width: 100%; }
 .key-card .btn { width: 100%; justify-content: center; }
 .key-card p { margin: 0; }
+.key-card .sign-field { width: 100%; display: flex; flex-direction: column; gap: 4px; text-align: left; font-size: 14px; } /* signing in on worktask.in */
 
 #viewer {
   position: fixed; inset: 0; z-index: 50; background: rgba(15, 20, 30, .92);
@@ -882,6 +883,9 @@ a.tag.team:hover { text-decoration: underline; }
 a.team-btn { position: relative; text-decoration: none; }
 .team-count { position: absolute; top: -2px; right: -4px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: #d93025; color: #fff; font-size: 11px; line-height: 16px; text-align: center; }
 .team-banner { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+/* giving a 📂 project: its tasks, ticked = they go too */
+.give-tasks { display: flex; flex-direction: column; gap: 4px; width: 100%; }
+.give-tasks .give-task { display: flex; gap: 6px; align-items: center; }
 a.team-line { display: block; margin: 6px 0 4px; padding: 6px 10px; border-radius: 8px; background: var(--brand-soft); border: 1px solid var(--line); color: var(--text); text-decoration: none; font-size: 14px; }
 a.team-line.late { border-color: var(--red); color: var(--red); }
 a.team-line.ok { border-color: var(--green); }
@@ -1147,3 +1151,26 @@ img.rich-photo { width: 72px; height: 72px; object-fit: cover; border-radius: 6p
 .tag.app-status.rejected { color: var(--red); background: #fff3f3; border-color: #fbd0d0; }
 @media (max-width: 600px) { .once-row { grid-template-columns: 1fr auto; } .once-label { grid-column: 1 / -1; } }
 @media (prefers-color-scheme: dark) { .conn-once { background: #2b2311; border-color: #5c4813; } .once-value, .conn-guide pre { background: transparent; } }
+
+/* ---------------------------------------------------------------- the staff view (one app: ui/staff.js)
+   Staff see this app's own design. Only the few pieces this app had no style for, and only inside the staff view
+   (.layout.staff), so the owner's screens never change. */
+.layout.staff .list-sec { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin: 14px 16px 2px; font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+.layout.staff .list-sec .tag { text-transform: none; letter-spacing: 0; }
+.layout.staff .pre { white-space: pre-wrap; word-break: break-word; }
+.layout.staff .stack { display: flex; flex-direction: column; gap: 10px; }
+.layout.staff .banner.stack { gap: 6px; margin: 10px 14px 0; color: var(--text); }
+.layout.staff .team-msg.mine { background: var(--brand-soft); border-color: #c7d7fb; }
+.layout.staff .msg-acts { margin-left: auto; display: inline-flex; gap: 6px; }
+.layout.staff .search-box { margin: 12px 14px 4px; }
+.layout.staff .search-box .search { width: 100%; }
+.layout.staff .update-form textarea, .layout.staff .team-msgs textarea { width: 100%; min-height: 64px; }
+.layout.staff .update-form .segmented { align-self: flex-start; }
+.layout.staff .detail-top h2 { flex: 1 1 0; min-width: 0; }
+.layout.staff .quick-line .search { flex: 1; min-width: 0; }
+/* the People page's morning-email table: words never squeezed to one letter a line */
+.layout.staff .wt-table.morning { table-layout: fixed; }
+.layout.staff .wt-table.morning td { overflow-wrap: anywhere; word-break: normal; }
+.layout.staff .wt-table.morning .m-no { width: 2.2em; }
+.layout.staff .wt-table.morning .m-last { width: 38%; }
+.layout.staff .wt-table tr.wt-open { cursor: pointer; }

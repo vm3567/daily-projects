@@ -58,7 +58,7 @@ export function mainBoxItems(ctx, p) {
     out.push({
       kind: 'create', label: `+ Create '${create}' as a new project`,
       run: () => {
-        ctx.act('createMainProject', { projectId: newId(), name: create, groupId: p.groupId, childId: p.id }, `New project 📂 ${create} — ${p.name} is in it`);
+        ctx.act('createMainProject', { projectId: newId(), name: create, childId: p.id }, `New project 📂 ${create} — ${p.name} is in it`);
         again();
       },
     });
@@ -305,7 +305,7 @@ function newHereBox(ctx, p) {
     key: `newhere-${p.id}`, heading: `New task in 📂 ${p.name}`,
     onCancel: close,
     onCreate: (name, editor) => {
-      const id = createTaskWithNote(ctx, { name, groupId: p.groupId, parentId: p.id, d, editor });
+      const id = createTaskWithNote(ctx, { name, parentId: p.id, d, editor });
       if (!id) return;
       ctx.toast(`Added to 📂 ${p.name}: ${name}`);
       close();
@@ -323,7 +323,7 @@ export function renderProjectsHead(ctx) {
     const name = globalThis.prompt ? prompt('Name of the new project (it holds a few tasks):') : null;
     if (!name || !name.trim()) return;
     const projectId = newId();
-    if (store.dispatch('createMainProject', { projectId, name: name.trim(), groupId: data.groups[0] && data.groups[0].id })) {
+    if (store.dispatch('createMainProject', { projectId, name: name.trim() })) {
       ctx.toast(`New project: 📂 ${name.trim()}`);
       if (ctx.showHere) ctx.showHere(projectId); else ctx.render();
     }

@@ -1,7 +1,7 @@
 // Daily Projects — main app: start-up, menu, project list, Today box, Diary, Settings, key screen.
 
 import { h, morph, installEvents, fmtDay, fmtLongDay, fmtTime, keyHint, withKey } from './ui/dom.js';
-import { renderDetail, linkChip, isMailLink, pasteIntoProject } from './ui/detail.js';
+import { renderDetail, linkChip, isMailLink, pasteIntoProject, takeBackQuestion } from './ui/detail.js';
 import { renderPeopleList, renderPerson, peopleByFollowUp } from './ui/people.js';
 import { installMentions } from './ui/mention.js';
 import { installAutocorrect, setAutocorrect, autocorrectOn } from './ui/autocorrect.js';
@@ -20,8 +20,10 @@ import { MockRepo } from './mockrepo.js';
 import { device } from './device.js';
 import { DATA_OWNER, DATA_REPO, DATA_BRANCH, MOVED_TO, REFRESH_MS, AI_DAILY_LIMIT, BRIEF_CLAIM_MINUTES, WAIT_RED_DAYS, NO_WORK_NOTE_DAYS } from './config.js';
 import { dotColour, greenByTeamOnly, isSnoozed, restUntil, restReason, onlyDaysLabel, openIdFromHash, awakeProjects, activeProjects, nextStep, todayIndia, isSundayIndia, colourCounts, isOverdue, indiaDate, waitingDays, daysWithoutWork, dayScore, greenStreak, addDays, monthOf, fmtMinutes, takeBackWaits, staffStepAction, pasteGoesToProject, singleStepClose, versionRequest, askDiaryAgain, pasteInForm, diaryLoadedAt, photoNeedsFetch, teamUndoKey, teamActionUndone, teamProgressOf, projectKeyIgnored, teamMovedTo, serverHolder, keepMovedStep, teamMemberFor, repliesOf, mailThreads, replyMailto, MAILTO_BODY_MAX, emailPath, pasteReason } from './rules.js';
+import { whoFromUser, signInTag, timerOn, projectGiveChanges, UNDO_GRACE_MS } from './rules.js';
+import { signInCard, firstPasswordCard } from './ui/signin.js';
 import { parentIdsOf, isMainProject, mainProjects, activeTasks, todayWithoutEmptyMains, todayList, stepTargets, mainSummary, childrenOf, deleteQuestion, pickEnterTarget } from './rules.js';
-import { newId, clone, opMonth, groupHasTimer, cleanLink, carriedOps, orderPosOf } from './ops.js';
+import { newId, clone, opMonth, cleanLink, carriedOps, orderPosOf } from './ops.js';
 import * as ai from './ai.js';
 import { parseVoice } from './voice.js';
 
@@ -33,12 +35,271 @@ const isMock = new URLSearchParams(location.search).has('mock')
 const onServer = ['worktask.in', 'www.worktask.in'].includes(location.hostname)
   || (location.port === '8090' && ['localhost', '127.0.0.1'].includes(location.hostname));
 const serverToken = () => { try { return localStorage.getItem(SERVER_TOKEN_KEY) || ''; } catch { return ''; } };
-/** To the Work Task sign-in page; it comes back here after signing in. */
-function toSignIn() { location.href = '../?next=projects'; }
+/** Signed out (or the sign-in stopped working) while the app runs: the sign-in of this app, then it opens again. */
+function toSignIn() { signInAgain(); }
+
+// ---------------------------------------------------------------- signing in (one app: everyone signs in here)
+// The sign-in card sits where the owner's key screen does; the person's own screens stay hidden behind it.
+const LAST_USER_KEY = 'wt.lastUser';
+const signScreen = () => document.getElementById('keyscreen');
+function showCard(el) { const s = signScreen(); root.hidden = true; s.hidden = false; s.replaceChildren(el); }
+function hideCard() { const s = signScreen(); s.hidden = true; s.replaceChildren(); root.hidden = false; }
+async function postNoToken(a, body, token = '') {
+  const r = await fetch(`../api/?a=${a}`, { method: 'POST', cache: 'no-store', headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}) }, body: JSON.stringify(body) });
+  let out = null; try { out = await r.json(); } catch { /* not an answer */ }
+  return { status: r.status, out };
+}
+/** Keep the new sign-in. Someone else than last time on this phone: the last person's saved lists go. */
+function keepSignIn(token, user) {
+  try {
+    if (localStorage.getItem(LAST_USER_KEY) !== String(user.id)) {
+      for (const k of Object.keys(localStorage)) if (k.startsWith('wt.c.')) localStorage.removeItem(k);
+      if (!user.owner) localStorage.removeItem('dp.snapshot'); // the owner's copy of the projects never stays for someone else
+      localStorage.setItem(LAST_USER_KEY, String(user.id));
+    }
+    localStorage.setItem(SERVER_TOKEN_KEY, token);
+    localStorage.removeItem(WHO_KEY);
+  } catch { /* blocked */ }
+}
+/** The sign-in card; then(user) once signed in. */
+function showSignIn(then, message = '') {
+  showCard(signInCard({ post: postNoToken, message, onSignedIn: ({ token, user }) => { keepSignIn(token, user); hideCard(); then(user); } }));
+}
+/** Their first password (or one the manager reset), before anything else; then(user) once saved. */
+function showFirstPassword(user, then) {
+  const api = async (a, body = {}) => {
+    let res; try { res = await postNoToken(a, body, serverToken()); } catch { throw new Error('No connection. Try again when the internet is back.'); }
+    if (!res.out || !res.out.ok) throw new Error((res.out && res.out.error) || 'Something went wrong. Try again.');
+    return res.out;
+  };
+  showCard(firstPasswordCard({
+    api, user,
+    onDone: (u) => { rememberWho(whoFromUser(u)); hideCard(); toast('Password changed ✓'); then(u); },
+    onSignOut: async () => { try { await api('logout'); } catch { /* signed out on this phone anyway */ } dropSignIn(); showSignIn(then); },
+  }));
+}
+function dropSignIn() { try { localStorage.removeItem(SERVER_TOKEN_KEY); localStorage.removeItem(WHO_KEY); } catch { /* blocked */ } }
+/** The sign-in stopped working (or a new password is needed) while the app runs: sign in here, then open again. */
+let signingIn = false;
+async function signInAgain() {
+  if (signingIn) return;
+  signingIn = true;
+  const { user, who } = serverToken() ? await askWho() : {};
+  if (user && user.mustChange) { showFirstPassword(user, () => location.reload()); return; }
+  // the sign-in still works (e.g. the wrong screens were open): open the right ones again — once, never in a loop
+  if (who && !reloadedJustNow()) { location.reload(); return; }
+  dropSignIn(); // (what waits to be sent stays on this phone and goes after signing in)
+  showSignIn(() => location.reload(), 'Please sign in again.');
+}
+/** True when signInAgain reloaded the page less than a minute ago (then it asks to sign in instead of reloading again). */
+function reloadedJustNow() {
+  try {
+    const at = Number(sessionStorage.getItem('dp.authReload') || 0);
+    if (Date.now() - at < 60000) return true;
+    sessionStorage.setItem('dp.authReload', String(Date.now()));
+  } catch { /* blocked: one reload at most anyway (signingIn) */ }
+  return false;
+}
+/** First start with this sign-in and no answer from the server: never guess who it is — this phone's owner copy says so, else try again. */
+function routeWho({ who, user, answered }, teamTask) {
+  if (user && user.mustChange) openFor(user, teamTask); // their own password first
+  else if (who === 'staff') startStaff(user, teamTask);
+  else if (who === 'manager') startManager(user, teamTask);
+  else if (who === 'owner' || ownerCopyHere()) startOwner(); // (offline: the owner's own phone opens as before)
+  else if (answered) signInAgain(); // the sign-in does not work any more
+  else noAnswerYet(teamTask);
+}
+const ownerCopyHere = () => { try { return !!localStorage.getItem('dp.snapshot'); } catch { return false; } };
+function noAnswerYet(teamTask) {
+  const again = () => { window.removeEventListener('online', again); root.replaceChildren(h('div', { class: 'loading' }, 'Loading…')); askWho().then((r) => routeWho(r, teamTask)); };
+  window.addEventListener('online', again);
+  root.replaceChildren(h('div', { class: 'loading' }, h('p', null, 'Cannot reach worktask.in right now. Check the internet.'), h('button', { class: 'btn primary', onClick: again }, 'Try again')));
+}
+/** Signed in: their first password if needed, then their own screens (team task: a task link that waited). */
+function openFor(user, teamTask = 0) {
+  if (user && user.mustChange) { showFirstPassword(user, (u) => openFor(u, teamTask)); return; }
+  const who = whoFromUser(user);
+  if (who) rememberWho(who);
+  if (who === 'staff') startStaff(user, teamTask);
+  else if (who === 'manager') startManager(user, teamTask);
+  else startOwner();
+}
+
+// ---------------------------------------------------------------- one app for everyone on worktask.in
+// Who signed in decides the screens: the owner gets this app, a team member gets the staff view (only their own
+// Work Task tasks, ui/staff.js), another manager goes to Work Task's manager screens. It is remembered for this
+// sign-in only, so the owner's start-up never waits for the server (and works offline as before).
+const WHO_KEY = 'dp.who';
+function rememberedWho() {
+  try { const w = JSON.parse(localStorage.getItem(WHO_KEY) || 'null'); return w && w.tag === signInTag(serverToken()) ? w.who : ''; } catch { return ''; }
+}
+function rememberWho(who) { try { localStorage.setItem(WHO_KEY, JSON.stringify({ tag: signInTag(serverToken()), who })); } catch { /* blocked */ } }
+/** First time with this sign-in: ask the server who it is (no answer in 4 s, or none at all = the owner's app, as before). */
+async function askWho() {
+  const stop = new AbortController();
+  const timer = setTimeout(() => stop.abort(), 4000);
+  try {
+    const r = await fetch('../api/?a=me', { method: 'POST', cache: 'no-store', signal: stop.signal, headers: { Authorization: 'Bearer ' + serverToken(), 'Content-Type': 'application/json' }, body: '{}' });
+    const out = await r.json();
+    const who = out && out.ok ? whoFromUser(out.user) : '';
+    if (who) rememberWho(who);
+    return { who, user: out && out.user, answered: true }; // (answered without a user: the sign-in does not work any more)
+  } catch { return { who: '', answered: false }; } finally { clearTimeout(timer); }
+}
+
+/**
+ * What the staff view and the team pages share: photos fetched with the sign-in, the viewer, signing out.
+ * more: { waiting() (items still to send), push() (this phone's notifications) }.
+ */
+function serverTools(api, more = {}) {
+  const photos = new Map();
+  const photo = (kind, id) => {
+    const k = kind + ':' + id;
+    if (!photos.has(k)) {
+      const p = fetch(`../api/?a=${kind}&id=${id}`, { headers: { Authorization: 'Bearer ' + serverToken() } }).then((r) => (r.ok ? r.blob() : Promise.reject(new Error('photo')))).then((b) => URL.createObjectURL(b));
+      p.catch(() => photos.delete(k)); // a failed one is tried again next time
+      photos.set(k, p);
+    }
+    return photos.get(k);
+  };
+  const signOut = async () => {
+    const n = more.waiting ? more.waiting() : 0;
+    if (n && !confirm(`${n} item${n > 1 ? 's are' : ' is'} not sent yet. They go out when you sign in again on this phone. Sign out anyway?`)) return;
+    try { const p = more.push && more.push(); if (p) await p.unlink(); } catch { /* tried: offline */ } // the next person on this phone must not get this person's messages
+    try { await api('logout'); } catch { /* signed out on this phone anyway */ }
+    try { // nothing of this person stays for the next one on this phone (what waits to send stays, sent after they sign in again)
+      localStorage.removeItem(SERVER_TOKEN_KEY); localStorage.removeItem(WHO_KEY);
+      for (const k of Object.keys(localStorage)) if (k.startsWith('wt.c.')) localStorage.removeItem(k);
+    } catch { /* blocked */ }
+    location.replace(location.pathname); // this app's sign-in
+  };
+  /** A photo or PDF on top of the page (the same viewer as the owner's files). */
+  const viewer = (url, name, image) => {
+    const v = document.getElementById('viewer');
+    const close = () => { v.hidden = true; v.replaceChildren(); };
+    v.replaceChildren(h('div', { class: 'viewer-bar' }, h('strong', { class: 'viewer-name' }, name), h('a', { class: 'btn', href: url, download: name }, 'Download'), h('button', { class: 'btn', onClick: close }, 'Close')),
+      h('div', { class: 'viewer-body' }, image ? h('img', { src: url, alt: name }) : h('iframe', { src: url, title: name })));
+    v.hidden = false;
+  };
+  return { photo, viewer, signOut };
+}
+
+/** The team pages (ui/team.js): the owner's "👥 Team" space, or all a manager who is not the owner gets. */
+let teamView = null, staffView = null, space = 'owner'; // space: 'owner' (Daily Projects) | 'team' (the team pages)
+async function teamPages(user, more = {}) {
+  const [{ createTeam }, { staffApi, shrinkPhoto, browserPush }, { idbOutbox }, rules] = await Promise.all([import('./ui/team.js'), import('./ui/staff.js'), import('./ui/staffbox.js'), import('../logic.js')]);
+  let t = null;
+  const api = staffApi(serverToken(), '../api/', { allow: null, onNet: (on) => { if (t) t.setOffline(!on); } }); // (the server decides what a manager may do)
+  if (!user) user = (await api('me')).user;
+  const push = browserPush(api, user.id);
+  const { photo, viewer, signOut } = serverTools(api, { waiting: () => (t ? t.state.outbox.length : 0), push: () => push });
+  t = createTeam({ root, api, rules, user, toast, signOut, onAuth: () => signInAgain(), photo, viewer, box: idbOutbox(), shrink: shrinkPhoto, push, appLink: location.origin + '/', ...more });
+  setInterval(() => { if (document.visibilityState === 'visible' && (space === 'team' || !store)) t.act.liveCheck(); }, 20000); // new work comes in by itself
+  setInterval(() => { if (t.state.outbox.length) t.act.flush(); }, 30000);
+  window.addEventListener('online', () => { t.setOffline(false); t.act.flush(); });
+  window.addEventListener('offline', () => t.setOffline(true));
+  return t;
+}
+
+/** The owner: open "👥 Team" inside this app (from 👥, a team task chip, or "Give to team"); "📋 My projects" comes back. */
+async function openTeam(how = {}) {
+  if (!onServer || isMock) return;
+  try {
+    if (!teamView) {
+      teamView = await teamPages(null, {
+        toProjects: () => { leaveTeam(); render(); },
+        openPeople: () => { leaveTeam(); go('people'); },
+      });
+    }
+  } catch (e) { toast(e.message, 5000); return; }
+  space = 'team'; teamView.state.hidden = false;
+  root.replaceChildren();
+  teamView.start(how);
+}
+
+/** Back from the team pages to the owner's projects. */
+function leaveTeam() { space = 'owner'; if (teamView) teamView.state.hidden = true; root.replaceChildren(); }
+
+/**
+ * worktask.in/projects/#team (👥), #team-task=<id> (a team task chip, a phone notification), #team-new=<what to give>
+ * ("Give to team"): what to open on the team pages, or null. Taken off the address.
+ */
+function teamHowFromHash() {
+  const hsh = location.hash;
+  let how = null;
+  const m = /^#team-task=(\d+)$/.exec(hsh);
+  if (hsh === '#team') how = {};
+  else if (m) how = { sel: 'task:' + m[1], fromProjects: true };
+  else if (hsh.startsWith('#team-new=')) { try { const p = JSON.parse(decodeURIComponent(hsh.slice(10))); how = { sel: 'give', prefill: p && typeof p === 'object' ? p : null, fromProjects: true }; } catch { how = { sel: 'give' }; } }
+  if (how) history.replaceState(null, '', location.pathname + location.search);
+  return how;
+}
+/** The owner: "#team…" opens the team pages of this app. */
+function takeTeamFromHash() {
+  const how = teamHowFromHash();
+  if (!how) return false;
+  openTeam(how);
+  return true;
+}
+
+/** A manager who is not the owner: the team pages are all of this app for them (teamTask: a task to open first). */
+async function startManager(user, teamTask = 0) {
+  root.replaceChildren(h('div', { class: 'loading' }, 'Loading…'));
+  try { teamView = await teamPages(user); } catch (e) { if (e.auth) { signInAgain(); return; } root.replaceChildren(h('div', { class: 'loading' }, e.message)); return; }
+  space = 'team';
+  const how = teamHowFromHash() || (teamTask ? { sel: 'task:' + teamTask } : {});
+  teamView.start({ ...how, fromProjects: false }); // (they have no projects page to go back to)
+  window.addEventListener('hashchange', () => { const h2 = teamHowFromHash(); if (h2) teamView.start({ ...h2, fromProjects: false }); }); // a notification tapped while open
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') teamView.act.reload(); });
+  document.addEventListener('paste', (e) => pasteToView(teamView, e, TEAM_BOX));
+}
+/** Ctrl+V on the staff view or the team pages: to that view (in its message box: a photo message). One copy for all. */
+const TEAM_BOX = /^Reply or give/, STAFF_BOX = /^Ask or reply/; // (the message boxes' first words)
+function pasteToView(view, e, box) {
+  if (e.defaultPrevented || !e.clipboardData) return;
+  const inMessageBox = !!(e.target && e.target.tagName === 'TEXTAREA' && box.test(e.target.placeholder || ''));
+  if (view.act.paste({ files: [...(e.clipboardData.files || [])], text: e.clipboardData.getData('text/plain') || '', inMessageBox })) e.preventDefault();
+}
+/** A task number on the address for a team member or a manager (a phone notification): "#team-task=<id>", or the older "#open=<id>". */
+const teamTaskInHash = () => Number((/^#(?:open|team-task)=(\d+)$/.exec(location.hash) || [])[1] || 0);
+
+/** A team member: the staff view, in the same layout and look as this app (the rules come from Work Task's logic.js). */
+async function startStaff(user, openTask = 0) {
+  // (staff see this app's own design: only its styles, never Work Task's on top)
+  root.replaceChildren(h('div', { class: 'loading' }, 'Loading…'));
+  const [{ createStaff, staffApi, shrinkPhoto, browserPush }, { idbOutbox }, rules] = await Promise.all([import('./ui/staff.js'), import('./ui/staffbox.js'), import('../logic.js')]);
+  let staff = null;
+  const api = staffApi(serverToken(), '../api/', { onNet: (on) => { if (staff) staff.setOffline(!on); } });
+  if (!user) {
+    try { user = (await api('me')).user; } // (offline: the saved copy)
+    catch (e) { if (e.auth) { signInAgain(); return; } root.replaceChildren(h('div', { class: 'loading' }, e.message)); return; }
+  }
+  const push = browserPush(api, user.id);
+  const { photo, viewer, signOut } = serverTools(api, { waiting: () => (staff ? staff.state.outbox.length : 0), push: () => push });
+  // signed out (or their first password still to choose): this app's sign-in; what waits on the phone stays and is sent after
+  const onAuth = () => signInAgain();
+  staff = createStaff({ root, api, rules, user, toast, signOut, onAuth, photo, viewer, box: idbOutbox(), shrink: shrinkPhoto, push });
+  staffView = staff;
+  if (openTask) { if (teamTaskInHash() === openTask) history.replaceState(null, '', location.pathname + location.search); staff.open('task:' + openTask); } // a phone notification: that task (taken off the address, so a reload does not open it again)
+  staff.start();
+  window.addEventListener('hashchange', () => { // a notification tapped while open
+    const id = teamTaskInHash();
+    if (location.hash) history.replaceState(null, '', location.pathname + location.search);
+    if (id) staff.open('task:' + id);
+  });
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') staff.act.reload(); });
+  window.addEventListener('online', () => { staff.setOffline(false); staff.act.flush(); });
+  window.addEventListener('offline', () => staff.setOffline(true));
+  setInterval(() => { if (staff.state.outbox.length) staff.act.flush(); }, 30000); // weak signal: keep trying
+  setInterval(() => { if (document.visibilityState === 'visible') staff.act.liveCheck(); }, 20000); // new work comes in by itself
+  window.addEventListener('focus', () => staff.act.liveCheck());
+  // Ctrl+V on an open task: a photo into today's update, or (in the message box) a photo message
+  document.addEventListener('paste', (e) => pasteToView(staff, e, STAFF_BOX));
+}
 
 const saved = device.ui();
 const ui = {
-  view: saved.view || 'today', // today | all | group:<id> | paused | finished | diary | settings
+  view: saved.view && !String(saved.view).startsWith('group:') ? saved.view : saved.view ? 'all' : 'today', // today | all | mains | paused | finished | diary | settings (groups are gone: an old group view opens ✅ Tasks)
   selected: saved.selected || null,
   search: '',
   mobile: 'list', // list | detail (phone only)
@@ -665,11 +926,6 @@ function kindWord(p) {
   return isMainProject(store.view.data, p) ? 'project' : 'task';
 }
 
-function groupName(id) {
-  const g = store.view.data.groups.find((x) => x.id === id);
-  return g ? g.name : '';
-}
-
 
 function visibleProjects() {
   const all = store.view.data.projects;
@@ -680,16 +936,11 @@ function visibleProjects() {
   if (ui.view === 'mains') return mainProjects(store.view.data).filter((p) => p.state !== 'finished'); // 📂 Projects: projects only, a list like Tasks
   if (ui.view === 'paused') return all.filter((p) => p.state === 'paused');
   if (ui.view === 'finished') return all.filter((p) => p.state === 'finished');
-  if (ui.view.startsWith('group:')) {
-    const id = ui.view.slice(6);
-    return all.filter((p) => p.groupId === id && p.state === 'active' && !isMainProject(store.view.data, p) && (ui.taskFilter !== 'loose' || !parentIdsOf(p).length)); // a group shows its tasks only (📂 projects are on Projects); 'No project' = loose tasks
-  }
   return [];
 }
 
 function viewTitle() {
   if (ui.search.trim()) return `Search: "${ui.search.trim()}"`;
-  if (ui.view.startsWith('group:')) return groupName(ui.view.slice(6));
   return { today: 'Today', inbox: 'Inbox', all: '✅ Tasks', paused: 'Paused', finished: 'Finished', diary: 'Diary', settings: 'Settings', people: 'People', dashboard: 'Dashboard', time: 'Time report', replies: '✉ Replies', apps: '🔌 From apps', mains: '📂 Projects' }[ui.view];
 }
 
@@ -837,19 +1088,12 @@ function renderMenu() {
         h('span', { class: 'dot red' }), String(counts.red), ' ',
         h('span', { class: 'dot yellow' }), String(counts.yellow), ' ',
         h('span', { class: 'dot green' }), String(counts.green)),
-      // order the owner chose (22 Oct): Today, Tasks, Projects, Replies, Inbox, Groups, Paused, Finished, People, Settings, More
+      // order the owner chose (22 Oct): Today, Tasks, Projects, Replies, Inbox, Paused, Finished, People, Settings, More (no groups, 23 Oct)
       item('all', '✅ Tasks', activeTasks(data).length),
       item('mains', '📂 Projects', mainProjects(data).length),
       item('replies', '✉ Replies', readyCount(data, today)), // replies ready to send
       onServer ? item('apps', '🔌 From apps', appsPending()) : null, // approvals your apps sent, waiting for ✓ / ✕
       item('inbox', '📥 Inbox', (data.inbox || []).length),
-      h('li', { class: 'menu-head', key: 'groups-head' }, 'Groups'),
-      data.groups.map((g) => item('group:' + g.id, g.name, count((p) => p.groupId === g.id && p.state === 'active' && !isMainProject(data, p)),
-        h('button', {
-          class: 'icon tiny', title: `Rename or delete "${g.name}"`,
-          onClick: () => editGroup(g),
-        }, '✎'))),
-      h('li', { key: 'add-group' }, h('button', { class: 'menu-item add', onClick: addGroup }, '+ Group')),
       h('li', { class: 'menu-sep', key: 'sep' }),
       item('paused', 'Paused', count((p) => p.state === 'paused')),
       item('finished', 'Finished', count((p) => p.state === 'finished')),
@@ -862,25 +1106,6 @@ function renderMenu() {
       }, moreOpen ? 'More ▾' : 'More ▸')),
       moreOpen ? [item('diary', 'Diary'), item('dashboard', 'Dashboard'), item('time', 'Time report')] : null),
     h('button', { class: 'keys-hint', onClick: () => { ui.showKeys = true; ui.menuOpen = false; render(); } }, 'Keyboard shortcuts: press ?'));
-}
-
-function addGroup() {
-  const name = prompt('Name of the new group:');
-  if (name && name.trim()) store.dispatch('addGroup', { groupId: newId(), name: name.trim() });
-}
-
-function editGroup(g) {
-  const used = store.view.data.projects.some((p) => p.groupId === g.id);
-  const name = prompt(`Rename the group "${g.name}".${used ? '' : '\n\nTo delete this empty group, type DELETE.'}`, g.name);
-  if (name === null) return;
-  if (!used && name.trim() === 'DELETE') {
-    if (store.view.data.groups.length <= 1) { toast('You need at least one group.'); return; }
-    store.dispatch('deleteGroup', { groupId: g.id });
-    if (ui.view === 'group:' + g.id) go('today');
-    return;
-  }
-  if (name.trim() === 'DELETE') { toast('Only an empty group can be deleted. Move its tasks first.'); return; }
-  store.dispatch('renameGroup', { groupId: g.id, name: name.trim() });
 }
 
 // ---------------------------------------------------------------- Today box
@@ -930,7 +1155,7 @@ function projectRow(p, today, opts = {}) {
   const due = nextStep(p, today, { dueOnly: true }); // what the tick box ticks
   const asProject = ui.view === 'mains' && !ui.search; // 📂 Projects list: "3 tasks · 1 red" instead of the next step
   const canTick = due && p.state === 'active' && !asProject;
-  const picking = canPickRows(); // ✅ Tasks and groups: a select box for moving many tasks at once
+  const picking = canPickRows(); // ✅ Tasks: a select box for moving many tasks at once
   return h('li', {
     key: 'p-' + p.id, 'data-id': p.id, class: 'prow' + (ui.selected === p.id ? ' current' : '') + (isMainProject(store.view.data, p) ? ' main-row' : ''),
     onContextmenu: (e) => { e.preventDefault(); ui.rowMenu = { id: p.id, x: e.clientX, y: e.clientY }; render(); },
@@ -974,10 +1199,10 @@ function projectRow(p, today, opts = {}) {
     ui.quickAdd === p.id ? quickAddForm(p) : null);
 }
 
-/** ✅ Tasks and groups: rows can be selected, then put into one 📂 project together. Today keeps its tick box. */
+/** ✅ Tasks: rows can be selected, then put into one 📂 project together. Today keeps its tick box. */
 const picked = new Set();
 function canPickRows() {
-  return !ui.search && (ui.view === 'all' || ui.view.startsWith('group:'));
+  return !ui.search && ui.view === 'all';
 }
 
 /** The bar over the list while tasks are selected: "3 selected · 📂 Add to project… · Clear". */
@@ -995,7 +1220,7 @@ function pickBar(list) {
   const create = (name) => {
     const ids = [...picked];
     const projectId = newId();
-    if (!store.dispatch('createMainProject', { projectId, name, groupId: data.groups[0] && data.groups[0].id, childId: ids[0] })) return;
+    if (!store.dispatch('createMainProject', { projectId, name, childId: ids[0] })) return;
     for (const id of ids.slice(1)) store.dispatch('addToProject', { projectId: id, parentId: projectId });
     toast(`New project 📂 ${name} with ${ids.length} task${ids.length === 1 ? '' : 's'}`);
     picked.clear(); ui.pickBox = null; render();
@@ -1269,8 +1494,7 @@ function clipBox() {
     const text = textNow();
     if (!text) { toast('Write the name first'); return; }
     const projectId = newId();
-    const groupId = data.groups[0] && data.groups[0].id;
-    const ok = store.dispatch('createProject', { projectId, name: text, groupId });
+    const ok = store.dispatch('createProject', { projectId, name: text });
     if (ok) ensurePeople(clip.people);
     if (ok && clip.link) store.dispatch('addLink', { projectId, linkId: newId(), title: clip.link.title, url: clip.link.url });
     if (ok) { ui.capture = false; toast(`New task: ${text}`, 3000); select(projectId); }
@@ -1460,10 +1684,9 @@ function renderInbox() {
             onChange: (e, el) => {
               const v = el.value;
               el.value = '';
-              if (v.startsWith('new:')) {
-                const groupId = v.slice(4);
+              if (v === 'new') {
                 const projectId = newId();
-                if (inboxAct('inboxToProject', { itemId: item.id, projectId, groupId }, item, `New task: ${item.text}`)) render();
+                if (inboxAct('inboxToProject', { itemId: item.id, projectId }, item, `New task: ${item.text}`)) render();
               } else {
                 const p = data.projects.find((x) => x.id === v);
                 if (p) toStep(item, p);
@@ -1472,7 +1695,7 @@ function renderInbox() {
           },
           h('option', { value: '' }, 'Send to task…'),
           projects.map((p) => h('option', { value: p.id }, p.name)),
-          data.groups.map((g) => h('option', { value: 'new:' + g.id }, `+ New task in ${g.name}`))),
+          h('option', { value: 'new' }, '+ New task')),
           h('button', { class: 'icon', title: 'Delete', 'aria-label': 'Delete', onClick: () => inboxAct('removeInbox', { itemId: item.id }, item, 'Removed from Inbox') }, '🗑')));
     })) : h('p', { class: 'empty-list' }, 'Inbox is empty. Press Q anywhere (or 📥 at the top) to write something down fast.'));
 }
@@ -1492,7 +1715,6 @@ function rowMenu() {
   if (!p) return null;
   const today = todayIndia();
   const due = p.state === 'active' && nextStep(p, today, { dueOnly: true });
-  const g = store.view.data.groups.find((x) => x.id === p.groupId);
   const timing = store.view.data.timer && store.view.data.timer.projectId === p.id;
   const item = (icon, label, fn) => h('button', {
     class: 'row-menu-item', role: 'menuitem',
@@ -1507,11 +1729,11 @@ function rowMenu() {
     p.state === 'active' ? (p.snoozedUntil && p.snoozedUntil > today
       ? item('⏰', 'Wake up now', () => act('wake', { projectId: p.id }, `Back on Today: ${p.name}`))
       : item('💤', 'Snooze…', () => { select(p.id); ui.snoozeOpen = p.id; focusKey('snooze-' + p.id); })) : null,
-    p.state === 'active' && groupHasTimer(g || {}) ? item(timing ? '⏹' : '▶', timing ? 'Stop timer' : 'Start timer', () => (timing ? stopTimer() : startTimer(p))) : null,
+    p.state === 'active' && timerOn(store.view.data) ? item(timing ? '⏹' : '▶', timing ? 'Stop timer' : 'Start timer', () => (timing ? stopTimer() : startTimer(p))) : null,
     p.state === 'active' ? item('⏸', `Pause ${kindWord(p)}`, () => act('pause', { projectId: p.id }, `Paused: ${p.name}`))
       : p.state === 'paused' ? item('▶', `Unpause ${kindWord(p)}`, () => act('unpause', { projectId: p.id }, `Back on Today: ${p.name}`)) : null,
     onServer && p.state === 'active' ? (p.team
-      ? item('👥', `Take back from ${p.team.name}`, () => { if (confirm(`Take "${p.name}" back from ${p.team.name}? Their open steps are removed from their list.`)) giveProject(p, null); })
+      ? item('👥', `Take back from ${p.team.name}`, () => { if (confirm(takeBackQuestion(store.view.data, p))) giveProject(p, null); })
       : item('👥', `Give ${kindWord(p)} to…`, () => { select(p.id); ui.giveOpen = p.id; ui.givePhoto = false; })) : null,
     item('↗', 'Open', () => select(p.id)),
     !isMainProject(store.view.data, p) ? item('📂', 'Add to a project…', () => { select(p.id); openMainBox(ctx, p, 'parent'); }) : null,
@@ -1528,7 +1750,7 @@ function rowMenu() {
 
 /** Lists where a 📂 project shows (and sorts by) the worst of it and its tasks. Today and search: its own dot. */
 function rollsUpHere() {
-  return !ui.search && (ui.view.startsWith('group:') || ui.view === 'paused' || ui.view === 'finished' || ui.view === 'mains');
+  return !ui.search && (ui.view === 'paused' || ui.view === 'finished' || ui.view === 'mains');
 }
 
 function rowColour(p, today) {
@@ -1544,9 +1766,9 @@ function canDrag() {
   return !ui.search && ui.sort === 'mine' && !taskListView();
 }
 
-/** ✅ Tasks and the groups: the 'All tasks | No project' switch, always red first. */
+/** ✅ Tasks: the 'All tasks | No project' switch, always red first. */
 function taskListView() {
-  return ui.view === 'all' || ui.view.startsWith('group:');
+  return ui.view === 'all';
 }
 
 /** Right-click on a person (People list or the side menu): the things you can do with them. */
@@ -1638,7 +1860,7 @@ function personMenu(m) {
       : account ? [
         h('div', { class: 'row-menu-note muted small' }, `Work Task: @${account.username}${account.active ? '' : ' (switched off)'}`),
         item('🔑', 'New password…', () => newPasswordFor(person, account)),
-        item('👥', 'Their tasks (Team)', () => { location.href = '../?team'; }),
+        item('👥', 'Their tasks (Team)', () => openTeam()),
       ] : item('🔑', 'Give a Work Task sign-in', () => giveSignIn(person))) : null,
     item('✎', 'Rename…', () => {
       const n = prompt('Name:', person.name);
@@ -1672,7 +1894,7 @@ let redOrder = null; // fixed "Red first" order, so rows do not jump while you o
 function resetRedOrder() { redOrder = null; }
 
 function sortForView(list, today) {
-  if ((ui.sort !== 'red' && !taskListView()) || ui.search) return list; // (✅ Tasks and groups are always red first)
+  if ((ui.sort !== 'red' && !taskListView()) || ui.search) return list; // (✅ Tasks is always red first)
   const ids = list.map((p) => p.id);
   if (redOrder && redOrder.view === ui.view && ids.length === redOrder.ids.length && ids.every((id) => redOrder.pos.has(id))) {
     return [...list].sort((a, b) => redOrder.pos.get(a.id) - redOrder.pos.get(b.id));
@@ -1691,8 +1913,7 @@ function computeRedFirst(list, today) {
 
 /** ✅ Tasks: "All tasks 19" | "No project 7" (both red first). */
 function taskFilterSwitch() {
-  const gid = ui.view.startsWith('group:') ? ui.view.slice(6) : null; // in a group: count that group's tasks
-  const all = activeTasks(store.view.data).filter((p) => !gid || p.groupId === gid);
+  const all = activeTasks(store.view.data);
   const loose = all.filter((p) => !parentIdsOf(p).length).length;
   const opt = (value, label) => h('button', {
     class: 'seg' + (ui.taskFilter === value ? ' on' : ''), 'aria-pressed': String(ui.taskFilter === value),
@@ -1794,11 +2015,11 @@ function teamLine() {
   const m = team.messages[0];
   const ofProject = m && m.projectRef && store.view.data.projects.some((p) => p.id === m.projectRef);
   return [
-    h('a', { class: 'team-line' + (bad ? ' late' : s.due && s.sent === s.due ? ' ok' : ''), href: '../?team', key: 'team-line', title: 'Open Team today' },
+    h('a', { class: 'team-line' + (bad ? ' late' : s.due && s.sent === s.due ? ' ok' : ''), href: '#team', key: 'team-line', title: 'Open Team today' },
       `👥 Team: ${bits.join(' · ')}${missing}`),
     // the newest message from the team, right here: tap = open the project (or the task in the team app) to read and answer
     m ? h('a', {
-      class: 'team-line msg', key: 'team-msg', href: ofProject ? '#' : `../?team#open=${m.taskId}`, title: 'Read and answer',
+      class: 'team-line msg', key: 'team-msg', href: ofProject ? '#' : `#team-task=${m.taskId}`, title: 'Read and answer',
       onClick: (e) => { if (!ofProject) return; e.preventDefault(); select(m.projectRef); },
     }, `💬 ${m.by}: “${m.text.length > 70 ? m.text.slice(0, 68) + '…' : m.text}”${team.messages.length > 1 ? ` (+${team.messages.length - 1} more)` : ''} — answer →`) : null,
   ];
@@ -1808,21 +2029,17 @@ function newProjectForm() {
   if (!ui.adding) {
     return h('button', { class: 'btn primary new-project', onClick: () => { ui.adding = true; render(); focusKey('new-name'); } }, '+ New task', keyHint('N'));
   }
-  const defaultGroup = ui.view.startsWith('group:') ? ui.view.slice(6) : store.view.data.groups[0]?.id;
   const d = ((ui.newTaskDraft ||= {}).list ||= {});
   const close = () => { ui.adding = false; render(); };
   // a name, then notes you can paste a screenshot, a table or words into (they become the task's first update)
   return newTaskBox(ctx, d, {
     key: 'new',
-    extra: h('select', { name: 'group', 'aria-label': 'Group', value: d.groupId || defaultGroup, onChange: (e, el) => { d.groupId = el.value; } },
-      store.view.data.groups.map((g) => h('option', { value: g.id }, g.name))),
     onCancel: close,
     onCreate: (name, editor) => {
-      const projectId = createTaskWithNote(ctx, { name, groupId: d.groupId || defaultGroup, d, editor });
+      const projectId = createTaskWithNote(ctx, { name, d, editor });
       if (!projectId) return;
       ui.adding = false;
-      d.groupId = null;
-      if (ui.view !== 'today' && ui.view !== 'all' && !ui.view.startsWith('group:')) ui.view = 'today';
+      if (ui.view !== 'today' && ui.view !== 'all') ui.view = 'today';
       select(projectId);
       focusKey('add-step-' + projectId);
     },
@@ -2026,7 +2243,7 @@ function renderSettings() {
       h('p', null, isMock ? 'Test mode (no real GitHub).' : onServer ? 'Signed in to Work Task ✓ Your projects are private to you.' : 'Connected to your private data ✓'),
       h('div', { class: 'row' },
         isMock || onServer ? null : h('button', { class: 'btn', onClick: () => showKeyScreen('Paste your new GitHub access key.') }, 'Change key'),
-        onServer ? h('a', { class: 'btn', href: '../?team' }, '👥 Team') : null,
+        onServer ? h('a', { class: 'btn', href: '#team' }, '👥 Team') : null,
         onServer ? h('button', { class: 'btn', onClick: signOutServer }, 'Sign out') : null,
         h('button', {
           class: 'btn danger',
@@ -2055,34 +2272,33 @@ function renderSettings() {
       h('p', null, `AI uses today: ${usage} / ${AI_DAILY_LIMIT}`),
       keyForm('claude', 'Claude', 'From console.anthropic.com → API keys. Saved in your private data, so all your devices use it.'),
       keyForm('gemini', 'Gemini', 'Optional backup. From aistudio.google.com → Get API key. Shared with all your devices. On the free plan Google may read the text.')),
-    h('section', { class: 'block' }, h('h3', null, 'Groups and tags'),
-      h('p', { class: 'muted small' }, 'Tags belong to a group; each task picks one. The timer and the Time report use the groups that have the timer on.'),
-      data.groups.map((g) => h('div', { class: 'group-set', key: 'gs-' + g.id },
+    h('section', { class: 'block' }, h('h3', null, 'Tags and timer'),
+      h('p', { class: 'muted small' }, 'Each task can pick one tag. The Time report shows your time by tag.'),
+      h('div', { class: 'group-set' },
         h('div', { class: 'row' },
-          h('strong', null, g.name),
           h('label', { class: 'check' },
-            h('input', { type: 'checkbox', checked: groupHasTimer(g), onChange: (e, el) => store.dispatch('setGroupTimer', { groupId: g.id, on: el.checked }) }),
+            h('input', { type: 'checkbox', checked: timerOn(data), onChange: (e, el) => store.dispatch('setTimer', { on: el.checked }) }),
             ' Timer')),
         h('div', { class: 'tag-list' },
-          (g.tags || []).map((t) => h('span', { class: 'tag tag-chip', key: 'tg-' + t.id }, `🏷 ${t.name}`,
+          (data.tags || []).map((t) => h('span', { class: 'tag tag-chip', key: 'tg-' + t.id }, `🏷 ${t.name}`,
             h('button', {
               class: 'icon tiny-x', title: 'Rename tag',
-              onClick: () => { const n = prompt('Rename tag:', t.name); if (n && n.trim()) store.dispatch('renameTag', { groupId: g.id, tagId: t.id, name: n.trim() }); },
+              onClick: () => { const n = prompt('Rename tag:', t.name); if (n && n.trim()) store.dispatch('renameTag', { tagId: t.id, name: n.trim() }); },
             }, '✎'),
             h('button', {
               class: 'icon tiny-x', title: 'Delete tag',
               onClick: () => {
                 const used = data.projects.filter((p) => p.tagId === t.id).length;
-                if (confirm(`Delete the tag "${t.name}"?${used ? `\n\n${used} project(s) use it; they will have no tag (their time is kept).` : ''}`)) store.dispatch('deleteTag', { groupId: g.id, tagId: t.id });
+                if (confirm(`Delete the tag "${t.name}"?${used ? `\n\n${used} project(s) use it; they will have no tag (their time is kept).` : ''}`)) store.dispatch('deleteTag', { tagId: t.id });
               },
             }, '✕'))),
           h('button', {
             class: 'btn small',
             onClick: () => {
-              const n = prompt(`New tag for ${g.name}:`);
-              if (n && n.trim() && !store.dispatch('addTag', { groupId: g.id, tagId: newId(), name: n.trim() })) toast(`"${n.trim()}" already exists in ${g.name}`);
+              const n = prompt('New tag:');
+              if (n && n.trim() && !store.dispatch('addTag', { tagId: newId(), name: n.trim() })) toast(`"${n.trim()}" already exists`);
             },
-          }, '+ Tag'))))),
+          }, '+ Tag')))),
     onServer ? renderConnectionsSettings(appsCtx) : null, // 🔌 other apps send tasks and approvals (worktask.in only)
     h('section', { class: 'block' }, h('h3', null, 'Backup'),
       h('p', { class: 'muted' }, 'Every save is kept as a version, so nothing is lost. You can also download a copy.'),
@@ -2098,8 +2314,8 @@ async function signOutServer() {
   clearTimeout(store.saveTimer);
   store.forgetPending(); // before clearing storage below; also stops the leave-page check from sending them
   try { await fetch('../api/?a=logout', { method: 'POST', headers: { Authorization: 'Bearer ' + serverToken() } }); } catch { /* signed out anyway */ }
-  try { localStorage.removeItem(SERVER_TOKEN_KEY); localStorage.removeItem('dp.pending'); localStorage.removeItem('dp.snapshot'); } catch { /* blocked */ }
-  location.href = '../';
+  try { localStorage.removeItem(SERVER_TOKEN_KEY); localStorage.removeItem(WHO_KEY); localStorage.removeItem('dp.pending'); localStorage.removeItem('dp.snapshot'); } catch { /* blocked */ }
+  location.replace(location.pathname); // this app's sign-in
 }
 
 // ---------------------------------------------------------------- key screen
@@ -2252,6 +2468,7 @@ function setupSortable() {
 }
 
 function render() {
+  if (space === 'team') return; // the team pages draw themselves (ui/team.js)
   if (!store || !store.view) {
     root.replaceChildren(h('div', { class: 'loading' }, store && store.status === 'offline' ? 'No connection. Retrying…' : 'Loading…'));
     return;
@@ -2487,7 +2704,6 @@ function renderRound() {
   const ns = nextStep(p, today);
   const due = nextStep(p, today, { dueOnly: true });
   const colour = dotColour(p, today);
-  const g = store.view.data.groups.find((x) => x.id === p.groupId);
   const open = p.steps.filter((s) => !s.done);
   const lastNote = p.workNotes[0];
   const mode = r.mode;
@@ -2499,7 +2715,7 @@ function renderRound() {
       h('div', { class: 'round-name' },
         h('span', { class: `dot ${colour}` }),
         h('button', { class: 'link round-title', title: 'Open the full task', onClick: () => { const id = p.id; ui.round = null; select(id); } }, p.name)),
-      h('p', { class: 'muted small round-meta' }, [g ? g.name : '', p.priority === 'high' ? 'High' : '', p.deadline ? `${isOverdue(p, today) ? 'Overdue' : 'Target'} ${fmtDay(p.deadline)}` : '']
+      h('p', { class: 'muted small round-meta' }, [p.priority === 'high' ? 'High' : '', p.deadline ? `${isOverdue(p, today) ? 'Overdue' : 'Target'} ${fmtDay(p.deadline)}` : '']
         .filter(Boolean).join(' · ')),
       h('div', { class: 'round-next' + (ns ? '' : ' warn') },
         ns ? ['Next: ', h('strong', null, ns.text)] : 'No next step yet',
@@ -2598,7 +2814,7 @@ function goBack() {
   render();
 }
 
-/** Next / previous project in the tab you are in (Today, All, a group, Paused…). */
+/** Next / previous project in the tab you are in (Today, All, Paused…). */
 function neighbourProject(step) {
   const list = currentList();
   if (!list.length || !ui.selected) return null;
@@ -2680,7 +2896,6 @@ function jumpItems() {
     ['People', () => go('people')], ['Diary', () => go('diary')], ['Paused', () => go('paused')],
     ['Finished', () => go('finished')], ['Settings', () => go('settings')], ['Time report', () => go('time')], ['✉ Replies', () => go('replies')], ['📂 Projects', () => go('mains')], ['Daily round', () => { go('today'); startRound(); }],
     ["Today's summary", () => openSummary()], ['New task', () => { go('today'); ui.adding = true; render(); focusKey('new-name'); }],
-    ...data.groups.map((g) => [`Group: ${g.name}`, () => go('group:' + g.id)]),
   ].map(([label, run]) => ({ kind: 'page', label, run }));
   const projects = data.projects.map((p) => ({
     kind: 'project', label: p.name, dot: dotColour(p, today), sub: p.state !== 'active' ? p.state : (nextStep(p, today) || {}).text || '',
@@ -2830,6 +3045,7 @@ function selectedProject() {
 }
 
 function onKey(e) {
+  if (space === 'team') return; // (the projects' keys are not for the team pages)
   if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) { e.preventDefault(); openJump(); return; }
   if (e.metaKey || e.ctrlKey || e.altKey) return; // leave browser shortcuts alone
   if (e.key === 'Escape') {
@@ -2902,7 +3118,7 @@ function onKey(e) {
   } else if (k === 'n' && ui.view === 'people' && ui.person && !ui.search) {
     focusKey('person-task-input'); // on a person's page: the "Add a task with …" box
   } else if (k === 'n') {
-    if (!(ui.view === 'today' || ui.view === 'all' || ui.view.startsWith('group:'))) ui.view = 'today'; // the form is only on project lists
+    if (!(ui.view === 'today' || ui.view === 'all')) ui.view = 'today'; // the form is only on project lists
     ui.search = ''; ui.adding = true; ui.mobile = 'list'; render(); focusKey('new-name');
   } else if (k === 'q') {
     openCapture();
@@ -2942,7 +3158,7 @@ function teamButton() {
   const a = team.alerts;
   const n = a.stuck + a.unread + a.suggestions;
   const why = [a.stuck && `${a.stuck} stuck`, a.unread && `${a.unread} with new messages`, a.suggestions && `${a.suggestions} suggestion(s)`].filter(Boolean).join(', ');
-  return h('a', { class: 'icon team-btn', href: '../?team', title: n ? `Team needs you: ${why}` : 'Team: tasks you gave and their daily updates', 'aria-label': n ? `Team, ${n} need you` : 'Team' },
+  return h('a', { class: 'icon team-btn', href: '#team', title: n ? `Team needs you: ${why}` : 'Team: tasks you gave and their daily updates', 'aria-label': n ? `Team, ${n} need you` : 'Team' },
     '👥', n ? h('span', { class: 'team-count' }, String(n)) : null);
 }
 
@@ -3066,6 +3282,7 @@ const projectSteps = (p) => {
   // (moved: the server only keeps the task it already has for it, never makes a new one)
   const open = p.steps.filter((x) => (!x.done || movedButGiven(x)) && !(x.snoozedUntil && x.snoozedUntil > today)).map((x) => ({ stepRef: x.id, title: x.text, details: x.note || '', dueDate: x.dueDate || null, ...(x.done && x.movedTo ? { moved: true } : {}) }));
   if (open.length || p.steps.length) return open; // (steps all done or snoozed: nothing to do; the whole-project task is only for no steps at all)
+  if (isMainProject(store.view.data, p)) return []; // a 📂 project: its tasks go to the person themselves (projectGiveChanges), never one task with its name
   // no steps at all: the person still gets the project, as one task with its name, until steps are added
   return [{ stepRef: wholeRef(p.id), title: p.name, details: p.status || '' }];
 };
@@ -3074,26 +3291,72 @@ let dataFreshAt = 0; // when the projects were last checked against the server (
 const SYNC_KEY = 'dp.teamSync'; // last steps sent per given project, so unchanged projects are not sent again
 const SYNC_RETRY = 'retry'; // never matches: sent again next time, but a deleted project is still taken back
 
-/** Give the whole project to a person (or take it back with person = null). */
-async function giveProject(p, person, needsPhoto = !!ui.givePhoto) {
+/**
+ * Give the whole project to a person (or take it back with person = null). A 📂 project: its tasks go with it, except
+ * those given to someone else on their own and those you keep (`keep`: the task ids you unticked in the give box).
+ */
+async function giveProject(p, person, needsPhoto = !!ui.givePhoto, keep = ui.giveKeepFor === p.id ? ui.giveKeep : null) {
   if (team.busy.has(p.id)) return; // a double tap must not send it twice
   team.busy.add(p.id);
   render();
+  const main = isMainProject(store.view.data, p);
   try {
     await withSyncLock(async () => {
       const steps = person ? projectSteps(p) : [];
       // (the change of person is saved right after this: the server must not act on the older saved copy meanwhile)
       const out = await teamApi('project.sync', { projectRef: p.id, project: p.name, about: p.about || '', assigneeId: person ? person.id : 0, steps, needsPhoto, reason: person ? '' : 'taken', baseCommit: store.base && store.base.commit, pending: true });
       team.gen++; // a list fetched before this change is old now: it must not move the project back
-      store.dispatch('setProjectTeam', { projectId: p.id, userId: person ? person.id : null, name: person ? person.name : '', needsPhoto });
+      store.dispatch('setProjectTeam', { projectId: p.id, userId: person ? person.id : null, name: person ? person.name : '', needsPhoto, ...(main && person ? { giveTasks: true } : {}), ...(!main && !person ? { keepOff: true } : {}) });
+      const kids = new Set(main ? childrenOf(store.view.data, p.id).map((c) => c.id) : []);
+      if (main && person && keep) for (const id of keep) if (kids.has(id)) store.dispatch('setProjectTeam', { projectId: id, userId: null, keepOff: true }); // the ones you keep (of this project only)
       ui.giveOpen = null;
       ui.givePhoto = false;
-      toast(person ? `👥 ${p.name} given to ${person.name} ✓` : `Taken back: ${p.name}`);
+      ui.giveKeep = null; ui.giveKeepFor = null;
+      const moved = main ? followProjects() : null;
+      // taken back by you: the tasks that went with it leave the person's list now too (not only at the next sync)
+      if (moved) {
+        for (const id of moved.backIds) {
+          const t = store.view.data.projects.find((x) => x.id === id);
+          try { await teamApi('project.sync', { projectRef: id, project: t ? t.name : '', assigneeId: 0, steps: [], reason: 'taken', baseCommit: store.base && store.base.commit, pending: true }); rememberSync(id, null); } catch { /* the sync takes it back later */ }
+        }
+      }
+      toast(!person ? `Taken back: ${p.name}${moved && moved.back ? ` (and ${moved.back} task${moved.back > 1 ? 's' : ''} that went with it)` : ''}`
+        : main ? `👥 ${p.name} given to ${person.name} ✓ — ${giveSummary(p, person)}` : `👥 ${p.name} given to ${person.name} ✓`, main ? 8000 : 3000);
       // a step the server did not make yet (just finished): sent again later
       rememberSync(p.id, !person ? null : notSent(out, steps).length ? SYNC_RETRY : syncSig(person.id, p, steps, needsPhoto));
     });
+    if (main) syncGivenProjects(); // its tasks reach the person's list now
     loadTeam(true);
   } catch (e) { toast(e.message, 5000); } finally { team.busy.delete(p.id); render(); }
+}
+
+/**
+ * The tasks of given 📂 projects follow them (rules.js projectGiveChanges). Returns { given, back } counts.
+ * onlyFresh (the background sync): only on data just checked with the server — an old copy on a phone must never
+ * give (or take back) tasks the owner changed elsewhere since.
+ */
+function followProjects({ onlyFresh = false } = {}) {
+  const out = { given: 0, back: 0, backIds: [] };
+  if (!store || !store.view || !store.canEdit()) return out;
+  if (onlyFresh && (store.status !== 'saved' || !dataFreshAt || Date.now() - dataFreshAt > 2 * 60000)) return out;
+  for (const c of projectGiveChanges(store.view.data)) {
+    if (store.dispatch('setProjectTeam', c.team ? { projectId: c.projectId, ...c.team } : { projectId: c.projectId, userId: null })) {
+      out[c.team ? 'given' : 'back']++;
+      if (!c.team) out.backIds.push(c.projectId);
+    }
+  }
+  return out;
+}
+
+/** "4 tasks go with it · 2 stay with Ravi · 1 stays with you" — after giving a 📂 project. */
+function giveSummary(p, person) {
+  const kids = childrenOf(store.view.data, p.id).filter((c) => c.state !== 'finished');
+  const go = kids.filter((c) => c.team && c.team.userId === person.id).length;
+  const others = new Map();
+  for (const c of kids) if (c.team && c.team.userId !== person.id) others.set(c.team.name, (others.get(c.team.name) || 0) + 1);
+  const mine = kids.filter((c) => !c.team).length;
+  const n = (k, w) => `${k} ${w}${k === 1 ? '' : 's'}`;
+  return [`${n(go, 'task')} go${go === 1 ? 'es' : ''} with it`, ...[...others].map(([name, k]) => `${k} stay${k === 1 ? 's' : ''} with ${name}`), mine ? `${mine} stay${mine === 1 ? 's' : ''} with you` : null].filter(Boolean).join(' · ');
 }
 
 /** Steps sent with project.sync that are not on the person's list yet (the server waits 10 minutes after one was finished). */
@@ -3124,6 +3387,7 @@ async function syncGivenNow(gen) {
   if (!store || !store.view) return;
   let m = {};
   try { m = JSON.parse(localStorage.getItem(SYNC_KEY) || '{}'); } catch { m = {}; }
+  followProjects({ onlyFresh: true }); // a task added to (or taken out of) a given 📂 project follows it (fresh data only)
   // store.view is replaced after each save: read every project fresh after each wait, never an old copy
   const fresh = (id) => store.view.data.projects.find((x) => x.id === id);
   for (const id of store.view.data.projects.filter((x) => x.team).map((x) => x.id)) {
@@ -3162,7 +3426,18 @@ async function syncGivenNow(gen) {
   const ids = new Set(store.view.data.projects.map((p) => p.id));
   const savedIds = store.base ? new Set(store.base.data.projects.map((p) => p.id)) : null;
   for (const ref of Object.keys(m)) {
-    if (ids.has(ref)) continue;
+    const still = fresh(ref);
+    if (still && still.team) continue;
+    if (still) { // no longer given (it went with its 📂 project, which was taken back or it left): off the person's list —
+      // once that is saved, its Undo time is over, and only if no other device saved since (ifHead: else "stale", look again later)
+      const saved = store.base && store.base.data.projects.find((x) => x.id === ref);
+      if (store.pending.length || !saved || saved.team || Date.now() - Date.parse(still.updatedAt || 0) < UNDO_GRACE_MS) continue;
+      try {
+        const out = await teamApi('project.sync', { projectRef: ref, project: still.name, assigneeId: 0, steps: [], reason: 'taken', ifHead: store.base.commit });
+        if (!out.stale) rememberSync(ref, null);
+      } catch { /* try again next time */ }
+      continue;
+    }
     if (takeBackWaits(ref, savedIds, store.view.history)) continue; // not saved yet, or Undo still on screen: next time
     try {
       await teamApi('project.sync', { projectRef: ref, project: '', assigneeId: 0, steps: [], reason: 'deleted' });
@@ -3328,11 +3603,28 @@ function start() {
   if (!isMock && !onServer && MOVED_TO) { showMoved(); return; } // first: it passes #say= / #add= on to the new address
   takeClipFromHash();
   takeVoiceFromHash();
+  // a team task on the address (a phone notification): read before the owner's reminder link below takes "#open=" away
+  const teamTask = teamTaskInHash();
   takeOpenFromHash(); // "#open=<id>": a phone reminder opens that project
   if (location.hash === '#people') { ui.view = 'people'; ui.search = ''; history.replaceState(null, '', location.pathname + location.search); } // from Work Task's "People ↗"
   if (location.hash === '#apps' && onServer) { ui.view = 'apps'; ui.search = ''; history.replaceState(null, '', location.pathname + location.search); } // a phone alert "🔌 App: title"
   if (onServer) takeOpsFromHash(); // before the store starts: it reads the waiting changes once
-  if (onServer && !serverToken()) { toSignIn(); return; }
+  if (onServer && !isMock && !serverToken()) { root.replaceChildren(); showSignIn((user) => openFor(user, teamTask)); return; } // sign in here (one app)
+  if (onServer && !isMock) { // one app: who signed in picks the screens (the owner's start is not held up once known)
+    const known = rememberedWho();
+    if (known === 'staff') { startStaff(undefined, teamTask); return; }
+    if (known === 'manager') { startManager(undefined, teamTask); return; }
+    if (!known) {
+      root.replaceChildren(h('div', { class: 'loading' }, 'Loading…'));
+      askWho().then((r) => routeWho(r, teamTask)); // (no answer: only this phone's owner copy opens the owner's app)
+      return;
+    }
+  }
+  startOwner();
+}
+
+/** The owner's Daily Projects. */
+function startOwner() {
   const key = device.githubKey();
   if (!isMock && !onServer && !key) { showKeyScreen(); return; }
   const repo = isMock ? new MockRepo() : onServer ? new ServerRepo(serverToken(), '../api/') : new GitHubRepo(key, DATA_OWNER, DATA_REPO, DATA_BRANCH);
@@ -3353,6 +3645,7 @@ function start() {
     render(); // put ticked boxes and menus back to the real data
   });
   render();
+  if (onServer && !isMock) takeTeamFromHash(); // "#team…": the team pages of this app (from 👥, a team task chip, Give to team)
   store.init().then(() => { if (store.status === 'saved') dataFreshAt = Date.now(); render(); if (ui.capture) focusKey('capture-input'); voiceReady = true; runVoice(); loadTeam(true); if (onServer) loadApps(appsCtx, true); shareLocalKeys(); markShownOpened(); makeBrief(); recordPastScores(); });
   if (started) return;
   started = true;
@@ -3371,7 +3664,7 @@ function start() {
     else { saveTypedText(); rememberScroll(); sendNow(); } // leaving the app: send waiting changes at once, not after the usual pause
   });
   window.addEventListener('focus', () => doRefresh(false));
-  window.addEventListener('hashchange', () => { takeClipFromHash(); takeVoiceFromHash(); if (takeOpenFromHash()) render(); }); // the Chrome button, when the app is already open // back to this window from another app
+  window.addEventListener('hashchange', () => { takeClipFromHash(); takeVoiceFromHash(); if (takeTeamFromHash()) return; if (space === 'team' && openIdFromHash(location.hash)) leaveTeam(); if (takeOpenFromHash()) render(); }); // the Chrome button, when the app is already open // back to this window from another app
   window.addEventListener('pagehide', () => { saveTypedText(); rememberScroll(); sendNow(); });
   // Closing the app while changes are still being sent: ask first, so nothing stays only on this computer.
   window.addEventListener('beforeunload', (e) => {
@@ -3385,6 +3678,7 @@ function start() {
   document.addEventListener('keydown', onKey);
   // Ctrl+V anywhere on an open project: a screenshot or a copied file is added to it (the update box handles its own paste)
   document.addEventListener('paste', (e) => {
+    if (space === 'team' && teamView) { pasteToView(teamView, e, TEAM_BOX); return; } // the team pages: an instruction file, or a photo message
     if (e.defaultPrevented || !store || !store.view) return;
     if (pasteInForm(e.target)) return; // naming a new task: its own box takes the paste, never the open task's update
     // the project page must be on screen (not the Diary, Dashboard, Settings, Time, People, the round, Quick capture, or a sheet on top)
@@ -3409,6 +3703,15 @@ installEvents(document.body);
 installSwipe();
 // Keep the app's files on the device so it opens without internet (not in test mode on this Mac).
 if ('serviceWorker' in navigator && !isMock && !(onServer && !['worktask.in', 'www.worktask.in'].includes(location.hostname))) navigator.serviceWorker.register('sw.js').catch(() => {});
+// A phone notification tapped (or arriving) while this app is open: the site's service worker (../sw.js) tells it.
+// Tapped: open that team task (or the owner's project reminder). Arriving: look for the news now.
+if ('serviceWorker' in navigator && onServer) {
+  navigator.serviceWorker.addEventListener('message', (e) => {
+    const d = e.data || {};
+    if (d.type === 'open' && typeof d.hash === 'string' && /^#(?:team-task=\d+|open=[\w-]{1,64})$/.test(d.hash)) location.hash = d.hash;
+    else if (d.type === 'push') { if (staffView) staffView.act.liveCheck(); else if (teamView) teamView.act.liveCheck(); }
+  });
+}
 installMentions(() => ctx);
 installAutocorrect(device.autocorrect());
 if (isMock) document.title = 'Daily Projects (test mode)';

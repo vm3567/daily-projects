@@ -504,3 +504,18 @@ export function pasteReason({ connected = false, email = '', name = '', error = 
   if (connected !== true) return 'Outlook not connected';
   return emailPath({ connected, email }) === 'paste' ? 'That email address does not look right' : null;
 }
+
+/** One app: a team member (signed in, own password chosen) works in the staff view of the projects app. */
+export const staffGoes = (u) => !!u && u.role !== 'admin' && !u.mustChange;
+
+/**
+ * One app: an old Work Task address (worktask.in/…, an installed app, an old notification or link) → the same place in
+ * the one app (worktask.in/projects/…): "#open=<id>" / "#task=<id>" a team task, "#new=…" Give a task, "?team" the team pages.
+ */
+export function oneAppAddress(search, hash) {
+  const n = /^#(?:open|task)=(\d+)$/.exec(hash || '');
+  if (n) return 'projects/#team-task=' + n[1];
+  if (String(hash || '').startsWith('#new=')) return 'projects/#team-new=' + hash.slice(5);
+  if (new URLSearchParams(search || '').has('team')) return 'projects/#team';
+  return 'projects/';
+}
