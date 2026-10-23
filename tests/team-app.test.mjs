@@ -1427,3 +1427,25 @@ test('Team today table (review): a step waiting its turn with a by-date gone is 
   assert.equal(b.counts.notdue, 1);
   assert.equal(b.groups[0].all, 2, 'the due ones count in "x of y sent", the waiting step does not');
 });
+
+test('Team today table (review 2): Late is the server\'s rule (a Sunday does not hide it; a waiting step never is); no dueToday on a stuck / new-message task = not due; a group with a red row never has a green tag; every filter', async () => {
+  const { teamBoard } = await import('../team/public_html/logic.js');
+  const V = { id: 3, name: 'Valar' }, R = { id: 4, name: 'Ravi' };
+  const T = (id, who, x = {}) => ({ id, title: 'T' + id, assignee: who, status: 'open', repeat: 'once', today: null, stuck: false, unread: 0, ...x });
+  const sunday = T(1, V, { dueDate: '2026-10-20', dueToday: false, late: true, skipSunday: true, unread: 1 }); // overdue, comes on a Sunday
+  const waiting = T(2, V, { dueDate: '2026-10-20', dueToday: false, late: false, queued: true, unread: 1 });
+  const old = T(3, V, { repeat: 'weekly', stuck: false, unread: 2 }); // an older copy: no dueToday, no late
+  const sent = T(4, R, { dueToday: true, late: false, today: { at: 'x', note: 'ok' } });
+  const stuckWeekly = T(5, R, { repeat: 'weekly', dueToday: false, late: false, stuck: true });
+  const d = { today: '2026-10-25', late: false, tasks: [sent], stuck: [stuckWeekly], unread: [sunday, waiting, old], suggestions: [] };
+  const b = teamBoard(d);
+  const st = Object.fromEntries(b.groups.flatMap((g) => g.rows.map((r) => [r.t.id, r.status])));
+  assert.deepEqual(st, { 1: 'late', 2: 'notdue', 3: 'notdue', 4: 'sent', 5: 'stuck' });
+  assert.deepEqual([b.counts.late, b.counts.notdue], [1, 2]);
+  const ravi = b.groups.find((g) => g.name === 'Ravi');
+  assert.deepEqual([ravi.sent, ravi.all, ravi.red], [1, 1, 1], '"1 of 1 sent" but a red ⚠️ Stuck row in it');
+  assert.deepEqual(teamBoard(d, { filter: 'notdue' }).groups.flatMap((g) => g.rows.map((r) => r.t.id)), [2, 3], 'Not due today can be shown alone');
+  // without the server's field (an older copy): past its by-date and not waiting its turn
+  assert.equal(teamBoard({ today: '2026-10-23', tasks: [T(6, V, { dueDate: '2026-10-20' })], suggestions: [] }).groups[0].rows[0].status, 'late');
+  assert.equal(teamBoard({ today: '2026-10-23', tasks: [T(7, V, { dueDate: '2026-10-20', queued: true })], suggestions: [] }).groups[0].rows[0].status, 'notyet');
+});

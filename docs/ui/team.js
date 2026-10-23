@@ -598,16 +598,14 @@ export function createTeam(opts) {
     outlookConnected(); // asked once, so 📧 Morning email knows by the time it is pressed
     const d = state.data;
     const filt = state.personFilter;
-    const people = [...(d.people || [])];
-    // (everyone with a row of the table: today's tasks, and stuck ones, new messages and suggestions not due today)
-    for (const t of [...d.tasks, ...(d.stuck || []), ...(d.unread || []), ...(d.suggestions || [])]) if (!people.some((p) => p.id === t.assignee.id)) people.push({ id: t.assignee.id, name: t.assignee.name });
+    const anyone = (d.people || []).length > 0 || rules.teamBoard(d).total > 0; // (the table's own rows decide, logic.js teamBoard)
     const sentMark = (p) => { const tm = rules.sentTime(sentAtOf(p.id, p.morningSentAt), istDay()); return tm ? h('span', { class: 'muted small', title: 'Morning email sent today' }, ' ✓ ' + tm) : null; };
     return [
       d.stale ? h('p', { class: 'empty-list' }, `📴 Saved copy from ${fmtDay(d.today)} — today's updates are not shown yet.`) : null,
       filt ? null : summary(d),
       // (owner, 23 Oct: no "Needs you" list — stuck, new messages and suggestions are in the table, with their counts)
-      people.length ? null : h('p', { class: 'empty-list' }, 'No team members yet. ', h('button', { class: 'link', onClick: () => (opts.openPeople ? opts.openPeople() : go('people')) }, 'Add a person')),
-      people.length ? board(d, sentMark) : null,
+      anyone ? null : h('p', { class: 'empty-list' }, 'No team members yet. ', h('button', { class: 'link', onClick: () => (opts.openPeople ? opts.openPeople() : go('people')) }, 'Add a person')),
+      anyone ? board(d, sentMark) : null,
       filt ? h('p', { class: 'empty-list' }, h('button', { class: 'link', onClick: () => { state.personFilter = 0; state.boardPage = 1; render(); } }, '← Show everyone')) : null,
     ];
   }
@@ -642,11 +640,11 @@ export function createTeam(opts) {
     };
     const head = (g) => h('tr', { key: 'g-' + g.name, class: 'board-group' }, h('td', { colspan: '6' },
       h('strong', null, (state.boardGroup === 'project' ? '📂 ' : '') + g.name), ' ',
-      g.all ? h('span', { class: 'tag ' + tagOf(g.sent === g.all ? 'green' : d.late ? 'red' : 'amber') }, `${g.sent} of ${g.all} sent`) : null,
+      g.all ? h('span', { class: 'tag ' + tagOf(g.sent === g.all && !g.red ? 'green' : d.late || g.red ? 'red' : 'amber') }, `${g.sent} of ${g.all} sent`) : null, // (a red row in it: never green)
       g.person ? [' ', h('button', { class: 'chip', onClick: (e) => { if (e && e.stopPropagation) e.stopPropagation(); morningEmail(g.person); } }, '📧 Morning email'), sentMark(g.person)] : null));
     return [
       h('div', { class: 'board-counts row' }, chip('sent', `✓ Sent ${b.counts.sent}`), chip('notyet', `⏳ Not yet ${b.counts.notyet}`), chip('stuck', `⚠️ Stuck ${b.counts.stuck}`),
-        chip('late', `⏰ Late ${b.counts.late}`), chip('msg', `💬 New messages ${b.counts.msg}`), b.counts.sugg || state.boardFilter === 'sugg' ? chip('sugg', `💡 Suggestions ${b.counts.sugg}`) : null),
+        chip('late', `⏰ Late ${b.counts.late}`), b.counts.notdue || state.boardFilter === 'notdue' ? chip('notdue', `📅 Not due today ${b.counts.notdue}`) : null, chip('msg', `💬 New messages ${b.counts.msg}`), b.counts.sugg || state.boardFilter === 'sugg' ? chip('sugg', `💡 Suggestions ${b.counts.sugg}`) : null),
       h('div', { class: 'segmented board-group-by', role: 'group', 'aria-label': 'Group the table' }, seg('person', 'By person'), seg('project', 'By 📂 project')),
       !b.total ? h('p', { class: 'empty-list' }, 'No tasks today.') : !b.groups.length ? h('p', { class: 'empty-list' }, 'None of these. ', h('button', { class: 'link', onClick: pick(state.boardFilter) }, 'Show all')) :
         h('table', { class: 'sub-table board-table' },

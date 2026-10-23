@@ -3468,3 +3468,18 @@ test('Team today (review): a stuck task of someone no longer on the team list, w
   assert.ok(!text.includes('No team members yet'));
   assert.ok(text.includes('Fix the dryer') && text.includes('Mohan'), 'the stuck task is a row');
 });
+
+test('Team today (review 2): a "📅 Not due today" count shows those rows alone; a person\'s "x of y sent" is never green beside a red row', async () => {
+  const R = { id: 4, name: 'Ravi' };
+  const sent = { id: 81, title: 'Sweep floor', assignee: R, status: 'open', repeat: 'daily', dueToday: true, late: false, today: { at: '2026-10-23 10:00:00', note: 'done' }, unread: 0 };
+  const stuckWeekly = { id: 82, title: 'Fix the fan', assignee: R, status: 'open', repeat: 'weekly', dueToday: false, late: false, stuck: true, today: null, unread: 0 };
+  const quiet = { id: 83, title: 'Order bags', assignee: R, status: 'open', repeat: 'weekly', dueToday: false, late: false, today: null, unread: 1, lastMessage: { by: 'Ravi', text: 'Which size?' } };
+  const { t } = fakeTeam({ 'team.today': () => ({ ok: true, today: '2026-10-23', fillBy: '18:00', late: false, people: [R], tasks: [sent], stuck: [stuckWeekly], unread: [quiet], suggestions: [] }) });
+  t.go('today'); await new Promise((r) => setTimeout(r, 0)); await new Promise((r) => setTimeout(r, 0));
+  const find = (n, f) => (f(n) ? n : (n.childNodes || []).map((c) => find(c, f)).find(Boolean));
+  const tag = find(t.view(), (n) => n.nodeName === 'SPAN' && n.textContent === '1 of 1 sent');
+  assert.ok(tag && !/\bdone-tag\b/.test(tag.className) && /\blate\b/.test(tag.className), 'red, not green: ' + (tag && tag.className));
+  find(t.view(), (n) => n.nodeName === 'BUTTON' && (n.textContent || '').startsWith('📅 Not due today 1')).__on.click();
+  const text = t.view().textContent;
+  assert.ok(text.includes('Order bags') && !text.includes('Sweep floor') && !text.includes('Fix the fan'), 'only the not-due one');
+});
