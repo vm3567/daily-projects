@@ -408,7 +408,7 @@ function ol_load(): array {
  * Change the saved projects as one new version: $change($data, $hist) changes the data (and adds history lines by month);
  * it returns false when there is nothing to save. Another device saved first: read again, change again (a few tries).
  */
-function ol_write(callable $change, string $message): bool {
+function ol_write(callable $change, string $message, ?callable $alsoInTx = null): bool {
   $owner = (int)setting('dp_owner', '0');
   for ($try = 0; ; $try++) {
     [$head, $files, $data] = ol_load();
@@ -422,7 +422,7 @@ function ol_write(callable $change, string $message): bool {
       $changes[] = ['path' => $path, 'content' => ol_json(array_merge($list, $events))];
     }
     try {
-      dp_commit(['id' => $owner], $head, $changes, $message);
+      dp_commit(['id' => $owner], $head, $changes, $message, $alsoInTx);
       return true;
     } catch (ApiError $e) {
       if ($e->status !== 409 || $try >= 4) throw $e;
@@ -658,13 +658,16 @@ function ol_add(array $msgs): int {
       $threads[$ch] = true;
     }
     return true;
-  }, '📧 ' . count($new) . ' email' . (count($new) === 1 ? '' : 's') . ' from Outlook');
-  foreach ($new as [$m, $hs]) {
-    $r = strtotime((string)($m['receivedDateTime'] ?? ''));
-    // the internetMessageId row is marked OL_SEEN_IMID (not a thread, not counted as an email added)
-    foreach ($hs as $k => $h) q('INSERT IGNORE INTO ol_seen (msg_hash, conv_hash, received_at, added_at) VALUES (?, ?, ?, ?)',
-      [$h, $k ? OL_SEEN_IMID : hash('sha256', 'c|' . (string)($m['conversationId'] ?? '')), $r ? date('Y-m-d H:i:s', $r) : null, now()]);
-  }
+  }, '📧 ' . count($new) . ' email' . (count($new) === 1 ? '' : 's') . ' from Outlook', function () use ($new) {
+    // "these emails are in" is saved WITH the version that puts them in (never one without the other: a stop in between
+    // would add them all again next time)
+    foreach ($new as [$m, $hs]) {
+      $r = strtotime((string)($m['receivedDateTime'] ?? ''));
+      // the internetMessageId row is marked OL_SEEN_IMID (not a thread, not counted as an email added)
+      foreach ($hs as $k => $h) q('INSERT IGNORE INTO ol_seen (msg_hash, conv_hash, received_at, added_at) VALUES (?, ?, ?, ?)',
+        [$h, $k ? OL_SEEN_IMID : hash('sha256', 'c|' . (string)($m['conversationId'] ?? '')), $r ? date('Y-m-d H:i:s', $r) : null, now()]);
+    }
+  });
   return count($new);
 }
 

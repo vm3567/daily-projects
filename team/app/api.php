@@ -386,7 +386,8 @@ function handle(string $a, array $in): array {
       if ($text === '') throw new ApiError('The message is empty.');
       $cid = client_id($in['clientId'] ?? null);
       if (!$cid || !one('SELECT id FROM comments WHERE user_id = ? AND client_id = ?', [$me['id'], $cid])) {
-        q('INSERT INTO comments (task_id, user_id, text, at, client_id) VALUES (?, ?, ?, ?, ?)', [$t['id'], $me['id'], $text, now(), $cid]);
+        // (the same send twice at the same moment: kept once, the second simply gets the messages)
+        if (insert_once('INSERT INTO comments (task_id, user_id, text, at, client_id) VALUES (?, ?, ?, ?, ?)', [$t['id'], $me['id'], $text, now(), $cid]))
         // the manager writes: the person doing it hears; the person writes: the managers hear
         notify($me['role'] === 'admin' ? [(int)$t['assignee_id']] : admin_ids(), 'msg', "💬 {$me['name']} · {$t['title']}", $text, '/projects/#team-task=' . $t['id'], 'm' . $t['id']);
       }
@@ -481,9 +482,11 @@ function handle(string $a, array $in): array {
       $kind = in_array($in['repeat'] ?? '', ['daily', 'weekly', 'once'], true) ? $in['repeat'] : 'once';
       $cid = client_id($in['clientId'] ?? null);
       if ($cid && ($dup = one('SELECT id FROM tasks WHERE created_by = ? AND client_id = ?', [$me['id'], $cid]))) return ['task' => tasks_out([own_task($me, (int)$dup['id'])], $day)[0]]; // sent twice
-      q("INSERT INTO tasks (title, details, assignee_id, created_by, repeat_kind, skip_sunday, weekday, due_date, start_date, status, client_id, created_at, updated_at)
+      if (!insert_once("INSERT INTO tasks (title, details, assignee_id, created_by, repeat_kind, skip_sunday, weekday, due_date, start_date, status, client_id, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, 1, NULL, ?, ?, 'suggested', ?, ?, ?)",
-        [$title, txt($in['details'] ?? '', 4000), $me['id'], $me['id'], $kind, $kind === 'once' ? date_or_null($in['dueDate'] ?? null) : null, $day, $cid, now(), now()]);
+        [$title, txt($in['details'] ?? '', 4000), $me['id'], $me['id'], $kind, $kind === 'once' ? date_or_null($in['dueDate'] ?? null) : null, $day, $cid, now(), now()])) {
+        return ['task' => tasks_out([own_task($me, (int)one('SELECT id FROM tasks WHERE created_by = ? AND client_id = ?', [$me['id'], $cid])['id'])], $day)[0]]; // sent twice at the same moment
+      }
       $id = (int)db()->lastInsertId();
       audit($me['id'], 'task_suggested', "#$id $title");
       notify(admin_ids(), 'msg', "💡 {$me['name']} suggests a task", $title, '/projects/#team-task=' . $id);
@@ -782,8 +785,10 @@ function handle(string $a, array $in): array {
       } else {
         $cid = client_id($in['clientId'] ?? null); // the form's id: a resend (reply lost) gives back the task already made
         if ($cid && ($dup = one('SELECT id FROM tasks WHERE created_by = ? AND client_id = ?', [$me['id'], $cid]))) return ['task' => tasks_out([own_task($me, (int)$dup['id'])], $day)[0]];
-        q('INSERT INTO tasks (title, details, assignee_id, repeat_kind, skip_sunday, weekday, due_date, project, project_ref, step_ref, updated_at, created_by, start_date, created_at, client_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
-          [...$vals, $me['id'], $day, now(), $cid]);
+        if (!insert_once('INSERT INTO tasks (title, details, assignee_id, repeat_kind, skip_sunday, weekday, due_date, project, project_ref, step_ref, updated_at, created_by, start_date, created_at, client_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+          [...$vals, $me['id'], $day, now(), $cid])) {
+          return ['task' => tasks_out([own_task($me, (int)one('SELECT id FROM tasks WHERE created_by = ? AND client_id = ?', [$me['id'], $cid])['id'])], $day)[0]]; // a double tap at the same moment: one task
+        }
         $id = (int)db()->lastInsertId();
         q('UPDATE tasks SET needs_photo = ? WHERE id = ?', [empty($in['needsPhoto']) ? 0 : 1, $id]);
         audit($me['id'], 'task_new', "#$id $title");
@@ -1187,23 +1192,33 @@ function add_photo(array $me, int $updateId): int {
   if (!is_dir(UPLOAD_DIR . "/$dir")) mkdir(UPLOAD_DIR . "/$dir", 0750, true);
   $file = "$dir/" . bin2hex(random_bytes(12)) . '.jpg';
   file_put_contents(UPLOAD_DIR . "/$file", $jpeg);
-  if (!insert_once('INSERT INTO photos (update_id, file, size, created_at, client_id) VALUES (?, ?, ?, ?, ?)', [$updateId, $file, strlen($jpeg), now(), $cid], $file)) {
+  // the limit, again under a lock on the update: photos sent at the same moment are counted one after the other
+  $saved = in_tx_with_alerts(function () use ($updateId, $u, $file, $jpeg, $cid) {
+    one('SELECT id FROM updates WHERE id = ? FOR UPDATE', [$updateId]);
+    if ((int)one('SELECT COUNT(*) AS n FROM photos WHERE update_id = ? AND created_at >= ?', [$updateId, $u['created_at']])['n'] >= MAX_PHOTOS) {
+      @unlink(UPLOAD_DIR . '/' . $file);
+      throw new ApiError('Up to ' . MAX_PHOTOS . ' photos per update.');
+    }
+    return insert_once('INSERT INTO photos (update_id, file, size, created_at, client_id) VALUES (?, ?, ?, ?, ?)', [$updateId, $file, strlen($jpeg), now(), $cid], $file) ? (int)db()->lastInsertId() : 0;
+  });
+  if (!$saved) {
     $dup = one('SELECT id FROM photos WHERE update_id = ? AND client_id = ?', [$updateId, $cid]); // the same send arrived twice at once: kept once
     if (!$dup) throw new ApiError('Something went wrong. Try again.');
     return (int)$dup['id'];
   }
-  return (int)db()->lastInsertId();
+  return $saved;
 }
 
 /**
- * Save a sent photo's row. Two sends of the same one (same clientId) at the same moment both pass the "sent before?"
- * look: the second is stopped by the unique key — then its file goes and false is returned (the first one is kept).
+ * Save a sent row (a message, a task, a photo). Two sends of the same one (same clientId) at the same moment both pass
+ * the "sent before?" look: the second is stopped by the unique key — then its file (if any) goes and false is returned
+ * (the first one is kept).
  */
-function insert_once(string $sql, array $args, string $file): bool {
+function insert_once(string $sql, array $args, ?string $file = null): bool {
   try { q($sql, $args); return true; }
   catch (PDOException $e) {
     if ((int)($e->errorInfo[1] ?? 0) !== 1062) throw $e; // only "already there" (MySQL 1062)
-    @unlink(UPLOAD_DIR . '/' . $file);
+    if ($file !== null) @unlink(UPLOAD_DIR . '/' . $file);
     return false;
   }
 }

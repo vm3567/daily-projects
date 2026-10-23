@@ -190,12 +190,17 @@ function serverRestore(date, yes) {
   for (const p of Object.keys(nowTree)) if (ours(p) && !(p in oldTree)) changes.push({ path: p, sha: null });
   for (const [p, sha] of Object.entries(oldTree)) if (ours(p) && p !== 'data.json' && nowTree[p] !== sha) changes.push({ path: p, sha });
   if (server.data.secrets) old.secrets = server.data.secrets; else delete old.secrets;
-  changes.push({ path: 'data.json', content: JSON.stringify(old, null, 1) + '\n' });
-  try {
-    serverRun(['commit'], JSON.stringify({ parent: server.head, changes, message: `Restore to ${date} (${v.commit.slice(0, 7)}) (via Claude)` }));
-  } catch (e) {
-    if (e.clash) throw new Error('Another device saved just now. Run the restore again in a moment.');
-    throw e;
+  changes.push({ path: 'data.json', content: JSON.stringify(old, null, 1) + '\n' }); // last: the projects then find every file
+  // the server takes at most 500 changes in one version: many files go in a few versions, one after the other
+  let parent = server.head;
+  for (let i = 0; i < changes.length; i += 500) {
+    const part = changes.slice(i, i + 500);
+    try {
+      parent = JSON.parse(serverRun(['commit'], JSON.stringify({ parent, changes: part, message: `Restore to ${date} (${v.commit.slice(0, 7)})${changes.length > 500 ? ` part ${i / 500 + 1}` : ''} (via Claude)` }))).commit;
+    } catch (e) {
+      if (e.clash) throw new Error('Another device saved just now. Run the restore again in a moment.');
+      throw e;
+    }
   }
   console.log(`Restored to the version from ${date} (${v.commit.slice(0, 7)}). Saved as a new version.`);
 }

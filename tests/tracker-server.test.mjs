@@ -213,3 +213,18 @@ test('replies: mail-body prints the newest email; set-reply saves a draft by Cla
   assert.deepEqual([reply.text, reply.by, reply.state, reply.forMessageId], ['Dear Anil,\nConfirmed.\nRegards, Venkat', 'claude', 'ready', 'M1']);
   assert.match(t.run('replies').out, /Replies: 2 waiting for a reply · 1 ready to send[\s\S]*READY TO SEND[\s\S]*draft \(claude, ready\): Dear Anil,/);
 });
+
+test('review round 2 (whole code): a restore with more than 500 file changes works (it goes in parts of 500; data.json last) — the server takes at most 500 at once', () => {
+  const t = restoreSetup();
+  const st = JSON.parse(readFileSync(t.state, 'utf8'));
+  const files = {}; for (let i = 0; i < 510; i++) files[`files/later-${i}.jpg`] = 'later ' + i; // 510 files added after that day
+  execFileSync(process.execPath, [FAKE, 'commit'], { input: JSON.stringify({ parent: st.head, changes: Object.entries(files).slice(0, 500).map(([path, content]) => ({ path, content })) }), env: { ...process.env, FAKE_DP_STATE: t.state } });
+  const st2 = JSON.parse(readFileSync(t.state, 'utf8'));
+  execFileSync(process.execPath, [FAKE, 'commit'], { input: JSON.stringify({ parent: st2.head, changes: Object.entries(files).slice(500).map(([path, content]) => ({ path, content })) }), env: { ...process.env, FAKE_DP_STATE: t.state } });
+  const r = t.run('restore', '2026-10-05', '--yes');
+  assert.ok(r.ok, r.out);
+  const s = t.read();
+  assert.equal(Object.keys(s.files).filter((p) => p.startsWith('files/later-')).length, 0, 'every file added after that day is gone');
+  assert.deepEqual(s.data.projects.map((p) => p.name), ['Kiln trial'], 'and the projects are that day\'s');
+  assert.equal(s.files['files/a.jpg'], 'photo A');
+});

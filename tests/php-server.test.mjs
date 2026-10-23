@@ -2728,6 +2728,64 @@ test('review round 1 (whole code): the same photo (same clientId) sent several t
   assert.equal(files() - before, 2, 'one file for the photo, one for the message: none left over');
 });
 
+test('review round 2 (whole code): a message, a suggestion and a new task sent twice at the same moment (same clientId) are kept once — no error answer', { skip }, async () => {
+  const t = (await call('task.save', { assigneeId: id.suresh, title: 'Message race', repeat: 'daily', skipSunday: false }, tok.boss)).task;
+  const port = WEB_PORT + 4;
+  const many = spawn('php', ['-S', `127.0.0.1:${port}`, '-t', join(ROOT, 'team', 'public_html')], { env: { ...env(), PHP_CLI_SERVER_WORKERS: '8' }, stdio: 'ignore' });
+  try {
+    const url = `http://127.0.0.1:${port}/api/?a=`;
+    await until(async () => (await fetch(url + 'ping', { method: 'POST', body: '{}' })).ok, 'PHP server with workers');
+    const send = (a, body, who) => fetch(url + a, { method: 'POST', headers: { Authorization: 'Bearer ' + who, 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(async (r) => ({ s: r.status, ...(await r.json()) }));
+    const all6 = (a, body, who) => Promise.all(Array.from({ length: 6 }, () => send(a, body, who)));
+    const msgs = await all6('comment.add', { taskId: t.id, text: 'Same words twice', clientId: 'race-text-1' }, tok.suresh);
+    assert.ok(msgs.every((r) => r.ok), msgs.map((r) => r.s + ' ' + (r.error || '')).join(', '));
+    assert.equal(msgs[0].comments.filter((c) => c.text === 'Same words twice').length, 1, 'one message');
+    const sug = await all6('suggest', { title: 'Race suggestion', clientId: 'race-sug-1' }, tok.suresh);
+    assert.ok(sug.every((r) => r.ok), sug.map((r) => r.s + ' ' + (r.error || '')).join(', '));
+    assert.equal(new Set(sug.map((r) => r.task.id)).size, 1, 'one suggestion');
+    const give = await all6('task.save', { assigneeId: id.suresh, title: 'Race give', repeat: 'once', clientId: 'race-give-1' }, tok.boss);
+    assert.ok(give.every((r) => r.ok), give.map((r) => r.s + ' ' + (r.error || '')).join(', '));
+    assert.equal(new Set(give.map((r) => r.task.id)).size, 1, 'one task');
+  } finally { many.kill(); }
+});
+
+test('review round 2 (whole code): Outlook emails and "these emails are in" are saved together (dp_commit alsoInTx) — a stop in between can never add them twice', { skip }, async () => {
+  const out = JSON.parse(await phpRun(`$me = ['id' => (int)setting('dp_owner', '0')]; dp_migrate();
+    $h0 = setting('dp_head');
+    try { dp_commit($me, $h0, [['path' => 'notes/tx.txt', 'content' => 'x']], 'tx test', function () { set_setting('tx_mark', 'set'); throw new RuntimeException('stopped'); }); } catch (Throwable $e) { }
+    $after = [setting('dp_head') === $h0, setting('tx_mark', '')];
+    $r = dp_commit($me, $h0, [['path' => 'notes/tx.txt', 'content' => 'y']], 'tx test 2', function () { set_setting('tx_mark', 'set2'); });
+    echo json_encode([$after, setting('dp_head') === $r['commit'], setting('tx_mark', '')]);`));
+  assert.deepEqual(out[0], [true, ''], 'the extra writes failed: no version, and nothing of the extra writes either');
+  assert.equal(out[1], true); assert.equal(out[2], 'set2', 'saved: both together');
+  const ol = readFileSync(join(ROOT, 'team', 'app', 'outlook.php'), 'utf8');
+  const add = ol.slice(ol.indexOf('function ol_add('), ol.indexOf('function ol_check('));
+  assert.match(add, /from Outlook', function \(\) use \(\$new\) \{[^]*INSERT IGNORE INTO ol_seen/, 'ol_seen is written inside the same save');
+  assert.match(ol, /dp_commit\(\['id' => \$owner\], \$head, \$changes, \$message, \$alsoInTx\);/);
+});
+
+test('review round 2 (whole code): photos sent at the same moment never push an update past 5 photos (the limit is counted under a lock); refused ones leave no file', { skip }, async () => {
+  const t = (await call('task.save', { assigneeId: id.suresh, title: 'Photo limit race', repeat: 'daily', skipSunday: false }, tok.boss)).task;
+  const up = await call('update.save', { taskId: t.id, note: 'many photos', clientId: 'limit-up-1' }, tok.suresh);
+  const { readdirSync, statSync } = await import('node:fs');
+  const files = () => { const out = []; const walk = (d) => { for (const f of readdirSync(d)) { const p = join(d, f); if (statSync(p).isDirectory()) walk(p); else out.push(p); } }; try { walk(join(dir, 'uploads')); } catch { /* none */ } return out.length; };
+  const before = files();
+  const port = WEB_PORT + 5;
+  const many = spawn('php', ['-S', `127.0.0.1:${port}`, '-t', join(ROOT, 'team', 'public_html')], { env: { ...env(), PHP_CLI_SERVER_WORKERS: '8' }, stdio: 'ignore' });
+  let res;
+  try {
+    const url = `http://127.0.0.1:${port}/api/?a=`;
+    await until(async () => (await fetch(url + 'ping', { method: 'POST', body: '{}' })).ok, 'PHP server with workers');
+    const send = (i) => { const fd = new FormData(); fd.append('updateId', String(up.update.id)); fd.append('clientId', 'limit-' + i); fd.append('file', new Blob([png], { type: 'image/png' }), 'p.png'); return fetch(url + 'photo.add', { method: 'POST', headers: { Authorization: 'Bearer ' + tok.suresh }, body: fd }).then(async (r) => ({ s: r.status, ...(await r.json()) })); };
+    res = await Promise.all(Array.from({ length: 8 }, (_, i) => send(i)));
+  } finally { many.kill(); }
+  const ok = res.filter((r) => r.ok).length;
+  assert.equal(ok, 5, res.map((r) => r.s + ' ' + (r.error || '')).join(', '));
+  assert.ok(res.filter((r) => !r.ok).every((r) => /Up to 5 photos/.test(r.error)), 'the others are told the limit');
+  assert.equal(Number(sqlOut(`SELECT COUNT(*) FROM wt.photos WHERE update_id = ${up.update.id}`).trim()), 5);
+  assert.equal(files() - before, 5, 'no file left for a refused one');
+});
+
 test('review round 1 (whole code): importing a data folder with more than 500 files works (it goes in parts of 500; data.json last), every file is there', { skip }, async () => {
   const src = join(dir, 'import-big'); mkdirSync(join(src, 'files', 'x1'), { recursive: true });
   const n = 520;
@@ -2738,4 +2796,18 @@ test('review round 1 (whole code): importing a data folder with more than 500 fi
   const snap = await call('dp.snapshot', {}, tok.boss);
   assert.equal(Object.keys(snap.entries).filter((p) => p.startsWith('files/x1/')).length, n, 'every file is in the newest version');
   assert.ok(snap.entries['data.json']);
+});
+
+test('review round 2 (whole code): the setup code cannot be guessed fast — after 5 wrong codes in 15 minutes even the right one waits (a fresh install, before setup)', { skip }, async () => {
+  const fresh = mkdtempSync(join(tmpdir(), 'wt-setup-'));
+  writeFileSync(join(fresh, 'setup-code.txt'), 'fresh-setup-code-9');
+  const port = WEB_PORT + 6;
+  const web2 = spawn('php', ['-S', `127.0.0.1:${port}`, '-t', join(ROOT, 'team', 'public_html')], { env: { ...env(), WT_TEST_DIR: fresh }, stdio: 'ignore' });
+  try {
+    const post = async (code) => (await fetch(`http://127.0.0.1:${port}/setup.php`, { method: 'POST', body: new URLSearchParams({ code, db_name: 'wt', db_user: 'wt', db_pass: 'wrong-db-pass', name: 'X', username: 'xx1', password: 'xx-pass-123', password2: 'xx-pass-123' }) })).text();
+    await until(async () => (await fetch(`http://127.0.0.1:${port}/setup.php`)).ok, 'PHP server (fresh install)');
+    for (let i = 0; i < 5; i++) assert.match(await post('guess-' + i), /setup code is not right/);
+    assert.match(await post('fresh-setup-code-9'), /Too many wrong setup codes/, 'paused, even for the right code');
+    assert.ok(!existsSync(join(fresh, 'config.php')), 'nothing set up');
+  } finally { web2.kill(); rmSync(fresh, { recursive: true, force: true }); }
 });
