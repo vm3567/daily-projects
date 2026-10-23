@@ -18,7 +18,7 @@
 //   node tools/tracker.mjs edit-step <project> "<step text or id>" "<new text>"
 //   node tools/tracker.mjs add-note <project> "<text>"
 //   node tools/tracker.mjs add-inbox "<text>" [--note "<up to 600 letters>"]   (📥 Inbox: you decide later; the same one twice is skipped)
-//   node tools/tracker.mjs new-task "<name>" [--priority high|medium|low] [--steps "<a>" "<b>" ...] [--project "<project>"]
+//   node tools/tracker.mjs new-task "<name>" [--priority high|medium|low] [--steps "<a>" "<b>" ...] [--project "<project>"] [--finished]
 //                         (new-project: the older name, the same)
 //   node tools/tracker.mjs restore <YYYY-MM-DD>          (shows that version; add --yes to restore it)
 //   node tools/tracker.mjs replies                       (emails waiting for your reply, for /replies)
@@ -480,6 +480,7 @@ try {
         const projectId = newId();
         const ops = [makeOp('createProject', { projectId, name, priority, ...(main ? { parentId: main.id } : {}) })];
         for (const text of steps) ops.push(makeOp('addStep', { projectId, stepId: newId(), text }));
+        if (args.includes('--finished')) ops.push(makeOp('finish', { projectId })); // work already done: kept as a record, off the open list
         return ops;
       }, `New task: ${name}`);
       break;

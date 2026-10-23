@@ -200,3 +200,17 @@ test('skills text: /add uses new-task and add-to (a task can be in several 📂 
   const usage = readFileSync(new URL('../tools/tracker.mjs', import.meta.url), 'utf8').split('\n').filter((l) => l.startsWith('//   node tools/tracker.mjs'));
   for (const cmd of ['add-to', 'remove-from', 'set-main', 'new-task']) assert.ok(usage.some((l) => l.includes(` ${cmd} `)), cmd);
 });
+
+test('new-task --finished saves work already done as a finished task in the 📂 project (a record, not on the open list)', () => {
+  tracker('new-task', 'Open thing');
+  tracker('add-to', 'Open thing', 'Records', '--create');
+  tracker('new-task', 'Done thing', '--project', 'Records', '--finished');
+  const d = data();
+  const main = d.projects.find((p) => p.name === 'Records' && p.isMain);
+  const done = d.projects.find((p) => p.name === 'Done thing');
+  const open = d.projects.find((p) => p.name === 'Open thing');
+  assert.ok(main && done && open);
+  assert.equal(done.state, 'finished');
+  assert.notEqual(open.state, 'finished');
+  assert.ok((done.parentIds || [done.parentId]).includes(main.id), 'in the project');
+});
