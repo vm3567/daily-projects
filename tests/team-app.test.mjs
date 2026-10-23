@@ -418,7 +418,7 @@ test('morning email: the plain-words version (for when a table cannot be copied)
 test('morning email: the Team today page has the button, copies the table (HTML + plain words) and opens the email', () => {
   // (one app: the team pages)
   const fn = TEAM.slice(TEAM.indexOf('async function morningEmail('), TEAM.indexOf('// People (another manager'));
-  assert.match(TEAM.slice(TEAM.indexOf('function teamList('), TEAM.indexOf('function followRow(')), /onClick: \(\) => morningEmail\(p\) \}, '📧 Morning email'/, 'a button under each person on the Team today list');
+  assert.match(TEAM.slice(TEAM.indexOf('function board('), TEAM.indexOf('function followRow(')), /morningEmail\(g\.person\); \} \}, '📧 Morning email'\)/, 'a button on each person\'s line of the Team today table (owner, 23 Oct: one table)');
   assert.match(fn, /api\('morning\.mail', \{ userId: p\.id \}\)/);
   assert.match(fn, /new ClipboardItem\(\{ 'text\/html': [^}]*'text\/plain'/, 'the table and the plain words');
   assert.match(fn, /navigator\.clipboard\.writeText\(mail\.text\)/, 'plain words when a table cannot be copied');
@@ -483,7 +483,7 @@ test('morning email on People: each staff card has the table (# | Work | Last up
 
 test('morning email on People: Team today shows a small ✓ time next to the 📧 Morning email button', () => {
   // (one app: the team pages' Team today)
-  assert.match(TEAM.slice(TEAM.indexOf('function teamList('), TEAM.indexOf('function followRow(')), /'📧 Morning email'\), sentMark\(p\)/, 'on the Team today list');
+  assert.match(TEAM.slice(TEAM.indexOf('function board('), TEAM.indexOf('function followRow(')), /'📧 Morning email'\), sentMark\(g\.person\)/, 'on the Team today table (owner, 23 Oct: one table)');
   assert.match(TEAM, /const sentMark = \(p\) => \{ const tm = rules\.sentTime\(sentAtOf\(p\.id, p\.morningSentAt\), istDay\(\)\);/);
   assert.match(TEAM, /' ✓ ' \+ tm/);
 });
@@ -1355,4 +1355,28 @@ test('staff ✅ Tasks and 📂 Projects (owner, 23 Oct): every open task once, r
   assert.deepEqual(folders.map((f) => [f.name, f.tasks.length, f.dot, f.red]), [['Ceramic Media', 2, 'red', 2], ['Kiln trial', 2, 'yellow', 0], ['Misc', 3, 'red', 1]], 'worst first; 📂 Misc last');
   assert.equal(folders.find((f) => f.name === 'Kiln trial').ref, 'k1', 'a given project with steps opens its own page (steps in order, add a step)');
   assert.ok(!folders.some((f) => f.name === 'Feldspar' || f.name === 'Paint door'), 'one given task is never also a project');
+});
+
+test('Team today as one table (owner, 23 Oct): status of each task (sent / not yet / stuck / late), the counts, red first, a filter, By person or By 📂 project (📂 Misc last)', async () => {
+  const { teamBoard } = await import('../team/public_html/logic.js');
+  const V = { id: 3, name: 'Valar' }, R = { id: 4, name: 'Ravi' };
+  const T = (id, who, x = {}) => ({ id, title: 'T' + id, assignee: who, status: 'open', repeat: 'daily', today: null, stuck: false, unread: 0, project: '', folder: '', ...x });
+  const d = { today: '2026-10-23', late: false, tasks: [
+    T(1, V, { today: { at: '2026-10-23 10:00:00', note: 'done' } }),
+    T(2, V, { stuck: true, folder: 'Kilns' }),
+    T(3, R, { repeat: 'once', dueDate: '2026-10-20', project: 'Glaze photos' }),
+    T(4, R, { unread: 2, folder: 'Kilns' }),
+  ] };
+  let b = teamBoard(d);
+  assert.deepEqual(b.counts, { sent: 1, notyet: 1, stuck: 1, late: 1, msg: 1 });
+  assert.deepEqual(b.groups.map((g) => [g.name, g.rows.map((r) => [r.t.id, r.status, r.colour]), g.sent]),
+    [['Ravi', [[3, 'late', 'red'], [4, 'notyet', 'yellow']], 0], ['Valar', [[2, 'stuck', 'red'], [1, 'sent', 'green']], 1]], 'by person, red first (both red: by name)');
+  assert.equal(b.groups[1].person.id, 3, 'a person\'s line has the person (📧 Morning email)');
+  b = teamBoard({ ...d, late: true }, { group: 'project' });
+  assert.deepEqual(b.groups.map((g) => [g.name, g.rows.map((r) => r.t.id)]), [['Glaze photos', [3]], ['Kilns', [2, 4]], ['Misc', [1]]], 'by 📂 project: the owner\'s 📂, else its work, else 📂 Misc (last)');
+  assert.equal(b.groups[1].rows[1].colour, 'red', 'after the fill-by time "not yet" is red');
+  assert.deepEqual(teamBoard(d, { filter: 'msg' }).groups.flatMap((g) => g.rows.map((r) => r.t.id)), [4], 'a count shows only those');
+  assert.deepEqual(teamBoard(d, { filter: 'sent' }).groups.flatMap((g) => g.rows.map((r) => r.t.id)), [1]);
+  assert.deepEqual(teamBoard(d, { person: 4 }).groups.map((g) => g.name), ['Ravi'], 'a person picked in the menu');
+  assert.equal(teamBoard(d, { filter: 'stuck' }).total, 4, 'the counts stay for all');
 });

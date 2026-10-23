@@ -1178,6 +1178,24 @@ img.rich-photo { width: 72px; height: 72px; object-fit: cover; border-radius: 6p
 body.has-bell .detail-top { padding-right: 56px; }
 @media (max-width: 760px) { body.has-bell .list-head { padding-right: 60px; } }
 
+/* Team today as one table (ui/team.js board): counts on top, By person | By 📂 project, a row per task */
+.board-counts { margin: 10px 14px 8px; gap: 6px; }
+.board-table { width: calc(100% - 28px); margin: 6px 14px 20px; }
+body.has-bell .layout.wide .list-head { padding-right: 60px; } /* (the 🔔 sits on the right of a page that fills the screen) */
+.board-count.on { background: var(--brand-soft); border-color: var(--brand); color: var(--brand); }
+.board-group-by { margin: 0 14px 8px; }
+.board-table .board-row { cursor: pointer; }
+.board-table .board-row:hover td { background: var(--panel); }
+.board-table .board-row.current td { background: var(--brand-soft); }
+.board-table .board-group td { background: var(--panel); padding: 8px 6px; }
+.board-table .board-task .sub-name { text-align: left; }
+.board-table .board-today, .board-table .board-msg { max-width: 360px; white-space: pre-wrap; word-break: break-word; }
+.layout.team:not(.wide) .board-table .col-extra { display: none; } /* a task open on the right: the short table */
+@media (max-width: 640px) {
+  .board-table th:nth-child(5), .board-table td:nth-child(5) { display: table-cell; }
+  .board-table .col-extra, .board-table .board-who, .board-table th:nth-child(3) { display: none; }
+}
+
 /* ---------------------------------------------------------------- the staff view (one app: ui/staff.js)
    Staff see this app's own design. Only the few pieces this app had no style for, and only inside the staff view
    (.layout.staff), so the owner's screens never change. */

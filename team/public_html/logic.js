@@ -519,3 +519,30 @@ export function oneAppAddress(search, hash) {
   if (new URLSearchParams(search || '').has('team')) return 'projects/#team';
   return 'projects/';
 }
+
+/**
+ * Team today as one table (owner, 23 Oct): every task of today, red first, with its status — sent, stuck, late (a
+ * one-time task past its by-date, not sent today) or not yet (red once the fill-by time has passed) — the counts for
+ * the strip on top (each a filter), and the rows grouped by person or by 📂 project (the owner's 📂 project, else the
+ * work it is a step of, else 📂 Misc). filter: '' | 'sent' | 'notyet' | 'stuck' | 'late' | 'msg'. Pure: tested.
+ */
+export function teamBoard(d, { filter = '', group = 'person', person = 0 } = {}) {
+  const today = d.today, RANK = { red: 0, yellow: 1, green: 2 };
+  const rows = (d.tasks || []).filter((t) => !person || t.assignee.id === person).map((t, i) => {
+    const late = t.status === 'open' && t.repeat === 'once' && !!t.dueDate && t.dueDate < today && !t.today;
+    const status = t.stuck ? 'stuck' : late ? 'late' : t.today ? 'sent' : 'notyet';
+    const colour = status === 'sent' ? 'green' : status === 'notyet' && !d.late ? 'yellow' : 'red';
+    const project = t.folder || t.project || 'Misc';
+    return { t, status, colour, project, msg: (t.unread || 0) > 0, i };
+  });
+  const counts = { sent: 0, notyet: 0, stuck: 0, late: 0, msg: 0 };
+  for (const r of rows) { counts[r.status]++; if (r.msg) counts.msg++; }
+  const shown = rows.filter((r) => !filter || (filter === 'msg' ? r.msg : r.status === filter))
+    .sort((a, b) => RANK[a.colour] - RANK[b.colour] || a.i - b.i);
+  const key = (r) => (group === 'project' ? r.project : r.t.assignee.name);
+  const groups = new Map();
+  for (const r of shown) { if (!groups.has(key(r))) groups.set(key(r), []); groups.get(key(r)).push(r); }
+  const list = [...groups].map(([name, rs]) => ({ name, rows: rs, sent: rs.filter((r) => r.status === 'sent').length, person: group === 'person' ? rs[0].t.assignee : null }))
+    .sort((a, b) => (group === 'project' && (a.name === 'Misc') - (b.name === 'Misc')) || RANK[a.rows[0].colour] - RANK[b.rows[0].colour] || a.name.localeCompare(b.name));
+  return { counts, total: rows.length, groups: list };
+}

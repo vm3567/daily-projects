@@ -600,7 +600,6 @@ export function createTeam(opts) {
     const filt = state.personFilter;
     const people = [...(d.people || [])];
     for (const t of d.tasks) if (!people.some((p) => p.id === t.assignee.id)) people.push({ id: t.assignee.id, name: t.assignee.name });
-    const shown = people.filter((p) => !filt || p.id === filt);
     const row = (t) => {
       const u = t.today;
       const sub = u ? `✓ ${fmtTime(u.at)}${u.state === 'stuck' ? ' · stuck' : u.state === 'finished' ? ' · finished' : ''} — ${u.note}` : t.queued ? 'Coming next' : d.late ? 'Not filled today' : 'Not filled yet';
@@ -617,15 +616,46 @@ export function createTeam(opts) {
       needs.length ? [sec('⚠︎ Needs you', h('span', { class: 'tag remind' }, String(needs.length))),
         h('ul', { class: 'plist' }, needs.map(([t, sub, dot]) => rowOf(t, `${t.assignee.name}: ${sub}`, dot, dot === 'red')))] : null,
       people.length ? null : h('p', { class: 'empty-list' }, 'No team members yet. ', h('button', { class: 'link', onClick: () => (opts.openPeople ? opts.openPeople() : go('people')) }, 'Add a person')),
-      shown.map((p) => {
-        const tasks = d.tasks.filter((t) => t.assignee.id === p.id);
-        const sent = tasks.filter((t) => t.today).length;
-        const tag = !tasks.length ? h('span', { class: 'tag waiting' }, 'No tasks today')
-          : h('span', { class: 'tag ' + tagOf(sent === tasks.length ? 'green' : d.late ? 'red' : 'amber') }, `${sent} of ${tasks.length} sent`);
-        return [sec(p.name, tag), h('ul', { class: 'plist' }, tasks.map(row)),
-          h('div', { class: 'row staff-pad' }, h('button', { class: 'chip', onClick: () => morningEmail(p) }, '📧 Morning email'), sentMark(p))];
-      }),
+      people.length ? board(d, sentMark) : null,
       filt ? h('p', { class: 'empty-list' }, h('button', { class: 'link', onClick: () => { state.personFilter = 0; render(); } }, '← Show everyone')) : null,
+    ];
+  }
+
+  /**
+   * Team today as one table (owner, 23 Oct; the rule: logic.js teamBoard): the counts on top (each shows only those),
+   * By person | By 📂 project, then every task, red first — its 📂, who, what they wrote today, its status, the last
+   * message. A row opens the task on the right. With no task open the table fills the screen.
+   */
+  function board(d, sentMark) {
+    const b = rules.teamBoard(d, { filter: state.boardFilter || '', group: state.boardGroup || 'person', person: state.personFilter || 0 });
+    const pick = (k) => () => { state.boardFilter = state.boardFilter === k ? '' : k; render(); };
+    const chip = (k, label) => h('button', { class: 'chip board-count' + (state.boardFilter === k ? ' on' : ''), 'aria-pressed': String(state.boardFilter === k), onClick: pick(k) }, label);
+    const seg = (g, label) => h('button', { class: 'seg' + ((state.boardGroup || 'person') === g ? ' on' : ''), 'aria-pressed': String((state.boardGroup || 'person') === g), onClick: () => { state.boardGroup = g; render(); } }, label);
+    const STATUS = { sent: ['✓ Sent', 'good'], notyet: ['Not yet', d.late ? 'late' : 'waiting'], stuck: ['⚠️ Stuck', 'late'], late: ['⏰ Late', 'late'] };
+    const cell = (cls, ...c) => h('td', { class: cls }, ...c);
+    const line = (r) => {
+      const t = r.t, u = t.today, m = t.lastMessage;
+      return h('tr', { key: 'b-' + t.id, class: 'sub-row board-row' + (state.sel === 'task:' + t.id ? ' current' : ''), onClick: () => open('task:' + t.id) },
+        cell('', h('span', { class: 'dot ' + dotOf(r.colour) })),
+        cell('board-task', h('button', { class: 'link sub-name', type: 'button' }, t.title), ' ', state.boardGroup === 'project' ? null : h('span', { class: 'tag main-tag' }, '📂 ' + r.project), // (by 📂 project: its line says it)
+          state.newIds.has(t.id) ? h('span', { class: 'tag high' }, 'New') : null),
+        cell('board-who', t.assignee.name),
+        cell('board-today col-extra' + (u ? '' : ' muted'), u ? [h('span', { class: 'muted small' }, fmtTime(u.at) + ' '), u.note, (u.photos || []).length ? ` 📷${u.photos.length}` : ''] : '—'),
+        cell('board-status', h('span', { class: 'tag ' + STATUS[r.status][1] }, r.status === 'late' ? `⏰ Late (by ${fmtDay(t.dueDate)})` : STATUS[r.status][0])),
+        cell('board-msg col-extra' + (m ? '' : ' muted'), m ? [r.msg ? h('span', { class: 'tag on-step' }, '💬 New') : null, ` ${m.mine ? 'You' : m.by}: ${m.text || '📷'}`] : '—'));
+    };
+    const head = (g) => h('tr', { key: 'g-' + g.name, class: 'board-group' }, h('td', { colspan: '6' },
+      h('strong', null, (state.boardGroup === 'project' ? '📂 ' : '') + g.name), ' ',
+      h('span', { class: 'tag ' + tagOf(g.sent === g.rows.length ? 'green' : d.late ? 'red' : 'amber') }, `${g.sent} of ${g.rows.length} sent`),
+      g.person ? [' ', h('button', { class: 'chip', onClick: (e) => { if (e && e.stopPropagation) e.stopPropagation(); morningEmail(g.person); } }, '📧 Morning email'), sentMark(g.person)] : null));
+    return [
+      h('div', { class: 'board-counts row' }, chip('sent', `✓ Sent ${b.counts.sent}`), chip('notyet', `⏳ Not yet ${b.counts.notyet}`), chip('stuck', `⚠️ Stuck ${b.counts.stuck}`),
+        chip('late', `⏰ Late ${b.counts.late}`), chip('msg', `💬 New messages ${b.counts.msg}`)),
+      h('div', { class: 'segmented board-group-by', role: 'group', 'aria-label': 'Group the table' }, seg('person', 'By person'), seg('project', 'By 📂 project')),
+      !b.total ? h('p', { class: 'empty-list' }, 'No tasks today.') : !b.groups.length ? h('p', { class: 'empty-list' }, 'None of these. ', h('button', { class: 'link', onClick: pick(state.boardFilter) }, 'Show all')) :
+        h('table', { class: 'sub-table board-table' },
+          h('thead', null, h('tr', null, h('th', null, ''), h('th', null, 'Task'), h('th', null, 'Person'), h('th', { class: 'col-extra' }, 'Today'), h('th', null, 'Status'), h('th', { class: 'col-extra' }, 'Last message'))),
+          h('tbody', null, b.groups.map((g) => [head(g), g.rows.map(line)]))),
     ];
   }
 
@@ -1083,7 +1113,7 @@ export function createTeam(opts) {
   }
 
   function view() {
-    const wide = WIDE.includes(state.view);
+    const wide = WIDE.includes(state.view) || (state.view === 'today' && !state.sel && !!state.data); // Team today's table fills the screen until a task is open
     return h('div', { class: ['layout', 'staff', 'team', wide ? 'wide' : '', state.mobile === 'detail' && !wide ? 'show-detail' : '', state.menuOpen ? 'menu-open' : ''].join(' ').replace(/\s+/g, ' ').trim() },
       h('aside', { id: 'menu' }, menu()),
       h('div', { class: 'scrim', onClick: () => { state.menuOpen = false; render(); } }),
