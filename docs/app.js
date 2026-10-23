@@ -60,7 +60,7 @@ async function askWho() {
 }
 
 /** A team member: the staff view, in the same layout and look as this app (the rules come from Work Task's logic.js). */
-async function startStaff(user) {
+async function startStaff(user, openTask = 0) {
   if (!document.querySelector('link[data-team-look]')) { // the same look as Work Task: its styles on top of these
     const link = document.createElement('link');
     link.rel = 'stylesheet'; link.href = '../styles.css'; link.dataset.teamLook = '';
@@ -103,13 +103,21 @@ async function startStaff(user) {
   // signed out (or their first password still to choose): Work Task's sign-in; what waits on the phone stays and is sent after
   const onAuth = () => { location.href = '../'; };
   staff = createStaff({ root, api, rules, user, toast, signOut, onAuth, photo, viewer, box: idbOutbox(), shrink: shrinkPhoto, push: browserPush(api, user.id) });
-  const opened = /^#open=(\d+)$/.exec(location.hash); // a phone notification: that task
-  if (opened) { history.replaceState(null, '', location.pathname + location.search); staff.open('task:' + opened[1]); }
+  if (openTask) staff.open('task:' + openTask); // a phone notification: that task
   staff.start();
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') staff.act.reload(); });
   window.addEventListener('online', () => { staff.setOffline(false); staff.act.flush(); });
   window.addEventListener('offline', () => staff.setOffline(true));
   setInterval(() => { if (staff.state.outbox.length) staff.act.flush(); }, 30000); // weak signal: keep trying
+  setInterval(() => { if (document.visibilityState === 'visible') staff.act.liveCheck(); }, 20000); // new work comes in by itself
+  window.addEventListener('focus', () => staff.act.liveCheck());
+  // Ctrl+V on an open task: a photo into today's update, or (in the message box) a photo message
+  document.addEventListener('paste', (e) => {
+    if (e.defaultPrevented || !e.clipboardData) return;
+    const files = [...(e.clipboardData.files || [])];
+    const inMessageBox = !!(e.target && e.target.tagName === 'TEXTAREA' && /^Ask or reply/.test(e.target.placeholder || ''));
+    if (staff.act.paste({ files, text: e.clipboardData.getData('text/plain') || '', inMessageBox })) e.preventDefault();
+  });
 }
 
 const saved = device.ui();
@@ -3404,6 +3412,8 @@ function start() {
   if (!isMock && !onServer && MOVED_TO) { showMoved(); return; } // first: it passes #say= / #add= on to the new address
   takeClipFromHash();
   takeVoiceFromHash();
+  // a staff notification's "#open=<task>" (read before the owner's reminder link below takes the same hash away)
+  const staffTask = Number((/^#open=(\d+)$/.exec(location.hash) || [])[1] || 0);
   takeOpenFromHash(); // "#open=<id>": a phone reminder opens that project
   if (location.hash === '#people') { ui.view = 'people'; ui.search = ''; history.replaceState(null, '', location.pathname + location.search); } // from Work Task's "People ↗"
   if (location.hash === '#apps' && onServer) { ui.view = 'apps'; ui.search = ''; history.replaceState(null, '', location.pathname + location.search); } // a phone alert "🔌 App: title"
@@ -3411,12 +3421,12 @@ function start() {
   if (onServer && !serverToken()) { toSignIn(); return; }
   if (onServer && !isMock) { // one app: who signed in picks the screens (the owner's start is not held up once known)
     const known = rememberedWho();
-    if (known === 'staff') { startStaff(); return; }
+    if (known === 'staff') { startStaff(undefined, staffTask); return; }
     if (known === 'manager') { location.href = '../'; return; }
     if (!known) {
       root.replaceChildren(h('div', { class: 'loading' }, 'Loading…'));
       askWho().then(({ who, user }) => {
-        if (who === 'staff') startStaff(user);
+        if (who === 'staff') startStaff(user, staffTask);
         else if (who === 'manager') location.href = '../';
         else startOwner();
       });

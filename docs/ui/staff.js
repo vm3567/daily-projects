@@ -28,7 +28,7 @@ const OFFLINE_KEPT = '📴 Saved on this phone — it will be sent when you are 
 
 /** The only server calls the staff view makes (a check in tests/screens.test.mjs holds it to this list). */
 export const STAFF_CALLS = ['me', 'my.today', 'task.get', 'project.mine', 'update.save', 'photo.add', 'comment.add', 'comment.edit', 'comment.delete',
-  'comment.photo', 'project.addStep', 'suggest', 'password', 'logout', 'push.key', 'push.subscribe', 'push.unsubscribe', 'push.test'];
+  'comment.photo', 'project.addStep', 'suggest', 'search', 'password', 'logout', 'push.key', 'push.subscribe', 'push.unsubscribe', 'push.test'];
 /** Lists kept on the phone (the last copy), so the app opens without internet — the same saved copies Work Task keeps. */
 const READS = new Set(['me', 'my.today', 'task.get', 'project.mine']);
 export const cacheKey = (a, body) => 'wt.c.' + a + ':' + JSON.stringify(body || {});
@@ -195,8 +195,11 @@ export function createStaff(opts) {
   const state = {
     user: opts.user, data: null, loadFailed: '', section: 'today', sel: null, detail: null, detailFailed: '',
     menuOpen: false, mobile: 'list', drafts: {}, editing: {}, files: {}, sending: {}, msgDrafts: {}, stepDrafts: {}, diaryDays: 14,
-    offline: false, outbox: [], notices: [], signedOut: false, pushLater: false,
+    offline: false, outbox: [], notices: [], news: [], signedOut: false, pushLater: false,
+    searchQ: '', searchResults: null, newIds: new Set(), knownIds: new Set(),
   };
+  let searchTimer = 0, searchSeq = 0, liveBusy = false, badge = -1;
+  const listOf = (d) => [...((d && d.tasks) || []), ...((d && d.other) || []), ...((d && d.suggestions) || [])];
   const ids = { msg: {}, step: {}, photo: {} }; // the same clientId on a retry of the same words: the server keeps it once
   let detailSeq = 0;
   const today = () => (state.data && !state.data.stale && state.data.today) || istDay();
@@ -278,6 +281,7 @@ export function createStaff(opts) {
     if (detail && !detail.fromCache && detail.task && detail.task.unread) load(); // opening it marked its messages read (task.get): the list's "New" goes
   }
   function open(sel) {
+    if (sel.startsWith('task:')) state.newIds.delete(Number(sel.slice(5))); // seen: no longer "New"
     state.sel = sel; state.detail = null; state.detailFailed = ''; state.mobile = 'detail'; state.menuOpen = false;
     render(); loadDetail();
   }
@@ -413,7 +417,8 @@ export function createStaff(opts) {
     const clientId = ids.step[ref].id;
     const typedOn = () => { const more = rules.msgBoxLeft((state.stepDrafts[ref] || '').trim(), title); if (more) state.stepDrafts[ref] = more; else delete state.stepDrafts[ref]; };
     try {
-      await api('project.addStep', { projectRef: ref, title, clientId });
+      const out = await api('project.addStep', { projectRef: ref, title, clientId });
+      if (out && out.task) state.knownIds.add(out.task.id); // my own step: never told to me as news
       delete ids.step[ref]; typedOn();
       toast('➕ Step added. Your manager sees it in the project too.');
       reload();
@@ -462,7 +467,96 @@ export function createStaff(opts) {
   }
   async function notifyOff() { if (push) { await push.turnOff(); toast('Notifications are off for this phone.'); render(); } }
 
-  const act = { sendUpdate, sendMessage, sendMessagePhoto, editMessage, deleteMessage, addStep, suggest, changePassword, openFile, notifyOn, notifyOff, flush, open, show, back, reload };
+  /** 📷 more photos on today's update that was already sent (up to 5 in all). Kept on the phone when offline. */
+  async function addPhotos(t, list) {
+    const u = t.today;
+    if (!u || !list.length) return '';
+    const room = Math.max(0, 5 - (u.photos || []).length);
+    const files = list.slice(0, room);
+    if (!files.length) return 'Up to 5 photos on one update.';
+    const cid = newClientId(); // the same id online and in the outbox: a photo whose answer was lost is kept once
+    let i = 0;
+    for (; i < files.length; i++) {
+      const fd = new FormData();
+      fd.append('updateId', String(u.id)); fd.append('file', await shrink(files[i]), 'photo.jpg'); fd.append('clientId', `${cid}-p${i}`);
+      try { await api('photo.add', fd, true); } catch (e) {
+        if (e.offline || e.retry) break;
+        if (e.auth) { onAuth(e); return ''; }
+        toast(`A photo was not sent: ${e.message}`, 6000);
+      }
+    }
+    if (i < files.length) { // the rest wait on the phone
+      const blobs = [];
+      for (const f of files.slice(i)) blobs.push(await shrink(f));
+      if (!(await keep({ kind: 'photos', taskId: t.id, updateId: u.id, note: u.note, state: u.state, files: blobs, clientId: cid, photoNo: i }))) return KEEP_FAIL;
+    } else toast('📷 Added ✓');
+    reload();
+    return '';
+  }
+
+  /** Ctrl+V on an open task: in the message box = a photo message; anywhere else = into today's update. true = taken. */
+  function paste({ files = [], text = '', inMessageBox = false }) {
+    if (!state.sel || !state.sel.startsWith('task:') || !state.detail || !state.detail.task || !files.length) return false;
+    if (String(text).trim()) return false; // text with a picture of it (cells from Excel, Word): the text
+    const t = state.detail.task;
+    const images = files.filter((f) => String(f.type || '').startsWith('image/'));
+    if (inMessageBox) {
+      if (!images.length) { toast('Only photos can go in a message. Ask your manager to add other files to the task.', 5000); return true; }
+      sendMessagePhoto(t.id, images[0]).then((m) => { if (m) toast(m, 5000); });
+      return true;
+    }
+    if (!images.length) { toast('Only photos can be added to an update.', 5000); return true; }
+    if (t.status !== 'open' && !t.today) { toast('This task is closed.', 4000); return true; }
+    if (rules.pasteWaits(state.outbox, t.id, !!state.editing[t.id])) { toast('Wait until your update is sent, then add the photo.', 5000); return true; } // (no box to put it in)
+    if (t.today && !state.editing[t.id]) addPhotos(t, images.slice(0, 5)).then((m) => { if (m) toast(m, 5000); });
+    else { state.files[t.id] = [...(state.files[t.id] || []), ...images].slice(0, 5); render(); }
+    toast('📷 Pasted into your update');
+    return true;
+  }
+
+  /** 🔍 Search my tasks, messages and updates (the server answers with my own only). */
+  function search(q) {
+    state.searchQ = q;
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(async () => {
+      const words = state.searchQ.trim(), n = ++searchSeq;
+      if (words.length < 2) { state.searchResults = null; render(); return; }
+      try { const out = await api('search', { q: words }); if (n === searchSeq) { state.searchResults = out.results; render(); } }
+      catch (e) { if (n === searchSeq) { state.searchResults = { error: fail(e) || 'Could not search.' }; render(); } }
+    }, opts.searchWait ?? 350);
+  }
+
+  /** What is new since the last look (new tasks, a new project, new steps): a bar to open it, and "New" on the rows. */
+  function tellNews(fresh, before) {
+    if (!fresh.length) return;
+    const steps = fresh.filter((t) => t.projectRef && t.seq !== null && t.seq !== undefined);
+    const names = fresh.map((t) => t.title).slice(0, 3).join(' · ');
+    if (steps.length === fresh.length && new Set(steps.map((t) => t.projectRef)).size === 1) {
+      const p = steps[0].project || 'a project';
+      const had = listOf(before).some((t) => t.projectRef === steps[0].projectRef);
+      state.news = [{ title: had ? (steps.length === 1 ? `➕ New step in ${p}` : `➕ ${steps.length} new steps in ${p}`) : `📁 New project for you: ${p}`, body: names, sel: 'project:' + steps[0].projectRef }];
+    } else state.news = [{ title: fresh.length === 1 ? '📥 New task for you' : `📥 ${fresh.length} new tasks`, body: names, sel: 'task:' + fresh[0].id }];
+  }
+
+  /** Every 20 seconds while the app is open (and when coming back to it): anything new? */
+  async function liveCheck() {
+    if (liveBusy || !state.data) return;
+    liveBusy = true;
+    try {
+      const out = await api('my.today');
+      if (out.fromCache || JSON.stringify(out) === JSON.stringify(state.data)) return;
+      const had = new Set(listOf(state.data).map((t) => t.id));
+      // new to this screen — but not what this person made themselves (a step they added, a suggestion)
+      const fresh = listOf(out).filter((t) => !had.has(t.id) && !state.knownIds.has(t.id) && t.createdBy !== state.user.id);
+      for (const t of fresh) state.newIds.add(t.id);
+      tellNews(fresh, state.data);
+      state.data = out;
+      render(); // (what is being typed lives in this view's state: never wiped)
+      if (state.sel && (state.sel.startsWith('task:') || state.sel.startsWith('project:'))) loadDetail(); // new messages / steps on the open page too
+    } catch { /* try again next time */ } finally { liveBusy = false; }
+  }
+
+  const act = { sendUpdate, addPhotos, paste, search, liveCheck, sendMessage, sendMessagePhoto, editMessage, deleteMessage, addStep, suggest, changePassword, openFile, notifyOn, notifyOff, flush, open, show, back, reload };
 
   // ---------------------------------------------------------------- screens
 
@@ -481,6 +575,7 @@ export function createStaff(opts) {
         item('Today', !state.sel && state.section === 'today', () => show('today'), due || null),
         item('Coming next', !state.sel && state.section === 'next', () => show('next'), d && d.other.length ? d.other.length : null),
         item('My suggestions', !state.sel && state.section === 'sugg', () => show('sugg'), d && (d.suggestions || []).length ? d.suggestions.length : null),
+        item('🔍 Search', !state.sel && state.section === 'search', () => show('search')),
         projs.length ? h('li', { class: 'menu-head' }, 'My projects') : null,
         projs.map((pr) => item(`📁 ${pr.name}`, state.sel === 'project:' + pr.ref, () => open('project:' + pr.ref), pr.real.length || null)),
         h('li', { class: 'menu-sep' }),
@@ -496,7 +591,7 @@ export function createStaff(opts) {
       h('button', { class: 'prow-btn', onClick: () => open('task:' + t.id) },
         h('span', { class: 'dot ' + dot, 'aria-label': dot }),
         h('span', { class: 'prow-text' },
-          h('span', { class: 'prow-name' }, t.title, t.unread ? h('span', { class: 'tag high', title: `${t.unread} new message(s)` }, '💬 New') : null),
+          h('span', { class: 'prow-name' }, t.title, state.newIds.has(t.id) ? h('span', { class: 'tag amber new-tag' }, 'New') : null, t.unread ? h('span', { class: 'tag high', title: `${t.unread} new message(s)` }, '💬 New') : null),
           h('span', { class: 'prow-next' + (warn ? ' warn' : '') }, sub))));
   }
 
@@ -530,6 +625,15 @@ export function createStaff(opts) {
         h('button', { class: 'btn', onClick: () => { state.notices.splice(i, 1); render(); } }, 'Close'))));
   }
 
+  /** New work since the last look: tap to open it. */
+  function newsBar() {
+    return state.news.map((n, i) => h('div', { class: 'card stack news', key: 'news-' + i },
+      h('strong', null, n.title), n.body ? h('span', { class: 'small muted' }, n.body) : null,
+      h('div', { class: 'row' },
+        h('button', { class: 'btn primary', onClick: () => { state.news = []; open(n.sel); } }, 'Open'),
+        h('button', { class: 'btn', onClick: () => { state.news = []; render(); } }, 'Close'))));
+  }
+
   /** Once at the top: "turn on notifications" (until done, or Later). */
   function pushBanner() {
     const s = push ? push.state() : 'no';
@@ -544,16 +648,26 @@ export function createStaff(opts) {
 
   function list() {
     const d = state.data;
-    const title = { today: 'My tasks today', next: 'Coming next', sugg: 'My suggestions' }[state.section];
+    const title = { today: 'My tasks today', next: 'Coming next', sugg: 'My suggestions', search: 'Search' }[state.section];
     const head = h('div', { class: 'list-head' },
       h('button', { class: 'icon menu-btn', 'aria-label': 'Menu', onClick: () => { state.menuOpen = true; render(); } }, '☰'),
       h('h2', null, title),
       h('button', { class: 'icon', title: 'Get latest', 'aria-label': 'Refresh', onClick: reload }, '↻'));
-    const top = [offlineBar(), notices(), pushBanner()];
+    const top = [offlineBar(), notices(), newsBar(), pushBanner()];
     if (!d) return h('div', { class: 'col-inner' }, head, top, h('p', { class: 'empty-list' }, state.loadFailed ? [state.loadFailed, ' ', h('button', { class: 'link', onClick: reload }, 'Try again')] : 'Loading…'));
     const td = d.today;
     let body;
-    if (state.section === 'next') {
+    if (state.section === 'search') {
+      const r = state.searchResults;
+      const icon = { task: '📋', message: '💬', update: '📝' };
+      body = [h('div', { class: 'search-box' }, h('input', { class: 'search', type: 'search', key: 'staff-search', placeholder: 'Search tasks, messages, updates…', 'aria-label': 'Search', value: state.searchQ, onInput: (e, el) => search(el.value) })),
+        !r ? h('p', { class: 'empty-list' }, 'Type 2 or more letters.') : r.error ? h('p', { class: 'empty-list' }, r.error) : !r.length ? h('p', { class: 'empty-list' }, 'Nothing found.')
+          : h('ul', { class: 'list-body' }, r.map((x, i) => h('li', { class: 'prow', key: 'sr-' + i },
+            h('span', { class: 'quick-tick-space' }),
+            h('button', { class: 'prow-btn', onClick: () => open('task:' + x.taskId) },
+              h('span', { class: 'prow-text' }, h('span', { class: 'prow-name' }, `${icon[x.kind] || ''} ${x.title}`),
+                h('span', { class: 'prow-next' }, `${x.who} · ${fmtDay(x.at)} — ${x.text}`))))))];
+    } else if (state.section === 'next') {
       body = [sec(`${d.other.length} coming next`), h('ul', { class: 'list-body' }, d.other.map((t) => row(t, [t.project, repeatLabel(t, td)].filter(Boolean).join(' · '), 'grey'))),
         d.other.length ? null : h('p', { class: 'empty-list' }, 'Nothing coming next.')];
     } else if (state.section === 'sugg') {
@@ -640,7 +754,9 @@ export function createStaff(opts) {
       const u = t.today;
       return h('div', { class: 'card sent' }, head(h('span', { class: 'ok' }, `Sent ${fmtTime(u.at)}`)),
         h('div', { class: 'row small' }, stateTag(u.state)), h('div', { class: 'pre' }, u.note), photos('photo', u.photos),
-        h('div', { class: 'row' }, h('button', { class: 'btn', onClick: () => { state.editing[t.id] = true; state.drafts[t.id] = { note: u.note, state: u.state }; render(); } }, '✎ Edit')));
+        h('div', { class: 'row' }, h('button', { class: 'btn', onClick: () => { state.editing[t.id] = true; state.drafts[t.id] = { note: u.note, state: u.state }; render(); } }, '✎ Edit'),
+          (u.photos || []).length < 5 ? h('label', { class: 'btn' }, '📷 Add photo', h('input', { type: 'file', accept: 'image/*', multiple: true, class: 'hidden-file',
+            onChange: (e, el) => { const f = [...el.files].slice(0, 5); el.value = ''; addPhotos(t, f).then((m) => { if (m) toast(m, 5000); }); } })) : null));
     }
     const d = (state.drafts[t.id] ||= { note: '', state: 'progress' });
     const picked = state.files[t.id] || [];
@@ -815,7 +931,17 @@ export function createStaff(opts) {
       h('section', { id: 'detail' }, detail()));
   }
 
+  /** The number on the app icon (installed app): tasks still to send today. */
+  function setBadge() {
+    if (!state.data || typeof navigator === 'undefined' || !navigator.setAppBadge) return;
+    const n = (state.data.tasks || []).filter((t) => !t.today).length;
+    if (n === badge) return;
+    badge = n;
+    (n ? navigator.setAppBadge(n) : navigator.clearAppBadge()).catch(() => {});
+  }
+
   function render() {
+    setBadge();
     if (!root) return;
     const next = view();
     if (root.firstChild && root.firstChild.classList && root.firstChild.classList.contains('layout')) morph(root.firstChild, next);

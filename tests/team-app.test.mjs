@@ -5,6 +5,20 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { addDay, weekdayOf, dueOn, itemKey, diaryRows, fieldChanged, lateValue, afterFlush, boxStillThere, updateSaveBody, redrawHow, projectRowState, giveBackShow, keptNotice, noticeHow, pasteWaits, msgBoxSent, msgBoxLeft, updateBoxLeft, redrawAfterSend, taskSaveBody, giveId, aboutShort, projectAboutOf, morningMail, morningOrder, morningSummary, sentTag, sentTime, escHtml, followupRule, followupRows, followupGroups, followupSummary, roundKey, roundSaved, roundPlan, roundMark, parseQuickTask, outlookLine } from '../team/public_html/logic.js';
 const APP = readFileSync(new URL('../team/public_html/app.js', import.meta.url), 'utf8');
+// one app (step 3): the staff screens moved to the staff view of the projects app; their checks read it here
+const STAFF = readFileSync(new URL('../docs/ui/staff.js', import.meta.url), 'utf8');
+const STAFFBOX = readFileSync(new URL('../docs/ui/staffbox.js', import.meta.url), 'utf8');
+async function staffView(answers = {}) {
+  const { createStaff } = await import('../docs/ui/staff.js');
+  const { memOutbox } = await import('../docs/ui/staffbox.js');
+  const rules = await import('../team/public_html/logic.js');
+  const calls = [], box = memOutbox();
+  const api = async (a, body) => { calls.push({ a, body }); if (answers[a]) return answers[a](body); if (a === 'my.today') return { today: '2026-10-22', fillBy: '18:00', tasks: [], other: [{ id: 5, title: 'S', projectRef: 'p1', seq: 1, status: 'open' }], suggestions: [] }; return { ok: true }; };
+  const s = createStaff({ root: null, api, rules, user: { id: 3, name: 'Valar', role: 'staff' }, box, lock: null, toast: () => {} });
+  await s.load();
+  return { s, calls, box };
+}
+const offline = () => Object.assign(new Error('offline'), { offline: true });
 
 // Wed 21 Oct 2026 is "today" in these checks; 18 Oct is a Sunday.
 const TODAY = '2026-10-21';
@@ -125,9 +139,13 @@ test('team: every update save carries a clientId (a timed-out online save that i
   assert.equal(fin.state, 'finished'); assert.equal(fin.clientId, 'abc-f', 'the Finished save has its own id');
   assert.equal(fin.writtenAt, undefined);
   assert.equal(updateSaveBody({ taskId: 4, note: 'n', state: 'stuck', clientId: 'a', day: 'd', writtenAt: 'w' }).writtenAt, 'w');
-  const calls = APP.match(/api\('update\.save',[^\n]*/g) || [];
-  assert.ok(calls.length >= 4, 'the online save, its Finished, the outbox save, its Finished');
-  for (const c of calls) assert.match(c, /updateSaveBody\(\{[^}]*clientId/, `update.save without a clientId: ${c.slice(0, 80)}`);
+  // (one app: the online save and its Finished are in the staff view now; the outbox saves in both apps' outboxes)
+  const where = { 'Work Task outbox': APP, 'staff view': STAFF, 'staff outbox': STAFFBOX };
+  for (const [name, src] of Object.entries(where)) {
+    const calls = src.match(/api\('update\.save',[^\n]*/g) || [];
+    assert.ok(calls.length >= 2, `${name}: the save and its Finished`);
+    for (const c of calls) assert.match(c, /updateSaveBody\(\{[^}]*clientId/, `${name}: update.save without a clientId: ${c.slice(0, 80)}`);
+  }
 });
 
 test('team: menu and list clicks never redraw over a half-filled Give / Edit form', () => {
@@ -190,11 +208,11 @@ test('team: a finished send never redraws over a form opened and typed in meanwh
   const photo = APP.slice(APP.indexOf('async function sendMsgPhoto'), APP.indexOf('// Ctrl+V on an open task'));
   assert.match(photo, /finally \{[^]*if \(!formHasText\(\)\) render\(\); else state\.reloadLater = true;/); // (round 11: the finally block spans lines now)
   assert.ok(!/finally \{ delete state\.sending\[key\]; render\(\); \}/.test(photo));
-  const send = APP.slice(APP.indexOf("toast('Sent ✓');\n      if (document.contains(btn)"), APP.indexOf("}, 'Send');"));
-  assert.ok(send.length > 0, 'the update Send checks before redrawing');
-  assert.match(send, /if \(document\.contains\(btn\) \|\| !formHasText\(\)\) render\(\);[^\n]*\n\s*else state\.reloadLater = true;/);
-  // (round 11: the redraw is no longer only on the Today list, see the check below; still never over typing)
-  assert.match(send, /if \(redrawAfterSend\(\{ view: state\.view, sel: state\.sel, taskId: t\.id \}\)\) \{ if \(!formHasText\(\)\) render\(\); else state\.reloadLater = true; \}/);
+  // (one app: the update Send is in the staff view, where every box shows what this view keeps for it and each
+  // keystroke is kept there, so the redraw after a send never wipes words typed meanwhile — in any box)
+  assert.match(STAFF, /h\('textarea', \{ key: 'up-' \+ t\.id,[^\n]*value: d\.note, onInput: \(e, el\) => \{ d\.note = el\.value;/, 'the update box');
+  assert.match(STAFF, /h\('textarea', \{ key: 'msg-' \+ taskId,[^\n]*value: state\.msgDrafts\[taskId\] \|\| '', onInput: \(e, el\) => \{ state\.msgDrafts\[taskId\] = el\.value;/, 'the message box');
+  assert.match(STAFF, /value: state\.stepDrafts\[ref\] \|\| '', onInput: \(e, el\) => \{ state\.stepDrafts\[ref\] = el\.value; \}/, 'the Add a step box');
 });
 
 test('team: Ctrl+V of a photo while the update waits on the phone is refused (it would go nowhere)', () => {
@@ -203,8 +221,9 @@ test('team: Ctrl+V of a photo while the update waits on the phone is refused (it
   assert.ok(pasteWaits([{ kind: 'photos', taskId: 5 }], 5, false));
   assert.ok(!pasteWaits(box, 5, true), 'changing the update: the photo goes with it');
   assert.ok(!pasteWaits(box, 6, false)); assert.ok(!pasteWaits([{ kind: 'comment', taskId: 5 }], 5, false)); assert.ok(!pasteWaits(undefined, 5, false));
-  const paste = APP.slice(APP.indexOf("document.addEventListener('paste'"), APP.indexOf('async function editMessage'));
-  assert.ok(paste.indexOf('pasteWaits(state.outbox, t.id') > 0 && paste.indexOf('pasteWaits(') < paste.indexOf('addTaskPhotos('), 'checked before the photo is added');
+  // (one app: staff paste in the staff view now)
+  const paste = STAFF.slice(STAFF.indexOf('function paste('), STAFF.indexOf('/** 🔍 Search my tasks'));
+  assert.ok(paste.indexOf('rules.pasteWaits(state.outbox, t.id') > 0 && paste.indexOf('pasteWaits(') < paste.indexOf('addPhotos(t, images') && paste.indexOf('pasteWaits(') < paste.indexOf('state.files[t.id] = '), 'checked before the photo is added');
 });
 
 test('team: a photo message sent with words empties the box (the words are not sent twice) and the photo shows', () => {
@@ -970,24 +989,30 @@ test('review r16: the "Finished" after the photos goes on the day the server sav
   assert.match(send, /if \(it\.thenFinish\) await api\('update\.save', updateSaveBody\(\{ taskId: it\.taskId, note: it\.note, day: it\.day \|\| day,/);
 });
 
-test('review r16: words typed in the update box while Send is running are kept (the box stays open as a change), online and when kept on the phone', () => {
+test('review r16: words typed in the update box while Send is running are kept (the box stays open as a change), online and when kept on the phone', async () => {
   assert.equal(updateBoxLeft('Fired kiln 3', 'Fired kiln 3'), '', 'just what went: the box closes');
   assert.equal(updateBoxLeft('Fired kiln 3, temp 1180C, crack on tile 4', 'Fired kiln 3'), 'Fired kiln 3, temp 1180C, crack on tile 4', 'more typed: all of it stays, to send again as the change');
   assert.equal(updateBoxLeft('  ', 'Fired kiln 3'), '', 'emptied meanwhile: nothing to keep');
   assert.equal(updateBoxLeft(undefined, 'x'), '');
-  const fnSrc = APP.slice(APP.indexOf('function keepTypedUpdate('), APP.indexOf('function updateForm('));
-  const state = { drafts: { 7: { note: 'Fired kiln 3, temp 1180C', state: 'progress' } }, editing: {} };
-  new Function('state', 'updateBoxLeft', fnSrc + '; return keepTypedUpdate;')(state, updateBoxLeft)(7, state.drafts[7], 'Fired kiln 3');
-  assert.deepEqual(state.drafts[7], { note: 'Fired kiln 3, temp 1180C', state: 'progress' }, 'the typed words have a draft behind them');
-  assert.equal(state.editing[7], true, 'the box stays open (a second Send changes today\'s update)');
-  state.drafts[8] = { note: 'done', state: 'finished' }; state.editing[8] = true;
-  new Function('state', 'updateBoxLeft', fnSrc + '; return keepTypedUpdate;')(state, updateBoxLeft)(8, state.drafts[8], 'done');
-  assert.ok(!(8 in state.drafts) && !(8 in state.editing), 'nothing more typed: emptied as before');
-  const send = APP.slice(APP.indexOf('function updateForm('), APP.indexOf("}, 'Send');", APP.indexOf('function updateForm(')));
-  assert.ok(!/delete state\.drafts\[t\.id\]/.test(send), 'the draft is never simply wiped after a send');
-  assert.equal((send.match(/keepTypedUpdate\(t\.id, d, sentNote\);/g) || []).length, 2, 'online and offline');
-  assert.match(send, /api\('update\.save', updateSaveBody\(\{ taskId: t\.id, note: sentNote,/, 'what went is the text taken when Send was tapped');
-  assert.equal((send.match(/note: sentNote, state: d\.state/g) || []).length, 2, 'the phone keeps that same text, not later typing');
+  // (one app: the update box is in the staff view; the same rule, run for real, online and when kept on the phone)
+  for (const net of ['online', 'offline']) {
+    let release;
+    const { s: v, calls, box } = await staffView({ 'update.save': (b) => new Promise((ok, no) => { release = () => (net === 'online' ? ok({ ok: true, update: { id: 9, note: b.note } }) : no(offline())); }) });
+    const t = { id: 7, title: 'Kiln', status: 'open', today: null };
+    v.state.drafts[7] = { note: 'Fired kiln 3', state: 'progress' };
+    const going = v.act.sendUpdate(t);
+    await new Promise((r) => setTimeout(r, 0));
+    v.state.drafts[7].note = 'Fired kiln 3, temp 1180C'; // typed while it was sending
+    release(); await going;
+    assert.deepEqual(v.state.drafts[7], { note: 'Fired kiln 3, temp 1180C', state: 'progress' }, `${net}: the typed words have a draft behind them`);
+    assert.equal(v.state.editing[7], true, `${net}: the box stays open (a second Send changes today's update)`);
+    const went = net === 'online' ? calls.find((c) => c.a === 'update.save').body.note : [...box.items.values()][0].note;
+    assert.equal(went, 'Fired kiln 3', `${net}: what went is the text taken when Send was tapped, not later typing`);
+  }
+  const { s: v2 } = await staffView({ 'update.save': (b) => ({ ok: true, update: { id: 9, note: b.note } }) });
+  v2.state.drafts[8] = { note: 'done', state: 'finished' }; v2.state.editing[8] = true;
+  await v2.act.sendUpdate({ id: 8, title: 'x', status: 'open', today: null });
+  assert.ok(!(8 in v2.state.drafts) && !(8 in v2.state.editing), 'nothing more typed: emptied as before');
 });
 
 test('review r16: a photo message — words typed during the upload stay in the draft and the box, and the caption that went is not sent again', async () => {
@@ -1056,23 +1081,24 @@ test('review sw mix: app.js from the network, then logic.js fails (offline or an
   assert.ok(fails(both[1]), 'logic.js fails cleanly, never the kept copy');
 });
 
-test('review: words typed in the Add a step box while a step is sending stay (online and when kept on the phone); just the sent step: the box empties', () => {
-  const fnSrc = APP.slice(APP.indexOf('function keepTypedStep('), APP.indexOf('function addStepForm('));
-  assert.ok(fnSrc.length > 0 && fnSrc.length < 600, 'the helper is there');
-  const state = { stepDrafts: { p1: 'Call vendor for quote' } };
-  const keep = new Function('state', 'msgBoxLeft', fnSrc + '; return keepTypedStep;')(state, msgBoxLeft);
-  assert.equal(keep('p1', 'Order servo motor'), 'Call vendor for quote', 'the next step typed meanwhile stays');
-  assert.equal(state.stepDrafts.p1, 'Call vendor for quote');
-  state.stepDrafts.p1 = 'Order servo motor ';
-  assert.equal(keep('p1', 'Order servo motor'), '', 'just what went: emptied');
-  assert.ok(!('p1' in state.stepDrafts), 'the draft is gone');
-  state.stepDrafts.p1 = 'Order servo motor\tCall vendor';
-  assert.equal(keep('p1', 'Order servo motor'), 'Call vendor', 'typed on after the sent words: only the later words stay');
-  const form = APP.slice(APP.indexOf('function addStepForm('), APP.indexOf('/** Manager, top of Team today'));
-  assert.ok(!/delete state\.stepDrafts\[ref\]/.test(form), 'the draft is never simply wiped after a send');
-  assert.ok(!/inp\.value = '';/.test(form), 'the box is never simply emptied');
-  assert.match(form, /await api\('project\.addStep'[^]*const left = keepTypedStep\(ref, title\);[^]*inp\.value = left;/, 'online');
-  assert.match(form, /await queue\(\{ kind: 'step'[^\n]*inp\.value = keepTypedStep\(ref, title\);/, 'kept on the phone');
+test('review: words typed in the Add a step box while a step is sending stay (online and when kept on the phone); just the sent step: the box empties', async () => {
+  // (one app: the Add a step box is in the staff view; the same rule, run for real, online and when kept on the phone)
+  for (const net of ['online', 'offline']) {
+    const run = async (typed) => {
+      let release;
+      const { s: v, box } = await staffView({ 'project.addStep': () => new Promise((ok, no) => { release = () => (net === 'online' ? ok({ ok: true }) : no(offline())); }) });
+      v.state.stepDrafts.p1 = 'Order servo motor';
+      const going = v.act.addStep('p1');
+      await new Promise((r) => setTimeout(r, 0));
+      v.state.stepDrafts.p1 = typed; // typed while it was sending
+      release(); await going;
+      return { left: v.state.stepDrafts.p1, kept: [...box.items.values()].map((x) => x.title) };
+    };
+    assert.equal((await run('Call vendor for quote')).left, 'Call vendor for quote', `${net}: the next step typed meanwhile stays`);
+    assert.equal((await run('Order servo motor ')).left, undefined, `${net}: just what went: emptied (the draft is gone)`);
+    assert.equal((await run('Order servo motor\tCall vendor')).left, 'Call vendor', `${net}: typed on after the sent words: only the later words stay`);
+    if (net === 'offline') assert.deepEqual((await run('x')).kept, ['Order servo motor'], 'kept on the phone: the step that was sent');
+  }
 });
 
 test('review: the one-line "Give it" box keeps a line typed while task.save was sending; only the given line is cleared', () => {
@@ -1100,4 +1126,37 @@ test('review: a given-back step never overwrites the words being typed in the Ad
   const empty = run({});
   assert.equal(empty.state.stepDrafts.p1, 'Order servo motor', 'an empty box gets the old step back');
   assert.match(empty.body, /back in the Add a step box/);
+});
+
+test('one app, step 3: a team member is sent to the staff view (after sign-in, after their first password, when the app opens; a task link goes along); offline only when that app is kept on the phone', async () => {
+  const { staffGoes } = await import('../team/public_html/logic.js');
+  assert.equal(staffGoes({ role: 'staff' }), true);
+  assert.equal(staffGoes({ role: 'staff', mustChange: true }), false, 'their own password first (here, in Work Task)');
+  assert.equal(staffGoes({ role: 'admin' }), false, 'managers stay');
+  assert.equal(staffGoes({ role: 'admin', owner: true }), false, 'the owner goes to the projects as before');
+  assert.equal(staffGoes(null), false);
+  const go = APP.slice(APP.indexOf('async function toStaffView() {'), APP.indexOf('async function toProjects() {'));
+  assert.match(go, /if \(!navigator\.onLine\) \{[^]*\(await caches\.keys\(\)\)\.some\(\(k\) => k\.startsWith\('daily-projects-app'\)\)[^]*if \(!kept\) return false;/, 'offline: only when the projects app is kept here');
+  assert.match(go, /location\.replace\('projects\/' \+ \(state\.openTask \? '#open=' \+ state\.openTask : ''\)\);/, 'a notification\'s task goes along');
+  const login = APP.slice(APP.indexOf('function loginScreen()'), APP.indexOf('function passwordScreen()'));
+  assert.ok(login.indexOf('if (staffGoes(out.user) && await toStaffView()) return;') > 0 && login.indexOf('staffGoes(') < login.indexOf('flushOutbox()'), 'after sign-in, first');
+  assert.match(APP.slice(APP.indexOf('function passwordScreen()')), /syncPush\(\);[^\n]*\n\s*if \(staffGoes\(out\.user\) && await toStaffView\(\)\) return;/, 'after choosing their own password');
+  const st = APP.slice(APP.indexOf('async function start() {'));
+  assert.match(st, /await loadOutbox\(\);\n\s*if \(staffGoes\(state\.user\) && await toStaffView\(\)\) return;/, 'when the app opens');
+});
+
+test('one app, step 3: Work Task has no staff screens any more (one design: the staff view of the projects app); a team member who cannot go yet sees "Open my tasks"; managers keep every screen', () => {
+  for (const gone of ['function updateForm(', 'function addStepForm(', 'function suggestForm(', 'function myTaskDetail(', 'function todayCard(', 'function myList(', 'function projectPage(', 'function sentView(', 'function addTaskPhotos(', 'function uploadPhotos(', 'function myToday(', 'function myTask(']) {
+    assert.ok(!APP.includes(gone), 'removed: ' + gone);
+  }
+  assert.match(APP, /if \(state\.user\.role !== 'admin'\) \{ root\.replaceChildren\(staffMoved\(\)\); return; \}/);
+  const moved = APP.slice(APP.indexOf('function staffMoved() {'), APP.indexOf('/** One app: a team member works in the staff view'));
+  assert.match(moved, /'Open my tasks'/); assert.match(moved, /onClick: signOut \}, 'Sign out'/);
+  for (const keep of ['function teamList(', 'function taskDetail(', 'function taskForm(', 'function followupList(', 'function adminProjectPage(', 'function peopleScreen(', 'function settingsScreen(', 'function messagesBlock(', 'async function sendItem(', 'function giveBack(']) {
+    assert.ok(APP.includes(keep), 'managers keep: ' + keep);
+  }
+  // what waits on a phone from before the switch is still sent (by either app: the same outbox)
+  for (const kind of ["it.kind === 'comment'", "it.kind === 'step'", "it.kind === 'suggest'", "it.kind === 'update' && !it.updateId"]) {
+    assert.ok(APP.includes(kind) && STAFFBOX.includes(kind), 'both send: ' + kind);
+  }
 });

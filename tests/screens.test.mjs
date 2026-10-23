@@ -2345,9 +2345,9 @@ test('one app — staff view: a task page shows chips, today\'s update box, mess
 test('one app wiring (app.js): who signed in picks the screens — staff get the staff view, another manager Work Task, the owner this app (never held up once known; no answer = the owner\'s app)', () => {
   const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
   const st = app.slice(app.indexOf('function start() {'), app.indexOf('/** The owner\'s Daily Projects. */'));
-  assert.match(st, /if \(known === 'staff'\) \{ startStaff\(\); return; \}/);
+  assert.match(st, /if \(known === 'staff'\) \{ startStaff\(undefined, staffTask\); return; \}/);
   assert.match(st, /if \(known === 'manager'\) \{ location\.href = '\.\.\/'; return; \}/);
-  assert.match(st, /if \(who === 'staff'\) startStaff\(user\);\s*else if \(who === 'manager'\) location\.href = '\.\.\/';\s*else startOwner\(\);/, 'not known (or no answer): the owner\'s app');
+  assert.match(st, /if \(who === 'staff'\) startStaff\(user, staffTask\);\s*else if \(who === 'manager'\) location\.href = '\.\.\/';\s*else startOwner\(\);/, 'not known (or no answer): the owner\'s app');
   assert.ok(st.indexOf("if (onServer && !serverToken()) { toSignIn(); return; }") < st.indexOf('rememberedWho()'), 'signed out: to sign-in first');
   assert.match(app, /const timer = setTimeout\(\(\) => stop\.abort\(\), 4000\);/, 'a slow answer never holds the owner up for long');
   // the staff code and Work Task's rules load only for staff: the owner's start (offline too) never needs them
@@ -2593,10 +2593,13 @@ test('one app — staff view: 🔔 Notifications (menu, page, the banner once, L
 
 test('one app wiring (step 2): offline sending, the shared outbox, #open from a notification, signing out clears the saved copies; the offline copy keeps Work Task\'s rules and look', () => {
   const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
-  const st = app.slice(app.indexOf('async function startStaff(user) {'), app.indexOf('const saved = device.ui();'));
+  const st = app.slice(app.indexOf('async function startStaff(user, openTask = 0) {'), app.indexOf('const saved = device.ui();'));
   assert.match(st, /box: idbOutbox\(\), shrink: shrinkPhoto, push: browserPush\(api, user\.id\)/);
   assert.match(st, /staffApi\(serverToken\(\), '\.\.\/api\/', \{ onNet: \(on\) => \{ if \(staff\) staff\.setOffline\(!on\); \} \}\)/);
-  assert.match(st, /const opened = \/\^#open=\(\\d\+\)\$\/\.exec\(location\.hash\);/);
+  // a notification's #open=<task> is read before the owner's reminder link takes the same hash away (it did in the browser)
+  const begin = app.slice(app.indexOf('function start() {'), app.indexOf("/** The owner's Daily Projects. */"));
+  assert.ok(begin.indexOf("const staffTask = Number((/^#open=(\\d+)$/.exec(location.hash)") >= 0 && begin.indexOf('const staffTask') < begin.indexOf('takeOpenFromHash();'), 'read first');
+  assert.match(st, /if \(openTask\) staff\.open\('task:' \+ openTask\);/);
   assert.match(st, /window\.addEventListener\('online', \(\) => \{ staff\.setOffline\(false\); staff\.act\.flush\(\); \}\);/);
   assert.match(st, /setInterval\(\(\) => \{ if \(staff\.state\.outbox\.length\) staff\.act\.flush\(\); \}, 30000\);/);
   assert.match(st, /if \(k\.startsWith\('wt\.c\.'\)\) localStorage\.removeItem\(k\);/, 'signing out leaves no saved lists for the next person');
@@ -2607,4 +2610,102 @@ test('one app wiring (step 2): offline sending, the shared outbox, #open from a 
   assert.match(sw, /const TEAM_FILES = \['\.\.\/logic\.js', '\.\.\/styles\.css'\];/);
   assert.match(sw, /Promise\.all\(TEAM_FILES\.map\(\(u\) => c\.add\(u\)\.catch\(\(\) => \{\}\)\)\)/, 'best effort: only worktask.in has them');
   assert.match(sw, /'ui\/staff\.js', 'ui\/staffbox\.js'/);
+});
+
+// ---------------------------------------------------------------- one app, step 3: what staff had in Work Task, now in the staff view
+test('one app — staff view: 🔍 Search (their own tasks, messages, updates; 2 letters or more) opens the task', async () => {
+  const { s, calls } = fakeStaff2({ search: (b) => ({ ok: true, results: [{ taskId: 12, title: 'Pack the samples', who: 'Valar', kind: 'message', text: 'brown boxes', at: '2026-10-22 10:00:00' }] }) }, { searchWait: 0 });
+  await s.load();
+  assert.ok(btn(s.view(), '🔍 Search'));
+  s.act.show('search');
+  assert.match(s.view().textContent, /Type 2 or more letters/);
+  s.act.search('b'); await tick(); await tick();
+  assert.ok(!calls.some((c) => c.a === 'search'), 'one letter: not asked');
+  s.act.search('brown'); await tick(); await tick();
+  assert.deepEqual(calls.filter((c) => c.a === 'search').map((c) => c.body), [{ q: 'brown' }]);
+  const v = s.view();
+  assert.match(v.textContent, /💬 Pack the samples/);
+  btn(v, 'Pack the samples').__on.click();
+  assert.equal(s.state.sel, 'task:12');
+});
+
+test('one app — staff view: 📷 more photos on today\'s sent update (up to 5; the rest wait on the phone when offline); Ctrl+V puts a photo in the update or, in the message box, sends it as a message', async () => {
+  let online = true;
+  const sent = { ...staffData().tasks[2], today: { id: 90, note: 'Called Ravi', state: 'progress', at: '2026-10-22 10:30:00', photos: [1, 2, 3, 4] } };
+  const { s, calls, box } = fakeStaff2({
+    'photo.add': () => { if (!online) throw offlineErr(); return { ok: true }; },
+    'task.get': () => ({ ok: true, task: sent, updates: [], comments: [] }),
+    'comment.photo': () => ({ ok: true, comments: [] }),
+  });
+  await s.load();
+  const img = (n) => Object.assign(new Blob(['x'], { type: 'image/png' }), { name: n });
+  assert.equal(await s.act.addPhotos(sent, [img('a'), img('b')]), '');
+  assert.deepEqual(calls.filter((c) => c.a === 'photo.add').map((c) => c.body.get('updateId')), ['90'], 'only 1 more fits (5 in all)');
+  online = false;
+  assert.equal(await s.act.addPhotos({ ...sent, today: { ...sent.today, photos: [] } }, [img('c'), img('d')]), '');
+  const kept = [...box.items.values()][0];
+  assert.deepEqual([kept.kind, kept.updateId, kept.files.length, kept.photoNo], ['photos', 90, 2, 0], 'offline: they wait on the phone, as in Work Task');
+  online = true;
+  // Ctrl+V
+  s.open('task:13'); await tick();
+  assert.equal(s.act.paste({ files: [img('p')], text: '', inMessageBox: false }), true);
+  assert.equal(s.act.paste({ files: [img('p')], text: 'cells from Excel', inMessageBox: false }), false, 'text with a picture of it: the text');
+  s.state.msgDrafts[13] = 'see this';
+  assert.equal(s.act.paste({ files: [img('m')], inMessageBox: true }), true);
+  await tick(); await tick();
+  assert.ok(calls.some((c) => c.a === 'comment.photo' && c.body.get('text') === 'see this'), 'in the message box: a photo message');
+  // the update waits on the phone: a pasted photo would go nowhere, so it is refused (pasteWaits, as in Work Task)
+  const { s: s2, box: box2, toasts } = fakeStaff2({ 'task.get': () => ({ ok: true, task: staffData().tasks[0], updates: [], comments: [] }) });
+  await s2.load();
+  await box2.add({ kind: 'update', taskId: 11, note: 'waiting', state: 'progress', files: [], userId: 7, at: new Date().toISOString(), clientId: 'w' });
+  await s2.refreshOutbox();
+  s2.open('task:11'); await tick();
+  s2.act.paste({ files: [img('p')], inMessageBox: false });
+  assert.ok(toasts.includes('Wait until your update is sent, then add the photo.'));
+  assert.equal(s2.state.files[11], undefined);
+  s2.state.editing[11] = true; // changing the update: the photo goes with it
+  s2.act.paste({ files: [img('p')], inMessageBox: false });
+  assert.equal(s2.state.files[11].length, 1);
+});
+
+test('one app — staff view: every 20 s new work comes in by itself — "New" on the rows and a bar to open it; never their own new step or suggestion; a saved copy never counts', async () => {
+  let next = staffData();
+  const { s } = fakeStaff2({ 'my.today': () => next, 'project.addStep': () => ({ ok: true, task: { id: 31 } }) });
+  await s.load();
+  // their own step (just added) and a suggestion they made are not news
+  s.state.stepDrafts.p1 = 'Mine'; await s.act.addStep('p1');
+  next = { ...staffData(), other: [...staffData().other, { id: 31, title: 'Mine', projectRef: 'p1', seq: 3, queued: true, status: 'open', createdBy: 7 }],
+    suggestions: [...staffData().suggestions, { id: 32, title: 'My idea', status: 'suggested', createdBy: 7 }] };
+  await s.act.liveCheck();
+  assert.equal(s.state.newIds.size, 0);
+  assert.equal(s.state.news.length, 0);
+  // the manager gives a new task
+  next = { ...next, tasks: [...next.tasks, { id: 40, title: 'Clean kiln 2', status: 'open', repeat: 'once', createdBy: 1 }] };
+  await s.act.liveCheck();
+  assert.ok(s.state.newIds.has(40));
+  const v = s.view();
+  assert.match(v.textContent, /📥 New task for you/);
+  assert.ok(rFind(v, (n) => n.nodeName === 'LI' && n.textContent.includes('Clean kiln 2') && n.textContent.includes('New')));
+  btn(v, 'Open').__on.click();
+  assert.equal(s.state.sel, 'task:40');
+  assert.ok(!s.state.newIds.has(40), 'opened: no longer New');
+  // two new steps in one project: said as steps of that project
+  next = { ...next, other: [...next.other, { id: 41, title: 'Glaze test', projectRef: 'p1', seq: 4, queued: true, status: 'open', createdBy: 1, project: 'Kiln trial' }, { id: 42, title: 'Report', projectRef: 'p1', seq: 5, queued: true, status: 'open', createdBy: 1, project: 'Kiln trial' }] };
+  await s.act.liveCheck();
+  assert.equal(s.state.news[0].title, '➕ 2 new steps in Kiln trial');
+  // offline (the saved copy): nothing is new
+  const before = s.state.data;
+  next = { ...staffData(), tasks: [{ id: 50, title: 'From the saved copy', status: 'open' }], fromCache: true };
+  await s.act.liveCheck();
+  assert.equal(s.state.data, before);
+});
+
+test('one app wiring (step 3): Ctrl+V and the 20 s check are hooked up for staff; the app icon shows tasks still to send', () => {
+  const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
+  const st = app.slice(app.indexOf('async function startStaff(user, openTask = 0) {'), app.indexOf('const saved = device.ui();'));
+  assert.match(st, /setInterval\(\(\) => \{ if \(document\.visibilityState === 'visible'\) staff\.act\.liveCheck\(\); \}, 20000\);/);
+  assert.match(st, /if \(staff\.act\.paste\(\{ files, text: e\.clipboardData\.getData\('text\/plain'\) \|\| '', inMessageBox \}\)\) e\.preventDefault\(\);/);
+  const src = readFileSync(new URL('../docs/ui/staff.js', import.meta.url), 'utf8');
+  assert.match(src, /const n = \(state\.data\.tasks \|\| \[\]\)\.filter\(\(t\) => !t\.today\)\.length;/);
+  assert.match(src, /\(n \? navigator\.setAppBadge\(n\) : navigator\.clearAppBadge\(\)\)/);
 });

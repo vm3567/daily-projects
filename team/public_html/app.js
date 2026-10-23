@@ -1,7 +1,7 @@
 // Work Task: the team app. Staff see and fill their own tasks; the manager gives tasks and sees everything.
 // No outside libraries. All text from the server is put on screen as text (never as HTML).
 
-import { addDay, weekdayOf, dueOn, itemKey, diaryRows, fieldChanged, lateValue, afterFlush, boxStillThere, updateSaveBody, redrawHow, projectRowState, aboutShort, projectAboutOf, giveBackShow, olderShow, keptNotice, noticeHow, pasteWaits, msgBoxSent, msgBoxLeft, updateBoxLeft, redrawAfterSend, taskSaveBody, giveId, morningMail, morningOrder, morningSummary, morningTitle, morningLast, mailDate, sentTag, sentTime, followupRows, followupGroups, followupSummary, roundKey, roundPlan, roundMark, parseQuickTask, outlookLine, emailPath, pasteReason } from './logic.js'; // the rules (checked in tests/team-app.test.mjs)
+import { addDay, weekdayOf, dueOn, itemKey, diaryRows, fieldChanged, lateValue, afterFlush, boxStillThere, updateSaveBody, redrawHow, projectRowState, aboutShort, projectAboutOf, giveBackShow, olderShow, keptNotice, noticeHow, msgBoxSent, msgBoxLeft, taskSaveBody, giveId, morningMail, morningOrder, morningSummary, morningTitle, morningLast, mailDate, sentTag, sentTime, followupRows, followupGroups, followupSummary, roundKey, roundPlan, roundMark, parseQuickTask, outlookLine, emailPath, pasteReason, staffGoes } from './logic.js'; // the rules (checked in tests/team-app.test.mjs)
 
 const TOKEN_KEY = 'wt.token';
 const state = {
@@ -564,6 +564,7 @@ function render() {
   }
   if (!state.token || !state.user) { root.replaceChildren(loginScreen()); return; }
   if (state.user.mustChange) { root.replaceChildren(passwordScreen()); return; }
+  if (state.user.role !== 'admin') { root.replaceChildren(staffMoved()); return; } // their screens are in the one app now
   // keep where each column was scrolled (the screen is drawn again after every change)
   const keep = ['list', 'detail'].map((id) => { const n = document.getElementById(id); return n ? n.scrollTop : 0; });
   const sameScreen = lastRender && state.renderKey === `${state.view}|${state.sel}`;
@@ -651,19 +652,6 @@ function menuColumn() {
         el('span', { class: 'dot ' + dot }), p.name, el('span', { class: 'count' }, tasks.length ? `${sent}/${tasks.length}` : '')));
       })));
     }
-  } else {
-    const due = d ? d.tasks.filter((x) => !x.today).length : 0;
-    parts.push(el('ul', { class: 'menu-list' },
-      item('Today', state.view === 'today' && state.section === 'today', () => { state.section = 'today'; go('today'); }, due || null),
-      item('Coming next', state.section === 'next', () => { state.section = 'next'; go('today'); }, d && d.other.length ? d.other.length : null),
-      item('My suggestions', state.section === 'sugg', () => { state.section = 'sugg'; go('today'); }, d && (d.suggestions || []).length ? d.suggestions.length : null),
-      item('🔍 Search', state.view === 'search', () => go('search'))),
-      el('button', { class: 'menu-cta', onClick: () => openDetail('suggest') }, '💡 Suggest a task'));
-    const projs = myProjects();
-    if (projs.length) {
-      parts.push(el('div', { class: 'menu-head' }, 'My projects'), el('ul', { class: 'menu-list' }, projs.map((pr) =>
-        item(`📁 ${pr.name}`, state.sel === 'project:' + pr.ref, () => openDetail('project:' + pr.ref), pr.real.length || null))));
-    }
   }
   return el('div', { class: 'menu-inner' },
     el('div', { class: 'brand' }, el('img', { src: 'icons/icon-192.png', alt: '', width: 26, height: 26 }), 'Work Task'),
@@ -690,7 +678,7 @@ function taskRow(t, sub, dot, warn = false) {
 /** Middle column: the list (or, for People and Settings, the whole page). */
 function listColumn(wide) {
   const me = state.user, admin = me.role === 'admin';
-  const titles = { today: admin ? 'Team today' : { today: 'My tasks today', next: 'Coming next', sugg: 'My suggestions' }[state.section], tasks: state.closed ? 'Done / cancelled' : 'Tasks', people: 'People', settings: 'Settings', projects: 'Projects', report: 'Weekly report', search: 'Search', followup: '🔁 Follow-up' };
+  const titles = { today: 'Team today', tasks: state.closed ? 'Done / cancelled' : 'Tasks', people: 'People', settings: 'Settings', projects: 'Projects', report: 'Weekly report', search: 'Search', followup: '🔁 Follow-up' };
   let title = titles[state.view];
   if (admin && state.view === 'today' && state.personFilter && state.team) { const p = state.team.people.find((x) => x.id === state.personFilter); if (p) title = p.name; }
   const head = el('div', { class: 'list-head' },
@@ -708,42 +696,11 @@ function listColumn(wide) {
   else if (state.view === 'projects') body = projectsList();
   else if (state.view === 'tasks') body = tasksList();
   else if (state.view === 'followup') body = followupList();
-  else body = admin ? teamList() : myList();
+  else body = teamList();
   return el('div', { class: 'col-inner' }, head, bar, body);
 }
 
 const sec = (label, extra) => el('div', { class: 'list-sec' }, el('span', null, label), extra || null);
-
-/** Staff: today's tasks, coming next, or suggestions (the menu picks which). */
-function myList() {
-  const d = state.data;
-  const sent = d.tasks.filter((t) => t.today).length;
-  const outboxFor = (t) => (state.outbox || []).some((x) => (x.kind === 'update' || x.kind === 'photos') && x.taskId === t.id);
-  if (state.section === 'next') {
-    return [sec(`${d.other.length} coming next`), el('ul', { class: 'list-body' }, d.other.map((t) => taskRow(t, [t.project, repeatLabel(t, d.today)].filter(Boolean).join(' · '), 'grey'))),
-      d.other.length ? null : el('p', { class: 'list-note' }, 'Nothing coming next.')];
-  }
-  if (state.section === 'sugg') {
-    const list = d.suggestions || [];
-    return [sec(`${list.length} suggestion${list.length === 1 ? '' : 's'}`),
-      el('ul', { class: 'list-body' }, list.map((t) => taskRow(t, t.status === 'suggested' ? 'Waiting for a yes' : 'Not now' + (t.lastMessage ? ` — ${t.lastMessage.text}` : ''), t.status === 'suggested' ? 'orange' : 'grey'))),
-      list.length ? null : el('p', { class: 'list-note' }, 'No suggestions yet. Tap 💡 Suggest a task in the menu.')];
-  }
-  const projs = myProjects();
-  return [
-    d.stale ? el('div', { class: 'list-banner' }, `📴 Saved copy from ${fmtDay(d.today)} — today's updates are not shown yet.`) : null,
-    projs.length ? [sec('📁 My projects'), el('ul', { class: 'list-body' }, projs.map(projectRow))] : null,
-    sec(`${fmtDay(d.today)} · ${sent} of ${d.tasks.length} sent`, el('span', { class: 'tag' }, `by ${d.fillBy}`)),
-    el('ul', { class: 'list-body' }, d.tasks.map((t) => {
-      const waiting = outboxFor(t);
-      const late = t.repeat === 'once' && t.dueDate && t.dueDate < d.today;
-      const sub = waiting ? '⏳ Waiting to send' : t.today ? `✓ Sent ${fmtTime(t.today.at)}${t.today.state === 'stuck' ? ' · stuck' : t.today.state === 'finished' ? ' · finished' : ''}`
-        : [t.project, repeatLabel(t, d.today)].filter(Boolean).join(' · ') || 'Send today\'s update';
-      return taskRow(t, sub, t.today ? 'green' : waiting ? 'orange' : late ? 'red' : 'orange', late && !t.today);
-    })),
-    d.tasks.length ? null : el('p', { class: 'list-note' }, 'No tasks for today. 🎉'),
-  ];
-}
 
 /** Staff: the projects given to me, each with its open steps in order (the current one first). */
 function myProjects() {
@@ -761,81 +718,6 @@ function myProjects() {
     pr.current = pr.steps.find((t) => !t.queued) || pr.steps[0];
     return pr;
   }).sort((a, b) => a.name.localeCompare(b.name));
-}
-
-function projectRow(pr) {
-  const c = pr.current, n = pr.real.length;
-  const sub = !n ? 'No steps yet — add your steps' : `${n} step${n > 1 ? 's' : ''} to do · now: ${c.title}${c.today ? ' · ✓ sent today' : ''}`;
-  return el('li', { class: 'prow' + (state.sel === 'project:' + pr.ref ? ' current' : '') },
-    el('button', { class: 'prow-btn', onClick: () => openDetail('project:' + pr.ref) },
-      el('span', { class: 'dot ' + (c && c.today ? 'green' : 'orange') }),
-      el('span', { class: 'prow-text' }, el('span', { class: 'prow-name' }, '📁 ' + pr.name), el('span', { class: 'prow-next' }, sub))));
-}
-
-/** Staff: one project — its steps in order, today's update on the current one, and adding a step. */
-function projectPage(pr, done = []) {
-  const doneList = done.length ? [sec(`✓ ${done.length} done`), el('ul', { class: 'list-body' }, done.map((t, i) => taskRow(t, `Step ${i + 1} · done ${t.doneAt ? fmtDay(t.doneAt) : ''}`, 'green')))] : null;
-  if (!pr) return [el('p', { class: 'muted' }, !state.data ? 'Loading…' : done.length ? 'All your steps are done ✓. Your manager decides what comes next.' : 'This project is not on your list any more.'), doneList];
-  const sent = (t) => t.today ? `✓ Sent ${fmtTime(t.today.at)}` : 'Send today\'s update';
-  const k = done.length; // the steps already done count in the numbers
-  return [
-    doneList,
-    el('p', { class: 'muted' }, pr.real.length
-      ? 'Do the steps in order. Every day, open the current step and send what you did. Found more work? Add a step below.'
-      : 'No steps yet. Add the steps you will do, in order. Until then, send your daily update on the whole project.'),
-    !pr.real.length ? el('ul', { class: 'list-body' }, pr.steps.map((t) => taskRow(t, sent(t), t.today ? 'green' : 'orange'))) : null,
-    pr.real.length ? [k ? sec('To do') : null, el('ol', { class: 'list-body steps-list' }, pr.real.map((t, i) => taskRow(t,
-      t === pr.current ? `Step ${k + i + 1} · current · ${sent(t)}` : `Step ${k + i + 1} · next${t.fromStaff ? ' · added by you' : ''}`,
-      t === pr.current ? (t.today ? 'green' : 'orange') : 'grey')))] : null,
-    waitingSteps(pr.ref),
-    addStepForm(pr.ref),
-  ];
-}
-
-/** Steps added offline, still on the phone. */
-function waitingSteps(ref) {
-  const w = (state.outbox || []).filter((x) => x.kind === 'step' && x.projectRef === ref);
-  return w.length ? el('ul', { class: 'list-body' }, w.map((x) => el('li', { class: 'prow' }, el('div', { class: 'prow-btn' }, el('span', { class: 'dot grey' }),
-    el('span', { class: 'prow-text' }, el('span', { class: 'prow-name' }, x.title), el('span', { class: 'prow-next' }, '⏳ Waiting to send')))))) : null;
-}
-
-/** A step went (or waits on this phone): its words leave the Add a step box; what was typed while it was sending stays. */
-function keepTypedStep(ref, title) {
-  const left = msgBoxLeft(((state.stepDrafts ||= {})[ref] || '').trim(), title);
-  if (left) state.stepDrafts[ref] = left; else delete state.stepDrafts[ref];
-  return left;
-}
-
-function addStepForm(ref) {
-  const inp = el('input', { placeholder: 'e.g. Order the spare servo motor', maxlength: '300', 'aria-label': 'New step', value: (state.stepDrafts || {})[ref] || '',
-    onInput: (e) => { (state.stepDrafts ||= {})[ref] = e.target.value; } }); // kept across redraws until added
-  const btn = el('button', { class: 'primary', type: 'submit' }, '+ Add step');
-  return el('form', {
-    class: 'card stack',
-    onSubmit: async (e) => {
-      e.preventDefault();
-      const title = inp.value.trim();
-      if (!title) { inp.focus(); return; }
-      btn.disabled = true;
-      const ids = (state.stepCid ||= {});
-      if (!ids[ref] || ids[ref].title !== title) ids[ref] = { id: newClientId(), title }; // a retry of the same step: the same id
-      const clientId = ids[ref].id;
-      try {
-        await api('project.addStep', { projectRef: ref, title, clientId });
-        delete state.stepCid[ref]; const left = keepTypedStep(ref, title);
-        toast('➕ Step added. Your manager sees it in the project too.');
-        inp.value = left; if (!left) inp.blur();
-        render(); // (the box is empty again, or holds only what was typed meanwhile: the list below may redraw)
-        await loadList();
-      } catch (ex) {
-        if (ex instanceof OfflineError) {
-          try { await queue({ kind: 'step', projectRef: ref, title, clientId }); delete state.stepCid[ref]; inp.value = keepTypedStep(ref, title); toast('📴 Saved on this phone — it will be added when you are online', 5000); render(); return; }
-          catch { /* could not keep it */ }
-        }
-        toast(ex.message, 6000); btn.disabled = false;
-      }
-    },
-  }, el('label', null, 'Add a step', inp), btn);
 }
 
 /** Manager, top of Team today: today in one look — updates in, who has not sent, who is stuck (and for how long). */
@@ -1036,19 +918,18 @@ function detailColumn() {
   let title = '', body, about = ''; // about: the project's short description, in grey under the title
   if (sel === 'give') { title = 'Give a task'; body = state.people.length ? [quickBox(state.people), taskForm()] : el('p', { class: 'muted' }, 'Loading…'); }
   else if (sel.startsWith('edit:')) { title = 'Edit task'; body = state.detail && state.people.length ? taskForm() : el('p', { class: 'muted' }, 'Loading…'); }
-  else if (sel === 'suggest') { title = '💡 Suggest a task'; body = suggestForm(); }
   else if (sel === 'password') { title = 'Change password'; body = passwordScreen(); }
   else if (sel === 'notify') { title = '🔔 Notifications'; body = notifyPage(); }
   else if (sel.startsWith('project:')) {
     const pr = myProjects().find((x) => x.ref === sel.slice(8)), all = (state.detail && state.detail.tasks) || [];
     title = '📁 ' + (pr ? pr.name : (all[all.length - 1] && all[all.length - 1].project) || 'Project');
     about = projectAboutOf([...(pr ? pr.steps : []), ...[...all].reverse()]);
-    body = state.user.role === 'admin' ? adminProjectPage(all) : projectPage(pr, all.filter((t) => t.status === 'done' && !t.stepRef.endsWith(':whole')));
+    body = adminProjectPage(all);
   }
   else if (sel.startsWith('task:')) {
     title = state.detail && state.detail.task ? state.detail.task.title : '';
     about = state.detail && state.detail.task ? projectAboutOf([state.detail.task]) : '';
-    body = state.detail ? (state.user.role === 'admin' ? taskDetail() : myTaskDetail())
+    body = state.detail ? taskDetail()
       : state.detailFailed ? el('p', { class: 'muted' }, 'Could not open this task. ', el('button', { class: 'link', onClick: () => loadDetail() }, 'Try again'))
         : el('p', { class: 'muted' }, 'Loading…');
   }
@@ -1059,37 +940,6 @@ function detailColumn() {
       sel.startsWith('task:') && state.user.role === 'admin' && state.detail && state.detail.task ? taskActions(state.detail.task) : null),
     about ? el('p', { class: 'project-about' }, (sel.startsWith('task:') ? '📁 ' : '') + about) : null,
     body);
-}
-
-/** Staff: one task — what to send today (or what was sent), messages, and earlier updates. */
-function myTaskDetail() {
-  const { task: t, updates = [], comments = [] } = state.detail;
-  const today = (state.data && !state.data.stale && state.data.today) || istDay(new Date());
-  return [
-    taskChips(t, today, false),
-    t.details ? el('div', { class: 'task-details pre' }, t.details) : null,
-    taskFiles(t),
-    todayCard(t, today),
-    messagesBlock(t.id, comments),
-    t.status === 'suggested' || (t.status !== 'open' && !updates.length) ? null : taskDiary(t, updates, today, true),
-  ];
-}
-
-/** Staff: today's update for this task (write it, or what was sent), or what waits on the phone. */
-function todayCard(t, today) {
-  const waiting = (state.outbox || []).filter((x) => (x.kind === 'update' || x.kind === 'photos') && x.taskId === t.id).pop();
-  const head = (extra) => el('div', { class: 'row spread small' }, el('strong', null, "Today's update"), extra);
-  if (waiting && !state.editing[t.id]) {
-    return el('div', { class: 'card waiting' }, head(el('span', { class: 'tag amber' }, '⏳ Waiting to send')),
-      el('div', { class: 'row small' }, stateTag(waiting.state), (waiting.files || []).length ? el('span', { class: 'muted' }, `📷 ${waiting.files.length}`) : null),
-      el('div', { class: 'pre' }, waiting.note),
-      el('p', { class: 'muted small' }, 'Kept on this phone. It is sent by itself when the internet is back.'));
-  }
-  if (t.status !== 'open' && !t.today) return null;
-  const done = t.today && !state.editing[t.id];
-  return el('div', { class: 'card' + (done ? ' sent' : '') },
-    head(null),
-    done ? sentView(t) : updateForm(t));
 }
 
 const LATE_HM = () => new Date().toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' });
@@ -1178,6 +1028,29 @@ async function signOut() {
 }
 
 /** The owner goes to their projects, but only once nothing waits to be sent: the waiting bar is only on these pages. */
+/** A team member here (offline, before that app was kept on this phone): their tasks are on the new page. */
+function staffMoved() {
+  return el('main', { class: 'narrow' }, brandBig(),
+    el('p', null, 'Your tasks are on the new page now. Everything you wrote is kept and goes with you.'),
+    navigator.onLine ? null : el('p', { class: 'muted' }, '📴 You are offline. Open it once with the internet; after that it works offline too.'),
+    el('div', { class: 'row' },
+      el('button', { class: 'primary', onClick: async () => { if (!(await toStaffView())) toast('📴 Connect to the internet once to open it.', 5000); } }, 'Open my tasks'),
+      el('button', { onClick: signOut }, 'Sign out')));
+}
+
+/** One app: a team member works in the staff view of the projects app (the same screens and look as the owner's).
+ *  What waits on this phone goes with them (both apps send from the same outbox). Offline: only when that app is
+ *  kept on this phone (else it would not open), so they never land on a page that cannot load. */
+async function toStaffView() {
+  if (!navigator.onLine) {
+    let kept = false;
+    try { kept = (await caches.keys()).some((k) => k.startsWith('daily-projects-app')); } catch { /* no caches here */ }
+    if (!kept) return false;
+  }
+  location.replace('projects/' + (state.openTask ? '#open=' + state.openTask : ''));
+  return true;
+}
+
 async function toProjects() {
   if ((state.outbox || []).length) await flushOutbox();
   if ((state.outbox || []).length) { toast('⏳ Something is still waiting to send. It goes by itself when the internet is back.', 6000); return false; }
@@ -1202,6 +1075,7 @@ function loginScreen() {
         save(TOKEN_KEY, out.token);
         state.view = 'today';
         await loadOutbox();
+        if (staffGoes(out.user) && await toStaffView()) return;
         const ready = !out.user.mustChange, teamWanted = new URLSearchParams(location.search).has('team');
         // straight to your projects, unless a Give to team / task link is waiting
         if (out.user.owner && ready && !teamWanted && !state.prefill && !state.openTask && await toProjects()) return;
@@ -1237,6 +1111,7 @@ function passwordScreen() {
         toast('Password changed ✓');
         flushOutbox(); // work that waited for the new password goes out now
         syncPush(); // other phones were signed out (and their notifications stopped): this one links itself again
+        if (staffGoes(out.user) && await toStaffView()) return;
         if (out.user.owner && wantsProjects && await toProjects()) return;
         // a Give to team / task link that waited for the new password
         if (state.prefill && out.user.role === 'admin') { go('give'); return; }
@@ -1251,179 +1126,7 @@ function passwordScreen() {
       first ? null : el('button', { type: 'button', onClick: () => closeDetail() }, 'Cancel'))));
 }
 
-// ---------- staff: my tasks today
-
-function myToday() {
-  const d = state.data;
-  const sent = d.tasks.filter((t) => t.today).length;
-  return [
-    el('div', { class: 'row spread' }, el('h1', null, 'My tasks today'), el('button', { onClick: () => go('suggest') }, '💡 Suggest a task')),
-    d.stale ? el('p', { class: 'small warn' }, `📴 Saved copy from ${fmtDay(d.today)} — today's updates are not shown yet.`)
-      : el('p', { class: 'muted small' }, `${fmtDay(d.today)} · ${sent} of ${d.tasks.length} sent · please send by ${d.fillBy}`),
-    d.tasks.length ? d.tasks.map((t) => myTask(t, d.today)) : el('div', { class: 'card muted' }, 'No tasks for today. 🎉'),
-    d.other.length ? [el('h2', null, 'Coming next / other tasks'), d.other.map((t) => el('div', { class: 'card' },
-      el('h3', null, t.title), el('div', { class: 'meta' }, [t.project, repeatLabel(t, d.today)].filter(Boolean).join(' · ')), messageLine(t)))] : null,
-    (d.suggestions || []).length ? [el('h2', null, 'My suggestions'), d.suggestions.map((t) => el('div', { class: 'card' },
-      el('div', { class: 'row spread' }, el('h3', null, t.title),
-        t.status === 'suggested' ? el('span', { class: 'tag amber' }, 'Waiting for a yes') : el('span', { class: 'tag grey' }, 'Not now')),
-      t.details ? el('div', { class: 'pre small muted' }, t.details) : null,
-      messageLine(t)))] : null,
-  ];
-}
-
-function myTask(t, today) {
-  const waiting = (state.outbox || []).filter((x) => (x.kind === 'update' || x.kind === 'photos') && x.taskId === t.id).pop();
-  if (waiting && !state.editing[t.id]) {
-    return el('div', { class: 'card waiting' },
-      el('div', { class: 'task-head' }, el('h3', null, t.title), el('span', { class: 'tag amber' }, '⏳ Waiting to send')),
-      el('div', { class: 'meta' }, [t.project, repeatLabel(t, today)].filter(Boolean).join(' · ')),
-      el('div', { class: 'update' }, el('div', { class: 'row small' }, stateTag(waiting.state), (waiting.files || []).length ? el('span', { class: 'muted' }, `📷 ${waiting.files.length}`) : null),
-        el('div', { class: 'pre' }, waiting.note),
-        el('p', { class: 'muted small' }, 'Kept on this phone. It is sent by itself when the internet is back.')));
-  }
-  const done = t.today && !state.editing[t.id];
-  const late = t.repeat === 'once' && t.dueDate && t.dueDate < today;
-  return el('div', { class: 'card' + (done ? ' sent' : late ? ' late' : '') },
-    el('div', { class: 'task-head' }, el('h3', null, t.title), done ? el('span', { class: 'tag green' }, '✓ Sent') : null),
-    el('div', { class: 'meta' }, [t.project, repeatLabel(t, today)].filter(Boolean).join(' · ')),
-    t.details ? el('div', { class: 'pre small muted' }, t.details) : null,
-    taskFiles(t),
-    t.needsPhoto && t.status === 'open' ? el('div', { class: 'small warn' }, '📷 A photo is needed to finish this task') : null,
-    t.last ? el('div', { class: 'last' }, `Last time (${fmtDay(t.last.day)}): `, el('span', { class: 'pre' }, t.last.note)) : null,
-    messageLine(t),
-    el('div', { class: 'update' }, done ? sentView(t) : updateForm(t)));
-}
-
-function sentView(t) {
-  const u = t.today;
-  return [
-    el('div', { class: 'row small' }, el('span', { class: 'ok' }, `Sent ${fmtTime(u.at)}`), stateTag(u.state)),
-    el('div', { class: 'pre' }, u.note),
-    thumbs(u.photos),
-    el('div', { class: 'row' },
-      el('button', { onClick: () => { state.editing[t.id] = true; state.drafts[t.id] = { note: u.note, state: u.state }; render(); } }, '✎ Edit'),
-      u.photos.length < 5 ? photoPicker(t, true) : null),
-  ];
-}
-
-function photoPicker(t, direct) {
-  const input = el('input', { type: 'file', accept: 'image/*', class: 'hidden-file', multiple: true, onChange: () => { const files = [...input.files].slice(0, 5); input.value = ''; addTaskPhotos(t, files, direct); } });
-  return el('label', { class: 'btn' }, '📷 Add photo', input);
-}
-
-/** Photos for my update: straight onto today's sent update (direct), or kept for the next Send. Also used by Ctrl+V. */
-async function addTaskPhotos(t, files, direct) {
-    if (direct) {
-      const cid = newClientId(); // the same id online and in the outbox: a photo whose reply was lost is not kept twice
-      const left = await uploadPhotos(t.today.id, files, cid);
-      if (left.length) { // offline: keep the photos on the phone
-        const blobs = [];
-        for (const f of left) blobs.push(await shrink(f));
-        try {
-          await queue({ kind: 'photos', taskId: t.id, updateId: t.today.id, note: t.today.note, state: t.today.state, files: blobs, clientId: cid, photoNo: files.length - left.length });
-        } catch { toast(KEEP_FAIL, 6000); return; }
-        toast('📴 Saved on this phone — it will be sent when you are online', 5000);
-        render();
-        return;
-      }
-      loadView();
-      return;
-    }
-    state.files[t.id] = [...(state.files[t.id] || []), ...files].slice(0, 5);
-    render();
-}
-
-/** An update went (or waits on this phone): words typed in its box meanwhile stay, the box open as a change (the rule: logic.js). */
-function keepTypedUpdate(taskId, d, sentNote) {
-  const left = updateBoxLeft(d.note, sentNote);
-  if (left) { state.drafts[taskId] = { note: left, state: d.state }; state.editing[taskId] = true; } else { delete state.drafts[taskId]; delete state.editing[taskId]; }
-}
-
-function updateForm(t) {
-  const d = (state.drafts[t.id] ||= { note: '', state: 'progress' });
-  const err = el('p', { class: 'err small', hidden: true });
-  const files = state.files[t.id] || [];
-  const btn = el('button', { class: 'primary', disabled: !!state.sending[t.id], onClick: async () => {
-    if (state.sending[t.id]) return; // already going (the screen was redrawn meanwhile)
-    if (!d.note.trim()) { err.textContent = 'Write what you did first.'; err.hidden = false; return; }
-    const havePhotos = (t.today && t.today.photos.length) || files.length || d.photosSent;
-    if (d.state === 'finished' && t.needsPhoto && !havePhotos) { err.textContent = '📷 Add a photo to finish this task.'; err.hidden = false; return; }
-    btn.disabled = true; state.sending[t.id] = true;
-    // photo needed to finish: save as "working", add the photos, then mark finished.
-    // Not when today's update already has a photo: "working" would open a finished task again.
-    const hadPhoto = !!((t.today && t.today.photos && t.today.photos.length) || d.photosSent);
-    const twoSteps = d.state === 'finished' && t.needsPhoto && files.length && !hadPhoto;
-    const cid = newClientId(); // the same id online and in the outbox: a photo whose reply was lost is not kept twice
-    let updateId = 0; // set once the update itself is on the server
-    let sentNote = d.note; // what goes (the box stays open: words typed while sending are kept, never wiped)
-    try {
-      const out = await api('update.save', updateSaveBody({ taskId: t.id, note: sentNote, state: twoSteps ? 'progress' : d.state, clientId: cid })); // (a timed-out save then queued is the same save)
-      updateId = out.update.id;
-      if (twoSteps) { // after a move the server put the earlier person's words above: keep them for the Finished save
-        if (d.note.startsWith(sentNote)) d.note = out.update.note + d.note.slice(sentNote.length);
-        sentNote = out.update.note;
-      }
-      const left = files.length ? await uploadPhotos(updateId, files, cid) : [];
-      if (left.length) throw Object.assign(new OfflineError('offline'), { left, sentPhotos: files.length - left.length });
-      if (files.length) { files.length = 0; delete state.files[t.id]; d.photosSent = true; } // the photos went: a second Send only repeats the last step
-      if (twoSteps) await api('update.save', updateSaveBody({ taskId: t.id, note: sentNote, clientId: cid, finish: true }));
-      keepTypedUpdate(t.id, d, sentNote); delete state.files[t.id];
-      toast('Sent ✓');
-      if (document.contains(btn) || !formHasText()) render(); // the empty box at once (a box still holding the sent words would count as "typing" and hold back the reload)
-      else state.reloadLater = true; // another form was opened and typed in meanwhile: never wipe it
-      loadView();
-    } catch (ex) {
-      if (ex instanceof OfflineError) { // keep it on the phone; it goes out when online
-        const blobs = [];
-        for (const f of updateId ? ex.left || [] : files) blobs.push(await shrink(f));
-        // only what did not go yet: the photos left, then "finished"
-        try {
-          await queue(updateId ? { kind: 'photos', taskId: t.id, updateId, note: sentNote, state: d.state, thenFinish: !!twoSteps, files: blobs, clientId: cid, photoNo: ex.sentPhotos || 0 }
-            : { kind: 'update', taskId: t.id, note: sentNote, state: d.state, needsPhoto: !!t.needsPhoto, hadPhoto, files: blobs, clientId: cid });
-        } catch { // could not keep it on the phone (storage full or blocked): the text stays in the box
-          delete state.sending[t.id];
-          render(); toast(KEEP_FAIL, 6000);
-          return;
-        }
-        keepTypedUpdate(t.id, d, sentNote); delete state.files[t.id];
-        delete state.sending[t.id];
-        toast('📴 Saved on this phone — it will be sent when you are online', 5000);
-        render();
-        return;
-      }
-      err.textContent = ex.message; err.hidden = false; btn.disabled = false;
-    } finally {
-      delete state.sending[t.id];
-      if (!document.contains(btn)) { // redrawn while sending: the new Send button was drawn greyed out
-        if (!err.hidden) toast(err.textContent, 6000);
-        if (redrawAfterSend({ view: state.view, sel: state.sel, taskId: t.id })) { if (!formHasText()) render(); else state.reloadLater = true; } // (never over a form typed in meanwhile; the rule: logic.js)
-      }
-    }
-  } }, 'Send');
-  return [
-    el('textarea', { placeholder: 'What did you do today? (you can tap 🎤 on the keyboard to speak)', value: d.note, onInput: (e) => { d.note = e.target.value; err.hidden = true; } }),
-    el('div', { class: 'row', role: 'group', 'aria-label': 'How is it going' }, STATES.map(([k, label]) =>
-      el('button', { class: 'chip' + (d.state === k ? ' on ' + k : ''), type: 'button', onClick: () => { d.state = k; render(); } }, label))),
-    files.length ? el('div', { class: 'thumbs' }, files.map((f, i) => {
-      const img = el('img', { alt: 'New photo (tap to remove)', title: 'Tap to remove', src: URL.createObjectURL(f), onClick: () => { files.splice(i, 1); render(); } });
-      return img;
-    })) : null,
-    err,
-    el('div', { class: 'row' }, btn, files.length < 5 ? photoPicker(t, false) : null,
-      state.editing[t.id] ? el('button', { onClick: () => { delete state.editing[t.id]; delete state.drafts[t.id]; render(); } }, 'Cancel') : null),
-  ];
-}
-
-/** The newest message on a task (💬), with a way to answer. "New" when someone else wrote it and I have not seen it. */
-function messageLine(t) {
-  const m = t.lastMessage;
-  const open = () => go('task:' + t.id);
-  if (!m) return el('div', { class: 'row small' }, el('button', { class: 'link', onClick: open }, '💬 Send a message'));
-  return el('div', { class: 'msg-line' + (t.unread ? ' new' : ''), onClick: open },
-    t.unread ? el('span', { class: 'tag red' }, 'New') : null,
-    el('strong', null, `💬 ${m.mine ? 'You' : m.by}: `), el('span', { class: 'pre' }, m.text.length > 160 ? m.text.slice(0, 160) + '…' : m.text),
-    el('span', { class: 'muted small' }, ` · ${fmtDay(m.at)} ${fmtTime(m.at)}${t.messages > 1 ? ` · ${t.messages} messages` : ''} · reply`));
-}
+// ---------- messages on a task
 
 /** A message went (or waits on this phone): its words leave the box; what was typed while it was sending stays. */
 function keepTypedAfter(taskId, text) {
@@ -1543,12 +1246,8 @@ document.addEventListener('paste', (e) => {
     sendMsgPhoto(t.id, images[0], e.target.value || '', e.target);
     return;
   }
-  if (state.user.role === 'admin') { toast('📎 Adding to the task…'); uploadTaskFiles(t.id, files.slice(0, 10)).then(() => { toast('📎 Added ✓'); loadDetail(); }).catch((ex) => toast(ex.message, 6000)); return; }
-  if (!images.length) { toast('Only photos can be added to an update.', 5000); return; }
-  if (t.status !== 'open' && !t.today) { toast('This task is closed.', 4000); return; }
-  if (pasteWaits(state.outbox, t.id, !!state.editing[t.id])) { toast('Wait until your update is sent, then add the photo.', 5000); return; } // (no box to put it in)
-  addTaskPhotos(t, images.slice(0, 5), !!(t.today && !state.editing[t.id]));
-  toast('📷 Pasted into your update');
+  toast('📎 Adding to the task…'); // (the manager: an instruction file; staff paste in the staff view of the projects app)
+  uploadTaskFiles(t.id, files.slice(0, 10)).then(() => { toast('📎 Added ✓'); loadDetail(); }).catch((ex) => toast(ex.message, 6000));
 });
 async function editMessage(taskId, c) {
   const text = prompt('Change your message:', c.text);
@@ -1560,48 +1259,6 @@ async function deleteMessage(taskId, c) {
   if (!confirm('Delete this message?')) return;
   try { const out = await api('comment.delete', { id: c.id }); if (state.detail) state.detail.comments = out.comments; render(); toast('Deleted'); }
   catch (ex) { toast(ex.message, 5000); }
-}
-
-function suggestForm() {
-  const err = el('p', { class: 'err', hidden: true });
-  const title = el('input', { required: true, placeholder: 'Clean the dryer filters every week' });
-  const details = el('textarea', { placeholder: 'Why it is needed (optional)' });
-  const formId = newClientId(); // a retry of this form sends the same id: kept once
-  const how = el('select', null, el('option', { value: 'once' }, 'One time'), el('option', { value: 'daily' }, 'Every day'), el('option', { value: 'weekly' }, 'Once a week'));
-  const btn = el('button', { class: 'primary', type: 'submit' }, 'Send to my manager');
-  return [
-    el('h1', null, '💡 Suggest a task'),
-    el('p', { class: 'muted' }, 'Your manager says yes or no. If yes, it comes on your list.'),
-    el('form', { class: 'card stack', onSubmit: async (e) => {
-      e.preventDefault();
-      btn.disabled = true; err.hidden = true;
-      const item = { title: title.value, details: details.value, repeat: how.value, clientId: formId };
-      try { await api('suggest', item); toast('Sent for a yes ✓'); state.section = 'sugg'; go('today'); }
-      catch (ex) {
-        if (ex instanceof OfflineError) { // kept on the phone, sent when online
-          try { await queue({ kind: 'suggest', ...item }); toast('📴 Saved on this phone — it will be sent when you are online', 5000); state.section = 'sugg'; go('today'); return; }
-          catch { /* could not keep it: say so below */ }
-        }
-        err.textContent = ex.message; err.hidden = false; btn.disabled = false;
-      }
-    } }, el('label', null, 'Task', title), el('label', null, 'Details', details), el('label', null, 'How often', how), err,
-    el('div', { class: 'row' }, btn, el('button', { type: 'button', onClick: () => go('today') }, 'Cancel'))),
-  ];
-}
-
-/** Returns the photos not sent because the internet (or the server) dropped, so they can be kept on the phone. */
-async function uploadPhotos(updateId, files, cid) {
-  for (let i = 0; i < files.length; i++) {
-    const fd = new FormData();
-    fd.append('updateId', String(updateId));
-    fd.append('file', await shrink(files[i]), 'photo.jpg');
-    if (cid) fd.append('clientId', `${cid}-p${i}`); // the outbox goes on from the same number, so a repeat is kept once
-    try { await api('photo.add', fd, true); } catch (ex) {
-      if (ex instanceof OfflineError || ex instanceof RetryError) return files.slice(i);
-      toast(ex.message, 5000);
-    }
-  }
-  return [];
 }
 
 // ---------- manager: 🔁 Follow-up (every task given out, worst first), the daily round, and work in one line
@@ -2265,6 +1922,7 @@ async function start() {
     return;
   }
   await loadOutbox();
+  if (staffGoes(state.user) && await toStaffView()) return;
   if (!state.user.mustChange) syncPush();
   // the owner opens the app on their projects; worktask.in/?team shows the Team pages
   const teamWanted = new URLSearchParams(location.search).has('team');
@@ -2451,11 +2109,8 @@ if ('serviceWorker' in navigator) {
 }
 
 /** The number on the app icon (Android, installed app): tasks still to send today. */
-function setBadge() {
-  if (state.user && state.user.role === 'admin' && navigator.clearAppBadge && document.visibilityState === 'visible') { navigator.clearAppBadge().catch(() => {}); return; }
-  if (!state.user || state.user.role === 'admin' || state.view !== 'today' || !state.data || !navigator.setAppBadge) return;
-  const n = (state.data.tasks || []).filter((t) => !t.today).length;
-  (n ? navigator.setAppBadge(n) : navigator.clearAppBadge()).catch(() => {});
+function setBadge() { // (staff: the staff view of the projects app sets it)
+  if (state.user && state.user.role === 'admin' && navigator.clearAppBadge && document.visibilityState === 'visible') navigator.clearAppBadge().catch(() => {});
 }
 
 function retryStart() { if (state.token && !state.user && state.retryMe) { state.retryMe = false; start(); } }

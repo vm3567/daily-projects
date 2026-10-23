@@ -504,3 +504,6 @@ export function pasteReason({ connected = false, email = '', name = '', error = 
   if (connected !== true) return 'Outlook not connected';
   return emailPath({ connected, email }) === 'paste' ? 'That email address does not look right' : null;
 }
+
+/** One app: a team member (signed in, own password chosen) works in the staff view of the projects app. */
+export const staffGoes = (u) => !!u && u.role !== 'admin' && !u.mustChange;
