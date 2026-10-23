@@ -362,7 +362,8 @@ function handle(string $a, array $in): array {
       return ['photoId' => add_photo($me, (int)($in['updateId'] ?? 0))];
     case 'photo.delete': {
       $p = one('SELECT p.*, u.user_id, u.day, u.state, u.created_at AS u_at, t.needs_photo FROM photos p JOIN updates u ON u.id = p.update_id JOIN tasks t ON t.id = u.task_id WHERE p.id = ?', [(int)($in['id'] ?? 0)]);
-      if (!$p || (int)$p['user_id'] !== $me['id'] || $p['day'] !== $day || $p['created_at'] < $p['u_at']) throw new ApiError('You can only remove your own photos from today.', 403);
+      // the same days a photo can be added on (today's update, or one written offline in the last 2 days): never stuck for good
+      if (!$p || (int)$p['user_id'] !== $me['id'] || $p['day'] > $day || $p['day'] < date('Y-m-d', strtotime($day . ' -2 days')) || $p['created_at'] < $p['u_at']) throw new ApiError('You can only remove your own photos from the last 2 days.', 403);
       if ($p['needs_photo'] && $p['state'] === 'finished'
         && (int)one('SELECT COUNT(*) AS n FROM photos WHERE update_id = ? AND created_at >= ?', [$p['update_id'], $p['u_at']])['n'] <= 1) {
         throw new ApiError('This task needs a photo. Add another photo first, or change the update from Finished.');
@@ -427,7 +428,7 @@ function handle(string $a, array $in): array {
       $file = "$dir/" . bin2hex(random_bytes(12)) . '.jpg';
       file_put_contents(UPLOAD_DIR . "/$file", $jpeg);
       $text = txt($_POST['text'] ?? '', 2000);
-      q('INSERT INTO comments (task_id, user_id, text, at, client_id, photo) VALUES (?, ?, ?, ?, ?, ?)', [$t['id'], $me['id'], $text, now(), $cid, $file]);
+      if (!insert_once('INSERT INTO comments (task_id, user_id, text, at, client_id, photo) VALUES (?, ?, ?, ?, ?, ?)', [$t['id'], $me['id'], $text, now(), $cid, $file], $file)) return ['comments' => comments_of((int)$t['id'])]; // the same send arrived twice at once: kept once
       mark_read([(int)$t['id']], $me['id']);
       notify($me['role'] === 'admin' ? [(int)$t['assignee_id']] : admin_ids(), 'msg', "📷 {$me['name']} · {$t['title']}", $text !== '' ? $text : 'Sent a photo', '/projects/#team-task=' . $t['id'], 'm' . $t['id']);
       return ['comments' => comments_of((int)$t['id'])];
@@ -1186,8 +1187,25 @@ function add_photo(array $me, int $updateId): int {
   if (!is_dir(UPLOAD_DIR . "/$dir")) mkdir(UPLOAD_DIR . "/$dir", 0750, true);
   $file = "$dir/" . bin2hex(random_bytes(12)) . '.jpg';
   file_put_contents(UPLOAD_DIR . "/$file", $jpeg);
-  q('INSERT INTO photos (update_id, file, size, created_at, client_id) VALUES (?, ?, ?, ?, ?)', [$updateId, $file, strlen($jpeg), now(), $cid]);
+  if (!insert_once('INSERT INTO photos (update_id, file, size, created_at, client_id) VALUES (?, ?, ?, ?, ?)', [$updateId, $file, strlen($jpeg), now(), $cid], $file)) {
+    $dup = one('SELECT id FROM photos WHERE update_id = ? AND client_id = ?', [$updateId, $cid]); // the same send arrived twice at once: kept once
+    if (!$dup) throw new ApiError('Something went wrong. Try again.');
+    return (int)$dup['id'];
+  }
   return (int)db()->lastInsertId();
+}
+
+/**
+ * Save a sent photo's row. Two sends of the same one (same clientId) at the same moment both pass the "sent before?"
+ * look: the second is stopped by the unique key — then its file goes and false is returned (the first one is kept).
+ */
+function insert_once(string $sql, array $args, string $file): bool {
+  try { q($sql, $args); return true; }
+  catch (PDOException $e) {
+    if ((int)($e->errorInfo[1] ?? 0) !== 1062) throw $e; // only "already there" (MySQL 1062)
+    @unlink(UPLOAD_DIR . '/' . $file);
+    return false;
+  }
 }
 
 function shrink_photo(string $path, string $mime): string {

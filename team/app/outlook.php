@@ -568,11 +568,18 @@ function ol_draft(string $id): string {
 
 /** outlook.compose: the app's email HTML, made safe anyway (no scripts, frames, on...= handlers or javascript: links). */
 function ol_clean_html(string $html): string {
-  $html = (string)preg_replace('#<(script|iframe|object|embed|style)\b[^>]*>.*?</\1\s*>#is', '', $html);
-  $html = (string)preg_replace('#</?(script|iframe|object|embed|frame|frameset|base|meta|link)\b[^>]*>#i', '', $html);
-  return (string)preg_replace_callback('#<[a-z][^>]*>#i', function ($m) {
+  $html = (string)preg_replace('#<(script|iframe|object|embed|style|svg|math)\b[^>]*>.*?</\1\s*>#is', '', $html);
+  $html = (string)preg_replace('#</?(script|iframe|object|embed|frame|frameset|base|meta|link|svg|math)\b[^>]*>#i', '', $html);
+  // a whole tag, also when a quoted value holds a ">" (else the rest of the tag would slip past as plain text)
+  return (string)preg_replace_callback('#<[a-z](?:[^>"\']|"[^"]*"|\'[^\']*\')*>#i', function ($m) {
     $tag = (string)preg_replace('#\s+on[a-z]+\s*=\s*("[^"]*"|\'[^\']*\'|[^\s>]+)#i', '', $m[0]);
-    return (string)preg_replace('#(href|src)\s*=\s*(["\']?)\s*(javascript|vbscript|data):#i', '$1=$2#', $tag);
+    // links and pictures: only web and mail addresses — read as the browser reads them (&#x73; = s, tabs and spaces dropped)
+    return (string)preg_replace_callback('#\b(href|src|action|formaction|xlink:href)\s*=\s*("[^"]*"|\'[^\']*\'|[^\s>]+)#i', function ($a) {
+      $v = trim($a[2], '"\'');
+      $plain = strtolower((string)preg_replace('#[\x00-\x20]+#', '', html_entity_decode(html_entity_decode($v, ENT_QUOTES | ENT_HTML5, 'UTF-8'), ENT_QUOTES | ENT_HTML5, 'UTF-8')));
+      $scheme = preg_match('#^([a-z][a-z0-9+.\-]*):#', $plain, $sm) ? $sm[1] : '';
+      return $scheme === '' || in_array($scheme, ['http', 'https', 'mailto'], true) ? $a[0] : $a[1] . '="#"';
+    }, $tag);
   }, $html);
 }
 

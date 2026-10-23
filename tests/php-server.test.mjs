@@ -2653,3 +2653,89 @@ test('review (code-review 23 Oct): a take-back sent with ifHead is not done ("st
   assert.ok(done.ok && !done.stale);
   assert.deepEqual(await openOf(), [], 'nothing saved since: taken back');
 });
+
+test('review round 1 (whole code): a right password clears only that address\'s wrong tries — guesses spread over many addresses keep counting toward the name\'s limit (they used to be wiped by every normal sign-in)', { skip }, async () => {
+  assert.ok((await call('user.save', { name: 'Spread', username: 'spread', password: 'first-pass-123' }, tok.boss)).ok);
+  const from = Number(sqlOut('SELECT IFNULL(MAX(id), 0) FROM wt.login_fails').trim());
+  const at = (await phpRun('echo now();')).trim(); // the server's own clock (India time), as it writes these rows
+  // 46 guesses from 23 other addresses (2 each: no address is ever paused)
+  sql(`INSERT INTO wt.login_fails (k, at) VALUES ${Array.from({ length: 46 }, (_, i) => `('u:spread|10.9.0.${i % 23}', '${at}')`).join(', ')}`);
+  assert.ok((await call('login', { username: 'spread', password: 'first-pass-123' })).ok, 'the real person signs in');
+  assert.equal(sqlOut(`SELECT COUNT(*) FROM wt.login_fails WHERE id > ${from} AND k LIKE 'u:spread|10.9.0.%'`).trim(), '46', 'the guesses from elsewhere still count');
+  sql(`INSERT INTO wt.login_fails (k, at) VALUES ${Array.from({ length: 4 }, (_, i) => `('u:spread|10.9.1.${i}', '${at}')`).join(', ')}`);
+  assert.equal((await call('login', { username: 'spread', password: 'guess-1' })).s, 429, '50 from many places: the name is paused, even right after a real sign-in');
+  sql(`DELETE FROM wt.login_fails WHERE id > ${from}`);
+  assert.ok((await call('login', { username: 'spread', password: 'first-pass-123' })).ok, 'after the pause (the rows expire): fine again');
+  sql(`DELETE FROM wt.login_fails WHERE id > ${from}`);
+});
+
+test('review round 1 (whole code): the Outlook draft cleaner reads links as a browser does — an entity-coded, split or hidden "javascript:" never gets through; web and mail links stay', { skip }, async () => {
+  const bad = ['<a href="java&#x73;cript:alert(1)">x</a>', '<a href="jav&#9;ascript:alert(1)">x</a>', "<a href='JaVaScRiPt:alert(1)'>x</a>", '<a href=javascript:alert(1)>x</a>',
+    '<a title="a>b" href="javascript:alert(1)">x</a>', '<img src="data:text/html;base64,PHNjcmlwdD4=">', '<a href="&#106;avascript:alert(1)">x</a>', '<a href="java&amp;#115;cript:alert(1)">x</a>',
+    '<svg><a href="javascript:alert(1)">x</a></svg>'];
+  const out = JSON.parse(await phpRun(`echo json_encode(array_map('ol_clean_html', json_decode(base64_decode('${Buffer.from(JSON.stringify(bad)).toString('base64')}'), true)));`));
+  for (const [i, o] of out.entries()) assert.ok(!/javascript:|data:text/i.test(o.replace(/&[^;]+;/g, (e) => ({ '&#x73;': 's', '&#9;': '', '&#106;': 'j' })[e] ?? e).replace(/\s/g, '')), `blocked: ${bad[i]} → ${o}`);
+  const good = JSON.parse(await phpRun(`echo json_encode([ol_clean_html('<a href="https://worktask.in/x">a</a>'), ol_clean_html('<a href="mailto:ravi@acton.com">m</a>'), ol_clean_html('<td style="color:#c00">Late</td>')]);`));
+  assert.deepEqual(good, ['<a href="https://worktask.in/x">a</a>', '<a href="mailto:ravi@acton.com">m</a>', '<td style="color:#c00">Late</td>'], 'web and mail links, and the table, stay as they were');
+});
+
+test('review round 1 (whole code): a project.sync that is rolled back takes back the phone alerts it queued (no "New project for you" for a change that never happened); a saved one keeps them', { skip }, async () => {
+  const out = JSON.parse(await phpRun(`$GLOBALS['push_out'] = [5 => [['title' => 'earlier']]];
+    try { in_tx_with_alerts(function () { notify([7], 'task', 'New project for you', 'Kilns'); throw new RuntimeException('deadlock'); }); } catch (Throwable $e) { }
+    $after = $GLOBALS['push_out'];
+    in_tx_with_alerts(function () { notify([7], 'task', 'Saved one', 'Kilns'); return 1; });
+    echo json_encode([$after, array_map(fn($l) => array_column($l, 'title'), $GLOBALS['push_out']), db()->inTransaction()]);`));
+  assert.deepEqual(out[0], { 5: [{ title: 'earlier' }] }, 'rolled back: only what was queued before stays');
+  assert.deepEqual(out[1], { 5: ['earlier'], 7: ['Saved one'] }, 'saved: its alert goes');
+  assert.equal(out[2], false, 'no transaction left open');
+  const jobs = readFileSync(join(ROOT, 'team', 'app', 'jobs.php'), 'utf8');
+  assert.match(jobs, /return in_tx_with_alerts\(fn\(\) => project_sync\(\$me, \$in, \$ref, \$day\)\);/, 'project.sync (the app\'s and the server\'s own) runs this way');
+  assert.match(jobs, /'\/projects\/#team', 'sum'\)/, 'the evening summary opens the team pages of the one app');
+});
+
+test('review round 1 (whole code): a photo on an update written offline yesterday (it could be added) can also be removed; older than 2 days or someone else\'s: never', { skip }, async () => {
+  const t = (await call('task.save', { assigneeId: id.suresh, title: 'Photo remove window', repeat: 'daily', skipSunday: false }, tok.boss)).task;
+  sql(`UPDATE wt.tasks SET created_at = DATE_SUB(created_at, INTERVAL 5 DAY), start_date = '${istDay(5)}' WHERE id = ${t.id}`); // theirs for days already
+  const up = await call('update.save', { taskId: t.id, note: 'written offline yesterday', day: istDay(1), clientId: 'prw-1' }, tok.suresh);
+  assert.ok(up.ok, JSON.stringify(up));
+  assert.equal(up.update.day, istDay(1), 'saved for yesterday');
+  const ph = await photo(up.update.id, tok.suresh);
+  assert.ok(ph.ok, 'added (allowed for 2 days)');
+  assert.equal((await call('photo.delete', { id: ph.photoId }, tok.anita)).s, 403, 'not someone else');
+  const del = await call('photo.delete', { id: ph.photoId }, tok.suresh);
+  assert.ok(del.ok, 'and removed again: ' + JSON.stringify(del));
+});
+
+test('review round 1 (whole code): the same photo (same clientId) sent several times at the same moment is kept once — no error answer, no extra file left in uploads', { skip }, async () => {
+  const t = (await call('task.save', { assigneeId: id.suresh, title: 'Photo race', repeat: 'daily', skipSunday: false }, tok.boss)).task;
+  const up = await call('update.save', { taskId: t.id, note: 'race', clientId: 'race-up-1' }, tok.suresh);
+  const { readdirSync, statSync } = await import('node:fs');
+  const files = () => { const out = []; const walk = (d) => { for (const f of readdirSync(d)) { const p = join(d, f); if (statSync(p).isDirectory()) walk(p); else out.push(p); } }; try { walk(join(dir, 'uploads')); } catch { /* none yet */ } return out.length; };
+  const before = files();
+  const port = WEB_PORT + 3;
+  const many = spawn('php', ['-S', `127.0.0.1:${port}`, '-t', join(ROOT, 'team', 'public_html')], { env: { ...env(), PHP_CLI_SERVER_WORKERS: '8' }, stdio: 'ignore' });
+  try {
+    const url = `http://127.0.0.1:${port}/api/?a=`;
+    await until(async () => (await fetch(url + 'ping', { method: 'POST', body: '{}' })).ok, 'PHP server with workers');
+    const send = (a, fields) => { const fd = new FormData(); for (const [k, v] of Object.entries(fields)) fd.append(k, v); fd.append('file', new Blob([png], { type: 'image/png' }), 'p.png'); return fetch(url + a, { method: 'POST', headers: { Authorization: 'Bearer ' + tok.suresh }, body: fd }).then(async (r) => ({ s: r.status, ...(await r.json()) })); };
+    const photos = await Promise.all(Array.from({ length: 6 }, () => send('photo.add', { updateId: String(up.update.id), clientId: 'race-photo-1' })));
+    assert.ok(photos.every((r) => r.ok), photos.map((r) => r.s + ' ' + (r.error || '')).join(', '));
+    assert.equal(new Set(photos.map((r) => r.photoId)).size, 1, 'one photo');
+    const msgs = await Promise.all(Array.from({ length: 6 }, () => send('comment.photo', { taskId: String(t.id), text: 'look', clientId: 'race-msg-1' })));
+    assert.ok(msgs.every((r) => r.ok), msgs.map((r) => r.s + ' ' + (r.error || '')).join(', '));
+    assert.equal(msgs[0].comments.filter((c) => c.photo).length, 1, 'one photo message');
+  } finally { many.kill(); }
+  assert.equal(files() - before, 2, 'one file for the photo, one for the message: none left over');
+});
+
+test('review round 1 (whole code): importing a data folder with more than 500 files works (it goes in parts of 500; data.json last), every file is there', { skip }, async () => {
+  const src = join(dir, 'import-big'); mkdirSync(join(src, 'files', 'x1'), { recursive: true });
+  const n = 520;
+  for (let i = 0; i < n; i++) writeFileSync(join(src, 'files', 'x1', `f${i}-note.txt`), 'note ' + i);
+  writeFileSync(join(src, 'data.json'), JSON.stringify({ projects: [{ id: 'x1', name: 'Kiln', files: [] }] }));
+  const out = execFileSync('php', [join(ROOT, 'team', 'app', 'dp-import.php'), src, 'boss', '--replace'], { env: env(), encoding: 'utf8' });
+  assert.match(out, new RegExp(`Imported ${n + 1} files`));
+  const snap = await call('dp.snapshot', {}, tok.boss);
+  assert.equal(Object.keys(snap.entries).filter((p) => p.startsWith('files/x1/')).length, n, 'every file is in the newest version');
+  assert.ok(snap.entries['data.json']);
+});
