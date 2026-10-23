@@ -3203,3 +3203,13 @@ test('review r4-1 (whole code): typing the same phone number written another way
   box().__on.change({}, bad);
   assert.deepEqual(toasts, ['That does not look like a phone number']);
 });
+
+test('review r4-2 (whole code): the server\'s own notes (a move, a chase) show no change/delete buttons; the owner\'s sign out sends this phone\'s notification address so it stops', async () => {
+  const { readFileSync } = await import('node:fs');
+  const parts = readFileSync(new URL('../docs/ui/workparts.js', import.meta.url), 'utf8');
+  assert.match(parts, /c\.mine && [^?]*c\.kind !== 'move' && c\.kind !== 'chase' \? h\('span', \{ class: 'msg-acts' \}/);
+  const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
+  const out = app.slice(app.indexOf('async function signOutServer()'), app.indexOf('// ---------------------------------------------------------------- key screen'));
+  assert.match(out, /pushManager\.getSubscription\(\)/);
+  assert.match(out, /a=logout'[^\n]*body: JSON\.stringify\(\{ endpoint \}\)/);
+});

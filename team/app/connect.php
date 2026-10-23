@@ -148,6 +148,12 @@ function conn_app_handle(string $a, array $in): ?array {
       // the decisions of that same second come again: the app knows them by item_id)
       $more = count($rows) === CONN_DECISIONS_MAX;
       if ($more) $until = (string)$rows[count($rows) - 1]['decided_at'];
+      // a whole page inside one second: "since = until" would give the same page for ever — so this answer holds every
+      // decision of that second, and the next one starts after it
+      if ($more && $rows[0]['decided_at'] === $until) {
+        $rows = all("SELECT * FROM conn_items WHERE conn_id = ? AND status IN ('approved', 'rejected') AND decided_at = ? ORDER BY id", [$c['id'], $until]);
+        $until = date('Y-m-d H:i:s', strtotime($until) + 1);
+      }
       // asked for = the app knows (shown to the owner as "✓ sent to app"); no more sending to its address
       $ids = array_map(fn($r) => (int)$r['id'], array_filter($rows, fn($r) => !$r['callback_ok_at']));
       if ($ids) q('UPDATE conn_items SET callback_ok_at = ?, callback_next_at = NULL WHERE id IN (' . implode(',', $ids) . ')', [now()]);

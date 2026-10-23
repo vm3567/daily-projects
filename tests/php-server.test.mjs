@@ -1960,7 +1960,7 @@ test('connections: Rotate key — the old key stops at once, the new key and a n
   const log = sqlOut("SELECT GROUP_CONCAT(action, ' ', detail SEPARATOR '\\n') FROM wt.audit WHERE action LIKE 'conn\\_%'");
   for (const a of ['conn_create #', 'conn_rotate #', 'conn_delete #', 'conn_update #', 'conn_decide #']) assert.ok(log.includes(a), a);
   assert.ok(!/wt[cs]_[0-9a-f]{20}/.test(log), 'no key or secret in the log');
-  assert.equal(sqlOut("SELECT v FROM wt.settings WHERE k = 'schema'").trim(), '35', 'the tables steps ran (v35: updates.written_at)');
+  assert.equal(sqlOut("SELECT v FROM wt.settings WHERE k = 'schema'").trim(), '36', 'the tables steps ran (v36: push_subs.token_id — which sign-in linked a phone)');
 });
 
 // ---------------------------------------------------------------- review round 12 (connect.php / outlook.php)
@@ -2815,6 +2815,70 @@ test('review r4-1 (whole code): an outside app pushing the same NEW item twice a
       assert.equal(sqlOut(`SELECT COUNT(*) FROM wt.conn_items WHERE external_id = '${ext}'`).trim(), '1');
     }
   } finally { many.kill(); }
+});
+
+test('review r4-2 (whole code): signing out on a phone stops that phone\'s notifications (never another phone\'s); an older link is found by the phone\'s address', { skip }, async () => {
+  const keys = { p256dh: Buffer.concat([Buffer.from([4]), randomBytes(64)]).toString('base64url'), auth: randomBytes(16).toString('base64url') };
+  assert.ok((await call('user.save', { name: 'Two Phones', username: 'twophones', password: 'first-pass-123' }, tok.boss)).ok);
+  const first = (await call('login', { username: 'twophones', password: 'first-pass-123' })).token;
+  assert.ok((await call('password', { old: 'first-pass-123', new: 'two-phones-own1' }, first)).ok);
+  const phoneA = (await call('login', { username: 'twophones', password: 'two-phones-own1' })).token;
+  const phoneB = (await call('login', { username: 'twophones', password: 'two-phones-own1' })).token;
+  assert.ok((await call('push.subscribe', { endpoint: 'https://fcm.googleapis.com/fcm/send/so-phone-a', keys }, phoneA)).ok);
+  assert.ok((await call('push.subscribe', { endpoint: 'https://fcm.googleapis.com/fcm/send/so-phone-b', keys }, phoneB)).ok);
+  const subs = () => sqlOut("SELECT endpoint FROM wt.push_subs WHERE endpoint LIKE '%/so-phone-%' ORDER BY endpoint").trim().split('\n').filter(Boolean).map((e) => e.split('/').pop());
+  assert.deepEqual(subs(), ['so-phone-a', 'so-phone-b']);
+  assert.ok((await call('logout', {}, phoneA)).ok);
+  assert.deepEqual(subs(), ['so-phone-b'], 'phone A signed out: no more notifications there; phone B keeps its own');
+  // an older link (no sign-in noted): the app sends this phone's address with the sign out
+  sql("UPDATE wt.push_subs SET token_id = NULL WHERE endpoint LIKE '%/so-phone-b'");
+  assert.ok((await call('logout', { endpoint: 'https://fcm.googleapis.com/fcm/send/so-phone-b' }, phoneB)).ok);
+  assert.deepEqual(subs(), []);
+});
+
+test('review r4-2 (whole code): a chase note cannot be deleted or changed (the once-an-hour limit and Follow-up read it); comments say their kind', { skip }, async () => {
+  const t = (await call('task.save', { assigneeId: id.suresh, title: 'Chase note kept', repeat: 'once' }, tok.boss)).task;
+  const c = await call('task.chase', { id: t.id }, tok.boss);
+  assert.ok(c.ok, c.error);
+  const note = c.comments.find((m) => m.kind === 'chase');
+  assert.ok(note, 'the chase note says it is a chase');
+  const del = await call('comment.delete', { id: note.id }, tok.boss);
+  assert.match(del.error || '', /cannot be changed/);
+  const ed = await call('comment.edit', { id: note.id, text: 'something else' }, tok.boss);
+  assert.match(ed.error || '', /cannot be changed/);
+  assert.match((await call('task.chase', { id: t.id }, tok.boss)).error || '', /Already chased/, 'still only once an hour');
+  const mine = (await call('comment.add', { taskId: t.id, text: 'my own note' }, tok.boss)).comments.at(-1);
+  assert.ok((await call('comment.delete', { id: mine.id }, tok.boss)).ok, 'a normal message can still be deleted');
+});
+
+test('review r4-2 (whole code): connect.decisions with more than 500 decisions in the same second gives them all at once and moves on (never the same page for ever)', { skip }, async () => {
+  const same = await call('conn.create', { name: 'Same second' }, tok.boss);
+  const cid = same.connection.id;
+  sql(`SET SESSION cte_max_recursion_depth = 2000; INSERT INTO wt.conn_items (conn_id, external_id, kind, title, status, decided_at, created_at, updated_at)
+    WITH RECURSIVE n (i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 501)
+    SELECT ${cid}, CONCAT('S-', i), 'approval', 'x', 'approved', '2026-01-05 10:00:00', NOW(), NOW() FROM n`);
+  const a = await appCall('connect.decisions', { since: '2026-01-05T10:00:00+05:30' }, same.key);
+  assert.ok(a.ok, a.error);
+  assert.equal(new Set(a.decisions.map((x) => x.external_id)).size, 501, 'all of that second at once');
+  const b = await appCall('connect.decisions', { since: a.until }, same.key);
+  assert.equal(b.decisions.length, 0, 'asking again from until does not repeat them');
+  assert.ok((await call('conn.delete', { id: cid }, tok.boss)).ok);
+});
+
+test('review r4-2 (whole code): the evening summary is worked out before the day is marked sent (a hiccup leaves it to the next run)', { skip }, () => {
+  const jobs = readFileSync(join(ROOT, 'team', 'app', 'jobs.php'), 'utf8');
+  const fn = jobs.slice(jobs.indexOf('function evening_summary()'));
+  assert.ok(fn.indexOf('day_summary($day)') < fn.indexOf("set_setting('sum_day'"), 'summary first, then marked sent');
+});
+
+test('review r4-2 (whole code): "Seen" with a task that moved away still marks the person\'s own tasks read', { skip }, async () => {
+  const own = (await call('task.save', { assigneeId: id.suresh, title: 'Seen own', repeat: 'once' }, tok.boss)).task;
+  const gone = (await call('task.save', { assigneeId: id.kavi, title: 'Seen gone', repeat: 'once' }, tok.boss)).task;
+  await call('comment.add', { taskId: own.id, text: 'please look' }, tok.boss);
+  const r = await call('tasks.read', { ids: [gone.id, own.id] }, tok.suresh);
+  assert.ok(r.ok, r.error);
+  assert.equal(sqlOut(`SELECT COUNT(*) FROM wt.task_reads WHERE task_id = ${own.id} AND user_id = ${id.suresh}`).trim(), '1', 'own task marked read');
+  assert.equal(sqlOut(`SELECT COUNT(*) FROM wt.task_reads WHERE task_id = ${gone.id} AND user_id = ${id.suresh}`).trim(), '0', 'never the other one');
 });
 
 test('review round 1 (whole code): importing a data folder with more than 500 files works (it goes in parts of 500; data.json last), every file is there', { skip }, async () => {

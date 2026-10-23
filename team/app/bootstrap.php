@@ -278,6 +278,8 @@ function migrate(PDO $pdo): void {
     "ALTER TABLE conn_items ADD COLUMN callback_since DATETIME NULL",
     // v35: when an update was written (on the phone, offline): the next offline one is compared with this, not with when it arrived
     "ALTER TABLE updates ADD COLUMN written_at DATETIME NULL",
+    // v36: which sign-in linked a phone's notifications, so signing out on that phone stops them there (only there)
+    "ALTER TABLE push_subs ADD COLUMN token_id INT NULL",
   ];
   $pdo->exec($steps[0]);
   $done = (int)($pdo->query("SELECT v FROM settings WHERE k = 'schema'")->fetchColumn() ?: 0);

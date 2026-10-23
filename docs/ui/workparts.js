@@ -129,7 +129,7 @@ export function messagesBlock({ taskId, comments, waiting = [], draft, sending, 
   return block('💬 Messages', h('div', { class: 'banner team-msgs' },
     comments.length ? comments.map((c) => h('div', { class: 'team-msg' + (c.mine ? ' mine' : ''), key: 'c-' + c.id },
       h('div', { class: 'row small' }, h('strong', null, c.mine ? 'You' : c.by), h('span', { class: 'muted' }, `${fmtDay(c.at)} ${fmtTime(c.at)}${c.editedAt ? ' · edited' : ''}`),
-        c.mine && !String(c.text || '').startsWith('↔ Moved') ? h('span', { class: 'msg-acts' },
+        c.mine && !String(c.text || '').startsWith('↔ Moved') && c.kind !== 'move' && c.kind !== 'chase' ? h('span', { class: 'msg-acts' }, // (the server's own notes stay as they are)
           h('button', { class: 'link small', title: 'Change', 'aria-label': 'Change this message', onClick: () => onEdit(c) }, '✎'),
           h('button', { class: 'link small', title: 'Delete', 'aria-label': 'Delete this message', onClick: () => onDelete(c) }, '✕')) : null),
       c.photo ? photos('comment.photo', [c.id]) : null,

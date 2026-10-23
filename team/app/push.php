@@ -158,9 +158,9 @@ function push_handle(string $a, array $in, array $me): ?array {
       $auth = (string)($in['keys']['auth'] ?? '');
       if (!push_endpoint_ok($ep) || strlen(b64u_dec($p256)) !== 65 || strlen(b64u_dec($auth)) !== 16) throw new ApiError('This phone cannot get notifications.');
       // one phone = one row; if someone else signs in on the same phone, it becomes theirs
-      q('INSERT INTO push_subs (user_id, endpoint, ep_hash, p256dh, auth, created_at) VALUES (?, ?, ?, ?, ?, ?)
-         ON DUPLICATE KEY UPDATE user_id = VALUES(user_id), p256dh = VALUES(p256dh), auth = VALUES(auth)',
-        [$me['id'], $ep, hash('sha256', $ep), $p256, $auth, now()]);
+      q('INSERT INTO push_subs (user_id, endpoint, ep_hash, p256dh, auth, created_at, token_id) VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE user_id = VALUES(user_id), p256dh = VALUES(p256dh), auth = VALUES(auth), token_id = VALUES(token_id)',
+        [$me['id'], $ep, hash('sha256', $ep), $p256, $auth, now(), $GLOBALS['token_id'] ?? null]);
       return ['on' => true];
     }
     case 'push.unsubscribe':

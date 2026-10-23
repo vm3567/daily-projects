@@ -2313,7 +2313,14 @@ async function signOutServer() {
   if (waiting && !confirm(`${waiting} change(s) are not saved yet and will be lost. Sign out anyway?`)) return;
   clearTimeout(store.saveTimer);
   store.forgetPending(); // before clearing storage below; also stops the leave-page check from sending them
-  try { await fetch('../api/?a=logout', { method: 'POST', headers: { Authorization: 'Bearer ' + serverToken() } }); } catch { /* signed out anyway */ }
+  // this phone's notifications stop too (the next person on it must not get the owner's messages)
+  let endpoint = '';
+  try {
+    const r = navigator.serviceWorker && await navigator.serviceWorker.getRegistration('../');
+    const sub = r && await r.pushManager.getSubscription();
+    if (sub) { endpoint = sub.endpoint; await sub.unsubscribe().catch(() => {}); }
+  } catch { /* no notifications here */ }
+  try { await fetch('../api/?a=logout', { method: 'POST', headers: { Authorization: 'Bearer ' + serverToken(), 'Content-Type': 'application/json' }, body: JSON.stringify({ endpoint }) }); } catch { /* signed out anyway */ }
   try { localStorage.removeItem(SERVER_TOKEN_KEY); localStorage.removeItem(WHO_KEY); localStorage.removeItem('dp.pending'); localStorage.removeItem('dp.snapshot'); } catch { /* blocked */ }
   location.replace(location.pathname); // this app's sign-in
 }

@@ -171,7 +171,7 @@ function mark_read(array $taskIds, int $userId, int $upTo = 0): void {
 function comments_of(int $taskId): array {
   $meId = (int)($GLOBALS['me']['id'] ?? 0);
   return array_map(fn($c) => ['id' => (int)$c['id'], 'by' => $c['name'], 'byId' => (int)$c['user_id'], 'text' => $c['text'], 'at' => $c['at'], 'mine' => (int)$c['user_id'] === $meId,
-    'photo' => !empty($c['photo']), 'editedAt' => $c['edited_at'] ?? null],
+    'photo' => !empty($c['photo']), 'editedAt' => $c['edited_at'] ?? null, 'kind' => $c['kind'] ?? null],
     all('SELECT c.*, u.name FROM comments c JOIN users u ON u.id = c.user_id WHERE c.task_id = ? ORDER BY c.id', [$taskId]));
 }
 
@@ -222,7 +222,7 @@ function handle(string $a, array $in): array {
     case 'me':
       return ['user' => public_user($me), 'today' => $day];
     case 'logout':
-      logout();
+      logout((string)($in['endpoint'] ?? ''));
       return [];
     case 'password':
       change_password($me, (string)($in['old'] ?? ''), (string)($in['new'] ?? ''));
@@ -439,12 +439,14 @@ function handle(string $a, array $in): array {
       $c = one('SELECT * FROM comments WHERE id = ?', [(int)($in['id'] ?? 0)]);
       if (!$c || (int)$c['user_id'] !== $me['id']) throw new ApiError('You can change only your own messages.', 403);
       own_task($me, (int)$c['task_id']);
+      // the server's own notes (a move, a chase) are the task's record: never changed or deleted (the chase limit and
+      // Follow-up's "chased" read them)
+      if (in_array($c['kind'] ?? '', ['move', 'chase'], true)) throw new ApiError('This note cannot be changed.');
       if ($a === 'comment.delete') {
         q('DELETE FROM comments WHERE id = ?', [$c['id']]);
         if ($c['photo']) @unlink(UPLOAD_DIR . '/' . $c['photo']);
       } else {
         $text = (string)preg_replace('/^[↔\s]+/u', '', txt($in['text'] ?? '', 2000, !$c['photo'], 'The message'));
-        if ($c['kind'] === 'move') throw new ApiError('This note cannot be changed.');
         if ($text === '' && !$c['photo']) throw new ApiError('The message is empty.');
         q('UPDATE comments SET text = ?, edited_at = ? WHERE id = ?', [$text, now(), $c['id']]);
       }
@@ -452,8 +454,9 @@ function handle(string $a, array $in): array {
     }
     case 'tasks.read': { // "seen": these tasks' messages count as read for me
       $ids = array_slice(array_map('intval', (array)($in['ids'] ?? [])), 0, 100);
-      foreach ($ids as $id) own_task($me, $id);
-      mark_read($ids, $me['id'], max(0, (int)($in['upTo'] ?? 0)));
+      // only the ones still mine (one moved away meanwhile must not stop the others being marked read)
+      $ids = array_values(array_filter($ids, function ($id) use ($me) { try { own_task($me, $id); return true; } catch (ApiError $e) { return false; } }));
+      if ($ids) mark_read($ids, $me['id'], max(0, (int)($in['upTo'] ?? 0)));
       return [];
     }
     case 'search': { // tasks, messages and updates with these words (staff: only their own tasks)
