@@ -39,7 +39,9 @@ export class ServerRepo {
     // with its own page. Going to sign-in would come straight back and try the same save again, without end.
     if (res.status === 403) {
       const out = await res.json().catch(() => null);
-      throw new GitHubError(out?.error || `The server refused this save (${res.status}). Remove any code-like text you just added.`, 403);
+      const err = new GitHubError(out?.error || `The server refused this save (${res.status}). Remove any code-like text you just added.`, 403);
+      if (!out?.error) err.refused = true; // the firewall's own page: something in what was sent, not who sent it
+      throw err;
     }
     if (res.status === 409) throw new ClashError('Another device saved first');
     if (method === 'GET') {

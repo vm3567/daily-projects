@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { addDay, weekdayOf, dueOn, itemKey, diaryRows, fieldChanged, lateValue, afterFlush, boxStillThere, updateSaveBody, redrawHow, projectRowState, giveBackShow, keptNotice, noticeHow, pasteWaits, msgBoxSent, redrawAfterSend, taskSaveBody, aboutShort, projectAboutOf, morningMail, morningOrder, morningSummary, sentTag, sentTime, escHtml, followupRule, followupRows, followupGroups, followupSummary, roundKey, roundSaved, roundPlan, roundMark, parseQuickTask, outlookLine } from '../team/public_html/logic.js';
+import { addDay, weekdayOf, dueOn, itemKey, diaryRows, fieldChanged, lateValue, afterFlush, boxStillThere, updateSaveBody, redrawHow, projectRowState, giveBackShow, keptNotice, noticeHow, pasteWaits, msgBoxSent, msgBoxLeft, updateBoxLeft, redrawAfterSend, taskSaveBody, giveId, aboutShort, projectAboutOf, morningMail, morningOrder, morningSummary, sentTag, sentTime, escHtml, followupRule, followupRows, followupGroups, followupSummary, roundKey, roundSaved, roundPlan, roundMark, parseQuickTask, outlookLine } from '../team/public_html/logic.js';
 const APP = readFileSync(new URL('../team/public_html/app.js', import.meta.url), 'utf8');
 
 // Wed 21 Oct 2026 is "today" in these checks; 18 Oct is a Sunday.
@@ -165,7 +165,7 @@ test('team: a refused step or suggestion shows its whole words to copy; "back in
   const sug = giveBackShow({ kind: 'suggest', title: 'Clean filters', details: 'The dryer clogs every week' }, 'No.', false);
   assert.ok(sug.sticky && sug.body.includes('The dryer clogs every week'), 'a suggestion shows its details too');
   assert.equal(giveBackShow({ kind: 'photos', note: 'n', updateId: 4 }, 'Closed.', false).sticky, false, 'photos: a toast as before');
-  assert.match(APP, /it\.kind === 'step' \? myProjects\(\)\.some\(\(p\) => p\.ref === it\.projectRef\)/, 'the step box is looked for in my projects');
+  assert.match(APP, /it\.kind === 'step' \? !typing && myProjects\(\)\.some\(\(p\) => p\.ref === it\.projectRef\)/, 'the step box is looked for in my projects (and must not hold other words being typed)');
 });
 
 test('team: two refused items both stay on screen, and other news waits until they are closed', () => {
@@ -237,10 +237,11 @@ test("team: 'Give task' carries one clientId per form (a second tap after a lost
   assert.deepEqual(taskSaveBody({ id: 7, title: 'x' }, 'abc'), { id: 7, title: 'x' }, 'a change to a task never does');
   assert.deepEqual(taskSaveBody({ id: 0, title: 'x' }, ''), { id: 0, title: 'x' });
   const form = APP.slice(APP.indexOf('function taskForm()'), APP.indexOf("'Give task');") + 400);
-  assert.match(form, /const formId = editing \? '' : newClientId\(\);/, 'made once when the form is drawn, kept for its retries');
+  // (review r15: the id is kept in state for the same words, so a redraw between two taps no longer makes a new one)
+  assert.ok(form.includes("'Give task'"));
+  assert.match(APP.slice(APP.indexOf('function taskForm()')), /const formId = editing \? '' : \(state\.giveCid = giveId\(state\.giveCid, fields, newClientId\)\)\.id;/, 'kept for its retries');
   const submit = APP.slice(APP.indexOf('function taskForm()'));
-  assert.match(submit, /api\('task\.save', taskSaveBody\(\{/);
-  assert.match(submit, /\}, formId\)\);/);
+  assert.match(submit, /api\('task\.save', taskSaveBody\(fields, formId\)\);\s*state\.giveCid = null;/);
 });
 
 test('team: typed passwords on Change password count as typing (a redraw never empties them)', () => {
@@ -274,7 +275,7 @@ test('project description: taken from the project\'s tasks (the first one that h
   assert.equal(projectAboutOf([{ title: 'old server, no field' }]), '');
   assert.match(APP, /class: 'prow-about' }, aboutShort\(p\.projectAbout\)\)/, 'manager\'s Projects list row');
   assert.match(APP, /class: 'project-about' }/, 'under the title of the project and task pages');
-  assert.match(readFileSync(new URL('../team/public_html/sw.js', import.meta.url), 'utf8'), /const CACHE = 'worktask-v26'/, 'new files reach the phones');
+  assert.match(readFileSync(new URL('../team/public_html/sw.js', import.meta.url), 'utf8'), /const CACHE = 'worktask-v27'/, 'new files reach the phones');
 });
 
 // ---------------------------------------------------------------- 📧 morning email (one person's pending work as a table to fill in)
@@ -747,8 +748,9 @@ async function swHarness({ netNever = false, netFail = false, net = null } = {})
   const handlers = {};
   const timers = [];
   const fetches = [];
+  const posted = []; // messages sent to the open pages
   const ctx = {
-    self: { addEventListener: (t, f) => { handlers[t] = f; }, clients: { matchAll: async () => [], claim: async () => {} }, skipWaiting: async () => {}, registration: {} },
+    self: { addEventListener: (t, f) => { handlers[t] = f; }, clients: { matchAll: async () => [], claim: async () => {}, get: async (id) => ({ id, postMessage: (m) => posted.push({ id, ...m }) }) }, skipWaiting: async () => {}, registration: {} },
     location: { origin: ORIGIN },
     caches: { open: async (n) => cacheObj(n), match: async (r) => { for (const n of Object.keys(stores)) { const x = store(n).get(key(r)); if (x) return x; } return undefined; }, keys: async () => Object.keys(stores), delete: async (n) => delete stores[n] },
     fetch: (r, o) => { fetches.push({ url: key(r), cache: o && o.cache }); return net ? net(key(r)) : netNever ? new Promise(() => {}) : netFail ? Promise.reject(new TypeError('offline')) : Promise.resolve(new Response('net ' + key(r))); },
@@ -760,7 +762,7 @@ async function swHarness({ netNever = false, netFail = false, net = null } = {})
   vm.runInNewContext(src, ctx);
   const cacheName = /const CACHE = '([^']+)'/.exec(src)[1];
   return {
-    cacheName, store, handlers, fetches,
+    cacheName, store, handlers, fetches, posted,
     /** One request; resolves to the body text, or 'PENDING' if nothing answered after the timers up to `upTo` ms fired. */
     async ask(path, mode = 'no-cors', { upTo = 4000, clientId = '', waits = [] } = {}) {
       let answer;
@@ -876,6 +878,28 @@ test('r14 version.txt: never answered from the kept copy (network only, no-store
   assert.match(fn, /`version\.txt\?check=\$\{Date\.now\(\)\}`, \{ cache: 'no-store' \}\)/, 'the page asks with no-store every time, the first time too');
 });
 
+test('sw: install notes the version of the files it keeps, so a later upload renews the kept set (never old code labelled new)', async () => {
+  let ver = 'A';
+  const h = await swHarness({ net: (u) => Promise.resolve(new Response(u.endsWith('version.txt') ? ver + '\n' : 'fresh ' + u)) });
+  let wait;
+  h.handlers.install({ waitUntil: (p) => { wait = p; } });
+  await wait;
+  assert.ok(h.fetches.some((f) => f.url === 'https://worktask.in/version.txt' && f.cache === 'no-store'), 'asked fresh from the server');
+  assert.equal(await h.store(h.cacheName).get('https://worktask.in/kept-version.txt').clone().text(), 'A', 'the stamp is the version of the kept files');
+  for (const f of ['app.js', 'logic.js']) h.store(h.cacheName).set('https://worktask.in/' + f, new Response('A ' + f));
+  ver = 'B'; // an upload; the page's first version check goes through the worker later
+  const waits = [];
+  assert.equal(await h.ask('/version.txt', 'no-cors', { waits }), 'B\n');
+  await Promise.all(waits);
+  for (const f of ['app.js', 'logic.js']) assert.equal(await h.store(h.cacheName).get('https://worktask.in/' + f).clone().text(), 'new https://worktask.in/' + f, f + ': the old A copy was renewed');
+  assert.equal(await h.store(h.cacheName).get('https://worktask.in/kept-version.txt').clone().text(), 'B');
+  // version.txt not readable at install: the set counts as old, renewed at the first check
+  const n = await swHarness({ net: (u) => Promise.resolve(u.endsWith('version.txt') ? new Response('', { status: 404 }) : new Response('x')) });
+  n.handlers.install({ waitUntil: (p) => { wait = p; } });
+  await wait;
+  assert.equal(await n.store(n.cacheName).get('https://worktask.in/kept-version.txt').clone().text(), '');
+});
+
 test('r14 Outlook status: one failed outlook.status answer does not switch the no-paste email off for the whole page load; the next redraw asks again', async () => {
   const src = APP.slice(APP.indexOf('let outlookOn = null;'), APP.indexOf('/**', APP.indexOf('function outlookConnected()')));
   let calls = 0, fail = true;
@@ -891,4 +915,189 @@ test('r14 Outlook status: one failed outlook.status answer does not switch the n
   await new Promise((r) => setImmediate(r));
   assert.equal(ask(), true, 'connected: the no-paste way works');
   assert.equal(calls, 2, 'a good answer is kept');
+});
+
+test('review r15: a waiting update sent with sentAt (the server puts a wrong phone clock right); an "older" answer shows the words that were not saved', async () => {
+  const { olderShow } = await import('../team/public_html/logic.js');
+  const b = updateSaveBody({ taskId: 4, note: 'n', state: 'progress', clientId: 'a', day: 'd', writtenAt: 'w' });
+  assert.ok(Date.parse(b.sentAt) > Date.now() - 5000, 'sentAt is now');
+  assert.equal(updateSaveBody({ taskId: 4, note: 'n', state: 'progress', clientId: 'a' }).sentAt, undefined, 'only with writtenAt');
+  const show = olderShow({ note: 'my late words' }, { note: 'newer words' });
+  assert.match(show.body, /my late words/);
+  assert.equal(olderShow({ note: 'same' }, { note: 'same' }), null, 'nothing lost: no notice');
+  const send = APP.slice(APP.indexOf('async function sendItem('), APP.indexOf('/** The task as this screen last saw it'));
+  assert.match(send, /const kept = out\.history === 'older' \? olderShow\(it, out\.update\) : null;/);
+  assert.match(send, /if \(kept\) notice\('stuck', kept\.title, kept\.body, null, \{ stay: true, copy: true \}\);/);
+});
+
+test('review r15: work in one line — numbers in the work (sizes, quantities) are not dates; the date word typed is used', () => {
+  assert.deepEqual(qt('Valar: fix 3/4 inch valve by Friday'), { person: { id: 1, name: 'Valar' }, title: 'Fix 3/4 inch valve', dueDate: '2026-10-23', error: '' });
+  assert.deepEqual(qt('Valar: order 2-3 bags of glaze'), { person: { id: 1, name: 'Valar' }, title: 'Order 2-3 bags of glaze', dueDate: '', error: '' });
+  assert.equal(qt('Valar: buy 10/12 mm pipes').title, 'Buy 10/12 mm pipes');
+  assert.equal(qt('Valar: buy 10/12 mm pipes').dueDate, '');
+  assert.equal(qt('Valar: send 2 may photos').title, 'Send 2 may photos');
+  assert.deepEqual([qt('Valar: load 13/14 trolleys').error, qt('Valar: load 13/14 trolleys').title], ['', 'Load 13/14 trolleys'], 'not refused as a wrong date');
+  // a date in numbers still counts after by / on, or at the end
+  assert.equal(qt('Valar: fix 3/4 inch valve by 5/11').dueDate, '2026-11-05');
+  assert.equal(qt('Valar: fix 3/4 inch valve by 5/11').title, 'Fix 3/4 inch valve');
+  assert.equal(qt('Valar: order 2-3 bags 24/10.').dueDate, '2026-10-24');
+  assert.equal(qt('Valar: send 2 may photos on 3 Nov').dueDate, '2026-11-03');
+});
+
+test('review r15: Give a task keeps its clientId for the same words across redraws (a retap after a lost answer is one task); changed words get a new one', () => {
+  let n = 0; const make = () => 'id' + (++n);
+  const f = { id: 0, assigneeId: 3, title: 'Fire samples', stepRef: 'p1:s2' };
+  const first = giveId(null, f, make);
+  assert.equal(first.id, 'id1');
+  assert.equal(giveId(first, { ...f }, make).id, 'id1', 'the same task again (a new form drawn in between): the same id');
+  assert.equal(giveId(first, { ...f, title: 'Fire more samples' }, make).id, 'id2', 'changed: a new task');
+  assert.equal(giveId(null, f, make).id, 'id3', 'after a success (saved id cleared): a new id');
+});
+
+test('review r15: words typed in the message box while a message is sending stay in the box (only the sent words leave)', () => {
+  assert.equal(msgBoxLeft('crack near the base', 'crack near the base'), '', 'just what went: emptied');
+  assert.equal(msgBoxLeft('crack near the base\nAlso the lid', 'crack near the base'), 'Also the lid', 'the words typed after stay');
+  assert.equal(msgBoxLeft('something else', 'crack near the base'), 'something else', 'rewritten: all kept');
+  assert.equal(msgBoxLeft(undefined, 'x'), '');
+  const send = APP.slice(APP.indexOf('function messagesBlock('), APP.indexOf("'Send message');"));
+  assert.ok(!/delete state\.drafts\['m' \+ taskId\]/.test(send), 'the draft is never simply wiped after a send');
+  assert.equal((send.match(/keepTypedAfter\(taskId, text\);/g) || []).length, 2, 'online and offline');
+});
+
+test('review r16: the "Finished" after the photos goes on the day the server saved the first part for (a wrong phone date is put right)', () => {
+  const send = APP.slice(APP.indexOf('async function sendItem('), APP.indexOf('/** The task as this screen last saw it'));
+  assert.match(send, /it\.day = out\.update\.day;/);
+  assert.match(send, /if \(it\.thenFinish\) await api\('update\.save', updateSaveBody\(\{ taskId: it\.taskId, note: it\.note, day: it\.day \|\| day,/);
+});
+
+test('review r16: words typed in the update box while Send is running are kept (the box stays open as a change), online and when kept on the phone', () => {
+  assert.equal(updateBoxLeft('Fired kiln 3', 'Fired kiln 3'), '', 'just what went: the box closes');
+  assert.equal(updateBoxLeft('Fired kiln 3, temp 1180C, crack on tile 4', 'Fired kiln 3'), 'Fired kiln 3, temp 1180C, crack on tile 4', 'more typed: all of it stays, to send again as the change');
+  assert.equal(updateBoxLeft('  ', 'Fired kiln 3'), '', 'emptied meanwhile: nothing to keep');
+  assert.equal(updateBoxLeft(undefined, 'x'), '');
+  const fnSrc = APP.slice(APP.indexOf('function keepTypedUpdate('), APP.indexOf('function updateForm('));
+  const state = { drafts: { 7: { note: 'Fired kiln 3, temp 1180C', state: 'progress' } }, editing: {} };
+  new Function('state', 'updateBoxLeft', fnSrc + '; return keepTypedUpdate;')(state, updateBoxLeft)(7, state.drafts[7], 'Fired kiln 3');
+  assert.deepEqual(state.drafts[7], { note: 'Fired kiln 3, temp 1180C', state: 'progress' }, 'the typed words have a draft behind them');
+  assert.equal(state.editing[7], true, 'the box stays open (a second Send changes today\'s update)');
+  state.drafts[8] = { note: 'done', state: 'finished' }; state.editing[8] = true;
+  new Function('state', 'updateBoxLeft', fnSrc + '; return keepTypedUpdate;')(state, updateBoxLeft)(8, state.drafts[8], 'done');
+  assert.ok(!(8 in state.drafts) && !(8 in state.editing), 'nothing more typed: emptied as before');
+  const send = APP.slice(APP.indexOf('function updateForm('), APP.indexOf("}, 'Send');", APP.indexOf('function updateForm(')));
+  assert.ok(!/delete state\.drafts\[t\.id\]/.test(send), 'the draft is never simply wiped after a send');
+  assert.equal((send.match(/keepTypedUpdate\(t\.id, d, sentNote\);/g) || []).length, 2, 'online and offline');
+  assert.match(send, /api\('update\.save', updateSaveBody\(\{ taskId: t\.id, note: sentNote,/, 'what went is the text taken when Send was tapped');
+  assert.equal((send.match(/note: sentNote, state: d\.state/g) || []).length, 2, 'the phone keeps that same text, not later typing');
+});
+
+test('review r16: a photo message — words typed during the upload stay in the draft and the box, and the caption that went is not sent again', async () => {
+  const src = APP.slice(APP.indexOf('function keepTypedAfter('), APP.indexOf('function messagesBlock(')) + APP.slice(APP.indexOf('async function sendMsgPhoto('), APP.indexOf('// Ctrl+V on an open task'));
+  const state = { drafts: { m5: 'see crack' }, sending: {}, sel: 'task:5', detail: { comments: [] } };
+  const box = { value: 'see crack', dataset: { init: '' } };
+  let renders = 0;
+  const api = async () => { box.value = state.drafts.m5 = 'see crack - replace the lid by Friday'; return { comments: [{ id: 1 }] }; }; // typed while it uploads
+  class FormData { append() {} }
+  const send = new Function('state', 'api', 'toast', 'FormData', 'newClientId', 'document', 'formHasText', 'render', 'OfflineError', 'msgBoxSent', 'msgBoxLeft',
+    src + '; return sendMsgPhoto;')(state, api, () => {}, FormData, () => 'c1', { contains: () => true }, () => false, () => { renders++; }, class extends Error {}, msgBoxSent, msgBoxLeft);
+  await send(5, { name: 'p.jpg', size: 1, type: 'image/jpeg' }, 'see crack', box);
+  assert.equal(state.drafts.m5, '- replace the lid by Friday', 'the later words keep a draft (a redraw does not wipe them)');
+  assert.equal(box.value, '- replace the lid by Friday', 'the caption that went leaves the box');
+  state.drafts.m5 = 'see crack'; box.value = 'see crack';
+  await send(5, { name: 'p.jpg', size: 1, type: 'image/jpeg' }, '', box); // a photo with no words: all typed is kept
+  assert.equal(state.drafts.m5, 'see crack - replace the lid by Friday');
+  assert.equal(box.value, 'see crack - replace the lid by Friday');
+});
+
+test('review r16 sw: a page that got old code from the kept set is told a new version is ready when version.txt shows a new one', async () => {
+  let slow = true;
+  const h = await swHarness({ net: (u) => (u.endsWith('version.txt') ? Promise.resolve(new Response('v2\n')) : slow ? new Promise(() => {}) : Promise.resolve(new Response('net ' + u))) });
+  h.store(h.cacheName).set('https://worktask.in/kept-version.txt', new Response('v1'));
+  for (const f of ['/app.js', '/logic.js']) h.store(h.cacheName).set('https://worktask.in' + f, new Response('old ' + f));
+  assert.equal(await h.ask('/app.js', 'no-cors', { upTo: 8000, clientId: 'p1' }), 'old /app.js', 'weak signal: the kept (v1) code');
+  slow = false;
+  assert.equal(await h.ask('/app.js', 'no-cors', { clientId: 'p2' }), 'net https://worktask.in/app.js', 'another page got the new code');
+  const waits = [];
+  assert.equal(await h.ask('/version.txt', 'no-cors', { clientId: 'p2', waits }), 'v2\n', 'the first stamp the page sees is already the new one');
+  await Promise.all(waits);
+  assert.deepEqual(h.posted, [{ id: 'p1', type: 'new-version' }], 'only the page running the old code is told (it offers the reload)');
+  waits.length = 0; h.posted.length = 0;
+  await h.ask('/version.txt', 'no-cors', { clientId: 'p1', waits }); await Promise.all(waits);
+  assert.deepEqual(h.posted, [], 'no new version since: nothing more');
+  assert.match(APP, /d\.type === 'new-version'\) \{\n\s+codeStamp = 'old'; checkNewVersion\(\);/, 'the page then shows "New version ready"');
+});
+
+test('review sw mix: app.js answered with 503 gets the kept app.js, and then logic.js comes from the kept set too (never the new logic.js); a new version is then offered', async () => {
+  const h = await swHarness({ net: (u) => Promise.resolve(u.endsWith('/app.js') ? new Response('busy', { status: 503 }) : new Response(u.endsWith('version.txt') ? 'v2\n' : 'new ' + u.slice(u.lastIndexOf('/') + 1))) });
+  for (const f of ['app.js', 'logic.js']) h.store(h.cacheName).set('https://worktask.in/' + f, new Response('kept ' + f));
+  h.store(h.cacheName).set('https://worktask.in/kept-version.txt', new Response('v1'));
+  assert.equal(await h.ask('/app.js', 'no-cors', { clientId: 'pageA' }), 'kept app.js', 'the host\'s error page swapped for the kept copy');
+  assert.equal(await h.ask('/logic.js', 'no-cors', { clientId: 'pageA' }), 'kept logic.js', 'the old app.js gets the old logic.js it was built with');
+  const waits = [];
+  await h.ask('/version.txt', 'no-cors', { clientId: 'pageA', waits }); await Promise.all(waits);
+  assert.ok(h.posted.some((m) => m.id === 'pageA' && m.type === 'new-version'), 'the page running the kept code is offered the reload');
+});
+
+test('review sw mix: app.js from the network, then logic.js fails (offline or an error answer): no kept copy is served next to the new app.js', async () => {
+  let way = 'ok';
+  const h = await swHarness({ net: (u) => (way === 'ok' ? Promise.resolve(new Response('new ' + u.slice(u.lastIndexOf('/') + 1))) : way === 'off' ? Promise.reject(new TypeError('offline')) : Promise.resolve(new Response('busy', { status: 508 }))) });
+  for (const f of ['app.js', 'logic.js']) h.store(h.cacheName).set('https://worktask.in/' + f, new Response('kept ' + f));
+  assert.equal(await h.ask('/app.js', 'no-cors', { clientId: 'pageA' }), 'new app.js');
+  way = 'off';
+  const fails = (t) => t === 'NETWORK ERROR' || t === ''; // a rejected answer, or Response.error() (a network error in the browser)
+  assert.ok(fails(await h.ask('/logic.js', 'no-cors', { clientId: 'pageA', upTo: 60000 }).catch(() => 'NETWORK ERROR')), 'offline: the load fails cleanly, never the kept logic.js');
+  way = 'busy';
+  assert.equal(await h.ask('/logic.js', 'no-cors', { clientId: 'pageA', upTo: 60000 }), 'busy', 'an error answer: the error, never the kept logic.js');
+  // the same when both start together and app.js arrives first
+  way = 'ok';
+  const h2 = await swHarness({ net: (u) => (u.endsWith('/app.js') ? Promise.resolve(new Response('new app.js')) : new Promise((r, no) => setImmediate(() => no(new TypeError('offline'))))) });
+  for (const f of ['app.js', 'logic.js']) h2.store(h2.cacheName).set('https://worktask.in/' + f, new Response('kept ' + f));
+  const both = await Promise.all([h2.ask('/app.js', 'no-cors', { clientId: 'pageB' }), h2.ask('/logic.js', 'no-cors', { clientId: 'pageB' }).catch(() => 'NETWORK ERROR')]);
+  assert.equal(both[0], 'new app.js');
+  assert.ok(fails(both[1]), 'logic.js fails cleanly, never the kept copy');
+});
+
+test('review: words typed in the Add a step box while a step is sending stay (online and when kept on the phone); just the sent step: the box empties', () => {
+  const fnSrc = APP.slice(APP.indexOf('function keepTypedStep('), APP.indexOf('function addStepForm('));
+  assert.ok(fnSrc.length > 0 && fnSrc.length < 600, 'the helper is there');
+  const state = { stepDrafts: { p1: 'Call vendor for quote' } };
+  const keep = new Function('state', 'msgBoxLeft', fnSrc + '; return keepTypedStep;')(state, msgBoxLeft);
+  assert.equal(keep('p1', 'Order servo motor'), 'Call vendor for quote', 'the next step typed meanwhile stays');
+  assert.equal(state.stepDrafts.p1, 'Call vendor for quote');
+  state.stepDrafts.p1 = 'Order servo motor ';
+  assert.equal(keep('p1', 'Order servo motor'), '', 'just what went: emptied');
+  assert.ok(!('p1' in state.stepDrafts), 'the draft is gone');
+  state.stepDrafts.p1 = 'Order servo motor\tCall vendor';
+  assert.equal(keep('p1', 'Order servo motor'), 'Call vendor', 'typed on after the sent words: only the later words stay');
+  const form = APP.slice(APP.indexOf('function addStepForm('), APP.indexOf('/** Manager, top of Team today'));
+  assert.ok(!/delete state\.stepDrafts\[ref\]/.test(form), 'the draft is never simply wiped after a send');
+  assert.ok(!/inp\.value = '';/.test(form), 'the box is never simply emptied');
+  assert.match(form, /await api\('project\.addStep'[^]*const left = keepTypedStep\(ref, title\);[^]*inp\.value = left;/, 'online');
+  assert.match(form, /await queue\(\{ kind: 'step'[^\n]*inp\.value = keepTypedStep\(ref, title\);/, 'kept on the phone');
+});
+
+test('review: the one-line "Give it" box keeps a line typed while task.save was sending; only the given line is cleared', () => {
+  const fn = APP.slice(APP.indexOf('function quickBox('), APP.indexOf('// ---------- manager: team today'));
+  assert.match(fn, /const sent = box\.value\.trim\(\);[^\n]*\n\s*try \{\n\s*const out = await api\('task\.save'/, 'the line given, read at the tap');
+  assert.match(fn, /if \(q\.text\.trim\(\) === sent\) \{ state\.quick = null; box\.value = ''; box\.dataset\.init = ''; card\.replaceChildren\(\); \}/, 'cleared only when the box still holds just that line');
+  assert.ok(!/\n\s*state\.quick = null; box\.value = '';/.test(fn), 'never cleared unconditionally');
+});
+
+test('review: a given-back step never overwrites the words being typed in the Add a step box; the notice then says to copy them', () => {
+  const src = APP.slice(APP.indexOf('function giveBack(it, why) {'), APP.indexOf('/** What a waiting item belongs to'));
+  const run = (drafts) => {
+    const state = { drafts: {}, editing: {}, files: {}, stepDrafts: drafts, user: { id: 3 } };
+    const shown = [];
+    const giveBack = new Function('state', 'myProjects', 'giveBackShow', 'boxStillThere', 'knownTask', 'notice', 'toast', src + '; return giveBack;')(
+      state, () => [{ ref: 'p1' }], giveBackShow, () => true, () => null, (k, title, body) => shown.push(body), (t) => shown.push(t));
+    giveBack({ kind: 'step', projectRef: 'p1', title: 'Order servo motor' }, 'Busy.');
+    return { state, body: shown[0] };
+  };
+  const typing = run({ p1: 'Call vendor for quote' });
+  assert.equal(typing.state.stepDrafts.p1, 'Call vendor for quote', 'the words being typed stay');
+  assert.match(typing.body, /Order servo motor/, 'the old step is shown to copy');
+  assert.ok(!/back in the Add a step box/.test(typing.body), 'never claims it is back in the box');
+  assert.match(typing.body, /Copy them if you need them/);
+  const empty = run({});
+  assert.equal(empty.state.stepDrafts.p1, 'Order servo motor', 'an empty box gets the old step back');
+  assert.match(empty.body, /back in the Add a step box/);
 });

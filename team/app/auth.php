@@ -105,11 +105,15 @@ function change_password(array $me, string $old, string $new): void {
   // the same limits as signing in, so a phone left signed in cannot be used to guess the password
   $keys = ['u:' . $me['username'] . '|' . client_ip(), 'u:' . $me['username'], 'ip:' . client_ip()];
   if (locked($me['username'])) throw too_many();
-  if (!password_verify($old, $me['pass_hash'])) {
-    foreach ($keys as $k) q('INSERT INTO login_fails (k, at) VALUES (?, ?)', [$k, now()]);
-    throw new ApiError('Your current password is not right.');
+  // count this try first (as login() does), so tries sent at the same moment all count; taken off again if right
+  $ids = [];
+  foreach ($keys as $k) {
+    q('INSERT INTO login_fails (k, at) VALUES (?, ?)', [$k, now()]);
+    $ids[] = (int)db()->lastInsertId();
   }
-  q('DELETE FROM login_fails WHERE k IN (?, ?)', [$keys[0], $keys[1]]);
+  if (locked($me['username'], 1)) throw too_many();
+  if (!password_verify($old, $me['pass_hash'])) throw new ApiError('Your current password is not right.');
+  q('DELETE FROM login_fails WHERE k IN (?, ?) OR id = ?', [$keys[0], $keys[1], $ids[2]]);
   check_password_rules($new);
   if ($old === $new) throw new ApiError('Choose a new password, not the same one.');
   q('UPDATE users SET pass_hash = ?, must_change = 0 WHERE id = ?', [password_hash($new, PASSWORD_DEFAULT), $me['id']]);

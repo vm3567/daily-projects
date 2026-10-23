@@ -100,7 +100,7 @@ export const boxStillThere = (task, userId) => !!task && task.status === 'open' 
 export function updateSaveBody({ taskId, note, state, clientId, day, writtenAt, finish = false }) {
   const b = { taskId, note, state: finish ? 'finished' : state };
   if (day) b.day = day;
-  if (writtenAt && !finish) b.writtenAt = writtenAt;
+  if (writtenAt && !finish) { b.writtenAt = writtenAt; b.sentAt = new Date().toISOString(); } // (sentAt: the server puts a wrong phone clock right)
   if (clientId) b.clientId = finish ? clientId + '-f' : clientId;
   return b;
 }
@@ -154,6 +154,13 @@ export function giveBackShow(it, why, boxThere) {
   return { sticky: false, text: `Could not send "${words.slice(0, 60)}": ${reason}.`, ms: 10000 };
 }
 
+/** A waiting update the server kept out (a newer update of theirs for that day stays): its words, to copy; null if the same. */
+export function olderShow(it, saved) {
+  const words = String(it.note || '');
+  if (!words.trim() || words === String((saved && saved.note) || '')) return null;
+  return { title: 'Not saved: a newer update for that day is already there.', body: `Your words:\n${words}\n\nCopy them if you need them.` };
+}
+
 /** The notice that stays: each refused item is added under the earlier ones (a second one never wipes the first). */
 export const keptNotice = (list) => (list.length === 1 ? { title: list[0].title, body: list[0].body }
   : { title: `Could not send ${list.length} items.`, body: list.map((x) => `${x.title}\n${x.body}`).join('\n\n———\n\n') });
@@ -167,6 +174,16 @@ export const pasteWaits = (outbox, taskId, editing) => !editing && (outbox || []
 /** A photo message went: the box is emptied only if it still holds just the words that went with the photo (more typed since: kept). */
 export const msgBoxSent = (boxValue, sentText) => String(sentText || '') !== '' && boxValue === sentText;
 
+/** A message sent (or queued) while the person kept typing: what stays in the box (the words typed after the sent ones). */
+export function msgBoxLeft(draft, sentText) {
+  const d = String(draft || ''), t = String(sentText || '');
+  if (!t || d === t) return '';
+  return d.startsWith(t) ? d.slice(t.length).replace(/^\s+/, '') : d;
+}
+
+/** An update sent (or queued) while the person kept typing in its box: the words to keep in the box, opened again as a change ('' = just what went). */
+export const updateBoxLeft = (draftNote, sentNote) => { const d = String(draftNote || ''); return d.trim() && d !== String(sentNote || '') ? d : ''; };
+
 /** An update Send whose button was redrawn meanwhile: redraw (the new Send button is no longer grey) if the task is still open, on any list. */
 export const redrawAfterSend = ({ view = '', sel = '', taskId }) => view === 'today' || sel === 'task:' + taskId;
 
@@ -175,6 +192,15 @@ export function taskSaveBody(fields, clientId) {
   const b = { ...fields };
   if (!b.id && clientId) b.clientId = clientId;
   return b;
+}
+
+/**
+ * The clientId of a Give a task: the same task given again after a failed try keeps its id (the server makes it once),
+ * even when the form was drawn again in between; anything changed gets a new id. saved: { id, words } or null.
+ */
+export function giveId(saved, fields, make) {
+  const words = JSON.stringify(fields);
+  return saved && saved.words === words ? saved : { id: make(), words };
 }
 
 /** Words safe to put inside HTML (names, titles and notes are typed by people). */
@@ -371,6 +397,7 @@ export function roundMark(saved, key, what, today) {
 const QT_MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
 const QT_DAYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
 const QT_PRE = '(?:\\b(?:by|on|before|till|until|due|this|next|coming)\\s+)?';
+const QT_PRE_WORD = /^\s*(?:by|on|before|till|until|due|this|next|coming)\s/i;
 /** 'YYYY-MM-DD' for that day, or '' if there is no such day (30 Feb). */
 const realDay = (y, m, d) => {
   const x = new Date(Date.UTC(y, m - 1, d));
@@ -392,9 +419,9 @@ const QT_DATES = [
   [/\b(?:by|before|till|until|due)?\s*next week\b/i, (m, today) => addDay(today, (1 - weekdayOf(today) + 7) % 7 || 7)],
   [/\b(?:by|before|till|until|due)?\s*in (\d{1,2}) days?\b/i, (m, today) => addDay(today, Number(m[1]))],
   [new RegExp(QT_PRE + '\\b(\\d{1,2})(?:st|nd|rd|th)?\\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\\.?(?:\\s+(\\d{4}))?\\b', 'i'),
-    (m, today) => comingDay(today, QT_MONTHS.indexOf(m[2].toLowerCase()) + 1, Number(m[1]), m[3] ? Number(m[3]) : 0)],
+    (m, today) => comingDay(today, QT_MONTHS.indexOf(m[2].toLowerCase()) + 1, Number(m[1]), m[3] ? Number(m[3]) : 0), true],
   [new RegExp(QT_PRE + '\\b(\\d{1,2})[/-](\\d{1,2})(?:[/-](\\d{4}|\\d{2}))?\\b', 'i'), // dd/mm (India)
-    (m, today) => comingDay(today, Number(m[2]), Number(m[1]), m[3] ? Number(m[3]) : 0)],
+    (m, today) => comingDay(today, Number(m[2]), Number(m[1]), m[3] ? Number(m[3]) : 0), true],
   [new RegExp(QT_PRE + '\\b(sunday|monday|tuesday|wednesday|thursday|friday|saturday)\\b', 'i'), (m, today) => nextWeekday(today, m[1])],
   // short names only after by / on … ("check sun dryer" is not a date)
   [/\b(?:by|on|before|till|until|due|this|next|coming)\s+(sun|mon|tues|tue|wed|thurs|thur|thu|fri|sat)\b\.?/i, (m, today) => nextWeekday(today, m[1])],
@@ -423,8 +450,11 @@ export function parseQuickTask(text, people, today) {
   if (hits.length > 1) return { ...out, error: `"${who}" could be ${hits.map((p) => p.name).join(' or ')}. Type more of the name.` };
   if (!hits.length) return { ...out, error: "Who should do it? Start with their name, like 'Valar: …'" };
   out.person = { id: hits[0].id, name: hits[0].name };
-  for (const [re, when] of QT_DATES) {
-    const all = [...rest.matchAll(new RegExp(re.source, 'gi'))];
+  for (const [re, when, num] of QT_DATES) {
+    // a date in numbers ("24/10", "2 May") counts after by / on … or at the very end; in the middle it is a
+    // quantity or a size ("3/4 inch valve", "2-3 bags", "2 may photos")
+    const all = [...rest.matchAll(new RegExp(re.source, 'gi'))].filter((x) => !num || QT_PRE_WORD.test(x[0])
+      || !rest.slice(x.index + x[0].length).replace(/[\s.,;:!?)]+/g, ''));
     const m = all[all.length - 1]; // the last one: the date is usually at the end ("Sunday cleaning by Sunday")
     if (!m) continue;
     const day = when(m, today);

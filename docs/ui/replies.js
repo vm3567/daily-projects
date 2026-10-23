@@ -16,11 +16,12 @@ function mailLink(m, label = 'Open email ↗') {
   return h('a', { class: 'tag link-chip', href: url, target: '_blank', rel: 'noopener noreferrer', title: m.link.title || url, key: 'ml-' + m.key }, label);
 }
 
+const replyTimers = {}; // one save timer per reply box, kept across screen updates (a late save must not bring back a sent or cleared reply)
+
 /** The reply text box: saves by itself after a short pause, and when leaving the box (by 'you'). */
 function replyText(ctx, m, extra = {}) {
-  let timer = null;
   const save = (el) => {
-    clearTimeout(timer);
+    clearTimeout(replyTimers[m.key]);
     const text = el.value;
     if (!text.trim() || (m.reply && m.reply.state !== 'sent' && m.reply.text === text)) return; // empty: kept as it was (✕ Clear throws it away)
     ctx.store.dispatch('setReply', { ...m.ref, text, by: 'you' });
@@ -29,7 +30,10 @@ function replyText(ctx, m, extra = {}) {
     class: 'reply-text', rows: 7, maxlength: REPLY_MAX, key: 'reply-' + m.key, 'aria-label': `Reply to ${m.from}`,
     placeholder: `Dear Mr. ${m.from.split(/\s+/)[0]},\n\n…\n\nThank you.`, // the owner's style; Outlook adds "Thanks & Regards," and the signature
     value: m.reply && m.reply.state !== 'sent' ? m.reply.text : '',
-    onInput: (e, el) => { clearTimeout(timer); timer = setTimeout(() => save(el), 900); },
+    onInput: (e, el) => {
+      clearTimeout(replyTimers[m.key]);
+      replyTimers[m.key] = setTimeout(() => { if (el.isConnected !== false) save(el); }, 900); // not for a box no longer on the page
+    },
     onChange: (e, el) => save(el),
     onFocusout: (e, el) => save(el),
     ...extra,
@@ -45,6 +49,7 @@ function focusReply(m) {
 function markSent(ctx, m) {
   const before = m.reply && m.reply.state !== 'sent' ? { ...m.reply } : null;
   const workDate = m.project ? m.project.workDate || null : null;
+  clearTimeout(replyTimers[m.key]);
   const op = ctx.store.dispatch('markReplySent', m.ref);
   if (!op) return false;
   // Undo takes it all back: the draft, the "Reply sent" line and the day counted as work
@@ -55,6 +60,7 @@ function markSent(ctx, m) {
 }
 
 function later(ctx, m) {
+  clearTimeout(replyTimers[m.key]);
   if (!ctx.store.dispatch('replyLater', m.ref)) return false;
   ctx.toast('⏭ Later — it comes back tomorrow', 2500);
   return true;
@@ -62,6 +68,7 @@ function later(ctx, m) {
 
 function clearIt(ctx, m) {
   const old = m.reply && m.reply.text;
+  clearTimeout(replyTimers[m.key]);
   if (!ctx.store.dispatch('clearReply', m.ref)) return;
   if (ctx.ui.replyOpen === m.key) ctx.ui.replyOpen = null;
   ctx.toast('Reply cleared', 5000, old ? () => ctx.store.dispatch('setReply', { ...m.ref, text: old, by: 'you' }) : null);

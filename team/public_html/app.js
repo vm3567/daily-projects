@@ -1,7 +1,7 @@
 // Work Task: the team app. Staff see and fill their own tasks; the manager gives tasks and sees everything.
 // No outside libraries. All text from the server is put on screen as text (never as HTML).
 
-import { addDay, weekdayOf, dueOn, itemKey, diaryRows, fieldChanged, lateValue, afterFlush, boxStillThere, updateSaveBody, redrawHow, projectRowState, aboutShort, projectAboutOf, giveBackShow, keptNotice, noticeHow, pasteWaits, msgBoxSent, redrawAfterSend, taskSaveBody, morningMail, morningOrder, morningSummary, morningTitle, morningLast, mailDate, sentTag, sentTime, followupRows, followupGroups, followupSummary, roundKey, roundPlan, roundMark, parseQuickTask, outlookLine, emailPath, pasteReason } from './logic.js'; // the rules (checked in tests/team-app.test.mjs)
+import { addDay, weekdayOf, dueOn, itemKey, diaryRows, fieldChanged, lateValue, afterFlush, boxStillThere, updateSaveBody, redrawHow, projectRowState, aboutShort, projectAboutOf, giveBackShow, olderShow, keptNotice, noticeHow, pasteWaits, msgBoxSent, msgBoxLeft, updateBoxLeft, redrawAfterSend, taskSaveBody, giveId, morningMail, morningOrder, morningSummary, morningTitle, morningLast, mailDate, sentTag, sentTime, followupRows, followupGroups, followupSummary, roundKey, roundPlan, roundMark, parseQuickTask, outlookLine, emailPath, pasteReason } from './logic.js'; // the rules (checked in tests/team-app.test.mjs)
 
 const TOKEN_KEY = 'wt.token';
 const state = {
@@ -169,8 +169,11 @@ async function sendItem(it, tok) {
     const twoSteps = it.state === 'finished' && it.needsPhoto && it.files && it.files.length && !it.hadPhoto;
     const out = await api('update.save', updateSaveBody({ taskId: it.taskId, note: it.note, state: twoSteps ? 'progress' : it.state, day, writtenAt: it.at, clientId: it.clientId })); // (a resend after a lost answer = the same save)
     it.updateId = out.update.id; it.thenFinish = !!twoSteps && !out.history;
+    it.day = out.update.day; // the day the server saved it for (it puts a wrong phone date right)
     if (twoSteps) it.note = out.update.note; // keep the earlier person's words (after a move) for the Finished save
     if (out.history === 'merged' || out.history === 'older') { // kept as words only (the task moved on, or a newer update of theirs stays)
+      const kept = out.history === 'older' ? olderShow(it, out.update) : null; // its words are not lost without a word
+      if (kept) notice('stuck', kept.title, kept.body, null, { stay: true, copy: true });
       if ((it.files || []).length) toast('The photos of a late update were not added: the task has a newer update now.', 7000);
       it.files = [];
     }
@@ -189,7 +192,7 @@ async function sendItem(it, tok) {
     await keep(it);
   }
   mine();
-  if (it.thenFinish) await api('update.save', updateSaveBody({ taskId: it.taskId, note: it.note, day, clientId: it.clientId, finish: true }));
+  if (it.thenFinish) await api('update.save', updateSaveBody({ taskId: it.taskId, note: it.note, day: it.day || day, clientId: it.clientId, finish: true })); // (the same day as the first save)
 }
 
 let flushP = null;
@@ -216,8 +219,9 @@ function giveBack(it, why) {
     state.drafts[it.taskId] = { note: it.note, state: it.state }; state.editing[it.taskId] = true;
     if ((it.files || []).length) state.files[it.taskId] = it.files.slice(0, 5);
   }
-  else if (it.kind === 'step') { (state.stepDrafts ||= {})[it.projectRef] = it.title; }
-  const boxThere = it.kind === 'step' ? myProjects().some((p) => p.ref === it.projectRef) // (taken back or moved: no Add a step box)
+  let typing = false; // the Add a step box holds other words being typed: they stay, the old step is only shown to copy
+  if (it.kind === 'step') { if (!(state.stepDrafts ||= {})[it.projectRef]) state.stepDrafts[it.projectRef] = it.title; else typing = state.stepDrafts[it.projectRef] !== it.title; }
+  const boxThere = it.kind === 'step' ? !typing && myProjects().some((p) => p.ref === it.projectRef) // (taken back or moved: no Add a step box)
     : it.kind === 'suggest' ? false : boxStillThere(knownTask(it.taskId), state.user && state.user.id);
   const show = giveBackShow(it, why, boxThere); // (the rule: logic.js)
   if (show.sticky) notice('stuck', show.title, show.body, null, { stay: true, copy: true });
@@ -795,6 +799,13 @@ function waitingSteps(ref) {
     el('span', { class: 'prow-text' }, el('span', { class: 'prow-name' }, x.title), el('span', { class: 'prow-next' }, '⏳ Waiting to send')))))) : null;
 }
 
+/** A step went (or waits on this phone): its words leave the Add a step box; what was typed while it was sending stays. */
+function keepTypedStep(ref, title) {
+  const left = msgBoxLeft(((state.stepDrafts ||= {})[ref] || '').trim(), title);
+  if (left) state.stepDrafts[ref] = left; else delete state.stepDrafts[ref];
+  return left;
+}
+
 function addStepForm(ref) {
   const inp = el('input', { placeholder: 'e.g. Order the spare servo motor', maxlength: '300', 'aria-label': 'New step', value: (state.stepDrafts || {})[ref] || '',
     onInput: (e) => { (state.stepDrafts ||= {})[ref] = e.target.value; } }); // kept across redraws until added
@@ -811,14 +822,14 @@ function addStepForm(ref) {
       const clientId = ids[ref].id;
       try {
         await api('project.addStep', { projectRef: ref, title, clientId });
-        delete state.stepCid[ref]; if (state.stepDrafts) delete state.stepDrafts[ref];
+        delete state.stepCid[ref]; const left = keepTypedStep(ref, title);
         toast('➕ Step added. Your manager sees it in the project too.');
-        inp.value = ''; inp.blur();
-        render(); // (the box is empty again: the list below may redraw)
+        inp.value = left; if (!left) inp.blur();
+        render(); // (the box is empty again, or holds only what was typed meanwhile: the list below may redraw)
         await loadList();
       } catch (ex) {
         if (ex instanceof OfflineError) {
-          try { await queue({ kind: 'step', projectRef: ref, title, clientId }); delete state.stepCid[ref]; if (state.stepDrafts) delete state.stepDrafts[ref]; inp.value = ''; toast('📴 Saved on this phone — it will be added when you are online', 5000); render(); return; }
+          try { await queue({ kind: 'step', projectRef: ref, title, clientId }); delete state.stepCid[ref]; inp.value = keepTypedStep(ref, title); toast('📴 Saved on this phone — it will be added when you are online', 5000); render(); return; }
           catch { /* could not keep it */ }
         }
         toast(ex.message, 6000); btn.disabled = false;
@@ -1322,6 +1333,12 @@ async function addTaskPhotos(t, files, direct) {
     render();
 }
 
+/** An update went (or waits on this phone): words typed in its box meanwhile stay, the box open as a change (the rule: logic.js). */
+function keepTypedUpdate(taskId, d, sentNote) {
+  const left = updateBoxLeft(d.note, sentNote);
+  if (left) { state.drafts[taskId] = { note: left, state: d.state }; state.editing[taskId] = true; } else { delete state.drafts[taskId]; delete state.editing[taskId]; }
+}
+
 function updateForm(t) {
   const d = (state.drafts[t.id] ||= { note: '', state: 'progress' });
   const err = el('p', { class: 'err small', hidden: true });
@@ -1338,15 +1355,19 @@ function updateForm(t) {
     const twoSteps = d.state === 'finished' && t.needsPhoto && files.length && !hadPhoto;
     const cid = newClientId(); // the same id online and in the outbox: a photo whose reply was lost is not kept twice
     let updateId = 0; // set once the update itself is on the server
+    let sentNote = d.note; // what goes (the box stays open: words typed while sending are kept, never wiped)
     try {
-      const out = await api('update.save', updateSaveBody({ taskId: t.id, note: d.note, state: twoSteps ? 'progress' : d.state, clientId: cid })); // (a timed-out save then queued is the same save)
+      const out = await api('update.save', updateSaveBody({ taskId: t.id, note: sentNote, state: twoSteps ? 'progress' : d.state, clientId: cid })); // (a timed-out save then queued is the same save)
       updateId = out.update.id;
-      if (twoSteps) d.note = out.update.note; // after a move the server put the earlier person's words above: keep them for the Finished save
+      if (twoSteps) { // after a move the server put the earlier person's words above: keep them for the Finished save
+        if (d.note.startsWith(sentNote)) d.note = out.update.note + d.note.slice(sentNote.length);
+        sentNote = out.update.note;
+      }
       const left = files.length ? await uploadPhotos(updateId, files, cid) : [];
       if (left.length) throw Object.assign(new OfflineError('offline'), { left, sentPhotos: files.length - left.length });
       if (files.length) { files.length = 0; delete state.files[t.id]; d.photosSent = true; } // the photos went: a second Send only repeats the last step
-      if (twoSteps) await api('update.save', updateSaveBody({ taskId: t.id, note: d.note, clientId: cid, finish: true }));
-      delete state.drafts[t.id]; delete state.files[t.id]; delete state.editing[t.id];
+      if (twoSteps) await api('update.save', updateSaveBody({ taskId: t.id, note: sentNote, clientId: cid, finish: true }));
+      keepTypedUpdate(t.id, d, sentNote); delete state.files[t.id];
       toast('Sent ✓');
       if (document.contains(btn) || !formHasText()) render(); // the empty box at once (a box still holding the sent words would count as "typing" and hold back the reload)
       else state.reloadLater = true; // another form was opened and typed in meanwhile: never wipe it
@@ -1357,14 +1378,14 @@ function updateForm(t) {
         for (const f of updateId ? ex.left || [] : files) blobs.push(await shrink(f));
         // only what did not go yet: the photos left, then "finished"
         try {
-          await queue(updateId ? { kind: 'photos', taskId: t.id, updateId, note: d.note, state: d.state, thenFinish: !!twoSteps, files: blobs, clientId: cid, photoNo: ex.sentPhotos || 0 }
-            : { kind: 'update', taskId: t.id, note: d.note, state: d.state, needsPhoto: !!t.needsPhoto, hadPhoto, files: blobs, clientId: cid });
+          await queue(updateId ? { kind: 'photos', taskId: t.id, updateId, note: sentNote, state: d.state, thenFinish: !!twoSteps, files: blobs, clientId: cid, photoNo: ex.sentPhotos || 0 }
+            : { kind: 'update', taskId: t.id, note: sentNote, state: d.state, needsPhoto: !!t.needsPhoto, hadPhoto, files: blobs, clientId: cid });
         } catch { // could not keep it on the phone (storage full or blocked): the text stays in the box
           delete state.sending[t.id];
           render(); toast(KEEP_FAIL, 6000);
           return;
         }
-        delete state.drafts[t.id]; delete state.files[t.id]; delete state.editing[t.id];
+        keepTypedUpdate(t.id, d, sentNote); delete state.files[t.id];
         delete state.sending[t.id];
         toast('📴 Saved on this phone — it will be sent when you are online', 5000);
         render();
@@ -1404,6 +1425,12 @@ function messageLine(t) {
     el('span', { class: 'muted small' }, ` · ${fmtDay(m.at)} ${fmtTime(m.at)}${t.messages > 1 ? ` · ${t.messages} messages` : ''} · reply`));
 }
 
+/** A message went (or waits on this phone): its words leave the box; what was typed while it was sending stays. */
+function keepTypedAfter(taskId, text) {
+  const left = msgBoxLeft(state.drafts['m' + taskId], text);
+  if (left) state.drafts['m' + taskId] = left; else delete state.drafts['m' + taskId];
+}
+
 function messagesBlock(taskId, comments) {
   const err = el('p', { class: 'err small', hidden: true });
   const box = el('textarea', { placeholder: state.user.role === 'admin' ? 'Reply or give an instruction…' : 'Ask or reply to your manager…', value: state.drafts['m' + taskId] || '', onInput: (e) => { state.drafts['m' + taskId] = e.target.value; err.hidden = true; } });
@@ -1420,7 +1447,7 @@ function messagesBlock(taskId, comments) {
     try {
       const out = await api('comment.add', { taskId, text, clientId: cid });
       delete state.msgCid[key];
-      delete state.drafts['m' + taskId]; delete state.sending[key]; // before the redraw, so the new button is not greyed out
+      keepTypedAfter(taskId, text); delete state.sending[key]; // before the redraw, so the new button is not greyed out
       toast('Sent ✓');
       // only if this task is still open on screen (the user may have gone to another one)
       if (state.sel === 'task:' + taskId && state.detail && state.detail.task && state.detail.task.id === taskId) { state.detail.comments = out.comments; render(); }
@@ -1428,7 +1455,7 @@ function messagesBlock(taskId, comments) {
       if (ex instanceof OfflineError) {
         try { await queue({ kind: 'comment', taskId, text, clientId: cid }); delete state.msgCid[key]; }
         catch { delete state.sending[key]; render(); toast(KEEP_FAIL, 6000); return; } // the text stays in the box
-        delete state.drafts['m' + taskId]; delete state.sending[key]; // empty the box, so a second tap does not send it twice
+        keepTypedAfter(taskId, text); delete state.sending[key]; // the sent words leave the box, so a second tap does not send them twice
         toast('📴 Saved on this phone — it will be sent when you are online', 5000);
         render();
         return;
@@ -1488,7 +1515,7 @@ async function sendMsgPhoto(taskId, f, text, box) {
     const out = await api('comment.photo', fd, true);
     sent = true;
     delete ids[key];
-    delete state.drafts[key];
+    if (text) keepTypedAfter(taskId, text); // the words that went leave the draft; what was typed meanwhile stays (no words: it is all typed after)
     toast('Sent ✓');
     if (state.sel === 'task:' + taskId && state.detail) state.detail.comments = out.comments;
   } catch (ex) { toast(ex instanceof OfflineError ? 'Photos in messages need the internet. Try again when online.' : ex.message, 6000); }
@@ -1496,6 +1523,7 @@ async function sendMsgPhoto(taskId, f, text, box) {
     delete state.sending[key];
     // the box still holds just the words that went: empty it, so it is not "typing" and a second tap cannot send them twice (the rule: logic.js)
     if (sent && box && document.contains(box) && msgBoxSent(box.value, text)) { box.value = ''; box.dataset.init = ''; }
+    else if (sent && box && document.contains(box) && text) box.value = msgBoxLeft(box.value, text); // typed on meanwhile: only the later words stay, so the caption is not sent twice
     if (!formHasText()) render(); else state.reloadLater = true; // (a form opened meanwhile is not wiped)
   }
 }
@@ -1694,9 +1722,10 @@ function quickBox(people) {
     if (q.sig !== sig) { q.sig = sig; q.cid = newClientId(); } // one id per preview: a second tap gives the task once
     const give = el('button', { class: 'primary', onClick: async () => {
       give.disabled = true;
+      const sent = box.value.trim(); // the line given (typed on meanwhile: the new words stay)
       try {
         const out = await api('task.save', taskSaveBody({ assigneeId: r.person.id, title: r.title, details: '', project: '', repeat: 'once', skipSunday: true, dueDate: r.dueDate }, q.cid));
-        state.quick = null; box.value = ''; box.dataset.init = ''; card.replaceChildren(); // (an empty box is not "typing")
+        if (q.text.trim() === sent) { state.quick = null; box.value = ''; box.dataset.init = ''; card.replaceChildren(); } // (an empty box is not "typing")
         notice('update', `Given to ${out.task.assignee.name} ✓`, r.title + (r.dueDate ? ` · by ${fmtDay(r.dueDate)}` : ''), () => openDetail('task:' + out.task.id));
         if (state.view === 'followup' || state.view === 'today' || state.view === 'tasks') loadList();
       } catch (ex) { toast(ex.message, 5000); give.disabled = false; }
@@ -1998,17 +2027,20 @@ function taskForm() {
   how.addEventListener('change', sync);
   sync();
   const btn = el('button', { class: 'primary', type: 'submit' }, editing ? 'Save' : 'Give task');
-  const formId = editing ? '' : newClientId(); // one per form: a second tap after a lost answer gives the task once
   return [
     el('form', { class: 'card stack', onSubmit: async (e) => {
       e.preventDefault();
       err.hidden = true; btn.disabled = true;
       try {
-        const out = await api('task.save', taskSaveBody({
+        const fields = {
           id: t ? t.id : 0, assigneeId: Number(person.value), title: title.value, details: details.value, project: project.value,
           repeat: how.value === 'daily7' ? 'daily' : how.value, skipSunday: how.value === 'daily' || (how.value === 'once' && (!t || t.skipSunday)), weekday: Number(weekday.value), dueDate: due.value,
           projectRef: t ? t.projectRef : pre.projectRef, stepRef: t ? t.stepRef : pre.stepRef, needsPhoto: needsPhoto.checked, startDate: start.value || (t && t.startDate && t.startDate > todayIs ? todayIs : ''),
-        }, formId));
+        };
+        // kept in state, not in the form: a second tap after a lost answer gives the task once, even after a redraw
+        const formId = editing ? '' : (state.giveCid = giveId(state.giveCid, fields, newClientId)).id;
+        const out = await api('task.save', taskSaveBody(fields, formId));
+        state.giveCid = null; // given: the next task gets a new id
         if (files.files.length) await uploadTaskFiles(out.task.id, [...files.files].slice(0, 10));
         const fromProjects = !editing && pre.stepRef && state.user.owner;
         state.prefill = null;

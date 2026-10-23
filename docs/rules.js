@@ -409,6 +409,16 @@ export function todayWithoutEmptyMains(list, today = todayIndia()) {
   return list.filter((p) => !((p.isMain || parents.has(p.id)) && !nextStep(p, today)));
 }
 
+/** What Today counts (its rows, the progress line, the Daily round, the evening check): awake, empty 📂 projects left out. */
+export function todayList(data, today = todayIndia()) {
+  return todayWithoutEmptyMains(awakeProjects(data, today), today);
+}
+
+/** Where a new step can go (Inbox, Chrome clip, a person's task box): awake tasks only — a 📂 project holds tasks, not steps. */
+export function stepTargets(data, today = todayIndia()) {
+  return awakeProjects(data, today).filter((p) => !isMainProject(data, p));
+}
+
 // ---------- People (@mentions) ----------
 
 const WORD_CHAR = /[\p{L}\p{N}_]/u;
@@ -588,6 +598,20 @@ export function fmtMinutes(m) {
   const h = Math.floor(m / 60);
   const r = Math.round(m % 60);
   return h ? (r ? `${h}h ${r}m` : `${h}h`) : `${r}m`;
+}
+
+/** A "+ Add time" answer in minutes, or null when it is not understood: 45, 45m, 45 min, 1.5h, 2 hours, 1h 30m, 1:30. */
+export function parseDuration(v) {
+  const t = String(v ?? '').trim().toLowerCase();
+  const n = '(\\d+(?:\\.\\d+)?|\\.\\d+)';
+  const mins = '(?:m|min|mins|minute|minutes)';
+  let m;
+  let out = null;
+  if ((m = /^(\d+):([0-5]\d)$/.exec(t))) out = +m[1] * 60 + +m[2];
+  else if ((m = new RegExp(`^${n}\\s*(?:h|hr|hrs|hour|hours)(?:\\s*${n}\\s*${mins}?)?$`).exec(t))) out = +m[1] * 60 + (m[2] ? +m[2] : 0);
+  else if ((m = new RegExp(`^${n}\\s*${mins}?$`).exec(t))) out = +m[1];
+  out = Math.round(out); // anything left over (like "2 apples") matched nothing: null → 0
+  return Number.isFinite(out) && out > 0 ? out : null;
 }
 
 /** Monday of the India week that contains `day`. */

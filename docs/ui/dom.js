@@ -70,11 +70,13 @@ export function morph(from, to) {
   // Styles are copied through the style object: the page's safety rules (CSP) block style attributes.
   if (from.style && from.style.cssText !== to.style.cssText) from.style.cssText = to.style.cssText;
   from.__on = to.__on;
-  // form values: never touch the box being typed in
+  // form values: never touch what is being typed in the focused box
   const focused = from === document.activeElement;
   if ('__value' in to) { // only boxes the app controls; never wipe a draft the user is typing
     const v = to.__value;
-    if (!focused && from.value !== v) from.value = v;
+    // a focused box not typed in since it was drawn takes the newer text too (another device's change), so leaving it
+    // never saves its old text over that change
+    if (from.value !== v && (!focused || from.value === from.__value)) from.value = v;
     from.__value = v;
   }
   if (from.nodeName === 'INPUT' && (from.type === 'checkbox' || from.type === 'radio')) from.checked = to.hasAttribute('checked');

@@ -73,8 +73,13 @@ function conn_item_out(array $it, array $c): array {
     'id' => (int)$it['id'], 'connId' => (int)$it['conn_id'], 'app' => $c['name'], 'externalId' => $it['external_id'], 'kind' => $it['kind'],
     'title' => $it['title'], 'details' => $it['details'] ?? '', 'link' => $it['link'] ?? '', 'fields' => conn_fields_of($it['fields']),
     'status' => $it['status'], 'reason' => $it['reason'] ?? '', 'decidedAt' => $it['decided_at'], 'createdAt' => $it['created_at'],
-    'updatedAt' => $it['updated_at'], 'delivery' => conn_delivery($it, $c),
+    'updatedAt' => $it['updated_at'], 'delivery' => conn_delivery($it, $c), 'version' => conn_version($it),
   ];
+}
+
+/** Which words of an item the owner saw (title, details, link, fields): conn.decide sends it back, so a change made by the app meanwhile is never decided unseen. */
+function conn_version(array $it): string {
+  return substr(hash('sha256', json_encode([$it['title'], $it['details'] ?? '', $it['link'] ?? '', $it['fields'] ?? ''], JSON_UNESCAPED_UNICODE)), 0, 16);
 }
 
 // ---------------------------------------------------------------- what the app sends
@@ -108,6 +113,13 @@ function conn_app(): array {
   return $c;
 }
 
+/** The app's id for an item: refused when too long (cut, two ids sharing their first 100 letters would be one item). */
+function conn_ext(array $in): string {
+  $ext = txt($in['external_id'] ?? '', 1000, true, 'external_id');
+  if (mb_strlen($ext) > 100) throw new ApiError('external_id is too long (at most 100 letters).');
+  return $ext;
+}
+
 /** connect.* (the app side). Returns null when `a` is not one of them. */
 function conn_app_handle(string $a, array $in): ?array {
   if (!str_starts_with($a, 'connect.')) return null;
@@ -116,7 +128,7 @@ function conn_app_handle(string $a, array $in): ?array {
     case 'connect.push':
       return conn_push($c, $in);
     case 'connect.withdraw': {
-      $ext = txt($in['external_id'] ?? '', 100, true, 'external_id');
+      $ext = conn_ext($in);
       $it = one('SELECT * FROM conn_items WHERE conn_id = ? AND external_id = ?', [$c['id'], $ext]);
       if (!$it) throw new ApiError('Nothing with that external_id.', 404);
       return conn_withdraw($c, $it);
@@ -151,7 +163,7 @@ function conn_app_handle(string $a, array $in): ?array {
 
 /** connect.push: a new item, or the same external_id again = an update (a decided item is not opened again). */
 function conn_push(array $c, array $in): array {
-  $ext = txt($in['external_id'] ?? '', 100, true, 'external_id');
+  $ext = conn_ext($in);
   $kind = (string)($in['kind'] ?? '');
   if (!in_array($kind, ['task', 'approval'], true)) throw new ApiError('kind must be "task" or "approval".');
   $title = txt($in['title'] ?? '', 200, true, 'title');
@@ -180,13 +192,24 @@ function conn_push(array $c, array $in): array {
   // a task: what changed goes to that task as a note (never a second task)
   $changes = conn_changes($old, $title, $details, $link, $fields);
   // the note first, the saved words after: a note that could not be written is written when the app sends it again
-  if ($old['dp_task_id'] && $changes && !conn_task_note($old['dp_task_id'], "🔌 {$c['name']} updated this:\n" . implode("\n", $changes), $c['name'], $link))
+  // (the link chip is touched only when the link changed: '' takes it away)
+  $chip = ($old['link'] ?? '') !== $link ? $link : null;
+  $note = "🔌 {$c['name']} updated this:\n" . implode("\n", $changes);
+  if ($old['dp_task_id'] && $changes && !conn_task_note($old['dp_task_id'], $note, $c['name'], $chip))
     throw new ApiError('The task could not be updated just now. Send the same again in a minute.', 503);
   // a task the app took back before it was made, sent again: it is wanted again (made below), like an approval sent again
   q("UPDATE conn_items SET title = ?, details = ?, link = ?, fields = ?, updated_at = ?, status = IF(status = 'withdrawn' AND dp_task_id IS NULL, 'pending', status) WHERE id = ?", [$title, $details, $link ?: null, $fjson, now(), $id]);
   $it = one('SELECT * FROM conn_items WHERE id = ?', [$id]);
-  if (!$it['dp_task_id']) conn_make_task($it, $c); // not made yet (the projects were not ready): made now, with the newest words
+  $mine = false;
+  if (!$it['dp_task_id']) conn_make_task($it, $c, $mine); // not made yet (the projects were not ready): made now, with the newest words
   $it = one('SELECT * FROM conn_items WHERE id = ?', [$id]);
+  // the 5-minute job made the task meanwhile, from the words read before these: the task hears what changed
+  if (!$old['dp_task_id'] && $it['dp_task_id'] && !$mine && $changes && !conn_task_note($it['dp_task_id'], $note, $c['name'], $chip)) {
+    // not written: the old words go back (only when nothing newer came), so sending the same again writes the note
+    q('UPDATE conn_items SET title = ?, details = ?, link = ?, fields = ? WHERE id = ? AND title = ? AND details <=> ? AND link <=> ? AND fields <=> ?',
+      [$old['title'], $old['details'], $old['link'], $old['fields'], $id, $title, $details, $link ?: null, $fjson]);
+    throw new ApiError('The task could not be updated just now. Send the same again in a minute.', 503);
+  }
   return ['id' => $id, 'status' => $it['status']];
 }
 
@@ -258,8 +281,12 @@ function conn_task_id(array $it): string {
   return 'ct' . (int)$it['id'] . '-' . substr(hash('sha256', $it['conn_id'] . '|' . $it['external_id'] . '|' . $it['created_at']), 0, 8);
 }
 
-/** Make the Daily Projects task for a 'task' item (once). False when the projects are not ready (tried again by the job). */
-function conn_make_task(array $it, array $c): bool {
+/**
+ * Make the Daily Projects task for a 'task' item (once). False when the projects are not ready (tried again by the job).
+ * $mine: true only when this call put the task in (from $it's words), not another maker.
+ */
+function conn_make_task(array $it, array $c, ?bool &$mine = null): bool {
+  $mine = false;
   if ($it['dp_task_id']) return true;
   $fresh = one('SELECT status, dp_task_id FROM conn_items WHERE id = ?', [$it['id']]);
   if (!$fresh || $fresh['dp_task_id'] || $fresh['status'] !== 'pending') return true; // made already, or the app took it back
@@ -296,6 +323,7 @@ function conn_make_task(array $it, array $c): bool {
     return false;
   }
   if (!$made && !$there) return false;
+  $mine = $made && !$there;
   $st = q("UPDATE conn_items SET dp_task_id = ?, status = 'done', updated_at = ? WHERE id = ? AND dp_task_id IS NULL AND status = 'pending'", [$taskId, now(), $it['id']]);
   if ($st->rowCount() !== 1) {
     // the app took it back while the task was being made: it stays withdrawn, and the task says so
@@ -309,7 +337,7 @@ function conn_make_task(array $it, array $c): bool {
  * A note from the app on its task (not your work: the dot does not change). Nothing when the task was deleted.
  * True when it is written (or there is no task any more); false when the projects could not be saved just now.
  */
-function conn_task_note(string $taskId, string $text, string $app, string $link = ''): bool {
+function conn_task_note(string $taskId, string $text, string $app, ?string $link = null): bool {
   try {
     ol_write(function (object $data, array &$hist) use ($taskId, $text, $app, $link): bool {
       foreach ((is_array($data->projects ?? null) ? $data->projects : []) as $p) {
@@ -317,9 +345,9 @@ function conn_task_note(string $taskId, string $text, string $app, string $link 
         $at = ol_iso_now();
         if (!isset($p->workNotes) || !is_array($p->workNotes)) $p->workNotes = [];
         array_unshift($p->workNotes, (object)['id' => ol_rand_id('an'), 'text' => mb_substr($text, 0, 5000), 'stepId' => null, 'createdAt' => $at, 'updatedAt' => $at, 'app' => true]);
-        if ($link !== '') { // the link chip follows the app's newest link
+        if ($link !== null) { // the link chip follows the app's newest link ('' = the app took the link away: no chip)
           $links = array_values(array_filter(is_array($p->links ?? null) ? $p->links : [], fn($l) => !is_object($l) || ($l->id ?? '') !== $taskId . '-link'));
-          $links[] = (object)['id' => $taskId . '-link', 'title' => mb_substr('Open in ' . $app, 0, 200), 'url' => $link];
+          if ($link !== '') $links[] = (object)['id' => $taskId . '-link', 'title' => mb_substr('Open in ' . $app, 0, 200), 'url' => $link];
           $p->links = $links;
         }
         $hist[date('Y-m', strtotime($at))][] = (object)['id' => ol_rand_id('ak'), 'projectId' => $taskId, 'projectName' => (string)($p->name ?? ''), 'kind' => 'app_note',
@@ -348,7 +376,10 @@ function conn_signature(string $secret, string $ts, string $body): string {
  */
 function conn_send(int $itemId): void {
   $it = one('SELECT * FROM conn_items WHERE id = ?', [$itemId]);
-  if (!$it || !in_array($it['status'], ['approved', 'rejected'], true) || $it['callback_ok_at'] || (int)$it['callback_failed']) return;
+  if (!$it || !in_array($it['status'], ['approved', 'rejected'], true) || $it['callback_ok_at'] || (int)$it['callback_failed']) {
+    if ($it) q('UPDATE conn_items SET callback_next_at = NULL WHERE id = ?', [$itemId]); // nothing to send: never picked by the job again
+    return;
+  }
   $c = one('SELECT * FROM connections WHERE id = ?', [$it['conn_id']]);
   if (!$c || ($c['callback_url'] ?? '') === '') { q('UPDATE conn_items SET callback_next_at = NULL WHERE id = ? AND callback_ok_at IS NULL', [$itemId]); return; }
   // claim it: only one sender at a time (the owner's ✓ and the 5-minute job, or two jobs, never both send it)
@@ -385,19 +416,21 @@ function conn_send(int $itemId): void {
     : ($code === 0 ? 'its decision address did not answer' : ($code >= 300 && $code < 400 ? "its decision address sent us somewhere else (error $code)" : "its decision address said error $code"));
   $short = ol_one_line((string)$it['title'], 60);
   if ($now - (int)strtotime((string)($it['callback_since'] ?: $it['decided_at'])) >= CONN_GIVE_UP) { // 24 hours from the decision, or from a new address
-    q('UPDATE conn_items SET callback_tries = ?, callback_next_at = NULL, callback_failed = 1 WHERE id = ?', [$tries, $itemId]);
+    // (only while not taken: the app may have asked for it while this send waited)
+    q('UPDATE conn_items SET callback_tries = ?, callback_next_at = NULL, callback_failed = 1 WHERE id = ? AND callback_ok_at IS NULL', [$tries, $itemId]);
     q('UPDATE connections SET last_error = ? WHERE id = ?', [mb_substr("Could not tell the app about “{$short}” for 24 hours: $why. Stopped trying — the app can still ask for its decisions.", 0, 300), $c['id']]);
     return;
   }
   $wait = min(300 * (2 ** min($tries - 1, 10)), 6 * 3600);
-  q('UPDATE conn_items SET callback_tries = ?, callback_next_at = ? WHERE id = ?', [$tries, date('Y-m-d H:i:s', $now + $wait), $itemId]);
+  $again = q('UPDATE conn_items SET callback_tries = ?, callback_next_at = ? WHERE id = ? AND callback_ok_at IS NULL', [$tries, date('Y-m-d H:i:s', $now + $wait), $itemId]);
+  if ($again->rowCount() !== 1) return; // the app asked for it while this send waited: it has it, no error to show
   q('UPDATE connections SET last_error = ? WHERE id = ?', [mb_substr("Could not tell the app about “{$short}”: $why. Trying again by itself.", 0, 300), $c['id']]);
 }
 
 /** The 5-minute job: decisions waiting to be sent again, and tasks not made yet (the projects were not ready). */
 function conn_jobs(): void {
   $due = date('Y-m-d H:i:s', jobs_now());
-  foreach (all("SELECT id FROM conn_items WHERE callback_next_at IS NOT NULL AND callback_next_at <= ? AND status IN ('approved', 'rejected') ORDER BY callback_next_at LIMIT 20", [$due]) as $r) {
+  foreach (all("SELECT id FROM conn_items WHERE callback_next_at IS NOT NULL AND callback_next_at <= ? AND callback_ok_at IS NULL AND callback_failed = 0 AND status IN ('approved', 'rejected') ORDER BY callback_next_at LIMIT 20", [$due]) as $r) {
     try { conn_send((int)$r['id']); } catch (Throwable $e) { error_log('connect send: ' . get_class($e)); }
   }
   foreach (all("SELECT i.*, c.name AS conn_name FROM conn_items i JOIN connections c ON c.id = i.conn_id WHERE i.kind = 'task' AND i.status = 'pending' AND i.dp_task_id IS NULL ORDER BY i.id LIMIT 20") as $r) {
@@ -487,13 +520,18 @@ function conn_handle(string $a, array $in, array $me): ?array {
       $it = one("SELECT * FROM conn_items WHERE id = ? AND kind = 'approval'", [(int)($in['id'] ?? 0)]);
       if (!$it) throw new ApiError('That item was not found.', 404);
       if ($it['status'] !== 'pending') throw new ApiError($it['status'] === 'withdrawn' ? 'The app took this back, so there is nothing to decide.' : 'This was already decided.', 409);
+      $changed = 'The app changed this since you opened it. Look at it again, then decide.';
+      $ver = (string)($in['version'] ?? '');
+      if ($ver !== '' && !hash_equals(conn_version($it), $ver)) throw new ApiError($changed, 409);
       $reason = txt($in['reason'] ?? '', 500);
       $c = conn_get((int)$it['conn_id']);
       $hasUrl = ($c['callback_url'] ?? '') !== '';
-      $st = q('UPDATE conn_items SET status = ?, reason = ?, decided_at = ?, callback_since = ?, updated_at = ?, callback_next_at = ? WHERE id = ? AND status = ?',
-        [$decision, $reason, now(), now(), now(), $hasUrl ? date('Y-m-d H:i:s', jobs_now()) : null, $it['id'], 'pending']);
+      $st = q('UPDATE conn_items SET status = ?, reason = ?, decided_at = ?, callback_since = ?, updated_at = ?, callback_next_at = ? WHERE id = ? AND status = ?'
+        . ' AND title = BINARY ? AND details <=> BINARY ? AND link <=> BINARY ? AND fields <=> BINARY ?', // the words checked above (the app sending new ones at the same moment: refused)
+        [$decision, $reason, now(), now(), now(), $hasUrl ? date('Y-m-d H:i:s', jobs_now()) : null, $it['id'], 'pending', $it['title'], $it['details'], $it['link'], $it['fields']]);
       if ($st->rowCount() !== 1) { // decided (or taken back) on another device at the same moment: that one counts, nothing is sent twice
         $now = one('SELECT status FROM conn_items WHERE id = ?', [$it['id']]);
+        if (($now['status'] ?? '') === 'pending') throw new ApiError($changed, 409);
         throw new ApiError(($now['status'] ?? '') === 'withdrawn' ? 'The app took this back, so there is nothing to decide.' : 'This was already decided.', 409);
       }
       audit($me['id'], 'conn_decide', "#{$it['id']} $decision");

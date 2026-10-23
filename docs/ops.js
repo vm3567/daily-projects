@@ -264,23 +264,41 @@ function removeTickEvent(state, project, step) {
       if (same && (!best || e.at > best.at)) best = { m, i, at: e.at };
     });
   }
-  if (best) state.history[best.m].splice(best.i, 1);
+  if (!best) return null;
+  const [event] = state.history[best.m].splice(best.i, 1);
+  return { month: best.m, event }; // kept on the untick's line, so its Undo puts it back
 }
 
 /**
  * A task made from an email: did an email from someone else come AFTER `at`? (The server adds it to the thread, and
  * opens a finished task again.) A Finish or Delete pressed before it, and saved only later (offline, or a save that
  * had to try again), must not hide or delete that email: the server will not bring it in a second time.
+ * seen = the newest email you could see when you pressed (seenMailAt, server time): compared with that, not with the
+ * device clock, which can be behind or ahead of the server. Old saved changes without it use `at`.
  */
-function newerMailThan(p, at) {
-  const t = Date.parse(at);
-  if (!p || !p.mail || Number.isNaN(t)) return false;
+// addedAt = when the server brought the email in (an email can be received before you pressed, but come in after)
+const mailWhen = (e) => (typeof e.addedAt === 'string' && !Number.isNaN(Date.parse(e.addedAt)) ? e.addedAt : e.at);
+function theirMailTimes(p) {
   const thread = Array.isArray(p.thread) ? p.thread : [];
-  // addedAt = when the server brought the email in (an email can be received before you pressed, but come in after)
-  const when = (e) => (typeof e.addedAt === 'string' && !Number.isNaN(Date.parse(e.addedAt)) ? e.addedAt : e.at);
-  const theirs = thread.filter((e) => e && !e.fromMe && typeof when(e) === 'string').map((e) => Date.parse(when(e)));
-  if (!thread.length && !p.mail.fromMe && typeof when(p.mail) === 'string') theirs.push(Date.parse(when(p.mail)));
-  return theirs.some((x) => x > t);
+  const theirs = thread.filter((e) => e && !e.fromMe && typeof mailWhen(e) === 'string').map((e) => Date.parse(mailWhen(e)));
+  if (!thread.length && !p.mail.fromMe && typeof mailWhen(p.mail) === 'string') theirs.push(Date.parse(mailWhen(p.mail)));
+  return theirs.filter((x) => !Number.isNaN(x));
+}
+
+/** The newest email from someone else on an email task (server time), or null: kept with a Finish / Delete as seenMailAt. */
+export function seenMailOf(p) {
+  if (!p || !p.mail) return null;
+  const theirs = theirMailTimes(p);
+  return theirs.length ? new Date(Math.max(...theirs)).toISOString() : null;
+}
+
+function newerMailThan(p, at, a = {}) {
+  if (!p || !p.mail) return false;
+  const seen = a && 'seenMailAt' in a;
+  if (seen && a.seenMailAt !== null && (typeof a.seenMailAt !== 'string' || Number.isNaN(Date.parse(a.seenMailAt)))) return false;
+  const t = seen ? (a.seenMailAt === null ? -Infinity : Date.parse(a.seenMailAt)) : Date.parse(at);
+  if (Number.isNaN(t)) return false;
+  return theirMailTimes(p).some((x) => x > t);
 }
 
 /** A task leaves 📂 projects: its place in their order (taskOrder) goes too, so added back it comes after the placed ones. */
@@ -289,6 +307,16 @@ function dropFromOrder(data, taskId, mainIds = null) {
     if (!Array.isArray(m.taskOrder) || (mainIds && !mainIds.includes(m.id))) continue;
     if (m.taskOrder.includes(taskId)) m.taskOrder = m.taskOrder.filter((x) => x !== taskId);
   }
+}
+
+/** Where a task sits in each 📂 project's order ({ mainId: index }), so Undo can put it back in its place. */
+export function orderPosOf(data, taskId) {
+  const pos = {};
+  for (const m of data.projects) {
+    const k = Array.isArray(m.taskOrder) ? m.taskOrder.indexOf(taskId) : -1;
+    if (k >= 0) pos[m.id] = k;
+  }
+  return pos;
 }
 
 /** Every change to a project counts as activity for the dot colour (green today). */
@@ -670,7 +698,7 @@ const handlers = {
   finish(state, op, a) {
     const p = findProject(state.data, a.projectId);
     if (!p || p.state === 'finished') return false;
-    if (newerMailThan(p, op.at)) return false; // an email came after you pressed Finish (a change saved late): it stays open for it
+    if (newerMailThan(p, op.at, a)) return false; // an email came after you pressed Finish (a change saved late): it stays open for it
     return setState(state, op, a, p.state, 'finished', 'finished');
   },
   reopen(state, op, a) { return setState(state, op, a, 'finished', 'active', 'reopened'); },
@@ -679,7 +707,7 @@ const handlers = {
     const { data } = state;
     const i = data.projects.findIndex((p) => p.id === a.projectId);
     if (i < 0) return false;
-    if (newerMailThan(data.projects[i], op.at)) return false; // an email came after you pressed Delete: the task (and that email) stays
+    if (newerMailThan(data.projects[i], op.at, a)) return false; // an email came after you pressed Delete: the task (and that email) stays
     const [p] = data.projects.splice(i, 1);
     for (const c of data.projects) if (parentIdsOf(c).includes(p.id)) setParents(c, parentIdsOf(c).filter((x) => x !== p.id)); // its tasks stay, just no longer in it
     dropFromOrder(data, p.id);
@@ -709,6 +737,15 @@ const handlers = {
         if (onlyServer) list.splice(k, 1); // nothing of yours in it: the two are one task again
       }
     }
+    // Undo of Pause / Finish while its timer ran: the timer runs again from its start, so no timed minutes are lost;
+    // another timer running by now: the minutes stay logged instead
+    const tm = a.timer && typeof a.timer === 'object' && a.timer.projectId === snap.id && typeof a.timer.start === 'string' && typeof a.timer.id === 'string' ? a.timer : null;
+    let keepLogged = false;
+    if (tm && back.state === 'active' && !state.data.timer) state.data.timer = { projectId: snap.id, start: tm.start, id: tm.id };
+    else if (tm && !(state.data.timer && state.data.timer.id === tm.id)) {
+      const logged = i >= 0 && (list[i].timeLogs || []).find((l) => l && l.id === tm.id);
+      if (logged && !(back.timeLogs || []).some((l) => l && l.id === tm.id)) { (back.timeLogs ||= []).push(clone(logged)); keepLogged = true; }
+    }
     if (i >= 0) list[i] = back;
     else list.splice(Math.min(Math.max(0, a.index ?? 0), list.length), 0, back);
     if (typeof a.removeProjectId === 'string' && a.removeProjectId !== snap.id) { // Undo of "Make it a project": the new one goes
@@ -728,13 +765,30 @@ const handlers = {
         if (c && pid === snap.id && c.id !== snap.id && !parentIdsOf(c).includes(pid) && linkStillOk(data, c, back)) setParents(c, [...parentIdsOf(c), pid]);
       }
     }
+    // Undo of taking it out (or deleting it): its place in each 📂 project's order comes back ({ mainId: index })
+    if (a.orderPos && typeof a.orderPos === 'object' && !Array.isArray(a.orderPos)) {
+      for (const [mid, k] of Object.entries(a.orderPos)) {
+        const m = list.find((x) => x.id === mid);
+        if (!m || !Number.isInteger(k) || k < 0 || !parentIdsOf(back).includes(mid)) continue;
+        const order = Array.isArray(m.taskOrder) ? m.taskOrder : [];
+        if (!order.includes(back.id)) m.taskOrder = [...order.slice(0, k), back.id, ...order.slice(k)];
+      }
+    }
     for (const pid of parentIdsOf(back)) { const m = list.find((x) => x.id === pid); if (m) m.isMain = true; }
     if (list.some((x) => x.id !== back.id && parentIdsOf(x).includes(back.id))) back.isMain = true;
-    const undone = [a.undoOpId, ...(Array.isArray(a.undoOpIds) ? a.undoOpIds : [])].filter(Boolean).flatMap((id) => [id, id + 't', id + 'm', id + 'u']);
+    const undone = [a.undoOpId, ...(Array.isArray(a.undoOpIds) ? a.undoOpIds : [])].filter(Boolean).flatMap((id) => [id, ...(keepLogged && id === a.undoOpId ? [] : [id + 't']), id + 'm', id + 'u']);
     for (const id of undone) {
       for (const events of Object.values(state.history)) {
         const k = events.findIndex((e) => e.id === id);
-        if (k >= 0) events.splice(k, 1);
+        if (k < 0) continue;
+        const [gone] = events.splice(k, 1);
+        // an undone untick: its step is done again, so the tick line it took away comes back (if that month is loaded)
+        const t = gone.tick && gone.tick.event;
+        const back = t && state.history[gone.tick.month];
+        if (back && !back.some((e) => e.id === t.id)) {
+          const at = back.findIndex((e) => e.at > t.at);
+          back.splice(at < 0 ? back.length : at, 0, clone(t));
+        }
       }
     }
     return true;
@@ -825,6 +879,7 @@ const handlers = {
     const s = p && p.steps.find((x) => x.id === a.stepId);
     if (!s || s.done) return false;
     s.done = true;
+    delete s.movedTo; // a normal tick is never a move (only stepToProject sets it)
     // ticked for the team (they finished it, maybe days ago): their day, and not your own work today
     s.doneAt = a.byTeam ? teamTime(a.at, op) : op.at;
     s.updatedAt = op.at;
@@ -833,7 +888,11 @@ const handlers = {
     if (s.repeat) {
       // A repeating step comes back: a fresh copy, due on the next date (same id on every replay).
       const doneDay = indiaDate(op.at);
-      const repeatDay = s.repeat === 'monthly' ? (s.repeatDay || (s.dueDate ? Number(s.dueDate.slice(8, 10)) : Number(doneDay.slice(8, 10)))) : null;
+      // the day of the month: from its due date (a date you moved wins); the kept day only when the due date is that day
+      // or a short month cut it (31st → 30 Apr keeps 31)
+      const dueDay = s.dueDate ? Number(s.dueDate.slice(8, 10)) : 0;
+      const keptDay = s.repeatDay && dueDay && (dueDay === s.repeatDay || (dueDay < s.repeatDay && addDays(s.dueDate, 1).endsWith('-01'))) ? s.repeatDay : 0;
+      const repeatDay = s.repeat === 'monthly' ? (keptDay || dueDay || s.repeatDay || Number(doneDay.slice(8, 10))) : null;
       const due = nextRepeatDate(s.repeat, s.dueDate, doneDay, repeatDay);
       const copyId = op.id + 'r';
       s.spawnedCopy = copyId;
@@ -862,6 +921,7 @@ const handlers = {
     s.doneAt = null;
     s.updatedAt = op.at;
     delete s.byTeam;
+    delete s.movedTo; // a moved step ("Make it a project") un-ticked: an ordinary open step again
     if (s.spawnedCopy) {
       // un-ticking a repeating step takes back the copy it made (if not started)
       const k = p.steps.findIndex((x) => x.id === s.spawnedCopy && !x.done);
@@ -870,8 +930,8 @@ const handlers = {
     }
     recalcLastTick(p);
     touch(p, op);
-    removeTickEvent(state, p, s);
-    addEvent(state, op, p, a.byTeam ? 'team_step_unticked' : 'step_unticked', s.text);
+    const tick = removeTickEvent(state, p, s);
+    addEvent(state, op, p, a.byTeam ? 'team_step_unticked' : 'step_unticked', s.text, tick ? { tick } : null);
     return true;
   },
 
@@ -1098,7 +1158,8 @@ const handlers = {
     if (replyOpen(old) && old.text === text) return false;
     const fresh = !replyOpen(old);
     t.target.reply = {
-      text, at: op.at, by, forMessageId: t.target.mail.messageId || null,
+      // the email it answers: the one Claude read (an email that came meanwhile then shows as newer), else the newest
+      text, at: op.at, by, forMessageId: (typeof a.forMessageId === 'string' && a.forMessageId.trim().slice(0, 400)) || t.target.mail.messageId || null,
       state: fresh ? 'ready' : old.state, ...(!fresh && old.laterUntil ? { laterUntil: old.laterUntil } : {}),
     };
     if (fresh) addEvent(state, op, t.project, 'reply_prepared', `Reply prepared${by === 'claude' ? ' by Claude' : ''}: ${t.target.mail.subject || ''}`.trim());
@@ -1420,14 +1481,18 @@ const handlers = {
     if (!groupHasTimer(grp)) return false; // the timer is only for groups that have it switched on
     const t = state.data.timer;
     if (t && t.projectId === p.id) return false; // already running here
+    // pressed while another timer (or none) ran: a timer started since on another device is never stopped by this late press
+    if ('running' in a && (t ? t.id : null) !== a.running) return false;
     if (t) closeTimer(state, op, op.at);
     state.data.timer = { projectId: p.id, start: op.at, id: op.id };
     touch(p, op);
     return true;
   },
 
-  stopTimer(state, op) {
+  stopTimer(state, op, a) {
     if (!state.data.timer) return false;
+    // a late Stop (pressed offline) stops only the timer it was pressed for, never one started since
+    if (a && a.timerId && a.timerId !== state.data.timer.id) return false;
     closeTimer(state, op, op.at);
     return true;
   },

@@ -32,7 +32,8 @@ async function until(fn, what, ms = 30000) {
   throw new Error(`timed out waiting for ${what}`);
 }
 const sql = (q) => execFileSync('mysql', ['-u', 'root', `--socket=${SOCK}`, '-e', q], { stdio: 'pipe' });
-const MS_PORT = DB_PORT + 10000; // a fake Microsoft (sign-in and Graph) for the Outlook checks
+// the fake servers sit below 32768: ports above it are handed out at random for outgoing connections and can be taken
+const MS_PORT = 10000 + (process.pid % 5000); // a fake Microsoft (sign-in and Graph) for the Outlook checks
 const MS = `http://127.0.0.1:${MS_PORT}`;
 const env = () => ({ ...process.env, WT_TEST_DIR: dir, WT_DB_HOST: `127.0.0.1;port=${DB_PORT}`, WT_PUSH_LOG: join(dir, 'push.log'), WT_MS_BASE: MS });
 
@@ -157,6 +158,13 @@ test('server: photo needed, closed tasks, late offline updates', { skip }, async
   assert.equal((await call('update.save', { taskId: d.id, note: 'yesterday', day: istDay(1) }, tok.suresh)).update.day, istDay(1), 'written yesterday counts for yesterday');
   assert.match((await call('update.save', { taskId: d.id, note: 'old', day: istDay(5) }, tok.suresh)).error || '', /more than 2 days/);
   assert.equal((await call('task.save', { assigneeId: id.suresh, title: 'bad date', repeat: 'once', dueDate: '2026-02-30' }, tok.boss)).s, 400);
+  // a step given from the People page (repeat once + stepRef): the person's Finished closes it, so Daily Projects ticks the step
+  const g = (await call('task.save', { assigneeId: id.suresh, title: 'Send drawing to vendor', details: '', project: 'Given P', projectRef: 'pg1', stepRef: 'sg1', repeat: 'once', dueDate: null, skipSunday: true }, tok.boss)).task;
+  assert.equal(g.repeat, 'once');
+  assert.ok((await call('update.save', { taskId: g.id, note: 'sent', state: 'finished' }, tok.suresh)).ok);
+  const gd = (await call('task.get', { id: g.id }, tok.boss)).task;
+  assert.equal(gd.status, 'done', 'Finished closes a given step');
+  assert.equal(gd.stepRef, 'sg1');
 });
 
 test('server: move, suggestions, give a whole project', { skip }, async () => {
@@ -1096,7 +1104,7 @@ test('work in one line: giving the same quick task twice (same clientId) makes o
 });
 
 // ---------------------------------------------------------------- Outlook → Daily Projects Inbox (against a fake Microsoft)
-const ms = { reqs: [], token: null, pages: [[]], sent: [], bodies: {}, draftCode: 201, composeCode: 201, server: null };
+const ms = { reqs: [], token: null, pages: [[]], moved: [], sent: [], bodies: {}, draftCode: 201, composeCode: 201, server: null, graph: null };
 async function fakeMicrosoft() {
   if (ms.server) return;
   ms.server = createServer((req, res) => {
@@ -1109,6 +1117,10 @@ async function fakeMicrosoft() {
       const send = (code, j) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(j)); };
       if (u.pathname.endsWith('/oauth2/v2.0/token')) { const [code, j] = ms.token(form); return send(code, j); }
       if (u.pathname === '/v1.0/me') return send(200, { mail: 'venkat@acton.test', userPrincipalName: 'venkat@acton.test' });
+      const g = ms.graph && ms.graph(u); // a test's own mailbox (filters, order and pages like Graph): [code, json]
+      if (g) return send(...g);
+      // the look for emails moved into the Inbox later (by when they last changed): its own list
+      if (u.pathname === '/v1.0/me/mailFolders/inbox/messages' && (u.searchParams.get('$filter') || '').startsWith('lastModifiedDateTime')) return send(200, { value: ms.moved });
       if (u.pathname === '/v1.0/me/mailFolders/inbox/messages' || u.pathname === '/v1.0/next') {
         const n = Number(u.searchParams.get('page') || 0);
         return send(200, { value: ms.pages[n] || [], ...(ms.pages[n + 1] ? { '@odata.nextLink': `${MS}/v1.0/next?page=${n + 1}` } : {}) });
@@ -1294,6 +1306,29 @@ test('outlook: each new email thread → one task "📧 subject" (mail + email t
   assert.deepEqual([glaze.thread[0].messageId, glaze.thread[49].messageId, glaze.mail.messageId], ['old1', 'm8', 'm8'], 'the oldest one goes; the newest is last');
   assert.equal(data.projects.filter((p) => p.mail && p.mail.conversationId === 'C2').length, 1, 'no second task for the thread');
   assert.deepEqual(data.inbox.map((x) => x.id), ['oi1']);
+  sql('UPDATE wt.settings SET v = 0 WHERE k = \'jobs_at\'');
+});
+
+test('outlook: an email moved into the Inbox later (from Junk: its received time is before the last check) still becomes a task, once', { skip }, async () => {
+  await fakeMicrosoft();
+  sql('UPDATE wt.settings SET v = UNIX_TIMESTAMP() + 86400 WHERE k = \'jobs_at\'');
+  ms.token = (f) => (f.grant_type === 'refresh_token' ? [200, { access_token: 'AT-M' }] : [400, { error: 'invalid_grant' }]);
+  // received 2 hours ago (in Junk), the checks have moved past it; the owner moves it to the Inbox now
+  sql("UPDATE wt.settings SET v = DATE_FORMAT(UTC_TIMESTAMP(), '%Y-%m-%dT%H:%i:%sZ') WHERE k = 'ol_since'");
+  ms.pages = [[]];
+  ms.moved = [{ ...mail('mv1', 'C-MOVED', 'Order for 40 tiles', 'Kumar', 120, 'Please confirm the order.'), lastModifiedDateTime: new Date().toISOString().replace(/\.\d+Z$/, 'Z') }];
+  ms.reqs = [];
+  const r = await call('outlook.check', {}, tok.boss);
+  assert.equal(r.outlook.error, '', r.error);
+  const look = ms.reqs.find((x) => x.path === '/v1.0/me/mailFolders/inbox/messages' && decodeURIComponent(x.url).includes('lastModifiedDateTime gt'));
+  assert.ok(look, 'the Inbox is also looked at by when an email last changed');
+  assert.match(decodeURIComponent(look.url), /\$filter=lastModifiedDateTime gt \d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ and receivedDateTime gt \d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ/, 'only recent emails (no flood of old ones marked as read)');
+  let { data } = await dpNow();
+  assert.deepEqual(data.projects.filter((p) => p.mail && p.mail.conversationId === 'C-MOVED').map((p) => [p.name, p.thread.length]), [['📧 Order for 40 tiles', 1]], 'the moved email became a task');
+  const head = (await dpNow()).head;
+  await call('outlook.check', {}, tok.boss);
+  assert.equal((await dpNow()).head, head, 'the next check does not add it again');
+  ms.moved = [];
   sql('UPDATE wt.settings SET v = 0 WHERE k = \'jobs_at\'');
 });
 
@@ -1501,6 +1536,7 @@ test('replies: your reply in Outlook (Sent Items) joins the task\'s email thread
 });
 
 test('replies: dp-cli mail-body, and Claude\'s tracker replies / set-reply / mail-body on the local server copy (ambiguous refused)', { skip }, async () => {
+  const { repliesOf } = await import('../docs/rules.js');
   await fakeMicrosoft();
   sql('UPDATE wt.settings SET v = UNIX_TIMESTAMP() + 86400 WHERE k = \'jobs_at\'');
   await replyProjects();
@@ -1528,6 +1564,30 @@ test('replies: dp-cli mail-body, and Claude\'s tracker replies / set-reply / mai
   const r = data.projects.find((p) => p.id === 'rp1').steps.find((s) => s.id === 'rs2').reply;
   assert.deepEqual([r.text, r.by, r.state, r.forMessageId], ['Dear Anil,\nNoted.\nRegards, Venkat', 'claude', 'ready', 'MSG-R2']);
   assert.ok(!ms.reqs.some((x) => x.path.endsWith('/createReply') || /send/i.test(x.path)), 'set-reply sends nothing');
+  // the email id is shown; set-reply --for keeps the email Claude read, so one that came meanwhile shows as newer
+  assert.match(list, /\[rs2\] Price R2\n.*\n {2}email id \(for set-reply --for\): MSG-R2\n/);
+  assert.match(await tr('mail-body', 'rs2'), /Received: .*\nEmail id \(for set-reply --for\): MSG-R2\n/);
+  assert.match(await tr('set-reply', 'ri1', '--for', 'MSG-R0', 'Dear Ravi,', 'Noted.'), /a newer email came on this thread[\s\S]*Saved to worktask\.in: Reply prepared/);
+  const d2 = (await dpNow()).data;
+  assert.deepEqual([d2.inbox[0].reply.text, d2.inbox[0].reply.forMessageId], ['Dear Ravi, Noted.', 'MSG-R0'], 'not the newest email at save time');
+  assert.equal(repliesOf(d2, istDay(0)).ready.find((m) => m.id === 'ri1').newer, true);
+  await assert.rejects(tr('set-reply', 'ri1', 'Hello', '--for'), (e) => /Give the email id after --for/.test(String(e.stderr)));
+});
+
+test('tracker only-on --remind: 9:00 is saved as 09:00; a time like 9am is refused with a clear error (never "saved" without the reminder)', { skip }, async () => {
+  await replyProjects();
+  const run = promisify(execFile);
+  const tr = async (...args) => (await run(process.execPath, [join(ROOT, 'tools', 'tracker.mjs'), ...args], { env: { ...env(), DP_SERVER_LOCAL: '1', DP_DATA_DIR: '' }, encoding: 'utf8' })).stdout;
+  assert.match(await tr('only-on', 'rp1', 'Mon,Thu', '--remind', '9:00'), /Saved to worktask\.in: Only on days/);
+  const p = (await dpNow()).data.projects.find((x) => x.id === 'rp1');
+  assert.deepEqual([p.onlyDays, p.remindAt], [[1, 4], '09:00']);
+  for (const bad of [['9am'], ['25:00'], []]) {
+    await assert.rejects(tr('only-on', 'rp1', 'Mon', '--remind', ...bad), (e) => /Give the reminder time as HH:MM, like 09:00/.test(String(e.stderr)) && !/Saved/.test(String(e.stdout)), String(bad));
+  }
+  const q = (await dpNow()).data.projects.find((x) => x.id === 'rp1');
+  assert.deepEqual([q.onlyDays, q.remindAt], [[1, 4], '09:00'], 'nothing changed by a refused time');
+  assert.match(await tr('only-on', 'rp1', 'every', '--remind', 'off'), /Saved/);
+  assert.equal('remindAt' in (await dpNow()).data.projects.find((x) => x.id === 'rp1'), false);
 });
 
 // ---------------------------------------------------------------- project reminders on the phone + cron.php
@@ -1603,7 +1663,7 @@ test('cron.php: runs the jobs from the command line, skips while another run hol
 });
 
 // ---------------------------------------------------------------- 🔌 Connections: outside apps send tasks and approvals (connect.php)
-const CB_PORT = DB_PORT + 12000; // a tiny fake app that receives the decisions
+const CB_PORT = 15000 + (process.pid % 5000); // a tiny fake app that receives the decisions (below 32768, as MS_PORT)
 const CB = `http://127.0.0.1:${CB_PORT}/hook`;
 const cb = { reqs: [], code: 200, delay: 0, server: null };
 async function fakeApp() {
@@ -1613,6 +1673,7 @@ async function fakeApp() {
     req.on('data', (c) => { body += c; });
     req.on('end', () => {
       cb.reqs.push({ method: req.method, path: req.url, headers: req.headers, body });
+      if (cb.onReq) cb.onReq();
       if (cb.delay) return setTimeout(() => { res.writeHead(cb.code, { 'Content-Type': 'application/json' }); res.end('{}'); }, cb.delay);
       res.writeHead(cb.code, cb.code >= 300 && cb.code < 400 ? { Location: 'http://127.0.0.1:1/elsewhere' } : { 'Content-Type': 'application/json' });
       res.end('{}');
@@ -1785,6 +1846,27 @@ test('approvals: conn.items lists them; ✓ Approve sends a signed decision (HMA
   assert.match((await call('conn.decide', { id: it3.id, decision: 'approved' }, tok.boss)).error, /took this back/);
 });
 
+test('approvals: ✓ / ✕ decides the words the owner saw — the app sending new words meanwhile (a new amount) is refused with 409, the new words can then be decided', { skip }, async () => {
+  cb.code = 200; cb.reqs = [];
+  const po = { external_id: 'PO-VER1', kind: 'approval', title: 'Approve PO VER1', details: 'Clay', fields: { Amount: '12,500' } };
+  await appCall('connect.push', po, cn.purchase.key);
+  const seen = (await appItems()).find((i) => i.externalId === 'PO-VER1');
+  assert.match(seen.version, /^[0-9a-f]{16}$/, 'each item says which words it has');
+  assert.equal((await appCall('connect.push', po, cn.purchase.key)).status, 'pending');
+  assert.equal((await appItems()).find((i) => i.id === seen.id).version, seen.version, 'the same words: the same version');
+  // the app sends it again with a new amount while the owner looks at 12,500
+  await appCall('connect.push', { ...po, fields: { Amount: '125,000' } }, cn.purchase.key);
+  const d = await call('conn.decide', { id: seen.id, decision: 'approved', version: seen.version }, tok.boss);
+  assert.equal(d.s, 409, 'refused');
+  assert.match(d.error, /changed this since you opened it/);
+  const now = (await appItems()).find((i) => i.id === seen.id);
+  assert.deepEqual([now.status, now.fields, cb.reqs.length], ['pending', [['Amount', '125,000']], 0], 'still waiting, nothing sent to the app');
+  assert.notEqual(now.version, seen.version);
+  const ok = await call('conn.decide', { id: seen.id, decision: 'approved', version: now.version }, tok.boss);
+  assert.ok(ok.ok, ok.error);
+  assert.deepEqual([ok.item.status, JSON.parse(cb.reqs[0].body).external_id], ['approved', 'PO-VER1'], 'the words seen: decided and sent');
+});
+
 test('approvals: a decision the app did not take (error / redirect) is tried again by the 5-minute job (cron) with backoff, then given up after 24 hours with the error in plain words; never follows a redirect', { skip }, async () => {
   cb.code = 500; cb.reqs = [];
   sql("USE wt; INSERT INTO wt.settings (k, v) VALUES ('fill_by', '23:59:59') ON DUPLICATE KEY UPDATE v = '23:59:59'");
@@ -1878,7 +1960,7 @@ test('connections: Rotate key — the old key stops at once, the new key and a n
   const log = sqlOut("SELECT GROUP_CONCAT(action, ' ', detail SEPARATOR '\\n') FROM wt.audit WHERE action LIKE 'conn\\_%'");
   for (const a of ['conn_create #', 'conn_rotate #', 'conn_delete #', 'conn_update #', 'conn_decide #']) assert.ok(log.includes(a), a);
   assert.ok(!/wt[cs]_[0-9a-f]{20}/.test(log), 'no key or secret in the log');
-  assert.equal(sqlOut("SELECT v FROM wt.settings WHERE k = 'schema'").trim(), '34', 'the tables steps ran (v34: conn_items.callback_since)');
+  assert.equal(sqlOut("SELECT v FROM wt.settings WHERE k = 'schema'").trim(), '35', 'the tables steps ran (v35: updates.written_at)');
 });
 
 // ---------------------------------------------------------------- review round 12 (connect.php / outlook.php)
@@ -2007,6 +2089,79 @@ test('review r12: a new email from them in the thread of a FINISHED 📧 task (o
   const { repliesOf } = await import('../docs/rules.js');
   assert.ok(repliesOf(data, istDay(0)).waiting.some((m) => m.id === 'r12a'), 'listed on ✉ Replies');
   await saveProjects([]);
+});
+
+test('an older email moved into the Inbox later (from Junk) joins the thread but never becomes its newest email (the reply draft and the ✉ Replies days stay on the newer one)', { skip }, async () => {
+  await fakeMicrosoft();
+  await connectOutlook();
+  sql('UPDATE wt.settings SET v = UNIX_TIMESTAMP() + 86400 WHERE k = \'jobs_at\'');
+  const iso = (minsAgo) => new Date(Date.now() - minsAgo * 60000).toISOString().replace(/\.\d+Z$/, '.000Z');
+  const newer = iso(60);
+  const added = iso(50);
+  const mailOf = (conv, id) => ({ conversationId: conv, messageId: id, fromName: 'Bob', fromAddress: 'bob@x.test', subject: 'Order 55', at: newer, addedAt: added });
+  await saveProjects([
+    { id: 'old1', name: '📧 Order 55', state: 'active', groupId: 'g1', createdAt: newer, steps: [], workNotes: [], links: [], files: [], notes: '',
+      mail: mailOf('C-OLD1', 'old1-bob'), thread: [{ at: newer, fromName: 'Bob', fromMe: false, preview: 'Newest from Bob', messageId: 'old1-bob' }] },
+    { id: 'old2', name: 'Kiln order', state: 'active', groupId: 'g1', createdAt: newer, steps: [], workNotes: [], links: [], files: [], notes: '', mail: mailOf('C-OLD2', 'old2-bob') },
+  ]);
+  ms.sent = []; ms.pages = [[]];
+  const mod = new Date().toISOString().replace(/\.\d+Z$/, 'Z');
+  ms.moved = [{ ...mail('old1-alice', 'C-OLD1', 'RE: Order 55', 'Alice', 120, 'Older one from Alice'), lastModifiedDateTime: mod },
+    { ...mail('old2-alice', 'C-OLD2', 'RE: Kiln order', 'Alice', 120, 'Older one on the kiln'), lastModifiedDateTime: mod }];
+  const r = await call('outlook.check', {}, tok.boss);
+  assert.equal(r.outlook.error, '', r.outlook.error);
+  const { data } = await dpNow();
+  const t = data.projects.find((p) => p.id === 'old1');
+  assert.deepEqual(t.thread.map((e) => e.fromName), ['Alice', 'Bob'], 'the older email joins the thread (oldest first)');
+  assert.deepEqual([t.mail.messageId, t.mail.fromName, t.mail.at, t.mail.subject], ['old1-bob', 'Bob', newer, 'Order 55'], 'the newest email is still Bob\'s');
+  assert.notEqual(t.mail.addedAt, added, 'addedAt still says a new email came in (docs/ops.js newerMailThan)');
+  const p = data.projects.find((x) => x.id === 'old2');
+  assert.ok(p.workNotes.some((n) => /Alice/.test(n.text)), 'the project gets its note');
+  assert.deepEqual([p.mail.messageId, p.mail.at], ['old2-bob', newer], 'the project keeps the newest email too');
+  ms.moved = [];
+  await saveProjects([]);
+  sql('UPDATE wt.settings SET v = 0 WHERE k = \'jobs_at\'');
+});
+
+test('the same email again with a new Outlook id (moved out of the Inbox and back): not added twice, a finished task is not opened again, a deleted task is not made again', { skip }, async () => {
+  await fakeMicrosoft();
+  await connectOutlook();
+  sql('UPDATE wt.settings SET v = UNIX_TIMESTAMP() + 86400 WHERE k = \'jobs_at\'');
+  await saveProjects([]);
+  ms.sent = []; ms.moved = [];
+  const x = { ...mail('dup-a', 'C-DUP', 'Invoice 9', 'Bob', 30, 'Invoice attached.'), internetMessageId: '<inv9@bob.x.test>' };
+  const before = (await call('outlook.status', {}, tok.boss)).outlook.addedToday;
+  ms.pages = [[x]];
+  assert.equal((await call('outlook.check', {}, tok.boss)).outlook.error, '');
+  let { data } = await dpNow();
+  const task = data.projects.find((p) => p.mail && p.mail.conversationId === 'C-DUP');
+  assert.ok(task, 'the task was made');
+  // the owner finishes it, then moves the email out of the Inbox and back: a new id, the same internetMessageId
+  await saveProjects(data.projects.map((p) => (p.id === task.id ? { ...p, state: 'finished', stateChangedAt: new Date().toISOString() } : p)));
+  ms.pages = [[]];
+  ms.moved = [{ ...x, id: 'dup-b', lastModifiedDateTime: new Date().toISOString().replace(/\.\d+Z$/, 'Z') }];
+  assert.equal((await call('outlook.check', {}, tok.boss)).outlook.error, '');
+  ({ data } = await dpNow());
+  const t = data.projects.find((p) => p.id === task.id);
+  assert.deepEqual([t.state, t.thread.length], ['finished', 1], 'not added again, not opened again');
+  // deleted instead: not made again either
+  await saveProjects([]);
+  ms.moved = [{ ...x, id: 'dup-c', lastModifiedDateTime: new Date().toISOString().replace(/\.\d+Z$/, 'Z') }];
+  assert.equal((await call('outlook.check', {}, tok.boss)).outlook.error, '');
+  assert.equal((await dpNow()).data.projects.filter((p) => p.mail && p.mail.conversationId === 'C-DUP').length, 0, 'no second task');
+  assert.equal((await call('outlook.status', {}, tok.boss)).outlook.addedToday, before + 1, 'one email added today (its second key is not counted)');
+  // an email kept before internetMessageIds were looked at: the thread knows it by its time, sender and words
+  const at = new Date(Date.now() - 40 * 60000).toISOString().replace(/\.\d+Z$/, 'Z');
+  await saveProjects([{ id: 'dupold', name: '📧 Invoice 8', state: 'finished', stateChangedAt: at, groupId: 'g1', createdAt: at, steps: [], workNotes: [], links: [], files: [], notes: '',
+    mail: { conversationId: 'C-DUP8', messageId: 'dup8-a', fromName: 'Bob', subject: 'Invoice 8', at: at.replace('Z', '.000Z') },
+    thread: [{ at: at.replace('Z', '.000Z'), fromName: 'Bob', fromMe: false, preview: 'Invoice 8 attached.', messageId: 'dup8-a' }] }]);
+  ms.moved = [{ ...mail('dup8-b', 'C-DUP8', 'Invoice 8', 'Bob', 0, 'Invoice 8 attached.'), receivedDateTime: at, lastModifiedDateTime: new Date().toISOString().replace(/\.\d+Z$/, 'Z') }];
+  assert.equal((await call('outlook.check', {}, tok.boss)).outlook.error, '');
+  const o = (await dpNow()).data.projects.find((p) => p.id === 'dupold');
+  assert.deepEqual([o.state, o.thread.length], ['finished', 1], 'not added again, not opened again');
+  ms.moved = [];
+  await saveProjects([]);
+  sql('UPDATE wt.settings SET v = 0 WHERE k = \'jobs_at\'');
 });
 
 // ---------------------------------------------------------------- review round 13 (connect.php / jobs.php)
@@ -2176,6 +2331,23 @@ test('review r14: the server sync never cancels the person\'s open task for a st
   await saveProjects([]);
 });
 
+test('review: a step already made into its own project (moved) is never made again as a new task, nor a cancelled one opened again, when the project is given', { skip }, async () => {
+  const steps = [{ stepRef: 'mvx1', title: 'Line kiln', moved: true }, { stepRef: 'mvx2', title: 'Paint door' }];
+  const out = await call('project.sync', { projectRef: 'mvx', project: 'Moved X', assigneeId: id.suresh, steps }, tok.boss);
+  assert.deepEqual(out.tasks.map((t) => t.stepRef), ['mvx2'], 'only the normal step is made');
+  assert.equal(sqlOut("SELECT COUNT(*) FROM wt.tasks WHERE step_ref = 'mvx1'").trim(), '0', 'no task for the moved step');
+  // given before the move, then taken back (cancelled): giving again with the step moved does not open it again
+  await call('project.sync', { projectRef: 'mvy', project: 'Moved Y', assigneeId: id.suresh, steps: [{ stepRef: 'mvy1', title: 'Line kiln' }, { stepRef: 'mvy2', title: 'Paint door' }] }, tok.boss);
+  await call('project.sync', { projectRef: 'mvy', project: 'Moved Y', assigneeId: 0, steps: [] }, tok.boss);
+  await call('project.sync', { projectRef: 'mvy', project: 'Moved Y', assigneeId: id.suresh, steps: [{ stepRef: 'mvy1', title: 'Line kiln', moved: true }, { stepRef: 'mvy2', title: 'Paint door' }] }, tok.boss);
+  assert.deepEqual((await openOf('suresh', 'mvy')).map((t) => t.stepRef), ['mvy2'], 'the cancelled task of the moved step stays closed');
+  // an open task the moved step already has is kept (the person's task is never cancelled by the move)
+  await call('project.sync', { projectRef: 'mvz', project: 'Moved Z', assigneeId: id.suresh, steps: [{ stepRef: 'mvz1', title: 'Line kiln' }] }, tok.boss);
+  await call('project.sync', { projectRef: 'mvz', project: 'Moved Z', assigneeId: id.suresh, steps: [{ stepRef: 'mvz1', title: 'Line kiln', moved: true }, { stepRef: 'mvz2', title: 'Paint door' }] }, tok.boss);
+  assert.deepEqual((await openOf('suresh', 'mvz')).map((t) => t.stepRef).sort(), ['mvz1', 'mvz2']);
+  for (const r of ['mvx', 'mvy', 'mvz']) await call('project.sync', { projectRef: r, project: 'x', assigneeId: 0, steps: [] }, tok.boss);
+});
+
 test('cloud review: an old waiting approval stays on From apps even after 300+ newer decided ones', { skip }, async () => {
   const ol = await call('conn.create', { name: 'Old wait' }, tok.boss);
   sql(`INSERT INTO wt.conn_items (conn_id, external_id, kind, title, status, created_at, updated_at)
@@ -2189,4 +2361,276 @@ test('cloud review: an old waiting approval stays on From apps even after 300+ n
   const p = await call('conn.items', { status: 'pending' }, tok.boss);
   assert.ok(p.items.some((x) => x.title === 'Old waiting PO'));
   assert.ok((await call('conn.delete', { id: ol.connection.id }, tok.boss)).ok);
+});
+
+// ---------------------------------------------------------------- review round 15
+test('review r15: an external_id over 100 letters is refused, never cut (two long ids are never one item)', { skip }, async () => {
+  const base = 'https://erp.example.com/approvals/' + 'a'.repeat(70);
+  const r = await appCall('connect.push', { external_id: base + '-A', kind: 'approval', title: 'Approve A' }, cn.purchase.key);
+  assert.equal(r.s, 400, JSON.stringify(r));
+  assert.match(r.error, /external_id is too long/);
+  assert.equal(sqlOut(`SELECT COUNT(*) FROM wt.conn_items WHERE external_id LIKE 'https://erp.example.com/approvals/%'`).trim(), '0', 'nothing saved');
+  assert.equal((await appCall('connect.withdraw', { external_id: base + '-B' }, cn.purchase.key)).s, 400);
+  const ok = 'X'.repeat(100);
+  assert.ok((await appCall('connect.push', { external_id: ok, kind: 'approval', title: 'Approve 100' }, cn.purchase.key)).ok, '100 letters is fine');
+  assert.equal((await appCall('connect.withdraw', { external_id: ok }, cn.purchase.key)).status, 'withdrawn');
+});
+
+test('review r15: decisions the app already asked for never jam the 5-minute resend list (a real failed one is still tried)', { skip }, async () => {
+  await fakeApp();
+  cb.code = 200; cb.reqs = []; cb.delay = 0;
+  const jam = await call('conn.create', { name: 'Jam', callback_url: CB }, tok.boss);
+  const cid = jam.connection.id;
+  // 25 decisions the app took by asking, left with an old retry time (the send failed after the app asked)
+  sql(`INSERT INTO wt.conn_items (conn_id, external_id, kind, title, status, decided_at, callback_ok_at, callback_next_at, created_at, updated_at)
+    WITH RECURSIVE n (i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 25)
+    SELECT ${cid}, CONCAT('TAKEN-', i), 'approval', 'x', 'approved', NOW() - INTERVAL 2 HOUR, NOW() - INTERVAL 1 HOUR, NOW() - INTERVAL 1 HOUR, NOW(), NOW() FROM n`);
+  // one real decision waiting to be sent again, due later than all of them
+  sql(`INSERT INTO wt.conn_items (conn_id, external_id, kind, title, status, decided_at, callback_next_at, callback_tries, created_at, updated_at)
+    VALUES (${cid}, 'REAL-1', 'approval', 'Real one', 'approved', NOW() - INTERVAL 30 MINUTE, NOW() - INTERVAL 5 MINUTE, 1, NOW(), NOW())`);
+  await cronIn(1);
+  assert.deepEqual(cb.reqs.map((q) => JSON.parse(q.body).external_id), ['REAL-1'], 'the real one is sent; the taken ones are not sent again');
+  assert.equal(sqlOut(`SELECT CONCAT(IFNULL(callback_next_at, 'none'), ' ', callback_ok_at IS NOT NULL) FROM wt.conn_items WHERE id = ${itemId(cid, 'REAL-1')}`).trim(), 'none 1', 'sent');
+  // a send that fails after the app asked for it meanwhile: not queued again, no error shown
+  sql(`INSERT INTO wt.conn_items (conn_id, external_id, kind, title, status, decided_at, callback_next_at, created_at, updated_at)
+    VALUES (${cid}, 'RACE-1', 'approval', 'Race', 'approved', NOW(), NOW() - INTERVAL 1 MINUTE, NOW(), NOW())`);
+  const rid = itemId(cid, 'RACE-1');
+  cb.code = 500; cb.reqs = [];
+  cb.onReq = () => sql(`UPDATE wt.conn_items SET callback_ok_at = NOW(), callback_next_at = NULL WHERE id = ${rid}`); // the app asks while we wait
+  try { await phpRun(`conn_send(${rid});`); } finally { cb.onReq = null; cb.code = 200; }
+  assert.equal(cb.reqs.length, 1);
+  assert.equal(sqlOut(`SELECT IFNULL(callback_next_at, 'none') FROM wt.conn_items WHERE id = ${rid}`).trim(), 'none', 'not queued again');
+  assert.equal((await connList()).find((c) => c.name === 'Jam').lastError, '', 'no "could not tell the app" error');
+  assert.ok((await call('conn.delete', { id: cid }, tok.boss)).ok);
+});
+
+test('review r15: a phone whose clock is 5 minutes slow — its newer update written later is saved, not thrown away as "older"', { skip }, async () => {
+  const t = (await call('task.save', { assigneeId: id.suresh, title: 'Slow clock', repeat: 'once' }, tok.boss)).task;
+  assert.ok((await call('update.save', { taskId: t.id, note: 'first words', state: 'progress' }, tok.suresh)).ok); // saved online (server time)
+  await new Promise((r) => setTimeout(r, 1100));
+  const slow = 5 * 60000; // the phone's clock is 5 minutes behind
+  const phoneNow = () => new Date(Date.now() - slow).toISOString();
+  const writtenAt = phoneNow(); // edited after the first save, then queued
+  const r = await call('update.save', { taskId: t.id, note: 'newer words', state: 'progress', writtenAt, sentAt: phoneNow() }, tok.suresh);
+  assert.ok(r.ok, r.error);
+  assert.notEqual(r.history, 'older');
+  assert.equal((await call('task.get', { id: t.id }, tok.suresh)).updates[0].note, 'newer words', 'the newer words are saved');
+  // a really older one (written before the first save, by the phone's clock) is still kept out
+  const t2 = (await call('task.save', { assigneeId: id.suresh, title: 'Slow clock 2', repeat: 'once' }, tok.boss)).task;
+  const before = new Date(Date.now() - slow - 3000).toISOString();
+  await new Promise((r2) => setTimeout(r2, 1100));
+  assert.ok((await call('update.save', { taskId: t2.id, note: 'newest', state: 'progress' }, tok.suresh)).ok);
+  const late = await call('update.save', { taskId: t2.id, note: 'old words', state: 'progress', writtenAt: before, sentAt: phoneNow() }, tok.suresh);
+  assert.equal(late.history, 'older');
+});
+
+test('two updates written offline for the same task, sent later one after the other: the newer one (Finished) is saved, not thrown away as "older"', { skip }, async () => {
+  const t = (await call('task.save', { assigneeId: id.suresh, title: 'Two offline', repeat: 'once' }, tok.boss)).task;
+  const at = (ago) => new Date(Date.now() - ago).toISOString();
+  const w1 = at(120000), w2 = at(60000); // 'half done' written first, 'all done' a minute later (both queued)
+  const r1 = await call('update.save', { taskId: t.id, note: 'half done', state: 'progress', writtenAt: w1, sentAt: at(0), clientId: 'two-off-0001' }, tok.suresh);
+  assert.ok(r1.ok, r1.error);
+  await new Promise((r) => setTimeout(r, 1100));
+  const r2 = await call('update.save', { taskId: t.id, note: 'all done', state: 'finished', writtenAt: w2, sentAt: at(0), clientId: 'two-off-0002' }, tok.suresh);
+  assert.ok(r2.ok, r2.error);
+  assert.notEqual(r2.history, 'older', 'the second one was written later: it is not older');
+  const g = await call('task.get', { id: t.id }, tok.suresh);
+  assert.equal(g.updates[0].note, 'all done', 'the newer words are saved');
+  assert.equal(g.updates[0].state, 'finished');
+  assert.equal(g.task.status, 'done', 'its Finished closes the task');
+  // the first one sent again after (a lost reply on the phone): still kept out as older
+  const again = await call('update.save', { taskId: t.id, note: 'half done', state: 'progress', writtenAt: w1, sentAt: at(0), clientId: 'two-off-0003' }, tok.suresh);
+  assert.equal(again.history, 'older');
+  assert.equal((await call('task.get', { id: t.id }, tok.suresh)).task.status, 'done', 'not reopened');
+});
+
+test('review r15: a project.sync that fails puts back the old "last sent" time, so a Work Task move made before it is still followed', { skip }, async () => {
+  const k = 'psc:' + md5('rg-r15');
+  sql(`USE wt; INSERT INTO wt.settings (k, v) VALUES ('${k}', '1000') ON DUPLICATE KEY UPDATE v = '1000'`);
+  const r = await call('project.sync', { projectRef: 'rg-r15', project: 'Fail again', assigneeId: 999999, steps: [{ stepRef: 'f1', title: 'F one' }] }, tok.boss);
+  assert.ok(!r.ok, 'refused (no such person)');
+  assert.equal(sqlOut(`SELECT v FROM wt.settings WHERE k = '${k}'`).trim(), '1000', 'the time of the last real send is kept');
+  sql(`DELETE FROM wt.settings WHERE k = '${k}'`);
+});
+
+test('review r15: the person of a finished, cancelled or suggested task cannot be changed in the edit form (no move record would be made)', { skip }, async () => {
+  const t = (await call('task.save', { assigneeId: id.suresh, title: 'Closed swap', repeat: 'once' }, tok.boss)).task;
+  assert.ok((await call('update.save', { taskId: t.id, note: 'done', state: 'finished' }, tok.suresh)).ok);
+  const r = await call('task.save', { id: t.id, assigneeId: id.anita, title: 'Closed swap', repeat: 'once' }, tok.boss);
+  assert.ok(!r.ok);
+  assert.match(r.error, /Only an open task can go to someone else/);
+  assert.equal(sqlOut(`SELECT assignee_id FROM wt.tasks WHERE id = ${t.id}`).trim(), String(id.suresh), 'still Suresh\'s');
+  assert.ok((await call('task.get', { id: t.id }, tok.suresh)).task, 'Suresh still sees it');
+  // the same person: the edit still works; an open task still moves (with its move record)
+  assert.ok((await call('task.save', { id: t.id, assigneeId: id.suresh, title: 'Closed swap (fixed name)', repeat: 'once' }, tok.boss)).ok);
+  const o = (await call('task.save', { assigneeId: id.suresh, title: 'Open swap', repeat: 'once' }, tok.boss)).task;
+  assert.ok((await call('task.save', { id: o.id, assigneeId: id.anita, title: 'Open swap', repeat: 'once' }, tok.boss)).ok);
+  assert.equal(sqlOut(`SELECT COUNT(*) FROM wt.task_moves WHERE task_id = ${o.id}`).trim(), '1');
+});
+
+test('review r16: an app update that lands while the 5-minute job makes the same task (from the old words) still reaches the task as a note', { skip }, async () => {
+  sql(`INSERT INTO wt.conn_items (conn_id, external_id, kind, title, details, fields, status, created_at, updated_at) VALUES (${cn.purchase.id}, 'T-JOBRACE', 'task', 'Order 10 bags', '', '[]', 'pending', NOW(), NOW())`);
+  const iid = itemId(cn.purchase.id, 'T-JOBRACE');
+  // the job put the task in from the old row, but has not yet marked the item (the push reads it as not made)
+  await phpRun(`$it = one('SELECT * FROM conn_items WHERE id = ${iid}'); conn_make_task($it, ['name' => 'Purchase']);`);
+  sql(`UPDATE wt.conn_items SET dp_task_id = NULL, status = 'pending' WHERE id = ${iid}`);
+  const r = await appCall('connect.push', { external_id: 'T-JOBRACE', kind: 'task', title: 'Order 20 bags' }, cn.purchase.key);
+  assert.ok(r.ok, r.error);
+  assert.equal(r.status, 'done');
+  const made = (await dpNow()).data.projects.filter((p) => p.fromApp === 'Purchase' && p.name === 'Order 10 bags');
+  assert.equal(made.length, 1, 'one task');
+  assert.equal(made[0].workNotes[0]?.text, '🔌 Purchase updated this:\nTitle: Order 10 bags → Order 20 bags', 'the owner is told it changed to 20');
+  // a push that makes the task itself (with the newest words) writes no extra note
+  const r2 = await appCall('connect.push', { external_id: 'T-FRESH', kind: 'task', title: 'Fresh one' }, cn.purchase.key);
+  assert.equal(r2.status, 'done');
+  assert.deepEqual((await dpNow()).data.projects.find((p) => p.name === 'Fresh one').workNotes, [], 'no note');
+});
+
+test('review r16: an app that takes a task\'s link away removes the "Open in" chip (a withdraw or an unchanged link keeps it)', { skip }, async () => {
+  const t = { external_id: 'T-LINK', kind: 'task', title: 'PO 1', link: 'https://erp.example/po/1' };
+  assert.equal((await appCall('connect.push', t, cn.purchase.key)).status, 'done');
+  const chip = async () => (await dpNow()).data.projects.find((p) => p.name === 'PO 1');
+  let task = await chip();
+  assert.deepEqual(task.links.map((l) => l.url), ['https://erp.example/po/1']);
+  assert.ok((await appCall('connect.push', { ...t, link: '' }, cn.purchase.key)).ok);
+  task = await chip();
+  assert.match(task.workNotes[0].text, /Link: \(removed\)/);
+  assert.ok(!task.links.some((l) => l.id === task.id + '-link'), 'the old link chip is gone');
+  // the link back: the chip comes back; a title change with the same link keeps it; a withdraw keeps it
+  await appCall('connect.push', t, cn.purchase.key);
+  await appCall('connect.push', { ...t, title: 'PO 1 (rush)' }, cn.purchase.key);
+  assert.deepEqual((await chip()).links.map((l) => l.url), ['https://erp.example/po/1'], 'unchanged link: the chip stays');
+  assert.equal((await appCall('connect.withdraw', { external_id: 'T-LINK' }, cn.purchase.key)).status, 'withdrawn');
+  task = await chip();
+  assert.match(task.workNotes[0].text, /took this back/);
+  assert.deepEqual(task.links.map((l) => l.url), ['https://erp.example/po/1'], 'a withdraw keeps the chip');
+});
+
+test('review r16: change password — many wrong guesses sent at the same moment still stop after 5 (each try is counted before the slow check)', { skip }, async () => {
+  assert.ok((await call('user.save', { name: 'Race', username: 'pwrace', password: 'first-pass-123' }, tok.boss)).ok);
+  const l = await call('login', { username: 'pwrace', password: 'first-pass-123' });
+  assert.ok((await call('password', { old: 'first-pass-123', new: 'race-own-pass1' }, l.token)).ok);
+  const from = Number(sqlOut('SELECT IFNULL(MAX(id), 0) FROM wt.login_fails').trim());
+  // a web server that answers many requests at once (the real one does)
+  const port = WEB_PORT + 2;
+  const many = spawn('php', ['-S', `127.0.0.1:${port}`, '-t', join(ROOT, 'team', 'public_html')], { env: { ...env(), PHP_CLI_SERVER_WORKERS: '8' }, stdio: 'ignore' });
+  try {
+    const url = `http://127.0.0.1:${port}/api/?a=`;
+    await until(async () => (await fetch(url + 'ping', { method: 'POST', body: '{}' })).ok, 'PHP server with workers');
+    const guess = (i) => fetch(url + 'password', { method: 'POST', headers: { Authorization: 'Bearer ' + l.token, 'Content-Type': 'application/json' }, body: JSON.stringify({ old: 'guess-' + i, new: 'taken-over-1' }) }).then((r) => r.status);
+    const codes = await Promise.all(Array.from({ length: 24 }, (_, i) => guess(i)));
+    assert.ok(codes.filter((c) => c === 400).length <= 5, `at most 5 guesses checked, got ${codes.join(',')}`);
+    assert.equal(codes.filter((c) => c !== 400 && c !== 429).length, 0, codes.join(','));
+  } finally { many.kill(); }
+  // the right password still works after fewer than 5 wrong tries, and clears the count
+  sql(`DELETE FROM wt.login_fails WHERE id > ${from}`);
+  for (let i = 0; i < 4; i++) assert.equal((await call('password', { old: 'wrong-' + i, new: 'race-own-pass2' }, l.token)).s, 400);
+  assert.ok((await call('password', { old: 'race-own-pass1', new: 'race-own-pass2' }, l.token)).ok);
+  assert.equal(sqlOut(`SELECT COUNT(*) FROM wt.login_fails WHERE id > ${from} AND k LIKE 'u:pwrace%'`).trim(), '0', 'the count is cleared');
+  assert.equal(sqlOut(`SELECT COUNT(*) FROM wt.login_fails WHERE id > ${from} AND k LIKE 'ip:%'`).trim(), '4', 'only this try is taken off the computer\'s count');
+  sql(`DELETE FROM wt.login_fails WHERE id > ${from}`);
+});
+
+test('review r16: an offline update from a phone whose date is behind is saved for the day it was really written (the server\'s day)', { skip }, async () => {
+  const t = (await call('task.save', { assigneeId: id.suresh, title: 'Phone date behind', repeat: 'once' }, tok.boss)).task;
+  const behind = (days) => new Date(Date.now() - days * 86400e3).toISOString();
+  // one day behind: the phone thinks it is yesterday
+  const r = await call('update.save', { taskId: t.id, note: 'written just now', state: 'progress', day: istDay(1), writtenAt: behind(1), sentAt: behind(1), clientId: 'behind-0001' }, tok.suresh);
+  assert.ok(r.ok, r.error);
+  assert.equal(r.update.day, istDay(0), 'today\'s update, not yesterday\'s');
+  // three days behind: not refused as "more than 2 days ago" (it was written just now)
+  const t3 = (await call('task.save', { assigneeId: id.suresh, title: 'Phone date far behind', repeat: 'once' }, tok.boss)).task;
+  sql(`UPDATE wt.tasks SET created_at = NOW() - INTERVAL 10 DAY, start_date = CURDATE() - INTERVAL 10 DAY WHERE id = ${t3.id}`);
+  const r3 = await call('update.save', { taskId: t3.id, note: 'written just now too', state: 'progress', day: istDay(3), writtenAt: behind(3), sentAt: behind(3), clientId: 'behind-0003' }, tok.suresh);
+  assert.ok(r3.ok, r3.error);
+  assert.ok(r3.update.day >= istDay(2), r3.update.day);
+  // without the phone's times the phone's day is still used (and still limited to 2 days back)
+  assert.equal((await call('update.save', { taskId: t3.id, note: 'old', day: istDay(1) }, tok.suresh)).update.day, istDay(1));
+  assert.match((await call('update.save', { taskId: t3.id, note: 'old', day: istDay(5) }, tok.suresh)).error || '', /more than 2 days/);
+});
+
+test('review: the manager\'s Done / Take back from an old screen never overwrites the person\'s own Finished', { skip }, async () => {
+  const t = (await call('task.save', { assigneeId: id.suresh, title: 'Finished on the phone', repeat: 'once' }, tok.boss)).task;
+  assert.ok((await call('update.save', { taskId: t.id, note: 'All done', state: 'finished' }, tok.suresh)).ok);
+  const closedBy = () => sqlOut(`SELECT CONCAT(status, ':', IFNULL(closed_by, 'none')) FROM wt.tasks WHERE id = ${t.id}`).trim();
+  assert.equal(closedBy(), `done:${id.suresh}`, 'the person finished it');
+  for (const status of ['done', 'cancelled']) {
+    const r = await call('task.status', { id: t.id, status }, tok.boss);
+    assert.equal(r.s, 409, `${status} on an already closed task is refused`);
+    assert.equal(closedBy(), `done:${id.suresh}`, `still the person's Finished after ${status}`);
+  }
+  // a task the manager closed is not cancelled (or closed again) either
+  const m = (await call('task.save', { assigneeId: id.suresh, title: 'Closed by the manager', repeat: 'once' }, tok.boss)).task;
+  assert.equal((await call('task.status', { id: m.id, status: 'done' }, tok.boss)).task.status, 'done');
+  assert.equal((await call('task.status', { id: m.id, status: 'cancelled' }, tok.boss)).s, 409);
+  assert.equal((await call('task.get', { id: m.id }, tok.boss)).task.status, 'done');
+  // Open again still works
+  assert.equal((await call('task.status', { id: t.id, status: 'open' }, tok.boss)).task.status, 'open');
+});
+
+test('outlook: 250+ emails within the 5 minutes looked back (a mail merge, a bulk "Mark all as read") never stop the checks — later emails, moved emails and your replies are still read', { skip }, async () => {
+  await fakeMicrosoft();
+  sql('UPDATE wt.settings SET v = UNIX_TIMESTAMP() + 86400 WHERE k = \'jobs_at\'');
+  await connectOutlook();
+  const iso = (ms) => new Date(ms).toISOString().replace(/\.\d+Z$/, 'Z');
+  const now = Date.now();
+  const at = (secs) => iso(now - 6 * 60000 + secs * 1000); // all within a few minutes
+  // a mailbox that filters, orders and pages like Graph ($top 50, @odata.nextLink with $skip)
+  const box = { inbox: [], moved: [], sent: [] };
+  ms.graph = (u) => {
+    const m = /^\/v1\.0\/me\/mailFolders\/(inbox|sentitems)\/messages$/.exec(u.pathname);
+    if (!m) return null;
+    const f = /^(\w+) gt (\S+)(?: and receivedDateTime gt (\S+))?$/.exec(u.searchParams.get('$filter') || '');
+    if (!f) return [400, { error: { code: 'BadRequest' } }];
+    const [, field, gt, recv] = f;
+    const list = m[1] === 'sentitems' ? box.sent : field === 'lastModifiedDateTime' ? box.moved : box.inbox;
+    const hits = list.filter((x) => Date.parse(x[field]) > Date.parse(gt) && (!recv || Date.parse(x.receivedDateTime) > Date.parse(recv)))
+      .sort((a, b) => Date.parse(a[field]) - Date.parse(b[field]));
+    const skipN = Number(u.searchParams.get('$skip') || 0);
+    const next = new URL(u.href); next.searchParams.set('$skip', String(skipN + 50));
+    return [200, { value: hits.slice(skipN, skipN + 50), ...(hits.length > skipN + 50 ? { '@odata.nextLink': MS + next.pathname + next.search } : {}) }];
+  };
+  sql(`UPDATE wt.settings SET v = '${iso(now - 10 * 60000)}' WHERE k IN ('ol_since', 'ol_sent_since', 'ol_mod_since')`);
+  sql(`REPLACE INTO wt.settings (k, v) VALUES ('ol_mod_from', '${iso(now - 3 * 86400e3 + 3600e3)}')`);
+  sql("DELETE FROM wt.settings WHERE k IN ('ol_next_inbox', 'ol_next_moved', 'ol_next_sent')");
+  // the Inbox: 260 emails within one minute (one thread), then one later email
+  for (let i = 0; i < 260; i++) box.inbox.push({ ...mail(`bulk-in-${i}`, 'C-BULK-IN', 'Monthly statement', 'Bank', 0, `Statement ${i}`), receivedDateTime: at(i / 5) });
+  box.inbox.push({ ...mail('late-in', 'C-LATE-IN', 'Urgent: kiln order', 'Kumar', 0, 'Please call me.'), receivedDateTime: at(90) });
+  // a bulk change: 300 recent emails changed at the same moment, then one email moved in from Junk (received 2 days ago)
+  const T = at(30);
+  for (let i = 0; i < 300; i++) box.moved.push({ ...mail(`bulk-mv-${i}`, 'C-BULK-MV', 'Newsletter', 'Shop', 120, `News ${i}`), lastModifiedDateTime: T });
+  box.moved.push({ ...mail('late-mv', 'C-LATE-MV', 'Order for 90 tiles', 'Mohan', 2 * 1440, 'Found in Junk.'), lastModifiedDateTime: at(60) });
+  // Sent Items: a mail merge of 260 invoices within one minute, then your reply in the Inbox thread
+  for (let i = 0; i < 260; i++) box.sent.push({ id: `inv-${i}`, conversationId: `C-INV-${i}`, sentDateTime: at(i / 5), bodyPreview: `Invoice ${i}` });
+  box.sent.push({ id: 'late-sent', conversationId: 'C-BULK-IN', sentDateTime: at(100), bodyPreview: 'Thanks, received.' });
+  try {
+    for (let n = 0; n < 2; n++) assert.equal((await call('outlook.check', {}, tok.boss)).outlook.error, '');
+    const { data } = await dpNow();
+    const task = (conv) => data.projects.find((p) => p.mail && p.mail.conversationId === conv);
+    assert.ok(task('C-LATE-IN'), 'the later Inbox email became a task');
+    assert.ok(task('C-LATE-MV'), 'the email moved in from Junk became a task');
+    assert.ok(task('C-BULK-IN').thread.some((e) => e.messageId === 'late-sent' && e.fromMe), 'your later reply joined the thread');
+    // the next checks start again from the watermark: nothing is added twice
+    const head = (await dpNow()).head;
+    for (let n = 0; n < 2; n++) await call('outlook.check', {}, tok.boss);
+    assert.equal((await dpNow()).head, head, 'nothing new: no new version');
+    // a kept page address Microsoft no longer takes: one error, then the checks start again
+    sql(`REPLACE INTO wt.settings (k, v) VALUES ('ol_next_inbox', '${MS}/v1.0/me/mailFolders/inbox/messages?gone=1')`);
+    assert.notEqual((await call('outlook.check', {}, tok.boss)).outlook.error, '');
+    assert.equal((await call('outlook.check', {}, tok.boss)).outlook.error, '', 'not stuck on the old page address');
+    // a page address from somewhere else is never followed (the token goes to Microsoft only)
+    sql("REPLACE INTO wt.settings (k, v) VALUES ('ol_next_inbox', 'https://evil.test/steal')");
+    ms.reqs = [];
+    assert.equal((await call('outlook.check', {}, tok.boss)).outlook.error, '');
+    assert.ok(ms.reqs.some((x) => x.path === '/v1.0/me/mailFolders/inbox/messages' && decodeURIComponent(x.url).includes('$filter=receivedDateTime gt')), 'a fresh look instead');
+    // after a long break (a new sign-in looks at the last 24 hours only), a kept page address is dropped too
+    sql(`REPLACE INTO wt.settings (k, v) VALUES ('ol_next_inbox', '${MS}/v1.0/me/mailFolders/inbox/messages?old=1'), ('ol_next_moved', '${MS}/v1.0/me/mailFolders/inbox/messages?old=2')`);
+    sql(`UPDATE wt.settings SET v = '${iso(now - 5 * 86400e3)}' WHERE k = 'ol_since'`);
+    await connectOutlook();
+    assert.equal(sqlOut("SELECT CONCAT(IFNULL(MAX(IF(k = 'ol_next_inbox', v, NULL)), ''), '|', IFNULL(MAX(IF(k = 'ol_next_moved', v, NULL)), '')) FROM wt.settings").trim(), '|');
+  } finally {
+    ms.graph = null;
+    sql("DELETE FROM wt.settings WHERE k IN ('ol_next_inbox', 'ol_next_moved', 'ol_next_sent')");
+    sql('UPDATE wt.settings SET v = 0 WHERE k = \'jobs_at\'');
+  }
 });

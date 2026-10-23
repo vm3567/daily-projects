@@ -3,7 +3,7 @@
 import { h, fmtDay, fmtTime, fmtSize, HAS_KEYBOARD } from './dom.js';
 
 const MOD = /Mac|iPhone|iPad/.test(globalThis.navigator ? navigator.platform || navigator.userAgent || '' : '') ? '⌘' : 'Ctrl';
-import { dotColour, isSnoozed, restUntil, restReason, onlyDaysOf, onlyDaysLabel, onlyDaysChip, remindOnceChip, indiaDateTime, WEEKDAYS, weekdayOf, stepWaitsForReminder, daysBetween, addDays, todayIndia, isOverdue, indiaDate, waitingDays, lastWorkDate, nextStep, stepLinkedTo, personStatus, minutesBetween, fmtMinutes, weekStart, seenUpTo, deleteQuestion } from '../rules.js';
+import { dotColour, isSnoozed, restUntil, restReason, onlyDaysOf, onlyDaysLabel, onlyDaysChip, remindOnceChip, indiaDateTime, WEEKDAYS, weekdayOf, stepWaitsForReminder, daysBetween, addDays, todayIndia, isOverdue, indiaDate, waitingDays, lastWorkDate, nextStep, stepLinkedTo, personStatus, minutesBetween, fmtMinutes, weekStart, seenUpTo, deleteQuestion, parseDuration } from '../rules.js';
 import { WAIT_RED_DAYS } from '../config.js';
 import { newId, PRIORITIES, cleanUrl, groupHasTimer, MAX_SNOOZE_DAYS, ABOUT_MAX } from '../ops.js';
 
@@ -739,9 +739,8 @@ function timeLine(ctx, p, today) {
 function addTimePrompt(ctx, p) {
   const v = prompt(`Add time to "${p.name}" (worked today, not timed).\n\nMinutes, or hours like 1.5h:`, '30');
   if (v === null) return;
-  const txt = v.trim().toLowerCase();
-  const minutes = txt.endsWith('h') ? Math.round(parseFloat(txt) * 60) : Math.round(parseFloat(txt));
-  if (!(minutes > 0)) { ctx.toast('Type a number of minutes, like 45, or hours like 1.5h'); return; }
+  const minutes = parseDuration(v); // the whole answer must be read ("2 hours" is not 2 minutes)
+  if (!minutes) { ctx.toast('Type a number of minutes, like 45, or hours like 1.5h'); return; }
   ctx.act('addTime', { projectId: p.id, minutes }, `⏱ Added ${fmtMinutes(minutes)} to ${p.name}`);
 }
 

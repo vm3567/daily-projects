@@ -873,6 +873,28 @@ test('Undo of a team tick (or untick) is remembered, so the next team load does 
   assert.equal(s2.data.projects[0].teamUndone, undefined);
 });
 
+test('Undo of an untick (team "opened again", or your own) brings the step back done WITH its tick line', () => {
+  for (const byTeam of [true, false]) {
+    const s = withProject('2026-10-01');
+    const tick = op('tickStep', { projectId: 'p1', stepId: 's1', byTeam }, '2026-10-02');
+    applyOp(s, tick);
+    const kind = byTeam ? 'team_ticked' : 'step_ticked';
+    const before = clone(s.data.projects[0]);
+    const untick = op('untickStep', { projectId: 'p1', stepId: 's1', byTeam }, '2026-10-03');
+    applyOp(s, untick);
+    assert.ok(!s.history['2026-10'].some((e) => e.kind === kind), 'the untick takes the tick line away');
+    applyOp(s, op('restoreProject', { project: before, index: 0, undoOpIds: [untick.id], undoMonth: '2026-10' }, '2026-10-03', '10:00:05'));
+    assert.equal(s.data.projects[0].steps[0].done, true, 'done again');
+    const lines = s.history['2026-10'].filter((e) => e.kind === kind && e.stepId === 's1');
+    assert.equal(lines.length, 1, `${kind} line is back (once)`);
+    assert.equal(lines[0].id, tick.id);
+    assert.ok(!s.history['2026-10'].some((e) => e.id === untick.id), 'the untick line is gone');
+    // replayed (a save that had to try again): still once
+    applyOp(s, op('restoreProject', { project: before, index: 0, undoOpIds: [untick.id], undoMonth: '2026-10' }, '2026-10-03', '10:00:05'));
+    assert.equal(s.history['2026-10'].filter((e) => e.kind === kind).length, 1);
+  }
+});
+
 test('a project given as one task (no steps) shows stuck when that task is stuck', async () => {
   const { teamProgressOf } = await import('../docs/rules.js');
   const whole = { id: 1, projectRef: 'p1', stepRef: 'p1:whole', seq: 1, status: 'open', stuck: true, today: { day: '2026-10-21', state: 'stuck' } };
@@ -1193,6 +1215,17 @@ test('replies: setReply saves the draft where the email lives (Inbox item, step,
   assert.equal(ev.length, 1, 'one short history line ("Reply prepared"), not one per edit');
   assert.equal(dayScore(s.data, s.history, '2026-10-22').green, 0, 'preparing a reply is not work');
   assert.equal(lastWorkDate(s.data.projects[0]), null);
+});
+
+test('replies: a Claude draft keeps the email it was written for (forMessageId); an email that came meanwhile shows as newer', async () => {
+  const { repliesOf } = await import('../docs/rules.js');
+  const s = withMails();
+  s.data.inbox[0].mail.messageId = 'msg-i1-b'; // a newer email on the thread while the owner read the drafts
+  assert.ok(applyOp(s, op('setReply', { itemId: 'i1', text: 'Dear Ravi, noted.', by: 'claude', forMessageId: 'msg-i1' }, '2026-10-22')));
+  assert.equal(s.data.inbox[0].reply.forMessageId, 'msg-i1', 'the email Claude read, not the newest at save time');
+  assert.equal(repliesOf(s.data, '2026-10-22').ready.find((m) => m.id === 'i1').newer, true, '"a newer email came after it"');
+  applyOp(s, op('setReply', { itemId: 'i2', text: 'Thanks Anil', by: 'claude' }, '2026-10-22'));
+  assert.equal(s.data.inbox[1].reply.forMessageId, 'msg-i2', 'not given: the newest email, as before');
 });
 
 test('replies: an Inbox item\'s draft goes with it to a step or project', () => {
@@ -2334,6 +2367,34 @@ test('email task: an email received before you pressed Finish / Delete but broug
   assert.equal(applyOp(s, op('finish', { projectId: 'mt' }, '2026-10-02', '10:00:00')), false, 'mail.addedAt counts too');
 });
 
+test('email task: Finish / Delete compare with the newest email you saw (seenMailAt, server time), not the device clock', async () => {
+  const { seenMailOf } = await import('../docs/ops.js');
+  for (const kind of ['finish', 'deleteProject']) {
+    // device clock 3 minutes behind: the server brought the email in at 10:00, the press says 09:58
+    const s = withMains();
+    const p = mailTask(s);
+    p.thread.push({ at: '2026-10-02T04:29:00.000Z', addedAt: '2026-10-02T04:30:00.000Z', fromName: 'Ravi', fromMe: false, preview: 'Invoice', messageId: 'e2' });
+    p.mail = { ...p.mail, messageId: 'e2', at: '2026-10-02T04:29:00.000Z', addedAt: '2026-10-02T04:30:00.000Z' };
+    assert.equal(seenMailOf(p), '2026-10-02T04:30:00.000Z');
+    assert.equal(applyOp(s, op(kind, { projectId: 'mt', seenMailAt: seenMailOf(p) }, '2026-10-02', '09:58:00')), true, `${kind}: clock behind, the email was on screen`);
+    // device clock ahead and the save waited: an email brought in after the press still holds it
+    const s2 = withMains();
+    const p2 = mailTask(s2);
+    const late = op(kind, { projectId: 'mt', seenMailAt: seenMailOf(p2) }, '2026-10-02', '10:30:00'); // clock says 10:30, real press 10:00
+    p2.thread.push({ at: '2026-10-02T04:33:00.000Z', addedAt: '2026-10-02T04:35:00.000Z', fromName: 'Ravi', fromMe: false, preview: 'Any news?', messageId: 'e2' });
+    assert.equal(applyOp(s2, late), false, `${kind}: clock ahead, the newer email stays`);
+    assert.equal(P(s2, 'mt').state, 'active');
+    // nothing from them seen yet (seenMailAt null): any email from them holds it
+    const s3 = withMains();
+    const p3 = mailTask(s3);
+    p3.thread = [{ at: '2026-10-01T04:00:00.000Z', fromName: 'Me', fromMe: true, preview: 'Hi', messageId: 'e1' }];
+    const none = op(kind, { projectId: 'mt', seenMailAt: seenMailOf(p3) }, '2026-10-02', '10:00:00');
+    assert.equal(none.args.seenMailAt, null);
+    serverEmail(p3, 'e2', '2026-10-01T04:00:00.000Z');
+    assert.equal(applyOp(s3, none), false, `${kind}: the first email from them stays`);
+  }
+});
+
 test('Inbox Undo takes back only the step it added (by id): another device\'s work on that task meanwhile stays, no project inside a project; safe to replay', () => {
   const base = () => {
     const s = withMains();
@@ -2405,4 +2466,192 @@ test('📂 a task taken out of a project (or deleted, or moved by setParent) los
   s = make();
   applyOp(s, op('deleteProject', { projectId: 'k1' }, '2026-10-03'));
   assert.deepEqual(P(s, 'm').taskOrder, ['k2', 'x'], 'deleteProject');
+});
+
+test('📂 Undo of taking a task out (or deleting it) puts it back in its place in the project\'s order, not at the bottom', async () => {
+  const { orderedTasks } = await import('../docs/rules.js');
+  const { orderPosOf } = await import('../docs/ops.js');
+  const make = () => {
+    const s = withMains();
+    for (const id of ['k1', 'k2', 'x']) applyOp(s, op('addToProject', { projectId: id, parentId: 'm' }, '2026-10-02'));
+    applyOp(s, op('setTaskOrder', { projectId: 'm', order: ['x', 'k1', 'k2'] }, '2026-10-02'));
+    return s;
+  };
+  const ids = (s) => orderedTasks(s.data, P(s, 'm'), '2026-10-22').map((x) => x.id);
+  for (const [type, args] of [['removeFromProject', { projectId: 'k1', parentId: 'm' }], ['deleteProject', { projectId: 'k1' }]]) {
+    const s = make();
+    const index = s.data.projects.findIndex((p) => p.id === 'k1');
+    const before = clone(P(s, 'k1'));
+    const orderPos = orderPosOf(s.data, 'k1'); // as act() records it
+    assert.deepEqual(orderPos, { m: 1 });
+    const t = op(type, args, '2026-10-03');
+    assert.ok(applyOp(s, t));
+    assert.deepEqual(P(s, 'm').taskOrder, ['x', 'k2']);
+    assert.ok(applyOp(s, op('restoreProject', { project: before, index, undoOpId: t.id, orderPos }, '2026-10-03', '10:01:00')));
+    assert.deepEqual(P(s, 'm').taskOrder, ['x', 'k1', 'k2'], type);
+    assert.deepEqual(ids(s), ['x', 'k1', 'k2'], type + ': second again, as arranged');
+    // replayed (twice, or on another device): it is not put in twice
+    assert.ok(applyOp(s, op('restoreProject', { project: before, index, undoOpId: t.id, orderPos }, '2026-10-03', '10:02:00')));
+    assert.deepEqual(P(s, 'm').taskOrder, ['x', 'k1', 'k2'], type + ': once only');
+  }
+  // a saved place in a project the task is not in (after the Undo): never put in its order
+  const s = make();
+  const before = clone(P(s, 'k1'));
+  applyOp(s, op('removeFromProject', { projectId: 'k1', parentId: 'm' }, '2026-10-03'));
+  P(s, 'x').taskOrder = ['k2'];
+  applyOp(s, op('restoreProject', { project: before, orderPos: { m: 1, x: 0 } }, '2026-10-03', '10:01:00'));
+  assert.deepEqual(P(s, 'x').taskOrder, ['k2'], 'not in that project: no place in its order');
+  assert.deepEqual(P(s, 'm').taskOrder, ['x', 'k1', 'k2']);
+});
+
+test('make it a project, then un-ticked, then ticked the normal way: no longer moved, so the person\'s Work Task task closes', async () => {
+  const { singleStepClose, keepMovedStep } = await import('../docs/rules.js');
+  const s = withProject('2026-10-01');
+  assert.ok(applyOp(s, op('stepToProject', { projectId: 'p1', stepId: 's1', newProjectId: 'pn' }, '2026-10-02')));
+  const step = () => P(s, 'p1').steps.find((x) => x.id === 's1');
+  assert.equal(step().movedTo, 'pn');
+  assert.ok(applyOp(s, op('untickStep', { projectId: 'p1', stepId: 's1' }, '2026-10-03')));
+  assert.deepEqual([step().done, step().movedTo], [false, undefined], 'un-ticked: an ordinary open step again');
+  assert.ok(applyOp(s, op('tickStep', { projectId: 'p1', stepId: 's1' }, '2026-10-05')));
+  assert.deepEqual([step().done, step().movedTo], [true, undefined]);
+  const t = { status: 'open', stepRef: 's1', seq: null, projectRef: 'p1' };
+  assert.equal(singleStepClose(t, s.data.projects, new Set(['p1']), s.history, Date.parse(T('2026-10-06'))), 'done', 'the person\'s task is closed');
+  assert.equal(keepMovedStep(step(), t, true), false, 'not sent as moved any more');
+  // a step still carrying movedTo from older data, ticked the normal way: not a move
+  const st = P(s, 'p1').steps.find((x) => x.id === 's2');
+  st.movedTo = 'pn';
+  assert.ok(applyOp(s, op('tickStep', { projectId: 'p1', stepId: 's2' }, '2026-10-05')));
+  assert.equal(st.movedTo, undefined);
+});
+
+test('review r15: Undo of Pause / Finish while the timer ran starts the timer again — the timed minutes are never lost', () => {
+  for (const kind of ['pause', 'finish']) {
+    const s = withProject('2026-10-01');
+    s.data.groups.find((g) => g.id === 'g2').timer = true;
+    const start = op('startTimer', { projectId: 'p1' }, '2026-10-05', '10:00:00');
+    applyOp(s, start);
+    const timerBefore = clone(s.data.timer);
+    const before = clone(s.data.projects[0]);
+    const act = op(kind, { projectId: 'p1' }, '2026-10-05', '12:00:00');
+    assert.ok(applyOp(s, act));
+    assert.equal(s.data.timer, null, kind + ' stops the timer');
+    applyOp(s, op('restoreProject', { project: before, index: 0, undoOpId: act.id, timer: timerBefore }, '2026-10-05', '12:01:00'));
+    assert.deepEqual(s.data.timer, { projectId: 'p1', start: start.at, id: start.id }, kind + ': running again from 10:00');
+    applyOp(s, op('stopTimer', { timerId: start.id }, '2026-10-05', '13:00:00'));
+    assert.deepEqual(s.data.projects[0].timeLogs.map((l) => l.minutes), [180], kind + ': all 3 hours logged');
+  }
+});
+
+test('review r15: Undo of Pause when another timer runs by now keeps the paused one\'s minutes logged', () => {
+  const s = withProject('2026-10-01');
+  s.data.groups.find((g) => g.id === 'g2').timer = true;
+  applyOp(s, op('createProject', { projectId: 'p2', name: 'Other', groupId: 'g2' }, '2026-10-01'));
+  applyOp(s, op('startTimer', { projectId: 'p1' }, '2026-10-05', '10:00:00'));
+  const timerBefore = clone(s.data.timer);
+  const before = clone(s.data.projects.find((x) => x.id === 'p1'));
+  const pause = op('pause', { projectId: 'p1' }, '2026-10-05', '12:00:00');
+  applyOp(s, pause);
+  applyOp(s, op('startTimer', { projectId: 'p2', running: null }, '2026-10-05', '12:05:00'));
+  applyOp(s, op('restoreProject', { project: before, index: 0, undoOpId: pause.id, timer: timerBefore }, '2026-10-05', '12:10:00'));
+  const p1 = s.data.projects.find((x) => x.id === 'p1');
+  assert.equal(p1.state, 'active');
+  assert.deepEqual((p1.timeLogs || []).map((l) => l.minutes), [120], 'the 2 hours stay');
+  assert.equal(s.data.timer.projectId, 'p2', 'the other timer keeps running');
+  const kinds = (s.history['2026-10'] || []).map((e) => e.kind);
+  assert.ok(kinds.includes('time_logged') && !kinds.includes('paused'), kinds.join());
+});
+
+test('review r15: a late Stop or Start from another device never stops a timer started since', () => {
+  const s = withProject('2026-10-01');
+  s.data.groups.find((g) => g.id === 'g2').timer = true;
+  applyOp(s, op('createProject', { projectId: 'p2', name: 'Other', groupId: 'g2' }, '2026-10-01'));
+  const a = op('startTimer', { projectId: 'p1', running: null }, '2026-10-05', '09:30:00');
+  applyOp(s, a);
+  applyOp(s, op('stopTimer', { timerId: a.id }, '2026-10-05', '10:30:00')); // the PC stops A
+  const b = op('startTimer', { projectId: 'p2', running: null }, '2026-10-05', '10:31:00');
+  applyOp(s, b);
+  // the phone's Stop, pressed offline at 10:20 for A, arrives now
+  assert.equal(applyOp(s, op('stopTimer', { timerId: a.id }, '2026-10-05', '10:20:00')), false);
+  assert.equal(s.data.timer && s.data.timer.id, b.id, 'B still runs');
+  // a late Start of A, pressed while A's old timer ran
+  assert.equal(applyOp(s, op('startTimer', { projectId: 'p1', running: a.id }, '2026-10-05', '10:25:00')), false);
+  assert.equal(s.data.timer && s.data.timer.id, b.id, 'B still runs');
+  // pressed now (for B): works
+  assert.ok(applyOp(s, op('stopTimer', { timerId: b.id }, '2026-10-05', '11:31:00')));
+  assert.deepEqual(s.data.projects.find((x) => x.id === 'p2').timeLogs.map((l) => l.minutes), [60]);
+});
+
+test('review r15: a monthly repeat follows a due date you moved (31st moved to the 5th → the 5th next month)', () => {
+  const s = withProject('2026-01-01');
+  applyOp(s, op('setStepField', { projectId: 'p1', stepId: 's1', field: 'repeat', value: 'monthly' }, '2026-01-01'));
+  applyOp(s, op('setStepField', { projectId: 'p1', stepId: 's1', field: 'dueDate', value: '2026-01-31' }, '2026-01-01'));
+  const t1 = op('tickStep', { projectId: 'p1', stepId: 's1' }, '2026-01-31');
+  applyOp(s, t1);
+  const c1 = s.data.projects[0].steps.find((x) => x.id === t1.id + 'r');
+  assert.equal(c1.dueDate, '2026-02-28');
+  applyOp(s, op('setStepField', { projectId: 'p1', stepId: c1.id, field: 'dueDate', value: '2026-03-05' }, '2026-02-10'));
+  const t2 = op('tickStep', { projectId: 'p1', stepId: c1.id }, '2026-03-05');
+  applyOp(s, t2);
+  const c2 = s.data.projects[0].steps.find((x) => x.id === t2.id + 'r');
+  assert.equal(c2.dueDate, '2026-04-05');
+  const t3 = op('tickStep', { projectId: 'p1', stepId: c2.id }, '2026-04-05');
+  applyOp(s, t3);
+  assert.equal(s.data.projects[0].steps.find((x) => x.id === t3.id + 'r').dueDate, '2026-05-05', 'stays on the 5th');
+});
+
+test('+ Add time answer: hours, minutes, "1h 30m" and "1:30" are read whole; anything not understood is refused (not read as a few minutes)', async () => {
+  const { parseDuration } = await import('../docs/rules.js');
+  assert.equal(parseDuration('2 hours'), 120);
+  assert.equal(parseDuration('1h 30m'), 90);
+  assert.equal(parseDuration('1h30m'), 90);
+  assert.equal(parseDuration('1:30'), 90);
+  assert.equal(parseDuration('1hr'), 60);
+  assert.equal(parseDuration('2 hrs'), 120);
+  assert.equal(parseDuration('1.5h'), 90);
+  assert.equal(parseDuration('1.5 H'), 90);
+  assert.equal(parseDuration('45'), 45);
+  assert.equal(parseDuration(' 45 min '), 45);
+  assert.equal(parseDuration('20m'), 20);
+  for (const bad of ['abc', '2 apples', '', '0', '-5', '1:75', '1h 30x', '2 hours later', null]) assert.equal(parseDuration(bad), null, `${bad} is refused`);
+});
+
+test('inbox Undo (as the app builds it: the whole item, cloned): an email item comes back whole — thread, note and reply draft — after → task, + New task and 🗑', async () => {
+  for (const [type, args] of [
+    ['inboxToStep', { itemId: 'i1', projectId: 'p1', stepId: 'sx' }],
+    ['inboxToProject', { itemId: 'i1', projectId: 'pn', groupId: 'g1' }],
+    ['removeInbox', { itemId: 'i1' }],
+  ]) {
+    const s = withMails();
+    applyOp(s, op('setReply', { itemId: 'i1', text: 'Dear Ravi,\n\nNoted.', by: 'you' }, '2026-10-22', '15:10:00'));
+    const item = clone(s.data.inbox[0]);
+    assert.ok(item.mail && item.note && item.reply, 'the sample has mail, note and reply');
+    const move = op(type, args, '2026-10-22', '15:11:00');
+    assert.ok(applyOp(s, move), type);
+    assert.ok(!s.data.inbox.some((x) => x.id === 'i1'));
+    // the args inboxAct (docs/app.js) sends: item = clone(item), and only what this change made is taken back
+    const extra = type === 'inboxToProject' ? { removeProjectId: args.projectId } : type === 'inboxToStep' ? { projectId: args.projectId, stepId: args.stepId } : {};
+    assert.ok(applyOp(s, op('inboxUndo', { item, index: 0, undoOpId: move.id, ...extra }, '2026-10-22', '15:11:05')), type + ' undo');
+    assert.deepEqual(s.data.inbox[0], item, type + ': back exactly as it was (mail, note, reply draft)');
+    assert.ok(!s.data.projects.some((p) => p.id === 'pn'), 'the new task is taken away');
+    assert.ok(!s.data.projects[0].steps.some((x) => x.id === 'sx'), 'the step is taken away');
+  }
+});
+
+test('todayList: what Today counts — an empty 📂 project (no own step) is left out, so 4 green tasks are "4 of 4"; stepTargets: tasks only, never a 📂 project', async () => {
+  const { todayList, stepTargets, dotColour: dot } = await import('../docs/rules.js');
+  const s = fresh();
+  applyOp(s, op('createMainProject', { projectId: 'm', name: 'Kilns', groupId: 'g1' }, '2026-10-01'));
+  for (const id of ['t1', 't2', 't3', 't4']) {
+    applyOp(s, op('createProject', { projectId: id, name: 'Task ' + id, groupId: 'g1' }, '2026-10-01'));
+    applyOp(s, op('addToProject', { projectId: id, parentId: 'm' }, '2026-10-01'));
+    applyOp(s, op('addStep', { projectId: id, stepId: id + 's', text: 'Do ' + id }, '2026-10-01'));
+    applyOp(s, op('addWorkNote', { projectId: id, noteId: id + 'n', text: 'Done today', stepId: id + 's' }, '2026-10-22'));
+  }
+  const list = todayList(s.data, '2026-10-22');
+  assert.deepEqual(list.map((p) => p.id).sort(), ['t1', 't2', 't3', 't4'], 'Kilns is left out');
+  assert.equal(list.filter((p) => dot(p, '2026-10-22') === 'green').length, 4, '4 of 4 green');
+  assert.deepEqual(stepTargets(s.data, '2026-10-22').map((p) => p.id).sort(), ['t1', 't2', 't3', 't4'], 'no 📂 project as a step target');
+  applyOp(s, op('addStep', { projectId: 'm', stepId: 'old', text: 'Old own step' }, '2026-10-22'));
+  assert.ok(todayList(s.data, '2026-10-22').some((p) => p.id === 'm'), 'with an own step it is on Today (as before)');
+  assert.ok(!stepTargets(s.data, '2026-10-22').some((p) => p.id === 'm'), 'still never a step target');
 });

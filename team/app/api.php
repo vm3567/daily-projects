@@ -241,17 +241,22 @@ function handle(string $a, array $in): array {
     }
     case 'update.save': {
       $t = one(TASK_SELECT . ' WHERE t.id = ?', [(int)($in['taskId'] ?? 0)]);
+      // the phone's clock may be off: its time when it sent this (sentAt) puts writtenAt on the server's clock
+      $sent = is_string($in['sentAt'] ?? null) && strtotime($in['sentAt']);
+      $skew = $sent ? max(-86400, min(86400, time() - (int)strtotime($in['sentAt']))) : 0;
+      $wrote = is_string($in['writtenAt'] ?? null) && strtotime($in['writtenAt']) ? date('Y-m-d H:i:s', min(time(), (int)strtotime($in['writtenAt']) + $skew)) : null;
       // written offline and sent later: it counts for the day it was written (up to 2 days back)
+      // (that day by the server's clock when the phone said both times; the phone's own day only when it did not)
       $uday = $day;
-      if (is_string($in['day'] ?? null) && preg_match('/^\d{4}-\d{2}-\d{2}$/', $in['day']) && $in['day'] < $day) {
+      $wday = $sent && $wrote ? substr($wrote, 0, 10) : ($in['day'] ?? null);
+      if (is_string($wday) && preg_match('/^\d{4}-\d{2}-\d{2}$/', $wday) && $wday < $day) {
         // older than 2 days: say so, never quietly save it as today's update
-        if ($in['day'] < date('Y-m-d', strtotime($day . ' -2 days'))) throw new ApiError('This update was written more than 2 days ago, so it was not saved. Please write it again.');
-        $uday = $in['day'];
+        if ($wday < date('Y-m-d', strtotime($day . ' -2 days'))) throw new ApiError('This update was written more than 2 days ago, so it was not saved. Please write it again.');
+        $uday = $wday;
       }
       // a closed task can only be changed by the person who finished it today (to fix or undo their own Finished);
       // never when the manager cancelled it, took it back, or marked it done (closed_by is set only by their own Finished)
       // (the newest update: a Finished written offline yesterday and sent today is still theirs to undo)
-      $wrote = is_string($in['writtenAt'] ?? null) && strtotime($in['writtenAt']) ? date('Y-m-d H:i:s', min(time(), (int)strtotime($in['writtenAt']))) : null;
       if ($wrote && substr($wrote, 0, 10) !== $uday) $wrote = null; // the time it was written must be on the day it is for
       // (an undo written offline within 12 hours of their Finished counts too, even if it arrives later)
       $mine = $t && $t['status'] === 'done' && $t['done_at'] && (int)($t['closed_by'] ?? 0) === $me['id']
@@ -282,12 +287,12 @@ function handle(string $a, array $in): array {
         if ($uday < $day && $notYetTheirs($t)) throw new ApiError('That day was before this task was yours, so the update was not saved.');
         $note = txt($in['note'] ?? '', 4000, true, 'The update');
         $state = in_array($in['state'] ?? '', ['progress', 'finished'], true) ? $in['state'] : 'progress'; // not "Stuck": the task is not theirs now
-        $old = one('SELECT user_id, note, updated_at, client_id FROM updates WHERE task_id = ? AND day = ?', [$t['id'], $uday]);
+        $old = one('SELECT user_id, note, COALESCE(written_at, updated_at) AS written_at, client_id FROM updates WHERE task_id = ? AND day = ?', [$t['id'], $uday]);
         if ($old && $ucid && (int)$old['user_id'] === $me['id'] && $old['client_id'] === $ucid) { // sent before, the answer was lost
           $u = one('SELECT * FROM updates WHERE task_id = ? AND day = ?', [$t['id'], $uday]);
           return ['update' => update_out($u, photos_of([(int)$u['id']])), 'history' => 'own'];
         }
-        if ($old && $wrote && (int)$old['user_id'] === $me['id'] && $old['updated_at'] > $wrote) { // they wrote again later: that one stays
+        if ($old && $wrote && (int)$old['user_id'] === $me['id'] && $old['written_at'] > $wrote) { // they wrote again later: that one stays
           return ['update' => update_out(one('SELECT * FROM updates WHERE task_id = ? AND day = ?', [$t['id'], $uday]), []), 'history' => 'older'];
         }
         if ($old && (int)$old['user_id'] !== $me['id']) { // someone else already wrote for that day: add these words below theirs (once)
@@ -297,9 +302,9 @@ function handle(string $a, array $in): array {
           $u['note'] = $note; $u['user_id'] = $me['id']; // the answer: only what this person wrote, never the other person's update
           return ['update' => update_out($u, []), 'history' => 'merged']; // (photos cannot go on the other person's update)
         } else {
-          q('INSERT INTO updates (task_id, user_id, day, note, state, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)
-             ON DUPLICATE KEY UPDATE note = VALUES(note), state = VALUES(state), updated_at = VALUES(updated_at)',
-            [$t['id'], $me['id'], $uday, $note, $state, now(), now()]);
+          q('INSERT INTO updates (task_id, user_id, day, note, state, created_at, updated_at, written_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+             ON DUPLICATE KEY UPDATE note = VALUES(note), state = VALUES(state), updated_at = VALUES(updated_at), written_at = VALUES(written_at)',
+            [$t['id'], $me['id'], $uday, $note, $state, now(), now(), $wrote ?? now()]);
           if ($ucid) q('UPDATE updates SET client_id = ? WHERE task_id = ? AND day = ?', [$ucid, $t['id'], $uday]);
           // today's words (written offline) for a whole-project task replaced by steps since: they count for their first step too
           if ($uday === $day && $t['status'] === 'cancelled' && $t['project_ref'] && $t['step_ref'] === $t['project_ref'] . ':whole') carry_whole_update((string)$t['project_ref'], $me['id']);
@@ -309,11 +314,11 @@ function handle(string $a, array $in): array {
       }
       $t = own_task($me, (int)($in['taskId'] ?? 0));
       if ($uday < $day && $notYetTheirs($t)) throw new ApiError('That day was before this task was yours, so the update was not saved.');
-      $cur = one('SELECT id, user_id, updated_at, client_id FROM updates WHERE task_id = ? AND day = ?', [$t['id'], $uday]);
+      $cur = one('SELECT id, user_id, COALESCE(written_at, updated_at) AS written_at, client_id FROM updates WHERE task_id = ? AND day = ?', [$t['id'], $uday]);
       if ($cur && $ucid && (int)$cur['user_id'] === $me['id'] && $cur['client_id'] === $ucid) { // sent before, the answer was lost: the same save
         return ['update' => update_out(one('SELECT * FROM updates WHERE id = ?', [$cur['id']]), photos_of([(int)$cur['id']]))];
       }
-      if ($wrote && $cur && (int)$cur['user_id'] === $me['id'] && $cur['updated_at'] > $wrote) { // an older offline update: their newer one stays (and the task is not reopened)
+      if ($wrote && $cur && (int)$cur['user_id'] === $me['id'] && $cur['written_at'] > $wrote) { // an older offline update: their newer one stays (and the task is not reopened)
         return ['update' => update_out(one('SELECT * FROM updates WHERE task_id = ? AND day = ?', [$t['id'], $uday]), []), 'history' => 'older'];
       }
       if ((int)$t['assignee_id'] !== $me['id']) throw new ApiError('Only the person doing the task can write its update.', 403);
@@ -336,11 +341,12 @@ function handle(string $a, array $in): array {
         // their photos stay on the row but are marked as older than this take-over (created_at)
         $before = trim((string)$old['note']);
         if ($before !== '') $note = mb_substr(user_name((int)$old['user_id']) . ': ' . $before . "\n\n" . $note, 0, 8000);
-        q('UPDATE updates SET user_id = ?, note = ?, state = ?, created_at = ?, updated_at = ? WHERE task_id = ? AND day = ?', [$me['id'], $note, $state, now(), now(), $t['id'], $uday]);
+        q('UPDATE updates SET user_id = ?, note = ?, state = ?, created_at = ?, updated_at = ?, written_at = ? WHERE task_id = ? AND day = ?', [$me['id'], $note, $state, now(), now(), $wrote ?? now(), $t['id'], $uday]);
       } else {
-        q('INSERT INTO updates (task_id, user_id, day, note, state, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)
-           ON DUPLICATE KEY UPDATE user_id = VALUES(user_id), note = VALUES(note), state = VALUES(state), updated_at = VALUES(updated_at)',
-          [$t['id'], $me['id'], $uday, $note, $state, now(), now()]);
+        // (written_at: when it was written, so the next offline one is compared with that, not with when this arrived)
+        q('INSERT INTO updates (task_id, user_id, day, note, state, created_at, updated_at, written_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+           ON DUPLICATE KEY UPDATE user_id = VALUES(user_id), note = VALUES(note), state = VALUES(state), updated_at = VALUES(updated_at), written_at = VALUES(written_at)',
+          [$t['id'], $me['id'], $uday, $note, $state, now(), now(), $wrote ?? now()]);
       }
       if ($ucid) q('UPDATE updates SET client_id = ? WHERE task_id = ? AND day = ?', [$ucid, $t['id'], $uday]);
       // a late update for an earlier day (sent from the outbox) is kept as history: it never reopens or closes the task
@@ -555,6 +561,8 @@ function handle(string $a, array $in): array {
         $out = locked_project_sync($me, $in, $ref, $day);
       } catch (Throwable $e) { // not done (busy, or the person is switched off): the owner's app keeps the old person, so the old marker is back
         if ($oldPsp === '') q('DELETE FROM settings WHERE k = ?', ['psp:' . md5($ref)]); else set_setting('psp:' . md5($ref), $oldPsp);
+        // and the old "last sent" time: a Work Task move made before this failed try is still followed when the app sends again
+        set_setting('psc:' . md5($ref), (string)$in['_psc']);
         throw $e;
       }
       set_setting('psc:' . md5($ref), (string)time()); // the server's own sync leaves this project alone for a few minutes
@@ -760,7 +768,9 @@ function handle(string $a, array $in): array {
         if ($old['seq'] !== null && $old['project_ref'] && (int)$old['assignee_id'] !== (int)$assignee['id'] && $old['status'] === 'open') {
           throw new ApiError('This step is part of a given project. Use "Move to…" to change the person.');
         }
-        if ((int)$old['assignee_id'] !== (int)$assignee['id'] && $old['status'] === 'open') move_tasks($me, [$old], (int)$assignee['id']);
+        // a closed task or a suggestion keeps its person (no move record: the report, the history and their list would be wrong)
+        if ((int)$old['assignee_id'] !== (int)$assignee['id'] && $old['status'] !== 'open') throw new ApiError('Only an open task can go to someone else. Open it again (or answer the suggestion) first.');
+        if ((int)$old['assignee_id'] !== (int)$assignee['id']) move_tasks($me, [$old], (int)$assignee['id']);
         q('UPDATE tasks SET title=?, details=?, assignee_id=?, repeat_kind=?, skip_sunday=?, weekday=?, due_date=?, project=?, project_ref=?, step_ref=?, updated_at=? WHERE id=?', [...$vals, $id]);
         q('UPDATE tasks SET needs_photo = ? WHERE id = ?', [empty($in['needsPhoto']) ? 0 : 1, $id]);
         if ($start = date_or_null($in['startDate'] ?? null)) q('UPDATE tasks SET start_date = ? WHERE id = ?', [$start, $id]);
@@ -785,10 +795,13 @@ function handle(string $a, array $in): array {
       if ($t['status'] === 'suggested') throw new ApiError('Answer the suggestion with Yes or Not now.');
       if ($st === 'cancelled' && $t['seq'] !== null && $t['project_ref']) throw new ApiError('This is a step of a given project: delete it (or take the project back) on your projects page.');
       if ($st === 'open' && !(int)(one('SELECT active FROM users WHERE id = ?', [$t['assignee_id']])['active'] ?? 0)) throw new ApiError('This person is switched off. Move the task to someone else first.');
+      // only an open task can be closed: never overwrite the person's own Finished (or an earlier close) from an old screen
+      if ($st !== 'open' && $t['status'] !== 'open') throw new ApiError('This task was already closed.', 409);
+      if ($st === 'open' && $t['status'] !== 'open') q('UPDATE tasks SET reopened_at = ?, closed_from = done_at WHERE id = ?', [now(), $t['id']]);
+      $upd = q('UPDATE tasks SET status = ?, done_at = ?, closed_by = NULL, updated_at = ? WHERE id = ?' . ($st === 'open' ? '' : " AND status = 'open'"), [$st, $st === 'open' ? null : now(), now(), $t['id']]); // closed by the manager, not by the person's Finished
+      if ($st !== 'open' && !$upd->rowCount()) throw new ApiError('This task was already closed.', 409); // (closed at the same moment)
       if ($st !== $t['status']) notify([(int)$t['assignee_id']], 'task',
         ['done' => '✓ Your manager closed a task', 'cancelled' => '✖️ A task was cancelled', 'open' => '↩️ A task is open again'][$st], $t['title'], '/#open=' . $t['id'], 't' . $t['id']);
-      if ($st === 'open' && $t['status'] !== 'open') q('UPDATE tasks SET reopened_at = ?, closed_from = done_at WHERE id = ?', [now(), $t['id']]);
-      q('UPDATE tasks SET status = ?, done_at = ?, closed_by = NULL, updated_at = ? WHERE id = ?', [$st, $st === 'open' ? null : now(), now(), $t['id']]); // closed by the manager, not by the person's Finished
       audit($me['id'], 'task_' . $st, "#{$t['id']} {$t['title']}");
       return ['task' => tasks_out([own_task($me, (int)$t['id'])], $day)[0]];
     }
@@ -1083,6 +1096,8 @@ function project_sync(array $me, array $in, string $ref, string $day): array {
       }
       continue;
     }
+    // a step made into its own project (moved): only a task it already has stays; never made again, nor a cancelled one opened again
+    if (!empty($st['moved']) && !one("SELECT id FROM tasks WHERE step_ref = ? AND status = 'open' AND seq IS NULL", [$stepRef])) continue;
     // the project with no steps was finished as one task: done, never made again (the owner decides to finish the project)
     if ($stepRef === "$ref:whole" && one("SELECT id FROM tasks WHERE project_ref = ? AND step_ref = ? AND status = 'done'", [$ref, $stepRef])) continue;
     // just finished by the person (the manager's step will tick itself in a moment): do not make it again.

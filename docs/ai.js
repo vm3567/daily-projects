@@ -202,6 +202,7 @@ export async function weeklyReview(provider, key, data, history) {
   const from = addDays(today, -7);
   const events = Object.values(history).flat()
     .filter((e) => indiaDate(e.at) >= from && ['step_ticked', 'note_added', 'finished', 'paused', 'created'].includes(e.kind))
+    .sort((a, b) => String(a.at).localeCompare(String(b.at))) // months are not kept in time order: keep the newest 150
     .slice(-150)
     .map((e) => `${indiaDate(e.at)} ${e.projectName || ''}: ${e.kind.replace('_', ' ')} - ${e.detail}`);
   const active = data.projects.filter((p) => p.state === 'active');

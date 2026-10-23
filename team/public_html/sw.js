@@ -1,11 +1,14 @@
 // Work Task app shell: keeps the screens on the phone so the app opens fast and shows something
 // without internet. Data (api/) and the projects app (projects/, it has its own) are never kept here.
-const CACHE = 'worktask-v26';
+const CACHE = 'worktask-v27';
 const SHELL = ['./', 'index.html', 'app.js', 'logic.js', 'styles.css', 'projects/styles.css', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png'];
 
 self.addEventListener('install', (e) => {
-  // all app files at once, fresh from the server (not the browser's own store): one version, all or nothing
-  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL.map((u) => new Request(u, { cache: 'reload' })))).then(() => self.skipWaiting()));
+  // all app files at once, fresh from the server (not the browser's own store): one version, all or nothing.
+  // Their version is noted with them (asked first: an upload in between only makes the set look older, so it is renewed;
+  // not known: '' = old, renewed at the first version check)
+  const ver = fetch('version.txt', { cache: 'no-store' }).then((r) => (r.ok ? r.text() : '')).then((t) => t.trim(), () => '');
+  e.waitUntil(caches.open(CACHE).then((c) => ver.then((v) => c.addAll(SHELL.map((u) => new Request(u, { cache: 'reload' }))).then(() => c.put(STAMP, new Response(v))))).then(() => self.skipWaiting()));
 });
 self.addEventListener('activate', (e) => {
   // only our own old copies: the projects app keeps its own cache on the same site
@@ -14,10 +17,11 @@ self.addEventListener('activate', (e) => {
 // The code files kept here are always ONE matched set: written only all at once (install, or when version.txt
 // says a new version was uploaded), never one file at a time.
 const STAMP = 'kept-version.txt'; // the version of the kept set
+// resolves true when the kept set was of an older version (a page that got its code from it runs old code)
 const keepSet = (stamp) => caches.open(CACHE).then((c) => c.match(STAMP).then((old) => (old ? old.text() : null)).then((was) => {
-  if (was === stamp) return undefined;
+  if (was === stamp) return false;
   const save = () => c.put(STAMP, new Response(stamp));
-  return was === null ? save() : c.addAll(SHELL.map((u) => new Request(u, { cache: 'reload' }))).then(save); // all or nothing
+  return was === null ? save().then(() => false) : c.addAll(SHELL.map((u) => new Request(u, { cache: 'reload' }))).then(save).then(() => true, () => true); // all or nothing
 }));
 // weak signal: a code file waits this long for the network, then this version's kept copy is used
 const CODE_WAIT = 8000;
@@ -33,30 +37,35 @@ self.addEventListener('fetch', (e) => {
   if (url.pathname === '/version.txt') {
     let text = null;
     const got = fetch(url.href, { cache: 'no-store' }).then((r) => { text = r.ok ? r.clone().text() : null; return r; });
-    e.waitUntil(got.then(() => text).then((t) => (t && t.trim() ? keepSet(t.trim()) : undefined)).catch(() => {}));
+    // the pages that got their code from the kept (old) set run old code, but their first stamp is already the new one: tell them (they offer the reload)
+    const oldPages = () => Promise.all([...pageWay].filter(([, way]) => way === 'kept').map(([id]) => self.clients.get(id).then((c) => c && c.postMessage({ type: 'new-version' }))));
+    e.waitUntil(got.then(() => text).then((t) => (t && t.trim() ? keepSet(t.trim()) : false)).then((wasOld) => (wasOld ? oldPages() : undefined)).catch(() => {}));
     e.respondWith(got);
     return;
   }
   const code = e.request.mode !== 'navigate' && /\.(js|mjs|css)$/.test(url.pathname);
   // only this version's copies (never a leftover from another cache)
   const fromCache = (req) => caches.open(CACHE).then((c) => c.match(req));
+  const id = code && /\.m?js$/.test(url.pathname) ? e.clientId : null; // the modules decide; a style sheet only has its own time limit
+  let from = 'net'; // where net's answer came from: 'net', 'kept' (the saved copy), or null (an error answer)
   // online: always the newest copy (and keep it, except code: that is kept only as a whole set); offline: the kept copy
   const net = fetch(e.request).then((res) => {
     if (res.ok) { if (!code) { const copy = res.clone(); caches.open(CACHE).then((c) => c.put(e.request, copy)).catch(() => {}); } return res; }
-    return fromCache(e.request).then((r) => r || res); // the host answered with an error page: the saved copy, if there is one
+    from = null;
+    if (pageWay.get(id) === 'net') return res; // this page has new code: the error, never an old kept copy next to it
+    return fromCache(e.request).then((r) => { if (r) from = 'kept'; return r || res; }); // the host answered with an error page: the saved copy, if there is one
   });
   const kept = () => fromCache(e.request).then((r) => r || (e.request.mode === 'navigate' ? fromCache('index.html') : Response.error()));
   // code (app.js, logic.js, styles): the network, or after CODE_WAIT (weak signal) / offline the kept set of this version.
   // A page that got one code file from the network waits for the network for the rest, and the other way round:
   // a new app.js never meets an old logic.js.
   if (code) {
-    const id = /\.m?js$/.test(url.pathname) ? e.clientId : null; // the modules decide; a style sheet only has its own time limit
     if (pageWay.get(id) === 'kept') { e.respondWith(fromCache(e.request).then((r) => r || net)); return; }
     const late = pageWay.get(id) === 'net' ? new Promise(() => {}) : new Promise((resolve) => setTimeout(() => fromCache(e.request).then(resolve, () => resolve(null)), CODE_WAIT));
     e.respondWith(Promise.race([
-      net.then((r) => { decide(id, 'net'); return r; }),
-      late.then((r) => { if (!r) return net; decide(id, 'kept'); return r; }),
-    ]).catch(() => { decide(id, 'kept'); return kept(); }));
+      net.then((r) => { if (from) decide(id, from); return r; }), // a kept copy (the host's error page swapped) marks the page 'kept'
+      late.then((r) => { if (!r || pageWay.get(id) === 'net') return net; decide(id, 'kept'); return r; }),
+    ]).catch(() => { if (pageWay.get(id) === 'net') return Response.error(); decide(id, 'kept'); return kept(); })); // new code on this page: fail cleanly, never mix
     return;
   }
   // the kept (old) page was shown because the network was slow, and a newer one then arrived: tell the page

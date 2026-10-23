@@ -464,6 +464,31 @@ test('replies: Undo after ✓ Sent takes it all back (undoReplySent with the dra
   assert.deepEqual([args.projectId, args.stepId, args.reply.text, args.reply.state, args.workDate, args.sentAt, args.undoOpId], ['p1', 'ms1', 'Dear Ravi', 'ready', wd, '2026-10-22T10:30:00.000Z', 'op9']);
 });
 
+test('replies: a save timer from an earlier screen update does not bring back a reply marked ✓ Sent or ✕ Cleared', async (t) => {
+  const { mailThreads } = await import('../docs/rules.js');
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  for (const button of ['✓ Sent', '✕ Clear']) {
+    const s = mailState();
+    const ctx = replyCtx(s);
+    ctx.store.dispatch = (type, args) => { const op = makeOp(type, args); applyOps(s, [op]); ctx.calls.push([type, args]); return op; };
+    const live = () => mailThreads(s.data).find((x) => x.key === 'inbox:i3');
+    const prepared = () => (JSON.stringify(s.history).match(/"reply_prepared"/g) || []).length;
+    const before = prepared();
+    const el = { value: 'Dear Meena, thanks a lot.' }; // the same box on the page across updates
+    rFind(replyArea(ctx, live()), (n) => n.nodeName === 'TEXTAREA').__on.input(null, el); // a letter typed
+    const box = replyArea(ctx, live()); // the page updates (the store's save status) within the pause
+    rFind(box, (n) => n.nodeName === 'TEXTAREA').__on.focusout(null, el); // leaving the box to click
+    btn(box, button).__on.click();
+    t.mock.timers.tick(1000); // the old pause runs out
+    const types = ctx.calls.map((c) => c[0]);
+    assert.deepEqual(types, ['setReply', button === '✓ Sent' ? 'markReplySent' : 'clearReply'], button + ': no late setReply after it');
+    const r = live().reply;
+    if (button === '✓ Sent') assert.equal(r && r.state, 'sent', 'still sent, not "Reply ready" again');
+    else assert.ok(!r || r.state === 'sent', 'still cleared');
+    assert.equal(prepared(), before, button + ': no stray "Reply prepared" line');
+  }
+});
+
 test('replies: the ✉ Replies page — counts, ready and waiting lists with days, tap opens, round button', () => {
   const s = mailState();
   assert.equal(readyCount(s.data), 1, 'the menu number');
@@ -574,7 +599,8 @@ test('people give: the app sends task.save with the step\'s projectRef and stepR
   const { readFileSync } = await import('node:fs');
   const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
   const fn = app.slice(app.indexOf('async function giveStepsTo('), app.indexOf('function refreshTeamPeople('));
-  assert.match(fn, /teamApi\('task\.save', \{\s*assigneeId: user\.id, title: step\.text, details: '', project: project\.name, projectRef: project\.id, stepRef: step\.id,\s*repeat: 'daily', skipSunday: true, clientId:/);
+  assert.match(fn, /teamApi\('task\.save', \{\s*assigneeId: user\.id, title: step\.text, details: '', project: project\.name, projectRef: project\.id, stepRef: step\.id,\s*repeat: 'once', dueDate: step\.dueDate \|\| null, skipSunday: true, clientId:/);
+  assert.doesNotMatch(fn, /repeat: 'daily'/, 'a given step is a one-off: a daily task never closes on Finished, so the step was never ticked');
   assert.match(fn, /Given to \$\{first\} ✓/);
   assert.match(fn, /Given \$\{given\} to \$\{person\.name\} ✓\$\{failed\.length \? ` \(\$\{failed\.length\} failed: \$\{failed\[0\]\}\)` : ''\}/);
   assert.match(fn, /team\.byStep\.set\(step\.id, out\.task\)/, 'the step shows it is on their list at once');
@@ -675,6 +701,8 @@ test('make it a project wiring (app.js): Undo also takes the new project away; a
   // the rule itself (keep while the task is open, and while the team list is not loaded) is checked in core.test.mjs
   assert.match(steps, /const movedButGiven = \(x\) => keepMovedStep\(x, team\.byStep\.get\(x\.id\), !!team\.listAt\);/);
   assert.match(steps, /\(!x\.done \|\| movedButGiven\(x\)\)/, 'the person\'s task is not cancelled by the move');
+  // a moved step is sent marked moved: the server keeps the task it has, but never makes a new one (or opens a cancelled one)
+  assert.match(steps, /\.\.\.\(x\.done && x\.movedTo \? \{ moved: true \} : \{\}\)/);
   const DETAIL = readFileSync(new URL('../docs/ui/detail.js', import.meta.url), 'utf8');
   assert.match(DETAIL, /setTimeout\(\(\) => \{ const f = document\.querySelector\('\.title-input'\); if \(f\) \{ f\.focus\(\); f\.select\(\); \} \}, 30\);/, 'the new project\'s name is ready to change');
 });
@@ -1032,7 +1060,7 @@ test('📂 Projects page: a click on a project row selects it and stays on the p
   assert.match(mainsSrc, /ctx\.ui\.view === 'mains' && ctx\.showHere \? ctx\.showHere\(c\.id\)/, 'a task in the TASKS table while on the Projects page');
   const here = app.slice(app.indexOf('  showHere: (id) => {'), app.indexOf('  openProject: (id) => {'));
   assert.match(here, /select\(id\);/);
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-25'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-26'/, 'phones get the new copy');
 });
 
 test('📂 project page: "✕ Remove" on a task row takes it out of this project only — the task is kept (and stays in its other projects)', () => {
@@ -1766,7 +1794,24 @@ test('🔌 From apps: waiting approvals grouped by app (newest first) with the f
   assert.ok(cnx.renderFromApps(empty).textContent.includes('Nothing waiting for you ✓'));
 });
 
-test('🔌 app wiring (app.js): "🔌 From apps" after ✉ Replies with the waiting count (worktask.in only), its page, the Settings section, #apps from a phone alert, the key forgotten when leaving Settings; offline copy daily-projects-app-25', async () => {
+test('🔌 From apps: ✓ Approve sends the version of the words on the screen; refused (the app changed them) → the list is loaded again to show the new words', async () => {
+  cnx.resetConnections();
+  let items = [appItem({ id: 7, title: 'Approve PO 1001', fields: [['Amount', '12,500']], version: 'v-old' })];
+  const changed = new Error('The app changed this since you opened it. Look at it again, then decide.');
+  const c = appsCtx({ 'conn.items': () => ({ items }), 'conn.decide': changed });
+  cnx.renderFromApps(c);
+  await flush();
+  items = [appItem({ id: 7, title: 'Approve PO 1001', fields: [['Amount', '125,000']], version: 'v-new' })];
+  await byText(walk(cnx.renderFromApps(c), (n) => n.nodeName === 'ARTICLE')[0], '✓ Approve', 'button').__on.click();
+  assert.deepEqual(c.calls.find((x) => x[0] === 'conn.decide'), ['conn.decide', { id: 7, decision: 'approved', reason: '', version: 'v-old' }]);
+  assert.match(c.toasts.at(-1), /changed this since you opened it/);
+  await flush();
+  assert.equal(c.calls.filter((x) => x[0] === 'conn.items').length, 2, 'loaded again');
+  assert.ok(cnx.renderFromApps(c).textContent.includes('125,000'), 'the new amount is shown');
+  assert.equal(cnx.appsPending(), 1, 'still waiting');
+});
+
+test('🔌 app wiring (app.js): "🔌 From apps" after ✉ Replies with the waiting count (worktask.in only), its page, the Settings section, #apps from a phone alert, the key forgotten when leaving Settings; offline copy daily-projects-app-26', async () => {
   const { readFileSync } = await import('node:fs');
   const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
   assert.match(app, /item\('replies', '✉ Replies', readyCount\(data, today\)\),[^\n]*\n\s*onServer \? item\('apps', '🔌 From apps', appsPending\(\)\) : null,/, 'right after ✉ Replies, with the count');
@@ -1778,7 +1823,7 @@ test('🔌 app wiring (app.js): "🔌 From apps" after ✉ Replies with the wait
   assert.match(app, /function go\(view\) \{\n\s*if \(view !== 'settings'\) forgetOnce\(\);/);
   assert.match(app, /if \(onServer\) loadApps\(appsCtx, force \|\| ui\.view === 'apps'\);/);
   assert.match(app, /replies: '✉ Replies', apps: '🔌 From apps', mains: '📂 Projects' \}\[ui\.view\]/, 'its page title');
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-25'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-26'/, 'phones get the new copy');
 });
 
 test('🔌 the PHP connector (team/connector/worktask-connector.php): the same text the app downloads, placeholders only (no real key), valid PHP 7.4+ (php -l), with wt_push / wt_withdraw / wt_decisions / wt_receive_decision', async () => {
@@ -2011,4 +2056,172 @@ test('🔌 the downloadable PHP connector: wt_decisions gives decisions, until a
   assert.match(tpl, /\$lastTime = \$answer\['until'\];/);
   assert.match(tpl, /\} while \(\$answer\['more'\]\);/);
   assert.ok(!/keep the answer's newest decided_at/.test(tpl), 'not the newest decided_at');
+});
+
+test('review r15 wiring (app.js): Undo of Pause / Finish passes the stopped timer; Start / Stop name the timer they were pressed for', () => {
+  const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
+  const act = app.slice(app.indexOf('function act(type, args, message'), app.indexOf('/** Remember how far the list'));
+  assert.match(act, /const timerBefore = store\.view\.data\.timer && store\.view\.data\.timer\.projectId === snapId \? clone\(store\.view\.data\.timer\) : null;\s*const op = store\.dispatch\(type, args\);/, 'the timer is read before the change');
+  assert.match(act, /if \(timerStopped\) made\.timer = timerStopped;/);
+  assert.match(app, /store\.dispatch\('startTimer', \{ projectId: p\.id, running: running \? running\.id : null \}\)/);
+  assert.match(app, /store\.dispatch\('stopTimer', \{ timerId: t\.id \}\)/);
+});
+
+test('review r15: a box left focused (not typed in) takes another device\'s newer text, so leaving it never saves the old text back; typed text is never touched', async () => {
+  const { h, morph } = await import('../docs/ui/dom.js');
+  const box = h('textarea', { value: 'old notes' });
+  const was = document.activeElement;
+  document.activeElement = box;
+  try {
+    morph(box, h('textarea', { value: 'newer notes from the phone' }));
+    assert.equal(box.value, 'newer notes from the phone', 'untouched focused box is brought up to date');
+    box.value = 'newer notes from the phone + typing'; // the user types
+    morph(box, h('textarea', { value: 'yet another change' }));
+    assert.equal(box.value, 'newer notes from the phone + typing', 'what is being typed stays');
+    const input = h('input', { value: 'Kiln' });
+    document.activeElement = input;
+    morph(input, h('input', { value: 'Kiln trial' }));
+    assert.equal(input.value, 'Kiln trial');
+  } finally { document.activeElement = was; }
+});
+
+test('+ Add time: "2 hours" adds 120 minutes; an answer it cannot read saves nothing and says how to type it', () => {
+  const s = sampleState();
+  const ui = { selected: 'p1', update: {}, showTime: 'p1' };
+  const acts = [];
+  const toasts = [];
+  const ctx = Object.assign(fakeCtx(s, ui), { act: (type, args) => acts.push([type, args]), toast: (m) => toasts.push(m) });
+  const realPrompt = globalThis.prompt;
+  try {
+    for (const answer of ['2 hours', '1h 30m', '2 apples']) {
+      globalThis.prompt = () => answer;
+      btn(renderDetail(ctx), '+ Add time').__on.click();
+    }
+  } finally { globalThis.prompt = realPrompt; }
+  assert.deepEqual(acts, [['addTime', { projectId: 'p1', minutes: 120 }], ['addTime', { projectId: 'p1', minutes: 90 }]]);
+  assert.match(toasts.at(-1), /Type a number of minutes/);
+});
+
+test('photo shrink: a wide PNG (a Mac window screenshot with a clear shadow) gets a white background before it is drawn into the JPEG, not black', async () => {
+  const { uploadBlob } = await import('../docs/ui/files.js');
+  const calls = [];
+  const c2d = {
+    set fillStyle(v) { calls.push(['fillStyle', v]); },
+    fillRect: (...a) => calls.push(['fillRect', ...a]),
+    drawImage: (img, ...a) => calls.push(['drawImage', ...a]),
+  };
+  const canvas = { getContext: () => c2d, toBlob: (r, type) => r(new Blob(['jpg'], { type })) };
+  const realCreate = document.createElement;
+  const realBitmap = globalThis.createImageBitmap;
+  globalThis.createImageBitmap = async () => ({ width: 3000, height: 1500, close() {} });
+  document.createElement = (t) => (t === 'canvas' ? canvas : realCreate(t));
+  try {
+    const store = { isOffline: () => false, canEdit: () => true, repo: { createBlobBase64: async () => 'sha1' } };
+    const out = await uploadBlob({ store, toast: () => {} }, new File(['png'], 'Screenshot.png', { type: 'image/png' }));
+    assert.equal(out.name, 'Screenshot.jpg');
+    const draw = calls.findIndex((c) => c[0] === 'drawImage');
+    const fill = calls.findIndex((c) => c[0] === 'fillRect');
+    assert.ok(fill >= 0 && fill < draw, 'the canvas is filled before the picture is drawn');
+    assert.deepEqual(calls[fill], ['fillRect', 0, 0, 2000, 1000]);
+    assert.deepEqual(calls.filter((c) => c[0] === 'fillStyle' && calls.indexOf(c) < fill).at(-1), ['fillStyle', '#fff'], 'with white');
+  } finally { document.createElement = realCreate; globalThis.createImageBitmap = realBitmap; }
+});
+
+// Runs one function from app.js with stand-ins for what it uses (app.js itself needs a real browser).
+async function appFunctions(from, to, deps) {
+  const { readFileSync } = await import('node:fs');
+  const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
+  const src = app.slice(app.indexOf(from), app.indexOf(to));
+  const names = Object.keys(deps);
+  const fns = [...src.matchAll(/^(?:async )?function (\w+)\(/gm)].map((m) => m[1]);
+  return new Function(...names, `${src}\nreturn { ${fns.join(', ')} };`)(...names.map((n) => deps[n]));
+}
+
+test('people give: a retry after a lost reply sends the same clientId (one task on their list); after it is given, a new give gets a new id', async () => {
+  const sent = [];
+  let lose = true;
+  const team = { byStep: new Map() };
+  const deps = {
+    team, newId, toast: () => {}, render: () => {}, teamMorning: () => {}, loadTeam: () => {},
+    teamApi: async (action, args) => { sent.push(args.clientId); if (lose) { lose = false; throw new Error('No connection'); } return { task: { id: 1 } }; },
+  };
+  const { giveStepsTo } = await appFunctions('async function giveStepsTo(', 'function refreshTeamPeople(', deps);
+  const items = [{ project: { id: 'p1', name: 'Kiln' }, step: { id: 's1', text: 'Send quote' } }];
+  const ravi = { id: 7 };
+  await giveStepsTo(items, ravi, { name: 'Ravi' }); // the server made it, the reply was lost
+  await giveStepsTo(items, ravi, { name: 'Ravi' }); // tapped again
+  assert.equal(sent.length, 2);
+  assert.equal(sent[1], sent[0], 'the same id: the server gives back the task it already made');
+  assert.match(sent[0], /^[A-Za-z0-9-]{8,60}$/, 'an id the server accepts');
+  await giveStepsTo(items, { id: 8 }, { name: 'Anil' });
+  assert.notEqual(sent[2], sent[0], 'another person: another give');
+  await giveStepsTo(items, ravi, { name: 'Ravi' });
+  assert.notEqual(sent[3], sent[0], 'given already (then cancelled): a new give is a new task');
+});
+
+test('Give a Work Task sign-in: a retry after a lost reply does not make a second account (ravi1); it offers a new password for the one made', async () => {
+  const { teamMemberFor } = await import('../docs/rules.js');
+  const accounts = [{ id: 1, owner: true, name: 'Owner', username: 'owner' }];
+  const made = [];
+  const reset = [];
+  const toasts = [];
+  let refreshed = 0;
+  let lose = true;
+  const team = {};
+  const deps = {
+    team, teamMemberFor, toast: (m) => toasts.push(m), render: () => {}, refreshTeamPeople: () => { refreshed++; },
+    sendSignIn: () => {}, firstPassword: () => 'kiln-clay-427', openSheet: () => {}, confirm: () => true,
+    teamApi: async (action, args) => {
+      if (action === 'users.list') return { users: accounts };
+      if (action === 'user.reset') { reset.push(args.id); return {}; }
+      if (accounts.some((u) => u.username === args.username)) throw new Error('This username is taken.');
+      accounts.push({ id: accounts.length + 1, name: args.name, username: args.username });
+      made.push(args.username);
+      if (lose) { lose = false; throw new Error('No connection'); }
+      return { user: accounts.at(-1) };
+    },
+  };
+  const { giveSignIn } = await appFunctions('async function giveSignIn(', 'function personMenu(', deps);
+  const ravi = { name: 'Ravi' };
+  await giveSignIn(ravi); // made on the server, the reply was lost
+  assert.equal(refreshed, 1, 'the sign-ins are loaded again (the menu then shows the account)');
+  await giveSignIn(ravi); // tapped again before that came back
+  assert.deepEqual(made, ['ravi'], 'only one account');
+  assert.deepEqual(reset, [2], 'a new first password for the account that was made');
+  assert.match(toasts.at(-1), /already has a Work Task sign-in: @ravi/);
+  accounts.push({ id: 9, name: 'Meena Rao', username: 'meena' });
+  await giveSignIn({ name: 'Meena Das' }); // a different Meena: 'meena' is someone else's, so the next number
+  assert.deepEqual(made, ['ravi', 'meena1']);
+});
+
+test('people: "Add a task with Ravi" offers tasks only — a 📂 project (even one with an old @Ravi step) is never a chip or the Enter target', () => {
+  const s = sampleState();
+  const g = s.data.groups[0].id;
+  applyOps(s, [
+    makeOp('createMainProject', { projectId: 'm1', name: 'Kilns', groupId: g }),
+    makeOp('addStep', { projectId: 'm1', stepId: 'ms', text: 'Old step with @Ravi' }),
+  ]);
+  const el = renderPerson(fakeCtx(s, { person: 'r' }));
+  const box = rFind(el, (n) => n.className === 'person-task block');
+  assert.ok(box, 'the task box is drawn');
+  assert.ok(rFind(box, (n) => n.nodeName === 'BUTTON' && n.textContent === 'Kiln'), 'the task Kiln is offered');
+  assert.ok(!rFind(box, (n) => n.nodeName === 'BUTTON' && n.textContent === 'Kilns'), 'the 📂 project Kilns is not offered');
+  assert.equal(rFind(box, (n) => n.className === 'chip first').textContent, 'Kiln', 'Enter adds to a task');
+});
+
+test('📂 app wiring (app.js): Inbox, Chrome clip and their suggestions offer tasks only (stepTargets); progress line, Daily round and evening check count what Today shows (todayList); Inbox Undo keeps the whole item', async () => {
+  const { readFileSync } = await import('node:fs');
+  const APP = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
+  const body = (name) => { const i = APP.indexOf(`function ${name}(`); assert.ok(i >= 0, name); return APP.slice(i, APP.indexOf('\n}\n', i)); };
+  for (const f of ['clipBox', 'inboxSuggestions', 'renderInbox']) {
+    assert.match(body(f), /stepTargets\((store\.view\.)?data, todayIndia\(\)\)/, f + ': tasks only');
+    assert.doesNotMatch(body(f), /awakeProjects\(/, f + ': never every awake project (that has 📂 projects)');
+  }
+  for (const f of ['progressLine', 'eveningCheck', 'startRound', 'renderRound']) {
+    assert.match(body(f), /todayList\(store\.view\.data, (today|todayIndia\(\))\)/, f + ': same list as Today');
+    assert.doesNotMatch(body(f), /awakeProjects\(/, f + ': an empty 📂 project is not counted');
+  }
+  const act = body('inboxAct');
+  assert.match(act, /const saved = clone\(item\)/, 'Undo keeps the whole item (mail, note, reply)');
+  assert.match(act, /store\.dispatch\('inboxUndo', \{\n\s+item: saved, index,/, 'that saved item is what Undo sends');
 });

@@ -20,8 +20,8 @@ import { MockRepo } from './mockrepo.js';
 import { device } from './device.js';
 import { DATA_OWNER, DATA_REPO, DATA_BRANCH, MOVED_TO, REFRESH_MS, AI_DAILY_LIMIT, BRIEF_CLAIM_MINUTES, WAIT_RED_DAYS, NO_WORK_NOTE_DAYS } from './config.js';
 import { dotColour, greenByTeamOnly, isSnoozed, restUntil, restReason, onlyDaysLabel, openIdFromHash, awakeProjects, activeProjects, nextStep, todayIndia, isSundayIndia, colourCounts, isOverdue, indiaDate, waitingDays, daysWithoutWork, dayScore, greenStreak, addDays, monthOf, fmtMinutes, takeBackWaits, staffStepAction, pasteGoesToProject, singleStepClose, versionRequest, askDiaryAgain, pasteInForm, diaryLoadedAt, photoNeedsFetch, teamUndoKey, teamActionUndone, teamProgressOf, projectKeyIgnored, teamMovedTo, serverHolder, keepMovedStep, teamMemberFor, repliesOf, mailThreads, replyMailto, MAILTO_BODY_MAX, emailPath, pasteReason } from './rules.js';
-import { parentIdsOf, isMainProject, mainProjects, activeTasks, todayWithoutEmptyMains, mainSummary, childrenOf, deleteQuestion, pickEnterTarget } from './rules.js';
-import { newId, clone, opMonth, groupHasTimer, cleanLink, carriedOps } from './ops.js';
+import { parentIdsOf, isMainProject, mainProjects, activeTasks, todayWithoutEmptyMains, todayList, stepTargets, mainSummary, childrenOf, deleteQuestion, pickEnterTarget } from './rules.js';
+import { newId, clone, opMonth, groupHasTimer, cleanLink, carriedOps, orderPosOf } from './ops.js';
 import * as ai from './ai.js';
 import { parseVoice } from './voice.js';
 
@@ -72,6 +72,9 @@ function toast(text, ms = 3500, undo = null) {
   toastTimer = setTimeout(() => { t.hidden = true; }, undo ? Math.max(ms, 6000) : ms);
 }
 
+// changes that take a task out of 📂 projects' order (dropFromOrder)
+const DROPS_ORDER = new Set(['removeFromProject', 'deleteProject', 'setParent']);
+
 /**
  * Several changes to one project as ONE action with one Undo (e.g. note + tick + next step).
  * `steps` is a list of [type, args]. Returns the ops that were applied, or null.
@@ -81,6 +84,8 @@ function actMany(projectId, steps, message, undoMark = null) {
   const list = store.view.data.projects;
   const index = list.findIndex((x) => x.id === projectId);
   const before = index >= 0 ? clone(list[index]) : null;
+  // taking it out of a 📂 project (or deleting it): Undo puts it back in its place in that project's order
+  const orderPos = steps.some(([type]) => DROPS_ORDER.has(type)) ? orderPosOf(store.view.data, projectId) : null;
   const ops = [];
   for (const [type, args] of steps) { const op = store.dispatch(type, args); if (op) ops.push(op); }
   if (!ops.length) return null;
@@ -88,7 +93,9 @@ function actMany(projectId, steps, message, undoMark = null) {
     const months = [...new Set(ops.map(opMonth))];
     // (a step the person added, taken away by this Undo, is remembered as deleted on every device)
     const dropTeamSteps = ops.filter((o) => o.type === 'addStep' && o.args.byTeam).map((o) => o.args.stepId);
-    if (store.dispatch('restoreProject', { project: before, index, undoOpIds: ops.map((o) => o.id), undoMonth: months[0], dropTeamSteps, teamUndone: undoMark })) toast('Undone', 1500);
+    // (an undone untick puts its tick line back: the save loads the month it is in)
+    const tickMonths = [...new Set(ops.flatMap((o) => o.args.tickMonths || []))];
+    if (store.dispatch('restoreProject', { project: before, index, undoOpIds: ops.map((o) => o.id), undoMonth: months[0], dropTeamSteps, teamUndone: undoMark, tickMonths, ...(orderPos ? { orderPos } : {}) })) toast('Undone', 1500);
   } : null;
   if (message) toast(message, 5000, undo);
   return { ops, undo };
@@ -107,12 +114,19 @@ function act(type, args, message, ms = 4000) {
   const before = index >= 0 ? clone(list[index]) : null;
   // deleting a 📂 project: its tasks stay (no longer in it); Undo puts them back into it
   const parentIds = type === 'deleteProject' ? Object.fromEntries(list.filter((x) => parentIdsOf(x).includes(args.projectId)).map((x) => [x.id, args.projectId])) : null;
+  const orderPos = DROPS_ORDER.has(type) ? orderPosOf(store.view.data, snapId) : null; // Undo: its place in each 📂 project's order
+  const timerBefore = store.view.data.timer && store.view.data.timer.projectId === snapId ? clone(store.view.data.timer) : null;
   const op = store.dispatch(type, args);
   if (!op) return null;
+  // Pause / Finish stopped its timer: Undo starts it again from its start (no timed minutes lost)
+  const timerStopped = timerBefore && !(store.view.data.timer && store.view.data.timer.id === timerBefore.id) ? timerBefore : null;
   const undo = before ? () => {
     // (Make it a task / new 📂 project: the new one goes too)
     const made = type === 'stepToProject' ? { removeProjectId: args.newProjectId } : {};
     Object.assign(made, type === 'createMainProject' ? { removeProjectId: args.projectId } : parentIds ? { parentIds } : {});
+    if (timerStopped) made.timer = timerStopped;
+    if (orderPos) made.orderPos = orderPos;
+    if (op.args.tickMonths) made.tickMonths = op.args.tickMonths; // an undone untick puts its tick line back
     if (store.dispatch('restoreProject', { project: before, index, undoOpId: op.id, undoMonth: opMonth(op), ...made })) toast('Undone', 1500);
   } : null;
   if (message) toast(message, ms, undo);
@@ -505,16 +519,20 @@ function personTeamLink(person) {
 async function giveStepsTo(items, user, person) {
   const first = person.name.split(/\s+/)[0];
   const giving = (team.giving ||= new Set());
+  const ids = (team.giveIds ||= new Map()); // one id per step and person until it is given: a retry after a lost reply is the same give
   let given = 0;
   const failed = [];
   for (const { project, step } of items) {
     if (giving.has(step.id)) continue; // a second tap while it is on its way
     giving.add(step.id);
+    const key = step.id + ' ' + user.id;
+    if (!ids.has(key)) ids.set(key, 'give-' + newId() + newId());
     try {
       const out = await teamApi('task.save', {
         assigneeId: user.id, title: step.text, details: '', project: project.name, projectRef: project.id, stepRef: step.id,
-        repeat: 'daily', skipSunday: true, clientId: 'give-' + newId() + newId(),
+        repeat: 'once', dueDate: step.dueDate || null, skipSunday: true, clientId: ids.get(key), // once: their Finished closes it and ticks the step
       });
+      ids.delete(key); // given: a later give (after a cancel) is a new task
       if (out.task) team.byStep.set(step.id, out.task); // shows "👥 on …'s list" at once
       given++;
     } catch (e) {
@@ -1222,7 +1240,7 @@ function clipBox() {
   const close = () => { ui.capture = false; render(); };
   const textNow = () => (document.querySelector('.capture [name=text]')?.value || clip.text).replace(/\s+/g, ' ').trim();
   const find = clip.find.trim().toLowerCase();
-  const all = awakeProjects(data, todayIndia());
+  const all = stepTargets(data, todayIndia()); // tasks only: a 📂 project holds tasks, not steps
   const sugg = inboxSuggestions(`${clip.text} ${clip.link ? clip.link.title : ''}`);
   const recent = all.slice().sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
   const list = find ? all.filter((p) => p.name.toLowerCase().includes(find)).slice(0, 8)
@@ -1336,7 +1354,7 @@ function captureBox() {
 function inboxSuggestions(text) {
   const words = new Set(text.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((w) => w.length >= 4));
   const people = (store.view.data.people || []).filter((x) => text.toLowerCase().includes(x.name.toLowerCase()));
-  return awakeProjects(store.view.data, todayIndia())
+  return stepTargets(store.view.data, todayIndia())
     .map((p) => {
       let score = p.name.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((w) => words.has(w)).length * 2;
       if (people.some((x) => p.steps.some((s) => !s.done && s.text.includes('@' + x.name)))) score += 1;
@@ -1349,7 +1367,7 @@ function inboxSuggestions(text) {
 function inboxAct(type, args, item, message) {
   const inbox = store.view.data.inbox || [];
   const index = inbox.findIndex((x) => x.id === item.id);
-  const saved = { id: item.id, text: item.text, createdAt: item.createdAt, ...(item.link ? { link: item.link } : {}) };
+  const saved = clone(item); // the whole item: its email thread, note and reply draft come back too
   const op = store.dispatch(type, args);
   if (!op) return null;
   const undo = () => {
@@ -1423,7 +1441,7 @@ async function openReplyDraft(m) {
 function renderInbox() {
   const { data } = store.view;
   const items = data.inbox || [];
-  const projects = awakeProjects(data, todayIndia()).slice().sort((a, b) => a.name.localeCompare(b.name));
+  const projects = stepTargets(data, todayIndia()).slice().sort((a, b) => a.name.localeCompare(b.name));
   const toStep = (item, p) => inboxAct('inboxToStep', { itemId: item.id, projectId: p.id, stepId: newId() }, item, `Added to ${p.name}: ${item.text}`);
   return h('div', { class: 'inbox' },
     h('div', { class: 'row inbox-top' },
@@ -1571,6 +1589,7 @@ function sendSignIn(person, username, password, isNew) {
 async function giveSignIn(person, email = '') {
   const base = (person.name.trim().split(/\s+/)[0] || 'user').toLowerCase().replace(/[^a-z0-9._-]/g, '') || 'user';
   const password = firstPassword();
+  let checked = false;
   for (const extra of ['', '1', '2', '3', String(Date.now() % 1000)]) {
     let name = (base + extra).slice(0, 40);
     if (name.length < 3) name = (name + 'user').slice(0, 40);
@@ -1580,7 +1599,12 @@ async function giveSignIn(person, email = '') {
       sendSignIn(person, out.user.username, password, true);
       return;
     } catch (e) {
-      if (!/taken/i.test(e.message)) { toast(e.message, 6000); return; }
+      if (!/taken/i.test(e.message)) { toast(e.message, 6000); refreshTeamPeople(); return; } // it may be made with the reply lost: reload the sign-ins
+      if (checked) continue;
+      checked = true; // taken: by this person (an earlier try whose reply was lost)? Then a new password, not a second account
+      let mine = null;
+      try { const users = (await teamApi('users.list')).users || []; team.accounts = users; mine = teamMemberFor(person, users.filter((u) => !u.owner)); } catch (e2) { toast(e2.message, 6000); return; } // cannot tell: never make a second one blind
+      if (mine) { render(); toast(`${person.name} already has a Work Task sign-in: @${mine.username}`, 6000); newPasswordFor(person, mine); return; }
     }
   }
   toast('Could not find a free username. Add them in Team → People.', 6000);
@@ -1724,7 +1748,7 @@ function weekBars() {
 
 /** "3 of 7 done today" with a thin bar. */
 function progressLine(today) {
-  const active = awakeProjects(store.view.data, todayIndia());
+  const active = todayList(store.view.data, todayIndia()); // as Today: an empty 📂 project is left out
   if (!active.length) return null;
   const done = active.filter((p) => dotColour(p, today) === 'green').length;
   const pct = Math.round((done / active.length) * 100);
@@ -1747,7 +1771,7 @@ function progressLine(today) {
 function eveningCheck(today) {
   const nowHm = new Date().toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' });
   if (nowHm < (team.fillBy || '18:00')) return null;
-  const left = awakeProjects(store.view.data, today).filter((p) => dotColour(p, today) !== 'green');
+  const left = todayList(store.view.data, today).filter((p) => dotColour(p, today) !== 'green');
   if (!left.length) return null;
   return h('div', { class: 'evening-check', key: 'evening' },
     `🕕 Nothing today on ${left.length} task${left.length > 1 ? 's' : ''}: `,
@@ -2354,7 +2378,7 @@ function playMoves(before) {
 
 function startRound() {
   const today = todayIndia();
-  const active = awakeProjects(store.view.data, todayIndia());
+  const active = todayList(store.view.data, todayIndia());
   const ids = computeRedFirst(active, today).filter((p) => dotColour(p, today) !== 'green').map((p) => p.id);
   if (!ids.length) { toast('Everything is green for today 🎉'); return; }
   ui.round = { ids, i: 0, mode: null, total: active.length };
@@ -2438,7 +2462,7 @@ function roundSubmit(text) {
 function renderRound() {
   const r = ui.round;
   const today = todayIndia();
-  const active = awakeProjects(store.view.data, todayIndia());
+  const active = todayList(store.view.data, todayIndia());
   const greenCount = active.filter((p) => dotColour(p, today) === 'green').length;
   const left = active.length - greenCount;
   const top = h('div', { class: 'round-top' },
@@ -2526,7 +2550,7 @@ function clockText(startIso) {
 function startTimer(p) {
   const running = store.view.data.timer;
   const other = running && running.projectId !== p.id && store.view.data.projects.find((x) => x.id === running.projectId);
-  if (store.dispatch('startTimer', { projectId: p.id })) toast(other ? `⏱ Started ${p.name} (stopped ${other.name})` : `⏱ Started: ${p.name}`, 2500);
+  if (store.dispatch('startTimer', { projectId: p.id, running: running ? running.id : null })) toast(other ? `⏱ Started ${p.name} (stopped ${other.name})` : `⏱ Started: ${p.name}`, 2500);
 }
 
 function stopTimer() {
@@ -2534,7 +2558,7 @@ function stopTimer() {
   if (!t) return;
   const p = store.view.data.projects.find((x) => x.id === t.projectId);
   const mins = Math.round((Date.now() - Date.parse(t.start)) / 60000);
-  if (store.dispatch('stopTimer', {})) toast(mins >= 1 ? `⏸ ${p ? p.name : 'Timer'}: ${fmtMinutes(Math.min(mins, 600))} logged` : 'Timer stopped (under a minute, not logged)', 3000);
+  if (store.dispatch('stopTimer', { timerId: t.id })) toast(mins >= 1 ? `⏸ ${p ? p.name : 'Timer'}: ${fmtMinutes(Math.min(mins, 600))} logged` : 'Timer stopped (under a minute, not logged)', 3000);
 }
 
 /** The running timer, shown at the top of every screen so it is never forgotten. */
@@ -3039,7 +3063,8 @@ const projectSteps = (p) => {
   const today = todayIndia();
   // a step made into its own project ("Make it a project") whose team task is still open: kept, so the person's task stays
   const movedButGiven = (x) => keepMovedStep(x, team.byStep.get(x.id), !!team.listAt);
-  const open = p.steps.filter((x) => (!x.done || movedButGiven(x)) && !(x.snoozedUntil && x.snoozedUntil > today)).map((x) => ({ stepRef: x.id, title: x.text, details: x.note || '', dueDate: x.dueDate || null }));
+  // (moved: the server only keeps the task it already has for it, never makes a new one)
+  const open = p.steps.filter((x) => (!x.done || movedButGiven(x)) && !(x.snoozedUntil && x.snoozedUntil > today)).map((x) => ({ stepRef: x.id, title: x.text, details: x.note || '', dueDate: x.dueDate || null, ...(x.done && x.movedTo ? { moved: true } : {}) }));
   if (open.length || p.steps.length) return open; // (steps all done or snoozed: nothing to do; the whole-project task is only for no steps at all)
   // no steps at all: the person still gets the project, as one task with its name, until steps are added
   return [{ stepRef: wholeRef(p.id), title: p.name, details: p.status || '' }];
@@ -3322,6 +3347,7 @@ function start() {
     render();
   });
   store.addEventListener('remote', () => toast('↻ Updated with changes from your other device'));
+  store.addEventListener('refused', (e) => toast(`The server refused one change (it holds code-like text), so it was not saved: ${e.detail.what}. Your other changes are saved.`, 10000));
   store.addEventListener('blocked', (e) => {
     toast(e.detail.status === 'offline' ? 'No connection — changes not saved. Try again when online.' : 'Please wait…');
     render(); // put ticked boxes and menus back to the real data

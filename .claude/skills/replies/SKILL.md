@@ -33,8 +33,10 @@ The user is not a programmer. Use short, plain English.
 5. Only after a yes, save each one:
 
    ```bash
-   node tools/tracker.mjs set-reply <id> "<the reply text>"
+   node tools/tracker.mjs set-reply <id> --for <email id> "<the reply text>"
    ```
+
+   `<email id>` is the "email id" line that `replies` / `mail-body` showed for the email you answered (so a newer email that came while they read the drafts shows as newer). If it says a newer email came, tell the owner.
 
    If it says several emails match, use the exact id from step 1.
 

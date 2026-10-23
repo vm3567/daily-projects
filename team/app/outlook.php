@@ -15,6 +15,7 @@ const OL_PAGES = 5;          // pages of 50 emails per check
 const OL_STATE_SECONDS = 600; // the sign-in must come back within 10 minutes
 const OL_THREAD_MAX = 50;    // a task keeps its newest 50 emails (THREAD_MAX in docs/rules.js)
 const OL_THREAD_PREVIEW = 300; // letters of each email kept in the thread
+const OL_SEEN_IMID = 'imid';   // ol_seen.conv_hash of the second row of an email: its internetMessageId (the same email with a new Outlook id)
 
 class OlError extends Exception {}
 
@@ -141,23 +142,40 @@ function ol_graph_error(int $code): OlError {
 }
 
 /** New emails in the Inbox since `since` (oldest first), a few pages at most. */
-function ol_fetch(string $token, string $since): array {
-  $all = ol_list($token, 'inbox', 'id,subject,from,receivedDateTime,bodyPreview,webLink,conversationId', 'receivedDateTime', $since);
+function ol_fetch(string $token, string $since, ?string &$next = null): array {
+  $all = ol_list($token, 'inbox', 'id,subject,from,receivedDateTime,bodyPreview,webLink,conversationId,internetMessageId', 'receivedDateTime', $since, '', 'ol_next_inbox', $next);
   return array_values(array_filter($all, fn($m) => is_string($m['id'] ?? null) && $m['id'] !== ''));
 }
 
-/** Emails in a folder (inbox, sentitems) whose $field (receivedDateTime, sentDateTime) is after `since`, oldest first. */
-function ol_list(string $token, string $folder, string $select, string $field, string $since): array {
-  $q = ['$select' => $select, '$orderby' => "$field asc", '$filter' => "$field gt " . $since, '$top' => '50'];
+/** Emails moved into the Inbox later (from Junk or another folder: their received time is old), changed after `since`, received after `from`. */
+function ol_fetch_moved(string $token, string $since, string $from, ?string &$next = null): array {
+  $all = ol_list($token, 'inbox', 'id,subject,from,receivedDateTime,lastModifiedDateTime,bodyPreview,webLink,conversationId,internetMessageId', 'lastModifiedDateTime', $since, " and receivedDateTime gt $from", 'ol_next_moved', $next);
+  return array_values(array_filter($all, fn($m) => is_string($m['id'] ?? null) && $m['id'] !== ''));
+}
+
+/**
+ * Emails in a folder (inbox, sentitems) whose $field (receivedDateTime, sentDateTime) is after `since`, oldest first.
+ * More than OL_PAGES pages: $next is the next page's address ('' when all was read); the caller keeps it in the setting
+ * $key once the emails are put in, and the next check goes on from there (else 250+ emails within the few minutes looked
+ * back would come first every time, and nothing after them would ever be read).
+ */
+function ol_list(string $token, string $folder, string $select, string $field, string $since, string $more = '', string $key = '', ?string &$next = null): array {
+  $q = ['$select' => $select, '$orderby' => "$field asc", '$filter' => "$field gt " . $since . $more, '$top' => '50'];
   $url = ol_graph_base() . '/v1.0/me/mailFolders/' . $folder . '/messages?' . http_build_query($q, '', '&', PHP_QUERY_RFC3986);
+  $saved = $key !== '' ? setting($key) : '';
+  if (str_starts_with($saved, ol_graph_base() . '/')) $url = $saved; // the token never goes anywhere else
   $all = [];
   for ($page = 0; $url !== '' && $page < OL_PAGES; $page++) {
     [$code, $j] = ol_http($url, null, $token);
-    if ($code !== 200) throw ol_graph_error($code);
+    if ($code !== 200) {
+      if ($key !== '') set_setting($key, ''); // (an old page address Microsoft no longer takes: start again next time)
+      throw ol_graph_error($code);
+    }
     foreach ((array)($j['value'] ?? []) as $m) if (is_array($m)) $all[] = $m;
     $next = (string)($j['@odata.nextLink'] ?? '');
     $url = str_starts_with($next, ol_graph_base() . '/') ? $next : ''; // the token never goes anywhere else
   }
+  $next = $url;
   return $all;
 }
 
@@ -216,6 +234,9 @@ function ol_mail_info(object $mail, array $x, string $addedAt = ''): void {
   // addedAt = when the server brought this email in (not when it was received): a Finish / Delete pressed earlier but
   // saved later must not hide it (docs/ops.js newerMailThan compares addedAt || at)
   if ($addedAt !== '') $mail->addedAt = $addedAt;
+  // an older email of the thread (moved into the Inbox later: it keeps its old received time) is not the newest one
+  $was = strtotime((string)($mail->at ?? '')) ?: 0;
+  if ($was && ($x['at'] === '' || strtotime($x['at']) < $was)) return;
   if ($x['id'] !== '' && mb_strlen($x['id']) <= 400) $mail->messageId = $x['id'];
   $mail->fromName = mb_substr($x['from'], 0, 120);
   $addr = trim($x['address']);
@@ -244,8 +265,13 @@ function ol_thread_task(object $data, string $conv): ?object {
 /** Add one email to a task's thread (oldest first, newest last, at most OL_THREAD_MAX). False when it is there already. */
 function ol_thread_add(object $p, array $e): bool {
   $list = is_array($p->thread ?? null) ? $p->thread : [];
-  foreach ($list as $old) if (is_object($old) && $e['messageId'] !== '' && ($old->messageId ?? '') === $e['messageId']) return false;
   $entry = ['at' => $e['at'], 'addedAt' => (string)($e['addedAt'] ?? '') !== '' ? (string)$e['addedAt'] : ol_iso_now(), 'fromName' => mb_substr($e['fromName'], 0, 120), 'fromMe' => $e['fromMe'], 'preview' => mb_substr($e['preview'], 0, OL_THREAD_PREVIEW)];
+  foreach ($list as $old) {
+    if (!is_object($old)) continue;
+    if ($e['messageId'] !== '' && ($old->messageId ?? '') === $e['messageId']) return false;
+    // the same email with a new Outlook id (moved out of the Inbox and back): the same time, sender and words (as docs/ops.js keepServerParts)
+    if (($old->at ?? '') === $entry['at'] && ($old->fromName ?? '') === $entry['fromName'] && ($old->preview ?? '') === $entry['preview']) return false;
+  }
   if ($e['link']) $entry['link'] = $e['link'];
   if ($e['messageId'] !== '' && mb_strlen($e['messageId']) <= 400) $entry['messageId'] = $e['messageId'];
   $list[] = (object)$entry;
@@ -492,7 +518,7 @@ function ol_thread_sent(object $data, array $m): bool {
 /** Look in Sent Items since the last look: a reply sent in a thread that waits for one ticks it as replied. */
 function ol_check_sent(string $token): void {
   $since = setting('ol_sent_since') ?: gmdate('Y-m-d\TH:i:s\Z', time() - 86400);
-  $sent = ol_list($token, 'sentitems', 'id,conversationId,sentDateTime,bodyPreview,webLink', 'sentDateTime', gmdate('Y-m-d\TH:i:s\Z', (int)strtotime($since) - 300));
+  $sent = ol_list($token, 'sentitems', 'id,conversationId,sentDateTime,bodyPreview,webLink', 'sentDateTime', gmdate('Y-m-d\TH:i:s\Z', (int)strtotime($since) - 300), '', 'ol_next_sent', $next);
   $last = strtotime($since);
   $by = []; // the newest reply of each thread
   $all = [];
@@ -514,6 +540,7 @@ function ol_check_sent(string $token): void {
     }, '✉ Replied in Outlook');
   }
   set_setting('ol_sent_since', gmdate('Y-m-d\TH:i:s\Z', $last));
+  set_setting('ol_next_sent', $next);
 }
 
 /**
@@ -604,16 +631,20 @@ function ol_add(array $msgs): int {
   if (!$owner) throw new OlError('No projects on this server yet.');
   dp_migrate();
   // only the emails not put in yet (one email once, even if Microsoft sends it again)
-  $new = [];
+  // (also by its internetMessageId: Outlook gives an email a new id when it is moved out of the Inbox and back)
+  $new = []; $keys = [];
   foreach ($msgs as $m) {
     $h = hash('sha256', (string)$m['id']);
-    if (isset($new[$h]) || one('SELECT id FROM ol_seen WHERE msg_hash = ?', [$h])) continue;
-    $new[$h] = $m;
+    $imid = (string)($m['internetMessageId'] ?? '');
+    $hs = $imid !== '' ? [$h, hash('sha256', 'i|' . $imid)] : [$h];
+    if (array_intersect($hs, array_keys($keys)) || one('SELECT id FROM ol_seen WHERE msg_hash IN (' . implode(',', array_fill(0, count($hs), '?')) . ') LIMIT 1', $hs)) continue;
+    foreach ($hs as $k) $keys[$k] = true;
+    $new[$h] = [$m, $hs];
   }
   if (!$new) return 0;
   ol_write(function (object $data, array &$hist) use ($new): bool {
     $threads = [];
-    foreach ($new as $m) {
+    foreach ($new as [$m]) {
       $conv = (string)($m['conversationId'] ?? '');
       $ch = hash('sha256', 'c|' . $conv);
       $seen = $conv !== '' && (isset($threads[$ch]) || (bool)one('SELECT id FROM ol_seen WHERE conv_hash = ? LIMIT 1', [$ch]));
@@ -622,10 +653,11 @@ function ol_add(array $msgs): int {
     }
     return true;
   }, '📧 ' . count($new) . ' email' . (count($new) === 1 ? '' : 's') . ' from Outlook');
-  foreach ($new as $h => $m) {
+  foreach ($new as [$m, $hs]) {
     $r = strtotime((string)($m['receivedDateTime'] ?? ''));
-    q('INSERT IGNORE INTO ol_seen (msg_hash, conv_hash, received_at, added_at) VALUES (?, ?, ?, ?)',
-      [$h, hash('sha256', 'c|' . (string)($m['conversationId'] ?? '')), $r ? date('Y-m-d H:i:s', $r) : null, now()]);
+    // the internetMessageId row is marked OL_SEEN_IMID (not a thread, not counted as an email added)
+    foreach ($hs as $k => $h) q('INSERT IGNORE INTO ol_seen (msg_hash, conv_hash, received_at, added_at) VALUES (?, ?, ?, ?)',
+      [$h, $k ? OL_SEEN_IMID : hash('sha256', 'c|' . (string)($m['conversationId'] ?? '')), $r ? date('Y-m-d H:i:s', $r) : null, now()]);
   }
   return count($new);
 }
@@ -640,11 +672,22 @@ function ol_check(bool $now = false): void {
     $token = ol_access_token();
     $since = setting('ol_since') ?: gmdate('Y-m-d\TH:i:s\Z', time() - 86400);
     // a few minutes back, in case two emails came in the same second (each email is still put in once)
-    $msgs = ol_fetch($token, gmdate('Y-m-d\TH:i:s\Z', (int)strtotime($since) - 300));
-    ol_add($msgs);
+    $msgs = ol_fetch($token, gmdate('Y-m-d\TH:i:s\Z', (int)strtotime($since) - 300), $next);
+    // an email moved into the Inbox later keeps its old received time: looked for by when it last changed (its own
+    // watermark), only among the last 3 days' emails (an old email marked as read never floods in); ol_seen adds each once
+    if (setting('ol_mod_since') === '') { set_setting('ol_mod_since', gmdate('Y-m-d\TH:i:s\Z')); set_setting('ol_mod_from', $since); }
+    $modSince = setting('ol_mod_since');
+    $from = max(time() - 3 * 86400, (int)strtotime(setting('ol_mod_from')));
+    $moved = ol_fetch_moved($token, gmdate('Y-m-d\TH:i:s\Z', (int)strtotime($modSince) - 300), gmdate('Y-m-d\TH:i:s\Z', $from), $nextMoved);
+    ol_add(array_merge($msgs, $moved));
+    set_setting('ol_next_inbox', $next); // more than OL_PAGES pages: the next check goes on from there
+    set_setting('ol_next_moved', $nextMoved);
     $last = strtotime($since);
     foreach ($msgs as $m) $last = max($last, (int)strtotime((string)($m['receivedDateTime'] ?? '')));
     set_setting('ol_since', gmdate('Y-m-d\TH:i:s\Z', $last));
+    $lastMod = strtotime($modSince);
+    foreach ($moved as $m) $lastMod = max($lastMod, (int)strtotime((string)($m['lastModifiedDateTime'] ?? '')));
+    set_setting('ol_mod_since', gmdate('Y-m-d\TH:i:s\Z', $lastMod));
     ol_check_sent($token); // replies you sent in Outlook tick their emails as replied
     set_setting('ol_error', '');
   } catch (OlError $e) {
@@ -667,7 +710,7 @@ function ol_status(): array {
     'redirectUri' => ol_redirect_uri(), 'scopes' => OL_SCOPES,
     'connected' => setting('ol_refresh') !== '', 'account' => setting('ol_account'),
     'lastCheck' => $at ? date('Y-m-d H:i:s', $at) : null,
-    'addedToday' => (int)(one('SELECT COUNT(*) AS n FROM ol_seen WHERE added_at >= ?', [today() . ' 00:00:00'])['n'] ?? 0),
+    'addedToday' => (int)(one('SELECT COUNT(*) AS n FROM ol_seen WHERE added_at >= ? AND conv_hash <> ?', [today() . ' 00:00:00', OL_SEEN_IMID])['n'] ?? 0),
     'error' => setting('ol_error'), 'today' => today(),
   ];
 }
@@ -768,7 +811,7 @@ function ol_callback(array $get): array {
     set_setting('ol_at', '0'); // look at once (the next request)
     // the first time: only the last 24 hours (after a long break too: never a flood of old emails)
     $since = strtotime(setting('ol_since')) ?: 0;
-    if ($since < time() - 3 * 86400) set_setting('ol_since', gmdate('Y-m-d\TH:i:s\Z', time() - 86400));
+    if ($since < time() - 3 * 86400) { set_setting('ol_since', gmdate('Y-m-d\TH:i:s\Z', time() - 86400)); set_setting('ol_mod_since', ''); set_setting('ol_next_inbox', ''); set_setting('ol_next_moved', ''); }
     audit((int)$saved['user'], 'outlook_on', '');
     return [true, 'Outlook connected ✓' . ($account !== '' ? " ($account)" : '') . ' — you can close this.'];
   } catch (OlError $e) {
