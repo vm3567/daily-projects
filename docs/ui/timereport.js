@@ -195,8 +195,8 @@ const PRESETS_OK = ['thisWeek', 'lastWeek', 'thisMonth', 'lastMonth'];
 export function renderTimeReport(ctx) {
   const { store, ui } = ctx;
   const data = store.view.data;
-  const groups = data.groups.filter(groupHasTimer);
-  if (!groups.length) return h('div', { class: 'report' }, h('p', { class: 'muted' }, 'No group has the timer on. Turn it on in Settings.'));
+  const groups = data.groups.filter(groupHasTimer).slice(0, 1); // (groups are off for now: one list)
+  if (!groups.length) return h('div', { class: 'report' }, h('p', { class: 'muted' }, 'The timer is off. Turn it on in Settings → Tags and timer.'));
   if (!ui.timeReport) {
     const saved = device.report();
     ui.timeReport = {
@@ -227,7 +227,7 @@ export function renderTimeReport(ctx) {
   const pcts = percents(rows);
   const total = rows.reduce((n, r) => n + r.minutes, 0);
   const period = from === to ? fmtDate(from) : `${fmtDate(from)} – ${fmtDate(to)}`;
-  const title = `${group.name} — time by ${tr.by === 'tag' ? 'tag' : 'task'}`;
+  const title = `Time by ${tr.by === 'tag' ? 'tag' : 'task'}`;
   const set = (k, v) => {
     if (k === 'preset' && v === 'custom') tr.custom = { from, to }; // start from the dates on screen, so changing one box works
     tr[k] = v;
@@ -241,18 +241,18 @@ export function renderTimeReport(ctx) {
   const download = async () => {
     const blob = await reportPng({ title, period, rows, pcts, mode: tr.mode });
     const url = URL.createObjectURL(blob);
-    const a = h('a', { href: url, download: `${group.name}-time-${from}-to-${to}.png` });
+    const a = h('a', { href: url, download: `time-${from}-to-${to}.png` });
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 10000);
     ctx.toast('Image downloaded — insert it in PowerPoint', 2500);
   };
-  const fullTitle = `${group.name} — time and work done`;
+  const fullTitle = 'Time and work done';
   const statuses = data.projects.filter((p) => p.groupId === group.id && p.state === 'active' && p.status).map((p) => ({ name: p.name, status: p.status }));
   const fullPng = () => fullReportPng({ title: fullTitle, period, rows: tagRows, pcts: percents(tagRows), work, tagColours, statuses });
   const downloadFull = async () => {
     const blob = await fullPng();
     const url = URL.createObjectURL(blob);
-    const a = h('a', { href: url, download: `${group.name}-report-${from}-to-${to}.png` });
+    const a = h('a', { href: url, download: `report-${from}-to-${to}.png` });
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 10000);
     ctx.toast('Report image downloaded — insert it in PowerPoint', 2500);
@@ -275,7 +275,6 @@ export function renderTimeReport(ctx) {
 
   return h('div', { class: 'report' },
     h('div', { class: 'report-controls' },
-      h('label', null, 'Group ', h('select', { value: tr.groupId, onChange: (e, el) => set('groupId', el.value) }, groups.map((g) => h('option', { value: g.id }, g.name)))),
       h('label', null, 'Period ', h('select', { value: tr.preset, onChange: (e, el) => set('preset', el.value) },
         h('option', { value: 'thisWeek' }, 'This week'), h('option', { value: 'lastWeek' }, 'Last week'),
         h('option', { value: 'thisMonth' }, 'This month'), h('option', { value: 'lastMonth' }, 'Last month'),
@@ -298,7 +297,7 @@ export function renderTimeReport(ctx) {
             h('strong', null, tr.mode === 'pct' ? `${pcts[i]}%` : fmtMinutes(row.minutes)),
             h('span', { class: 'muted small' }, tr.mode === 'pct' ? fmtMinutes(row.minutes) : `${pcts[i]}%`));
         })))
-        : h('p', { class: 'muted' }, `No time logged in ${group.name} for this period.`),
+        : h('p', { class: 'muted' }, 'No time logged for this period.'),
       total ? h('div', { class: 'row report-actions' },
         h('button', { class: 'btn primary', onClick: download }, '⬇ Download image'),
         h('button', { class: 'btn', onClick: copy }, '📋 Copy image'),
@@ -321,5 +320,5 @@ export function renderTimeReport(ctx) {
         h('button', { class: 'btn', onClick: copyFull }, '📋 Copy full report'),
         h('span', { class: 'muted small' }, 'Time by tag + work done + status, PowerPoint size'))),
     (group.tags || []).length ? null
-      : h('p', { class: 'muted small' }, `Tip: give ${group.name} some tags in Settings (or inside a task) to see time by tag.`));
+      : h('p', { class: 'muted small' }, 'Tip: make some tags in Settings → Tags and timer (or inside a task) to see time by tag.'));
 }

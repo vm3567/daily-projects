@@ -103,7 +103,10 @@ test('time report draws (pie, legend in % and hours) and date ranges are right',
   const s = sampleState();
   const ui = { timeReport: { groupId: s.data.groups[0].id, preset: 'thisWeek', by: 'tag', mode: 'pct', custom: {} } };
   const text = renderTimeReport(fakeCtx(s, ui)).textContent;
-  assert.ok(text.includes('time by tag'));
+  assert.ok(text.includes('Time by tag'), 'no group name in the title (groups are off for now, owner 23 Oct)');
+  assert.ok(!text.includes('Group '), 'no group picker');
+  const empty = renderTimeReport(fakeCtx(s, { timeReport: { ...ui.timeReport, preset: 'custom', custom: { from: '2020-01-01', to: '2020-01-02' } } })).textContent;
+  assert.ok(empty.includes('No time logged for this period.') && !empty.includes(s.data.groups[0].name), 'no group name when empty either');
   assert.ok(text.includes('Kiln'));
   assert.ok(text.includes('100%'));
   ui.timeReport.mode = 'hours';
@@ -1101,8 +1104,8 @@ test('✅ Tasks: "All tasks N" | "No project N" switch (both red first, remember
   assert.match(app, /opt\('all', `All tasks \$\{all\.length\}`\), opt\('loose', `No project \$\{loose\}`\)/);
   assert.match(app, /if \(ui\.view === 'all'\) return activeTasks\(store\.view\.data\)\.filter\(\(p\) => ui\.taskFilter !== 'loose' \|\| !parentIdsOf\(p\)\.length\);/, '"No project" = tasks in no project');
   assert.match(app, /taskListView\(\) && !ui\.search && !ui\.adding \? taskFilterSwitch\(\) : showSort/, 'the switch replaces My order / Red first on Tasks and in groups (owner asked, 22 Oct)');
-  assert.match(app, /function taskListView\(\) \{\n  return ui\.view === 'all' \|\| ui\.view\.startsWith\('group:'\);/);
-  assert.match(app, /&& \(ui\.taskFilter !== 'loose' \|\| !parentIdsOf\(p\)\.length\)\); \/\/ a group shows its tasks only/, 'No project works in a group too');
+  // (groups are off for now, owner 23 Oct: ✅ Tasks only)
+  assert.match(app, /function taskListView\(\) \{\n  return ui\.view === 'all';/);
   assert.match(app, /if \(\(ui\.sort !== 'red' && !taskListView\(\)\) \|\| ui\.search\) return list;/, 'Tasks and groups are always red first');
   assert.match(app, /taskFilter: ui\.taskFilter,/, 'remembered');
 });
@@ -1136,18 +1139,32 @@ test('task lists: a task with no next step shows no red "No next step — add on
   assert.match(row, /class: 'quick-add', title: 'Add the first step'/, 'the + to add a step stays');
 });
 
-test('groups (Acton, Personal…) list tasks only — 📂 projects are not shown there, and the menu count counts tasks only', async () => {
+test('groups are off for now (owner, 23 Oct): no Groups in the menu, no group pages, no group box on a task or + New task, no group in Settings, the Time report or the Dashboard; an older data file is merged into one list once', async () => {
   const { readFileSync } = await import('node:fs');
   const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
-  assert.match(app, /return all\.filter\(\(p\) => p\.groupId === id && p\.state === 'active' && !isMainProject\(store\.view\.data, p\)/);
-  assert.match(app, /count\(\(p\) => p\.groupId === g\.id && p\.state === 'active' && !isMainProject\(data, p\)\)/);
+  const detail = readFileSync(new URL('../docs/ui/detail.js', import.meta.url), 'utf8');
+  const dash = readFileSync(new URL('../docs/ui/dashboard.js', import.meta.url), 'utf8');
+  for (const gone of ["'groups-head'", 'function addGroup(', 'function editGroup(', "go('group:'", "'Group: '", "name: 'group'", '+ New task in ']) assert.ok(!app.includes(gone), 'gone: ' + gone);
+  assert.equal((app.match(/group:/g) || []).length, 1, 'only the old saved group page, which opens ✅ Tasks');
+  assert.match(app, /view: saved\.view && !String\(saved\.view\)\.startsWith\('group:'\) \? saved\.view : saved\.view \? 'all' : 'today'/);
+  assert.ok(!/'Group ',/.test(detail), 'no group box on a task');
+  assert.ok(!/time-groups/.test(dash), 'no time by group on the Dashboard');
+  assert.match(app, /h\('h3', null, 'Tags and timer'\)/); assert.ok(!/'Groups and tags'/.test(app));
+  assert.match(app, /store\.view\.data\.groups\.length > 1\) store\.dispatch\('mergeGroups', \{\}\);/, 'merged into one list once');
+  assert.match(app, /recordPastScores\(\); oneGroup\(\); \}\);/, 'after the data is loaded');
+  // drawn: the task page shows no group name; the Settings tags have no group name
+  const s = sampleState();
+  const text = renderDetail(fakeCtx(s, { selected: 'p1', update: {} })).textContent;
+  assert.ok(!text.includes(s.data.groups[0].name + ' ·'), 'no group name on the task page');
 });
+
 
 test('menu order (owner, 22 Oct): Today, Tasks, Projects, Replies, Inbox, Groups, Paused, Finished, People, Settings, More ▸ (Diary, Dashboard, Time report); no people listed under People', async () => {
   const { readFileSync } = await import('node:fs');
   const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
-  const menu = app.slice(app.indexOf("h('ul', { class: 'menu-list' },"), app.indexOf('function addGroup('));
-  const order = ["item('today'", "item('all'", "item('mains'", "item('replies'", "item('inbox'", "'groups-head'", "item('paused'", "item('finished'", "item('people'", "item('settings'", "'more-menu'", "item('diary'", "item('dashboard'", "item('time'"];
+  const menu = app.slice(app.indexOf("h('ul', { class: 'menu-list' },"), app.indexOf('// ---------------------------------------------------------------- Today box'));
+  // (groups are off for now, owner 23 Oct: no Groups between Inbox and Paused)
+  const order = ["item('today'", "item('all'", "item('mains'", "item('replies'", "item('inbox'", "item('paused'", "item('finished'", "item('people'", "item('settings'", "'more-menu'", "item('diary'", "item('dashboard'", "item('time'"];
   let at = -1;
   for (const bit of order) { const i = menu.indexOf(bit); assert.ok(i > at, `${bit} in its place`); at = i; }
   assert.ok(!menu.includes('menu-person'), 'People shows just its count');
@@ -1158,7 +1175,7 @@ test('menu order (owner, 22 Oct): Today, Tasks, Projects, Replies, Inbox, Groups
 test('✅ Tasks and groups: a select box on each row (instead of +), a bar "N selected · 📂 Add to project… · Select all · Clear" that puts all selected tasks into one project (or a new one); Today keeps its tick box', async () => {
   const { readFileSync } = await import('node:fs');
   const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
-  assert.match(app, /function canPickRows\(\) \{\n  return !ui\.search && \(ui\.view === 'all' \|\| ui\.view\.startsWith\('group:'\)\);/, 'Tasks and groups only (not Today)');
+  assert.match(app, /function canPickRows\(\) \{\n  return !ui\.search && ui\.view === 'all';/, 'Tasks only (not Today; groups are off for now, owner 23 Oct)');
   assert.match(app, /picking\n      \? h\('input', \{\n        type: 'checkbox', class: 'row-pick'/, 'the select box takes the place of + and the tick');
   assert.match(app, /for \(const id of picked\) if \(store\.dispatch\('addToProject', \{ projectId: id, parentId: main\.id \}\)\) n\+\+;/, 'all selected go into the chosen project');
   assert.match(app, /store\.dispatch\('createMainProject', \{ projectId, name, groupId: data\.groups\[0\] && data\.groups\[0\]\.id, childId: ids\[0\] \}\)/, 'or a new project made with them');
@@ -1604,7 +1621,8 @@ test('"+ New task here" (📂 project) and "+ New task": a box with a name and t
   const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
   const form = app.slice(app.indexOf('function newProjectForm()'), app.indexOf('function statusText()'));
   assert.match(form, /newTaskBox\(ctx, d, \{/);
-  assert.match(form, /createTaskWithNote\(ctx, \{ name, groupId: d\.groupId \|\| defaultGroup, d, editor \}\)/);
+  assert.match(form, /createTaskWithNote\(ctx, \{ name, groupId: defaultGroup, d, editor \}\)/); // (groups are off for now: no group box)
+  assert.ok(!/name: 'group'/.test(form), 'no group box on + New task');
   assert.ok(!/prompt\(/.test(form));
   const mainsSrc = readFileSync(new URL('../docs/ui/mains.js', import.meta.url), 'utf8');
   assert.ok(!/prompt\(`New task in/.test(mainsSrc), 'no question box for a new task here');

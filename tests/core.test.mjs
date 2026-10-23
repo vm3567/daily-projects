@@ -2668,3 +2668,32 @@ test('one app: who signed in — the owner, a team member (staff view) or anothe
   assert.ok(!tok.includes(signInTag(tok)) && signInTag(tok).length <= 8, 'not a piece of the sign-in');
   assert.equal(signInTag(''), '');
 });
+
+test('groups are off for now (owner, 23 Oct): mergeGroups puts every task in the first group once — each keeps the name of its old group, tags of the same name become one, the timer stays on if it was on anywhere; nothing else changes', () => {
+  const s = fresh();
+  const [a, p, c] = s.data.groups.map((g) => g.id); // Acton, Personal, Ceramic Ninja
+  applyOp(s, op('addTag', { groupId: a, tagId: 'ta', name: 'Kiln' }, '2026-10-01'));
+  applyOp(s, op('addTag', { groupId: c, tagId: 'tc', name: 'kiln' }, '2026-10-01'));
+  applyOp(s, op('addTag', { groupId: c, tagId: 'tg', name: 'Glaze' }, '2026-10-01'));
+  applyOp(s, op('createProject', { projectId: 'x1', name: 'Fire tiles', groupId: c }, '2026-10-01'));
+  applyOp(s, op('setProjectField', { projectId: 'x1', field: 'tagId', value: 'tc' }, '2026-10-01'));
+  applyOp(s, op('createProject', { projectId: 'x2', name: 'Gym', groupId: p }, '2026-10-01'));
+  applyOp(s, op('createProject', { projectId: 'x3', name: 'Glaze test', groupId: c }, '2026-10-01'));
+  applyOp(s, op('setProjectField', { projectId: 'x3', field: 'tagId', value: 'tg' }, '2026-10-01'));
+  applyOp(s, op('setGroupTimer', { groupId: a, on: false }, '2026-10-01'));
+  const steps = clone(s.data.projects.map((x) => x.steps));
+  assert.equal(applyOp(s, op('mergeGroups', {}, '2026-10-02')), true);
+  assert.deepEqual(s.data.groups.map((g) => g.id), [a], 'one list');
+  assert.ok(s.data.projects.every((x) => x.groupId === a));
+  const P = (id) => s.data.projects.find((x) => x.id === id);
+  assert.equal(P('x1').formerGroup, 'Ceramic Ninja'); assert.equal(P('x2').formerGroup, 'Personal');
+  assert.equal(P('x1').tagId, 'ta', 'the same tag name becomes one tag');
+  assert.equal(P('x3').tagId, 'tg', 'another tag comes along');
+  assert.deepEqual(s.data.groups[0].tags.map((t) => t.name), ['Kiln', 'Glaze']);
+  assert.equal(s.data.groups[0].timer, true, 'on, because Ceramic Ninja had it on');
+  assert.deepEqual(s.data.projects.map((x) => x.steps), steps, 'the tasks are otherwise as they were');
+  assert.equal(applyOp(s, op('mergeGroups', {}, '2026-10-03')), false, 'once: nothing to do the second time');
+  // a change made on another device with an old group still works: it goes into the one list
+  assert.equal(applyOp(s, op('createProject', { projectId: 'x4', name: 'Old phone task', groupId: p }, '2026-10-03')), true);
+  assert.equal(P('x4').groupId, a);
+});

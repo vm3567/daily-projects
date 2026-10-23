@@ -274,7 +274,7 @@ async function startStaff(user, openTask = 0) {
 
 const saved = device.ui();
 const ui = {
-  view: saved.view || 'today', // today | all | group:<id> | paused | finished | diary | settings
+  view: saved.view && !String(saved.view).startsWith('group:') ? saved.view : saved.view ? 'all' : 'today', // today | all | mains | paused | finished | diary | settings (groups are off for now: an old group view opens ✅ Tasks)
   selected: saved.selected || null,
   search: '',
   mobile: 'list', // list | detail (phone only)
@@ -901,11 +901,6 @@ function kindWord(p) {
   return isMainProject(store.view.data, p) ? 'project' : 'task';
 }
 
-function groupName(id) {
-  const g = store.view.data.groups.find((x) => x.id === id);
-  return g ? g.name : '';
-}
-
 
 function visibleProjects() {
   const all = store.view.data.projects;
@@ -916,16 +911,11 @@ function visibleProjects() {
   if (ui.view === 'mains') return mainProjects(store.view.data).filter((p) => p.state !== 'finished'); // 📂 Projects: projects only, a list like Tasks
   if (ui.view === 'paused') return all.filter((p) => p.state === 'paused');
   if (ui.view === 'finished') return all.filter((p) => p.state === 'finished');
-  if (ui.view.startsWith('group:')) {
-    const id = ui.view.slice(6);
-    return all.filter((p) => p.groupId === id && p.state === 'active' && !isMainProject(store.view.data, p) && (ui.taskFilter !== 'loose' || !parentIdsOf(p).length)); // a group shows its tasks only (📂 projects are on Projects); 'No project' = loose tasks
-  }
   return [];
 }
 
 function viewTitle() {
   if (ui.search.trim()) return `Search: "${ui.search.trim()}"`;
-  if (ui.view.startsWith('group:')) return groupName(ui.view.slice(6));
   return { today: 'Today', inbox: 'Inbox', all: '✅ Tasks', paused: 'Paused', finished: 'Finished', diary: 'Diary', settings: 'Settings', people: 'People', dashboard: 'Dashboard', time: 'Time report', replies: '✉ Replies', apps: '🔌 From apps', mains: '📂 Projects' }[ui.view];
 }
 
@@ -953,6 +943,11 @@ function markOpened(id) {
 }
 
 /** Save the green score of each of the last 7 days that has none yet (one save, once a day). */
+/** Groups are off for now (the owner asked, 23 Oct): an older data file with several groups is merged into one, once. */
+function oneGroup() {
+  if (store && store.base && store.canEdit() && store.view.data.groups.length > 1) store.dispatch('mergeGroups', {});
+}
+
 async function recordPastScores() {
   if (!store || !store.base || !store.canEdit()) return;
   const today = todayIndia();
@@ -1073,19 +1068,12 @@ function renderMenu() {
         h('span', { class: 'dot red' }), String(counts.red), ' ',
         h('span', { class: 'dot yellow' }), String(counts.yellow), ' ',
         h('span', { class: 'dot green' }), String(counts.green)),
-      // order the owner chose (22 Oct): Today, Tasks, Projects, Replies, Inbox, Groups, Paused, Finished, People, Settings, More
+      // order the owner chose (22 Oct): Today, Tasks, Projects, Replies, Inbox, Paused, Finished, People, Settings, More (groups are off for now, 23 Oct)
       item('all', '✅ Tasks', activeTasks(data).length),
       item('mains', '📂 Projects', mainProjects(data).length),
       item('replies', '✉ Replies', readyCount(data, today)), // replies ready to send
       onServer ? item('apps', '🔌 From apps', appsPending()) : null, // approvals your apps sent, waiting for ✓ / ✕
       item('inbox', '📥 Inbox', (data.inbox || []).length),
-      h('li', { class: 'menu-head', key: 'groups-head' }, 'Groups'),
-      data.groups.map((g) => item('group:' + g.id, g.name, count((p) => p.groupId === g.id && p.state === 'active' && !isMainProject(data, p)),
-        h('button', {
-          class: 'icon tiny', title: `Rename or delete "${g.name}"`,
-          onClick: () => editGroup(g),
-        }, '✎'))),
-      h('li', { key: 'add-group' }, h('button', { class: 'menu-item add', onClick: addGroup }, '+ Group')),
       h('li', { class: 'menu-sep', key: 'sep' }),
       item('paused', 'Paused', count((p) => p.state === 'paused')),
       item('finished', 'Finished', count((p) => p.state === 'finished')),
@@ -1098,25 +1086,6 @@ function renderMenu() {
       }, moreOpen ? 'More ▾' : 'More ▸')),
       moreOpen ? [item('diary', 'Diary'), item('dashboard', 'Dashboard'), item('time', 'Time report')] : null),
     h('button', { class: 'keys-hint', onClick: () => { ui.showKeys = true; ui.menuOpen = false; render(); } }, 'Keyboard shortcuts: press ?'));
-}
-
-function addGroup() {
-  const name = prompt('Name of the new group:');
-  if (name && name.trim()) store.dispatch('addGroup', { groupId: newId(), name: name.trim() });
-}
-
-function editGroup(g) {
-  const used = store.view.data.projects.some((p) => p.groupId === g.id);
-  const name = prompt(`Rename the group "${g.name}".${used ? '' : '\n\nTo delete this empty group, type DELETE.'}`, g.name);
-  if (name === null) return;
-  if (!used && name.trim() === 'DELETE') {
-    if (store.view.data.groups.length <= 1) { toast('You need at least one group.'); return; }
-    store.dispatch('deleteGroup', { groupId: g.id });
-    if (ui.view === 'group:' + g.id) go('today');
-    return;
-  }
-  if (name.trim() === 'DELETE') { toast('Only an empty group can be deleted. Move its tasks first.'); return; }
-  store.dispatch('renameGroup', { groupId: g.id, name: name.trim() });
 }
 
 // ---------------------------------------------------------------- Today box
@@ -1213,7 +1182,7 @@ function projectRow(p, today, opts = {}) {
 /** ✅ Tasks and groups: rows can be selected, then put into one 📂 project together. Today keeps its tick box. */
 const picked = new Set();
 function canPickRows() {
-  return !ui.search && (ui.view === 'all' || ui.view.startsWith('group:'));
+  return !ui.search && ui.view === 'all';
 }
 
 /** The bar over the list while tasks are selected: "3 selected · 📂 Add to project… · Clear". */
@@ -1708,7 +1677,7 @@ function renderInbox() {
           },
           h('option', { value: '' }, 'Send to task…'),
           projects.map((p) => h('option', { value: p.id }, p.name)),
-          data.groups.map((g) => h('option', { value: 'new:' + g.id }, `+ New task in ${g.name}`))),
+          data.groups.length ? h('option', { value: 'new:' + data.groups[0].id }, '+ New task') : null),
           h('button', { class: 'icon', title: 'Delete', 'aria-label': 'Delete', onClick: () => inboxAct('removeInbox', { itemId: item.id }, item, 'Removed from Inbox') }, '🗑')));
     })) : h('p', { class: 'empty-list' }, 'Inbox is empty. Press Q anywhere (or 📥 at the top) to write something down fast.'));
 }
@@ -1764,7 +1733,7 @@ function rowMenu() {
 
 /** Lists where a 📂 project shows (and sorts by) the worst of it and its tasks. Today and search: its own dot. */
 function rollsUpHere() {
-  return !ui.search && (ui.view.startsWith('group:') || ui.view === 'paused' || ui.view === 'finished' || ui.view === 'mains');
+  return !ui.search && (ui.view === 'paused' || ui.view === 'finished' || ui.view === 'mains');
 }
 
 function rowColour(p, today) {
@@ -1782,7 +1751,7 @@ function canDrag() {
 
 /** ✅ Tasks and the groups: the 'All tasks | No project' switch, always red first. */
 function taskListView() {
-  return ui.view === 'all' || ui.view.startsWith('group:');
+  return ui.view === 'all';
 }
 
 /** Right-click on a person (People list or the side menu): the things you can do with them. */
@@ -1927,8 +1896,7 @@ function computeRedFirst(list, today) {
 
 /** ✅ Tasks: "All tasks 19" | "No project 7" (both red first). */
 function taskFilterSwitch() {
-  const gid = ui.view.startsWith('group:') ? ui.view.slice(6) : null; // in a group: count that group's tasks
-  const all = activeTasks(store.view.data).filter((p) => !gid || p.groupId === gid);
+  const all = activeTasks(store.view.data);
   const loose = all.filter((p) => !parentIdsOf(p).length).length;
   const opt = (value, label) => h('button', {
     class: 'seg' + (ui.taskFilter === value ? ' on' : ''), 'aria-pressed': String(ui.taskFilter === value),
@@ -2044,21 +2012,18 @@ function newProjectForm() {
   if (!ui.adding) {
     return h('button', { class: 'btn primary new-project', onClick: () => { ui.adding = true; render(); focusKey('new-name'); } }, '+ New task', keyHint('N'));
   }
-  const defaultGroup = ui.view.startsWith('group:') ? ui.view.slice(6) : store.view.data.groups[0]?.id;
+  const defaultGroup = store.view.data.groups[0]?.id; // (groups are off for now: one list)
   const d = ((ui.newTaskDraft ||= {}).list ||= {});
   const close = () => { ui.adding = false; render(); };
   // a name, then notes you can paste a screenshot, a table or words into (they become the task's first update)
   return newTaskBox(ctx, d, {
     key: 'new',
-    extra: h('select', { name: 'group', 'aria-label': 'Group', value: d.groupId || defaultGroup, onChange: (e, el) => { d.groupId = el.value; } },
-      store.view.data.groups.map((g) => h('option', { value: g.id }, g.name))),
     onCancel: close,
     onCreate: (name, editor) => {
-      const projectId = createTaskWithNote(ctx, { name, groupId: d.groupId || defaultGroup, d, editor });
+      const projectId = createTaskWithNote(ctx, { name, groupId: defaultGroup, d, editor });
       if (!projectId) return;
       ui.adding = false;
-      d.groupId = null;
-      if (ui.view !== 'today' && ui.view !== 'all' && !ui.view.startsWith('group:')) ui.view = 'today';
+      if (ui.view !== 'today' && ui.view !== 'all') ui.view = 'today';
       select(projectId);
       focusKey('add-step-' + projectId);
     },
@@ -2291,11 +2256,10 @@ function renderSettings() {
       h('p', null, `AI uses today: ${usage} / ${AI_DAILY_LIMIT}`),
       keyForm('claude', 'Claude', 'From console.anthropic.com → API keys. Saved in your private data, so all your devices use it.'),
       keyForm('gemini', 'Gemini', 'Optional backup. From aistudio.google.com → Get API key. Shared with all your devices. On the free plan Google may read the text.')),
-    h('section', { class: 'block' }, h('h3', null, 'Groups and tags'),
-      h('p', { class: 'muted small' }, 'Tags belong to a group; each task picks one. The timer and the Time report use the groups that have the timer on.'),
-      data.groups.map((g) => h('div', { class: 'group-set', key: 'gs-' + g.id },
+    h('section', { class: 'block' }, h('h3', null, 'Tags and timer'),
+      h('p', { class: 'muted small' }, 'Each task can pick one tag. The Time report shows your time by tag.'),
+      data.groups.slice(0, 1).map((g) => h('div', { class: 'group-set', key: 'gs-' + g.id }, // (groups are off for now: one list)
         h('div', { class: 'row' },
-          h('strong', null, g.name),
           h('label', { class: 'check' },
             h('input', { type: 'checkbox', checked: groupHasTimer(g), onChange: (e, el) => store.dispatch('setGroupTimer', { groupId: g.id, on: el.checked }) }),
             ' Timer')),
@@ -2315,8 +2279,8 @@ function renderSettings() {
           h('button', {
             class: 'btn small',
             onClick: () => {
-              const n = prompt(`New tag for ${g.name}:`);
-              if (n && n.trim() && !store.dispatch('addTag', { groupId: g.id, tagId: newId(), name: n.trim() })) toast(`"${n.trim()}" already exists in ${g.name}`);
+              const n = prompt('New tag:');
+              if (n && n.trim() && !store.dispatch('addTag', { groupId: g.id, tagId: newId(), name: n.trim() })) toast(`"${n.trim()}" already exists`);
             },
           }, '+ Tag'))))),
     onServer ? renderConnectionsSettings(appsCtx) : null, // 🔌 other apps send tasks and approvals (worktask.in only)
@@ -2917,7 +2881,6 @@ function jumpItems() {
     ['People', () => go('people')], ['Diary', () => go('diary')], ['Paused', () => go('paused')],
     ['Finished', () => go('finished')], ['Settings', () => go('settings')], ['Time report', () => go('time')], ['✉ Replies', () => go('replies')], ['📂 Projects', () => go('mains')], ['Daily round', () => { go('today'); startRound(); }],
     ["Today's summary", () => openSummary()], ['New task', () => { go('today'); ui.adding = true; render(); focusKey('new-name'); }],
-    ...data.groups.map((g) => [`Group: ${g.name}`, () => go('group:' + g.id)]),
   ].map(([label, run]) => ({ kind: 'page', label, run }));
   const projects = data.projects.map((p) => ({
     kind: 'project', label: p.name, dot: dotColour(p, today), sub: p.state !== 'active' ? p.state : (nextStep(p, today) || {}).text || '',
@@ -3140,7 +3103,7 @@ function onKey(e) {
   } else if (k === 'n' && ui.view === 'people' && ui.person && !ui.search) {
     focusKey('person-task-input'); // on a person's page: the "Add a task with …" box
   } else if (k === 'n') {
-    if (!(ui.view === 'today' || ui.view === 'all' || ui.view.startsWith('group:'))) ui.view = 'today'; // the form is only on project lists
+    if (!(ui.view === 'today' || ui.view === 'all')) ui.view = 'today'; // the form is only on project lists
     ui.search = ''; ui.adding = true; ui.mobile = 'list'; render(); focusKey('new-name');
   } else if (k === 'q') {
     openCapture();
@@ -3614,7 +3577,7 @@ function startOwner() {
   });
   render();
   if (onServer && !isMock) takeTeamFromHash(); // "#team…": the team pages of this app (from 👥, a team task chip, Give to team)
-  store.init().then(() => { if (store.status === 'saved') dataFreshAt = Date.now(); render(); if (ui.capture) focusKey('capture-input'); voiceReady = true; runVoice(); loadTeam(true); if (onServer) loadApps(appsCtx, true); shareLocalKeys(); markShownOpened(); makeBrief(); recordPastScores(); });
+  store.init().then(() => { if (store.status === 'saved') dataFreshAt = Date.now(); render(); if (ui.capture) focusKey('capture-input'); voiceReady = true; runVoice(); loadTeam(true); if (onServer) loadApps(appsCtx, true); shareLocalKeys(); markShownOpened(); makeBrief(); recordPastScores(); oneGroup(); });
   if (started) return;
   started = true;
   // redraw now and then: the running timer, and the "not sent yet" bar appearing after a minute

@@ -1038,6 +1038,36 @@ const handlers = {
   },
 
   // ---------- Groups ----------
+  /**
+   * Groups are off for now (the owner asked, 23 Oct): everything goes into the first group, which the screens no longer
+   * show. Each task keeps the name of its old group in formerGroup (for a later idea); tags with the same name become
+   * one; the timer stays on if it was on in any group. Nothing else changes. Not work.
+   */
+  mergeGroups(state, op) {
+    const { data } = state;
+    if (data.groups.length <= 1) return false;
+    const keep = data.groups[0];
+    const tags = (keep.tags ||= []);
+    const tagMap = new Map(); // old tag id -> the kept tag's id
+    for (const g of data.groups.slice(1)) {
+      for (const t of g.tags || []) {
+        const same = tags.find((x) => x.name.toLowerCase() === t.name.toLowerCase());
+        if (same) tagMap.set(t.id, same.id); else tags.push({ id: t.id, name: t.name });
+      }
+    }
+    const timer = data.groups.some(groupHasTimer);
+    const names = new Map(data.groups.map((g) => [g.id, g.name]));
+    for (const p of data.projects) {
+      if (p.formerGroup === undefined && names.has(p.groupId)) p.formerGroup = names.get(p.groupId);
+      p.groupId = keep.id;
+      if (p.tagId && tagMap.has(p.tagId)) p.tagId = tagMap.get(p.tagId);
+    }
+    keep.timer = timer;
+    data.groups = [keep];
+    addEvent(state, op, null, 'group_deleted', 'Groups merged into one list');
+    return true;
+  },
+
   addGroup(state, op, a) {
     const name = cleanText(a.name, 100).trim();
     if (!name || state.data.groups.some((g) => g.id === a.groupId)) return false;

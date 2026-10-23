@@ -96,9 +96,6 @@ export function renderDashboard(ctx) {
   const timeRows = data.projects.map((p) => ({ p, m: minutesBetween(p, wk, today, data.timer) })).filter((x) => x.m > 0).sort((a, b) => b.m - a.m);
   const timeTotal = timeRows.reduce((n, x) => n + x.m, 0);
   const lastTotal = data.projects.reduce((n, p) => n + minutesBetween(p, lastWkStart, lastWkEnd), 0);
-  const byGroup = new Map();
-  for (const { p, m } of timeRows) byGroup.set(p.groupId, (byGroup.get(p.groupId) || 0) + m);
-  const groupRows = [...byGroup.entries()].map(([gid, m]) => ({ name: (data.groups.find((g) => g.id === gid) || {}).name || 'Other', m })).sort((a, b) => b.m - a.m);
   const maxTime = timeRows.length ? timeRows[0].m : 1;
 
   // Most worked projects this month
@@ -170,7 +167,7 @@ export function renderDashboard(ctx) {
         card('Time this week', timeTotal ? h('div', null,
           h('div', { class: 'time-total' }, h('strong', null, fmtMinutes(timeTotal)),
             lastTotal ? h('span', { class: timeTotal >= lastTotal ? 'up' : 'down' }, timeTotal >= lastTotal ? ` ↑ ${fmtMinutes(timeTotal - lastTotal)} vs last week` : ` ↓ ${fmtMinutes(lastTotal - timeTotal)} vs last week`) : h('span', { class: 'muted small' }, ' since Monday')),
-          h('div', { class: 'time-groups' }, groupRows.map((g) => h('span', { class: 'tag', key: 'tg-' + g.name }, `${g.name}: ${fmtMinutes(g.m)}`))),
+          // (groups are off for now: no "time by group" line)
           h('ul', { class: 'dash-bars' }, timeRows.slice(0, 5).map(({ p, m }) => h('li', { key: 'tm-' + p.id },
             h('button', { class: 'link', onClick: () => ctx.openProject(p.id) }, p.name),
             h('div', { class: 'dash-bar' }, bar(m, maxTime, 6)), h('span', { class: 'muted small' }, fmtMinutes(m))))))

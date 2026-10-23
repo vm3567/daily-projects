@@ -935,25 +935,19 @@ function metaLine(ctx, p, today) {
   const pri = p.priority[0].toUpperCase() + p.priority.slice(1);
   const overdue = isOverdue(p, today);
   if (!ui.editMeta) {
-    return h('button', { class: 'meta-line', key: 'meta-' + p.id, title: 'Change group, priority or target date', onClick: () => { ui.editMeta = true; ctx.render(); } },
-      h('span', null, g ? g.name : ''),
-      tagName(g, p) ? [' · ', h('span', { class: 'tag tag-chip' }, `🏷 ${tagName(g, p)}`)] : '',
-      ' · ', h('span', { class: p.priority === 'high' ? 'meta-high' : '' }, pri),
+    return h('button', { class: 'meta-line', key: 'meta-' + p.id, title: 'Change tag, priority or target date', onClick: () => { ui.editMeta = true; ctx.render(); } },
+      tagName(g, p) ? [h('span', { class: 'tag tag-chip' }, `🏷 ${tagName(g, p)}`), ' · '] : '', // (groups are off for now: not shown)
+      h('span', { class: p.priority === 'high' ? 'meta-high' : '' }, pri),
       p.deadline ? [' · ', h('span', { class: overdue ? 'late' : '' }, `${overdue ? 'Overdue' : 'Target'} ${fmtDay(p.deadline)}`)] : ' · No target date',
       h('span', { class: 'meta-edit', 'aria-hidden': 'true' }, ' ✎'));
   }
   return h('div', { class: 'fields', key: 'fields-' + p.id },
-    h('label', null, 'Group ',
-      h('select', {
-        value: p.groupId,
-        onChange: (e, el) => store.dispatch('setProjectField', { projectId: p.id, field: 'groupId', value: el.value }),
-      }, store.view.data.groups.map((x) => h('option', { value: x.id }, x.name)))),
     h('label', null, 'Tag ',
       h('select', {
         value: p.tagId || '',
         onChange: (e, el) => {
           if (el.value === '__new') {
-            const name = prompt(`New tag for the group "${g ? g.name : ''}":`);
+            const name = prompt('New tag:');
             if (name && name.trim() && g) {
               const tagId = newId();
               if (store.dispatch('addTag', { groupId: g.id, tagId, name: name.trim() })) store.dispatch('setProjectField', { projectId: p.id, field: 'tagId', value: tagId });
