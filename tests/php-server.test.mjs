@@ -2175,3 +2175,18 @@ test('review r14: the server sync never cancels the person\'s open task for a st
   assert.ok(!(await openOf('suresh', 'mv14')).some((t) => t.stepRef === 'mv14b'), 'a plain ticked step leaves the list');
   await saveProjects([]);
 });
+
+test('cloud review: an old waiting approval stays on From apps even after 300+ newer decided ones', { skip }, async () => {
+  const ol = await call('conn.create', { name: 'Old wait' }, tok.boss);
+  sql(`INSERT INTO wt.conn_items (conn_id, external_id, kind, title, status, created_at, updated_at)
+    VALUES (${ol.connection.id}, 'OLD-1', 'approval', 'Old waiting PO', 'pending', NOW() - INTERVAL 20 DAY, NOW() - INTERVAL 20 DAY)`);
+  sql(`SET SESSION cte_max_recursion_depth = 2000; INSERT INTO wt.conn_items (conn_id, external_id, kind, title, status, decided_at, created_at, updated_at)
+    WITH RECURSIVE n (i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 320)
+    SELECT ${ol.connection.id}, CONCAT('NEW-', i), 'approval', 'x', 'approved', NOW(), NOW() - INTERVAL i MINUTE, NOW() FROM n`);
+  const r = await call('conn.items', {}, tok.boss);
+  assert.ok(r.items.some((x) => x.title === 'Old waiting PO'), 'the waiting one is still listed');
+  assert.ok(r.items.filter((x) => x.status !== 'pending').length <= 300, 'decided ones are still capped');
+  const p = await call('conn.items', { status: 'pending' }, tok.boss);
+  assert.ok(p.items.some((x) => x.title === 'Old waiting PO'));
+  assert.ok((await call('conn.delete', { id: ol.connection.id }, tok.boss)).ok);
+});

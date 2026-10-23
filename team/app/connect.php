@@ -472,7 +472,13 @@ function conn_handle(string $a, array $in, array $me): ?array {
       $args = $status === 'pending' ? [] : [date('Y-m-d H:i:s', time() - 30 * 86400)];
       $conns = [];
       foreach (all('SELECT * FROM connections') as $c) $conns[(int)$c['id']] = $c;
-      $rows = all("SELECT i.* FROM conn_items i WHERE i.kind = 'approval' AND $where ORDER BY i.created_at DESC, i.id DESC LIMIT 300", $args);
+      if ($status === '') { // a waiting approval is never cut off by many newer decided ones: only the decided list is capped
+        $rows = array_merge(all("SELECT i.* FROM conn_items i WHERE i.kind = 'approval' AND i.status = 'pending' ORDER BY i.created_at DESC, i.id DESC LIMIT 2000"),
+          all("SELECT i.* FROM conn_items i WHERE i.kind = 'approval' AND i.status IN ('approved', 'rejected', 'withdrawn') AND i.updated_at >= ? ORDER BY i.created_at DESC, i.id DESC LIMIT 300", $args));
+        usort($rows, fn($a, $b) => [$b['created_at'], (int)$b['id']] <=> [$a['created_at'], (int)$a['id']]);
+      } else {
+        $rows = all("SELECT i.* FROM conn_items i WHERE i.kind = 'approval' AND $where ORDER BY i.created_at DESC, i.id DESC LIMIT " . ($status === 'pending' ? 2000 : 300), $args);
+      }
       return ['items' => array_values(array_map(fn($r) => conn_item_out($r, $conns[(int)$r['conn_id']] ?? ['name' => '?', 'callback_url' => '']), $rows))];
     }
     case 'conn.decide': {
