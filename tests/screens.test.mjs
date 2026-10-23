@@ -1653,6 +1653,23 @@ test('🔌 From apps: waiting approvals grouped by app (newest first) with the f
   assert.ok(cnx.renderFromApps(empty).textContent.includes('Nothing waiting for you ✓'));
 });
 
+test('🔌 From apps: ✓ Approve sends the version of the words on the screen; refused (the app changed them) → the list is loaded again to show the new words', async () => {
+  cnx.resetConnections();
+  let items = [appItem({ id: 7, title: 'Approve PO 1001', fields: [['Amount', '12,500']], version: 'v-old' })];
+  const changed = new Error('The app changed this since you opened it. Look at it again, then decide.');
+  const c = appsCtx({ 'conn.items': () => ({ items }), 'conn.decide': changed });
+  cnx.renderFromApps(c);
+  await flush();
+  items = [appItem({ id: 7, title: 'Approve PO 1001', fields: [['Amount', '125,000']], version: 'v-new' })];
+  await byText(walk(cnx.renderFromApps(c), (n) => n.nodeName === 'ARTICLE')[0], '✓ Approve', 'button').__on.click();
+  assert.deepEqual(c.calls.find((x) => x[0] === 'conn.decide'), ['conn.decide', { id: 7, decision: 'approved', reason: '', version: 'v-old' }]);
+  assert.match(c.toasts.at(-1), /changed this since you opened it/);
+  await flush();
+  assert.equal(c.calls.filter((x) => x[0] === 'conn.items').length, 2, 'loaded again');
+  assert.ok(cnx.renderFromApps(c).textContent.includes('125,000'), 'the new amount is shown');
+  assert.equal(cnx.appsPending(), 1, 'still waiting');
+});
+
 test('🔌 app wiring (app.js): "🔌 From apps" after ✉ Replies with the waiting count (worktask.in only), its page, the Settings section, #apps from a phone alert, the key forgotten when leaving Settings; offline copy daily-projects-app-23', async () => {
   const { readFileSync } = await import('node:fs');
   const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
@@ -2034,4 +2051,36 @@ test('Give a Work Task sign-in: a retry after a lost reply does not make a secon
   accounts.push({ id: 9, name: 'Meena Rao', username: 'meena' });
   await giveSignIn({ name: 'Meena Das' }); // a different Meena: 'meena' is someone else's, so the next number
   assert.deepEqual(made, ['ravi', 'meena1']);
+});
+
+test('people: "Add a task with Ravi" offers tasks only — a 📂 project (even one with an old @Ravi step) is never a chip or the Enter target', () => {
+  const s = sampleState();
+  const g = s.data.groups[0].id;
+  applyOps(s, [
+    makeOp('createMainProject', { projectId: 'm1', name: 'Kilns', groupId: g }),
+    makeOp('addStep', { projectId: 'm1', stepId: 'ms', text: 'Old step with @Ravi' }),
+  ]);
+  const el = renderPerson(fakeCtx(s, { person: 'r' }));
+  const box = rFind(el, (n) => n.className === 'person-task block');
+  assert.ok(box, 'the task box is drawn');
+  assert.ok(rFind(box, (n) => n.nodeName === 'BUTTON' && n.textContent === 'Kiln'), 'the task Kiln is offered');
+  assert.ok(!rFind(box, (n) => n.nodeName === 'BUTTON' && n.textContent === 'Kilns'), 'the 📂 project Kilns is not offered');
+  assert.equal(rFind(box, (n) => n.className === 'chip first').textContent, 'Kiln', 'Enter adds to a task');
+});
+
+test('📂 app wiring (app.js): Inbox, Chrome clip and their suggestions offer tasks only (stepTargets); progress line, Daily round and evening check count what Today shows (todayList); Inbox Undo keeps the whole item', async () => {
+  const { readFileSync } = await import('node:fs');
+  const APP = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
+  const body = (name) => { const i = APP.indexOf(`function ${name}(`); assert.ok(i >= 0, name); return APP.slice(i, APP.indexOf('\n}\n', i)); };
+  for (const f of ['clipBox', 'inboxSuggestions', 'renderInbox']) {
+    assert.match(body(f), /stepTargets\((store\.view\.)?data, todayIndia\(\)\)/, f + ': tasks only');
+    assert.doesNotMatch(body(f), /awakeProjects\(/, f + ': never every awake project (that has 📂 projects)');
+  }
+  for (const f of ['progressLine', 'eveningCheck', 'startRound', 'renderRound']) {
+    assert.match(body(f), /todayList\(store\.view\.data, (today|todayIndia\(\))\)/, f + ': same list as Today');
+    assert.doesNotMatch(body(f), /awakeProjects\(/, f + ': an empty 📂 project is not counted');
+  }
+  const act = body('inboxAct');
+  assert.match(act, /const saved = clone\(item\)/, 'Undo keeps the whole item (mail, note, reply)');
+  assert.match(act, /store\.dispatch\('inboxUndo', \{\n\s+item: saved, index,/, 'that saved item is what Undo sends');
 });

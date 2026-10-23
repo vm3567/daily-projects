@@ -287,12 +287,12 @@ function handle(string $a, array $in): array {
         if ($uday < $day && $notYetTheirs($t)) throw new ApiError('That day was before this task was yours, so the update was not saved.');
         $note = txt($in['note'] ?? '', 4000, true, 'The update');
         $state = in_array($in['state'] ?? '', ['progress', 'finished'], true) ? $in['state'] : 'progress'; // not "Stuck": the task is not theirs now
-        $old = one('SELECT user_id, note, updated_at, client_id FROM updates WHERE task_id = ? AND day = ?', [$t['id'], $uday]);
+        $old = one('SELECT user_id, note, COALESCE(written_at, updated_at) AS written_at, client_id FROM updates WHERE task_id = ? AND day = ?', [$t['id'], $uday]);
         if ($old && $ucid && (int)$old['user_id'] === $me['id'] && $old['client_id'] === $ucid) { // sent before, the answer was lost
           $u = one('SELECT * FROM updates WHERE task_id = ? AND day = ?', [$t['id'], $uday]);
           return ['update' => update_out($u, photos_of([(int)$u['id']])), 'history' => 'own'];
         }
-        if ($old && $wrote && (int)$old['user_id'] === $me['id'] && $old['updated_at'] > $wrote) { // they wrote again later: that one stays
+        if ($old && $wrote && (int)$old['user_id'] === $me['id'] && $old['written_at'] > $wrote) { // they wrote again later: that one stays
           return ['update' => update_out(one('SELECT * FROM updates WHERE task_id = ? AND day = ?', [$t['id'], $uday]), []), 'history' => 'older'];
         }
         if ($old && (int)$old['user_id'] !== $me['id']) { // someone else already wrote for that day: add these words below theirs (once)
@@ -302,9 +302,9 @@ function handle(string $a, array $in): array {
           $u['note'] = $note; $u['user_id'] = $me['id']; // the answer: only what this person wrote, never the other person's update
           return ['update' => update_out($u, []), 'history' => 'merged']; // (photos cannot go on the other person's update)
         } else {
-          q('INSERT INTO updates (task_id, user_id, day, note, state, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)
-             ON DUPLICATE KEY UPDATE note = VALUES(note), state = VALUES(state), updated_at = VALUES(updated_at)',
-            [$t['id'], $me['id'], $uday, $note, $state, now(), now()]);
+          q('INSERT INTO updates (task_id, user_id, day, note, state, created_at, updated_at, written_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+             ON DUPLICATE KEY UPDATE note = VALUES(note), state = VALUES(state), updated_at = VALUES(updated_at), written_at = VALUES(written_at)',
+            [$t['id'], $me['id'], $uday, $note, $state, now(), now(), $wrote ?? now()]);
           if ($ucid) q('UPDATE updates SET client_id = ? WHERE task_id = ? AND day = ?', [$ucid, $t['id'], $uday]);
           // today's words (written offline) for a whole-project task replaced by steps since: they count for their first step too
           if ($uday === $day && $t['status'] === 'cancelled' && $t['project_ref'] && $t['step_ref'] === $t['project_ref'] . ':whole') carry_whole_update((string)$t['project_ref'], $me['id']);
@@ -314,11 +314,11 @@ function handle(string $a, array $in): array {
       }
       $t = own_task($me, (int)($in['taskId'] ?? 0));
       if ($uday < $day && $notYetTheirs($t)) throw new ApiError('That day was before this task was yours, so the update was not saved.');
-      $cur = one('SELECT id, user_id, updated_at, client_id FROM updates WHERE task_id = ? AND day = ?', [$t['id'], $uday]);
+      $cur = one('SELECT id, user_id, COALESCE(written_at, updated_at) AS written_at, client_id FROM updates WHERE task_id = ? AND day = ?', [$t['id'], $uday]);
       if ($cur && $ucid && (int)$cur['user_id'] === $me['id'] && $cur['client_id'] === $ucid) { // sent before, the answer was lost: the same save
         return ['update' => update_out(one('SELECT * FROM updates WHERE id = ?', [$cur['id']]), photos_of([(int)$cur['id']]))];
       }
-      if ($wrote && $cur && (int)$cur['user_id'] === $me['id'] && $cur['updated_at'] > $wrote) { // an older offline update: their newer one stays (and the task is not reopened)
+      if ($wrote && $cur && (int)$cur['user_id'] === $me['id'] && $cur['written_at'] > $wrote) { // an older offline update: their newer one stays (and the task is not reopened)
         return ['update' => update_out(one('SELECT * FROM updates WHERE task_id = ? AND day = ?', [$t['id'], $uday]), []), 'history' => 'older'];
       }
       if ((int)$t['assignee_id'] !== $me['id']) throw new ApiError('Only the person doing the task can write its update.', 403);
@@ -341,11 +341,12 @@ function handle(string $a, array $in): array {
         // their photos stay on the row but are marked as older than this take-over (created_at)
         $before = trim((string)$old['note']);
         if ($before !== '') $note = mb_substr(user_name((int)$old['user_id']) . ': ' . $before . "\n\n" . $note, 0, 8000);
-        q('UPDATE updates SET user_id = ?, note = ?, state = ?, created_at = ?, updated_at = ? WHERE task_id = ? AND day = ?', [$me['id'], $note, $state, now(), now(), $t['id'], $uday]);
+        q('UPDATE updates SET user_id = ?, note = ?, state = ?, created_at = ?, updated_at = ?, written_at = ? WHERE task_id = ? AND day = ?', [$me['id'], $note, $state, now(), now(), $wrote ?? now(), $t['id'], $uday]);
       } else {
-        q('INSERT INTO updates (task_id, user_id, day, note, state, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)
-           ON DUPLICATE KEY UPDATE user_id = VALUES(user_id), note = VALUES(note), state = VALUES(state), updated_at = VALUES(updated_at)',
-          [$t['id'], $me['id'], $uday, $note, $state, now(), now()]);
+        // (written_at: when it was written, so the next offline one is compared with that, not with when this arrived)
+        q('INSERT INTO updates (task_id, user_id, day, note, state, created_at, updated_at, written_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+           ON DUPLICATE KEY UPDATE user_id = VALUES(user_id), note = VALUES(note), state = VALUES(state), updated_at = VALUES(updated_at), written_at = VALUES(written_at)',
+          [$t['id'], $me['id'], $uday, $note, $state, now(), now(), $wrote ?? now()]);
       }
       if ($ucid) q('UPDATE updates SET client_id = ? WHERE task_id = ? AND day = ?', [$ucid, $t['id'], $uday]);
       // a late update for an earlier day (sent from the outbox) is kept as history: it never reopens or closes the task

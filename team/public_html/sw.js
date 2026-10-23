@@ -43,23 +43,26 @@ self.addEventListener('fetch', (e) => {
   const code = e.request.mode !== 'navigate' && /\.(js|mjs|css)$/.test(url.pathname);
   // only this version's copies (never a leftover from another cache)
   const fromCache = (req) => caches.open(CACHE).then((c) => c.match(req));
+  const id = code && /\.m?js$/.test(url.pathname) ? e.clientId : null; // the modules decide; a style sheet only has its own time limit
+  let from = 'net'; // where net's answer came from: 'net', 'kept' (the saved copy), or null (an error answer)
   // online: always the newest copy (and keep it, except code: that is kept only as a whole set); offline: the kept copy
   const net = fetch(e.request).then((res) => {
     if (res.ok) { if (!code) { const copy = res.clone(); caches.open(CACHE).then((c) => c.put(e.request, copy)).catch(() => {}); } return res; }
-    return fromCache(e.request).then((r) => r || res); // the host answered with an error page: the saved copy, if there is one
+    from = null;
+    if (pageWay.get(id) === 'net') return res; // this page has new code: the error, never an old kept copy next to it
+    return fromCache(e.request).then((r) => { if (r) from = 'kept'; return r || res; }); // the host answered with an error page: the saved copy, if there is one
   });
   const kept = () => fromCache(e.request).then((r) => r || (e.request.mode === 'navigate' ? fromCache('index.html') : Response.error()));
   // code (app.js, logic.js, styles): the network, or after CODE_WAIT (weak signal) / offline the kept set of this version.
   // A page that got one code file from the network waits for the network for the rest, and the other way round:
   // a new app.js never meets an old logic.js.
   if (code) {
-    const id = /\.m?js$/.test(url.pathname) ? e.clientId : null; // the modules decide; a style sheet only has its own time limit
     if (pageWay.get(id) === 'kept') { e.respondWith(fromCache(e.request).then((r) => r || net)); return; }
     const late = pageWay.get(id) === 'net' ? new Promise(() => {}) : new Promise((resolve) => setTimeout(() => fromCache(e.request).then(resolve, () => resolve(null)), CODE_WAIT));
     e.respondWith(Promise.race([
-      net.then((r) => { decide(id, 'net'); return r; }),
-      late.then((r) => { if (!r) return net; decide(id, 'kept'); return r; }),
-    ]).catch(() => { decide(id, 'kept'); return kept(); }));
+      net.then((r) => { if (from) decide(id, from); return r; }), // a kept copy (the host's error page swapped) marks the page 'kept'
+      late.then((r) => { if (!r || pageWay.get(id) === 'net') return net; decide(id, 'kept'); return r; }),
+    ]).catch(() => { if (pageWay.get(id) === 'net') return Response.error(); decide(id, 'kept'); return kept(); })); // new code on this page: fail cleanly, never mix
     return;
   }
   // the kept (old) page was shown because the network was slow, and a newer one then arrived: tell the page

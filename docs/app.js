@@ -20,7 +20,7 @@ import { MockRepo } from './mockrepo.js';
 import { device } from './device.js';
 import { DATA_OWNER, DATA_REPO, DATA_BRANCH, MOVED_TO, REFRESH_MS, AI_DAILY_LIMIT, BRIEF_CLAIM_MINUTES, WAIT_RED_DAYS, NO_WORK_NOTE_DAYS } from './config.js';
 import { dotColour, greenByTeamOnly, isSnoozed, restUntil, restReason, onlyDaysLabel, openIdFromHash, awakeProjects, activeProjects, nextStep, todayIndia, isSundayIndia, colourCounts, isOverdue, indiaDate, waitingDays, daysWithoutWork, dayScore, greenStreak, addDays, monthOf, fmtMinutes, takeBackWaits, staffStepAction, pasteGoesToProject, singleStepClose, versionRequest, askDiaryAgain, pasteInForm, diaryLoadedAt, photoNeedsFetch, teamUndoKey, teamActionUndone, teamProgressOf, projectKeyIgnored, teamMovedTo, serverHolder, keepMovedStep, teamMemberFor, repliesOf, mailThreads, replyMailto, MAILTO_BODY_MAX, emailPath, pasteReason } from './rules.js';
-import { parentIdsOf, isMainProject, mainProjects, activeTasks, todayWithoutEmptyMains, mainSummary, childrenOf, deleteQuestion, pickEnterTarget } from './rules.js';
+import { parentIdsOf, isMainProject, mainProjects, activeTasks, todayWithoutEmptyMains, todayList, stepTargets, mainSummary, childrenOf, deleteQuestion, pickEnterTarget } from './rules.js';
 import { newId, clone, opMonth, groupHasTimer, cleanLink, carriedOps } from './ops.js';
 import * as ai from './ai.js';
 import { parseVoice } from './voice.js';
@@ -88,7 +88,9 @@ function actMany(projectId, steps, message, undoMark = null) {
     const months = [...new Set(ops.map(opMonth))];
     // (a step the person added, taken away by this Undo, is remembered as deleted on every device)
     const dropTeamSteps = ops.filter((o) => o.type === 'addStep' && o.args.byTeam).map((o) => o.args.stepId);
-    if (store.dispatch('restoreProject', { project: before, index, undoOpIds: ops.map((o) => o.id), undoMonth: months[0], dropTeamSteps, teamUndone: undoMark })) toast('Undone', 1500);
+    // (an undone untick puts its tick line back: the save loads the month it is in)
+    const tickMonths = [...new Set(ops.flatMap((o) => o.args.tickMonths || []))];
+    if (store.dispatch('restoreProject', { project: before, index, undoOpIds: ops.map((o) => o.id), undoMonth: months[0], dropTeamSteps, teamUndone: undoMark, tickMonths })) toast('Undone', 1500);
   } : null;
   if (message) toast(message, 5000, undo);
   return { ops, undo };
@@ -117,6 +119,7 @@ function act(type, args, message, ms = 4000) {
     const made = type === 'stepToProject' ? { removeProjectId: args.newProjectId } : {};
     Object.assign(made, type === 'createMainProject' ? { removeProjectId: args.projectId } : parentIds ? { parentIds } : {});
     if (timerStopped) made.timer = timerStopped;
+    if (op.args.tickMonths) made.tickMonths = op.args.tickMonths; // an undone untick puts its tick line back
     if (store.dispatch('restoreProject', { project: before, index, undoOpId: op.id, undoMonth: opMonth(op), ...made })) toast('Undone', 1500);
   } : null;
   if (message) toast(message, ms, undo);
@@ -1230,7 +1233,7 @@ function clipBox() {
   const close = () => { ui.capture = false; render(); };
   const textNow = () => (document.querySelector('.capture [name=text]')?.value || clip.text).replace(/\s+/g, ' ').trim();
   const find = clip.find.trim().toLowerCase();
-  const all = awakeProjects(data, todayIndia());
+  const all = stepTargets(data, todayIndia()); // tasks only: a 📂 project holds tasks, not steps
   const sugg = inboxSuggestions(`${clip.text} ${clip.link ? clip.link.title : ''}`);
   const recent = all.slice().sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
   const list = find ? all.filter((p) => p.name.toLowerCase().includes(find)).slice(0, 8)
@@ -1344,7 +1347,7 @@ function captureBox() {
 function inboxSuggestions(text) {
   const words = new Set(text.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((w) => w.length >= 4));
   const people = (store.view.data.people || []).filter((x) => text.toLowerCase().includes(x.name.toLowerCase()));
-  return awakeProjects(store.view.data, todayIndia())
+  return stepTargets(store.view.data, todayIndia())
     .map((p) => {
       let score = p.name.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((w) => words.has(w)).length * 2;
       if (people.some((x) => p.steps.some((s) => !s.done && s.text.includes('@' + x.name)))) score += 1;
@@ -1357,7 +1360,7 @@ function inboxSuggestions(text) {
 function inboxAct(type, args, item, message) {
   const inbox = store.view.data.inbox || [];
   const index = inbox.findIndex((x) => x.id === item.id);
-  const saved = { id: item.id, text: item.text, createdAt: item.createdAt, ...(item.link ? { link: item.link } : {}) };
+  const saved = clone(item); // the whole item: its email thread, note and reply draft come back too
   const op = store.dispatch(type, args);
   if (!op) return null;
   const undo = () => {
@@ -1431,7 +1434,7 @@ async function openReplyDraft(m) {
 function renderInbox() {
   const { data } = store.view;
   const items = data.inbox || [];
-  const projects = awakeProjects(data, todayIndia()).slice().sort((a, b) => a.name.localeCompare(b.name));
+  const projects = stepTargets(data, todayIndia()).slice().sort((a, b) => a.name.localeCompare(b.name));
   const toStep = (item, p) => inboxAct('inboxToStep', { itemId: item.id, projectId: p.id, stepId: newId() }, item, `Added to ${p.name}: ${item.text}`);
   return h('div', { class: 'inbox' },
     h('div', { class: 'row inbox-top' },
@@ -1738,7 +1741,7 @@ function weekBars() {
 
 /** "3 of 7 done today" with a thin bar. */
 function progressLine(today) {
-  const active = awakeProjects(store.view.data, todayIndia());
+  const active = todayList(store.view.data, todayIndia()); // as Today: an empty 📂 project is left out
   if (!active.length) return null;
   const done = active.filter((p) => dotColour(p, today) === 'green').length;
   const pct = Math.round((done / active.length) * 100);
@@ -1761,7 +1764,7 @@ function progressLine(today) {
 function eveningCheck(today) {
   const nowHm = new Date().toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' });
   if (nowHm < (team.fillBy || '18:00')) return null;
-  const left = awakeProjects(store.view.data, today).filter((p) => dotColour(p, today) !== 'green');
+  const left = todayList(store.view.data, today).filter((p) => dotColour(p, today) !== 'green');
   if (!left.length) return null;
   return h('div', { class: 'evening-check', key: 'evening' },
     `🕕 Nothing today on ${left.length} task${left.length > 1 ? 's' : ''}: `,
@@ -2368,7 +2371,7 @@ function playMoves(before) {
 
 function startRound() {
   const today = todayIndia();
-  const active = awakeProjects(store.view.data, todayIndia());
+  const active = todayList(store.view.data, todayIndia());
   const ids = computeRedFirst(active, today).filter((p) => dotColour(p, today) !== 'green').map((p) => p.id);
   if (!ids.length) { toast('Everything is green for today 🎉'); return; }
   ui.round = { ids, i: 0, mode: null, total: active.length };
@@ -2452,7 +2455,7 @@ function roundSubmit(text) {
 function renderRound() {
   const r = ui.round;
   const today = todayIndia();
-  const active = awakeProjects(store.view.data, todayIndia());
+  const active = todayList(store.view.data, todayIndia());
   const greenCount = active.filter((p) => dotColour(p, today) === 'green').length;
   const left = active.length - greenCount;
   const top = h('div', { class: 'round-top' },

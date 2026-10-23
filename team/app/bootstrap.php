@@ -276,6 +276,8 @@ function migrate(PDO $pdo): void {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
     // v34: the 24 hours of trying to tell the app count from here (the decision, or a new decision address)
     "ALTER TABLE conn_items ADD COLUMN callback_since DATETIME NULL",
+    // v35: when an update was written (on the phone, offline): the next offline one is compared with this, not with when it arrived
+    "ALTER TABLE updates ADD COLUMN written_at DATETIME NULL",
   ];
   $pdo->exec($steps[0]);
   $done = (int)($pdo->query("SELECT v FROM settings WHERE k = 'schema'")->fetchColumn() ?: 0);

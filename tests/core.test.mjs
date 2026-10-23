@@ -873,6 +873,28 @@ test('Undo of a team tick (or untick) is remembered, so the next team load does 
   assert.equal(s2.data.projects[0].teamUndone, undefined);
 });
 
+test('Undo of an untick (team "opened again", or your own) brings the step back done WITH its tick line', () => {
+  for (const byTeam of [true, false]) {
+    const s = withProject('2026-10-01');
+    const tick = op('tickStep', { projectId: 'p1', stepId: 's1', byTeam }, '2026-10-02');
+    applyOp(s, tick);
+    const kind = byTeam ? 'team_ticked' : 'step_ticked';
+    const before = clone(s.data.projects[0]);
+    const untick = op('untickStep', { projectId: 'p1', stepId: 's1', byTeam }, '2026-10-03');
+    applyOp(s, untick);
+    assert.ok(!s.history['2026-10'].some((e) => e.kind === kind), 'the untick takes the tick line away');
+    applyOp(s, op('restoreProject', { project: before, index: 0, undoOpIds: [untick.id], undoMonth: '2026-10' }, '2026-10-03', '10:00:05'));
+    assert.equal(s.data.projects[0].steps[0].done, true, 'done again');
+    const lines = s.history['2026-10'].filter((e) => e.kind === kind && e.stepId === 's1');
+    assert.equal(lines.length, 1, `${kind} line is back (once)`);
+    assert.equal(lines[0].id, tick.id);
+    assert.ok(!s.history['2026-10'].some((e) => e.id === untick.id), 'the untick line is gone');
+    // replayed (a save that had to try again): still once
+    applyOp(s, op('restoreProject', { project: before, index: 0, undoOpIds: [untick.id], undoMonth: '2026-10' }, '2026-10-03', '10:00:05'));
+    assert.equal(s.history['2026-10'].filter((e) => e.kind === kind).length, 1);
+  }
+});
+
 test('a project given as one task (no steps) shows stuck when that task is stuck', async () => {
   const { teamProgressOf } = await import('../docs/rules.js');
   const whole = { id: 1, projectRef: 'p1', stepRef: 'p1:whole', seq: 1, status: 'open', stuck: true, today: { day: '2026-10-21', state: 'stuck' } };
@@ -2314,6 +2336,34 @@ test('email task: an email received before you pressed Finish / Delete but broug
   assert.equal(applyOp(s, op('finish', { projectId: 'mt' }, '2026-10-02', '10:00:00')), false, 'mail.addedAt counts too');
 });
 
+test('email task: Finish / Delete compare with the newest email you saw (seenMailAt, server time), not the device clock', async () => {
+  const { seenMailOf } = await import('../docs/ops.js');
+  for (const kind of ['finish', 'deleteProject']) {
+    // device clock 3 minutes behind: the server brought the email in at 10:00, the press says 09:58
+    const s = withMains();
+    const p = mailTask(s);
+    p.thread.push({ at: '2026-10-02T04:29:00.000Z', addedAt: '2026-10-02T04:30:00.000Z', fromName: 'Ravi', fromMe: false, preview: 'Invoice', messageId: 'e2' });
+    p.mail = { ...p.mail, messageId: 'e2', at: '2026-10-02T04:29:00.000Z', addedAt: '2026-10-02T04:30:00.000Z' };
+    assert.equal(seenMailOf(p), '2026-10-02T04:30:00.000Z');
+    assert.equal(applyOp(s, op(kind, { projectId: 'mt', seenMailAt: seenMailOf(p) }, '2026-10-02', '09:58:00')), true, `${kind}: clock behind, the email was on screen`);
+    // device clock ahead and the save waited: an email brought in after the press still holds it
+    const s2 = withMains();
+    const p2 = mailTask(s2);
+    const late = op(kind, { projectId: 'mt', seenMailAt: seenMailOf(p2) }, '2026-10-02', '10:30:00'); // clock says 10:30, real press 10:00
+    p2.thread.push({ at: '2026-10-02T04:33:00.000Z', addedAt: '2026-10-02T04:35:00.000Z', fromName: 'Ravi', fromMe: false, preview: 'Any news?', messageId: 'e2' });
+    assert.equal(applyOp(s2, late), false, `${kind}: clock ahead, the newer email stays`);
+    assert.equal(P(s2, 'mt').state, 'active');
+    // nothing from them seen yet (seenMailAt null): any email from them holds it
+    const s3 = withMains();
+    const p3 = mailTask(s3);
+    p3.thread = [{ at: '2026-10-01T04:00:00.000Z', fromName: 'Me', fromMe: true, preview: 'Hi', messageId: 'e1' }];
+    const none = op(kind, { projectId: 'mt', seenMailAt: seenMailOf(p3) }, '2026-10-02', '10:00:00');
+    assert.equal(none.args.seenMailAt, null);
+    serverEmail(p3, 'e2', '2026-10-01T04:00:00.000Z');
+    assert.equal(applyOp(s3, none), false, `${kind}: the first email from them stays`);
+  }
+});
+
 test('Inbox Undo takes back only the step it added (by id): another device\'s work on that task meanwhile stays, no project inside a project; safe to replay', () => {
   const base = () => {
     const s = withMains();
@@ -2476,4 +2526,45 @@ test('+ Add time answer: hours, minutes, "1h 30m" and "1:30" are read whole; any
   assert.equal(parseDuration(' 45 min '), 45);
   assert.equal(parseDuration('20m'), 20);
   for (const bad of ['abc', '2 apples', '', '0', '-5', '1:75', '1h 30x', '2 hours later', null]) assert.equal(parseDuration(bad), null, `${bad} is refused`);
+});
+
+test('inbox Undo (as the app builds it: the whole item, cloned): an email item comes back whole — thread, note and reply draft — after → task, + New task and 🗑', async () => {
+  for (const [type, args] of [
+    ['inboxToStep', { itemId: 'i1', projectId: 'p1', stepId: 'sx' }],
+    ['inboxToProject', { itemId: 'i1', projectId: 'pn', groupId: 'g1' }],
+    ['removeInbox', { itemId: 'i1' }],
+  ]) {
+    const s = withMails();
+    applyOp(s, op('setReply', { itemId: 'i1', text: 'Dear Ravi,\n\nNoted.', by: 'you' }, '2026-10-22', '15:10:00'));
+    const item = clone(s.data.inbox[0]);
+    assert.ok(item.mail && item.note && item.reply, 'the sample has mail, note and reply');
+    const move = op(type, args, '2026-10-22', '15:11:00');
+    assert.ok(applyOp(s, move), type);
+    assert.ok(!s.data.inbox.some((x) => x.id === 'i1'));
+    // the args inboxAct (docs/app.js) sends: item = clone(item), and only what this change made is taken back
+    const extra = type === 'inboxToProject' ? { removeProjectId: args.projectId } : type === 'inboxToStep' ? { projectId: args.projectId, stepId: args.stepId } : {};
+    assert.ok(applyOp(s, op('inboxUndo', { item, index: 0, undoOpId: move.id, ...extra }, '2026-10-22', '15:11:05')), type + ' undo');
+    assert.deepEqual(s.data.inbox[0], item, type + ': back exactly as it was (mail, note, reply draft)');
+    assert.ok(!s.data.projects.some((p) => p.id === 'pn'), 'the new task is taken away');
+    assert.ok(!s.data.projects[0].steps.some((x) => x.id === 'sx'), 'the step is taken away');
+  }
+});
+
+test('todayList: what Today counts — an empty 📂 project (no own step) is left out, so 4 green tasks are "4 of 4"; stepTargets: tasks only, never a 📂 project', async () => {
+  const { todayList, stepTargets, dotColour: dot } = await import('../docs/rules.js');
+  const s = fresh();
+  applyOp(s, op('createMainProject', { projectId: 'm', name: 'Kilns', groupId: 'g1' }, '2026-10-01'));
+  for (const id of ['t1', 't2', 't3', 't4']) {
+    applyOp(s, op('createProject', { projectId: id, name: 'Task ' + id, groupId: 'g1' }, '2026-10-01'));
+    applyOp(s, op('addToProject', { projectId: id, parentId: 'm' }, '2026-10-01'));
+    applyOp(s, op('addStep', { projectId: id, stepId: id + 's', text: 'Do ' + id }, '2026-10-01'));
+    applyOp(s, op('addWorkNote', { projectId: id, noteId: id + 'n', text: 'Done today', stepId: id + 's' }, '2026-10-22'));
+  }
+  const list = todayList(s.data, '2026-10-22');
+  assert.deepEqual(list.map((p) => p.id).sort(), ['t1', 't2', 't3', 't4'], 'Kilns is left out');
+  assert.equal(list.filter((p) => dot(p, '2026-10-22') === 'green').length, 4, '4 of 4 green');
+  assert.deepEqual(stepTargets(s.data, '2026-10-22').map((p) => p.id).sort(), ['t1', 't2', 't3', 't4'], 'no 📂 project as a step target');
+  applyOp(s, op('addStep', { projectId: 'm', stepId: 'old', text: 'Old own step' }, '2026-10-22'));
+  assert.ok(todayList(s.data, '2026-10-22').some((p) => p.id === 'm'), 'with an own step it is on Today (as before)');
+  assert.ok(!stepTargets(s.data, '2026-10-22').some((p) => p.id === 'm'), 'still never a step target');
 });

@@ -165,7 +165,7 @@ test('team: a refused step or suggestion shows its whole words to copy; "back in
   const sug = giveBackShow({ kind: 'suggest', title: 'Clean filters', details: 'The dryer clogs every week' }, 'No.', false);
   assert.ok(sug.sticky && sug.body.includes('The dryer clogs every week'), 'a suggestion shows its details too');
   assert.equal(giveBackShow({ kind: 'photos', note: 'n', updateId: 4 }, 'Closed.', false).sticky, false, 'photos: a toast as before');
-  assert.match(APP, /it\.kind === 'step' \? myProjects\(\)\.some\(\(p\) => p\.ref === it\.projectRef\)/, 'the step box is looked for in my projects');
+  assert.match(APP, /it\.kind === 'step' \? !typing && myProjects\(\)\.some\(\(p\) => p\.ref === it\.projectRef\)/, 'the step box is looked for in my projects (and must not hold other words being typed)');
 });
 
 test('team: two refused items both stay on screen, and other news waits until they are closed', () => {
@@ -1002,4 +1002,80 @@ test('review r16 sw: a page that got old code from the kept set is told a new ve
   await h.ask('/version.txt', 'no-cors', { clientId: 'p1', waits }); await Promise.all(waits);
   assert.deepEqual(h.posted, [], 'no new version since: nothing more');
   assert.match(APP, /d\.type === 'new-version'\) \{\n\s+codeStamp = 'old'; checkNewVersion\(\);/, 'the page then shows "New version ready"');
+});
+
+test('review sw mix: app.js answered with 503 gets the kept app.js, and then logic.js comes from the kept set too (never the new logic.js); a new version is then offered', async () => {
+  const h = await swHarness({ net: (u) => Promise.resolve(u.endsWith('/app.js') ? new Response('busy', { status: 503 }) : new Response(u.endsWith('version.txt') ? 'v2\n' : 'new ' + u.slice(u.lastIndexOf('/') + 1))) });
+  for (const f of ['app.js', 'logic.js']) h.store(h.cacheName).set('https://worktask.in/' + f, new Response('kept ' + f));
+  h.store(h.cacheName).set('https://worktask.in/kept-version.txt', new Response('v1'));
+  assert.equal(await h.ask('/app.js', 'no-cors', { clientId: 'pageA' }), 'kept app.js', 'the host\'s error page swapped for the kept copy');
+  assert.equal(await h.ask('/logic.js', 'no-cors', { clientId: 'pageA' }), 'kept logic.js', 'the old app.js gets the old logic.js it was built with');
+  const waits = [];
+  await h.ask('/version.txt', 'no-cors', { clientId: 'pageA', waits }); await Promise.all(waits);
+  assert.ok(h.posted.some((m) => m.id === 'pageA' && m.type === 'new-version'), 'the page running the kept code is offered the reload');
+});
+
+test('review sw mix: app.js from the network, then logic.js fails (offline or an error answer): no kept copy is served next to the new app.js', async () => {
+  let way = 'ok';
+  const h = await swHarness({ net: (u) => (way === 'ok' ? Promise.resolve(new Response('new ' + u.slice(u.lastIndexOf('/') + 1))) : way === 'off' ? Promise.reject(new TypeError('offline')) : Promise.resolve(new Response('busy', { status: 508 }))) });
+  for (const f of ['app.js', 'logic.js']) h.store(h.cacheName).set('https://worktask.in/' + f, new Response('kept ' + f));
+  assert.equal(await h.ask('/app.js', 'no-cors', { clientId: 'pageA' }), 'new app.js');
+  way = 'off';
+  const fails = (t) => t === 'NETWORK ERROR' || t === ''; // a rejected answer, or Response.error() (a network error in the browser)
+  assert.ok(fails(await h.ask('/logic.js', 'no-cors', { clientId: 'pageA', upTo: 60000 }).catch(() => 'NETWORK ERROR')), 'offline: the load fails cleanly, never the kept logic.js');
+  way = 'busy';
+  assert.equal(await h.ask('/logic.js', 'no-cors', { clientId: 'pageA', upTo: 60000 }), 'busy', 'an error answer: the error, never the kept logic.js');
+  // the same when both start together and app.js arrives first
+  way = 'ok';
+  const h2 = await swHarness({ net: (u) => (u.endsWith('/app.js') ? Promise.resolve(new Response('new app.js')) : new Promise((r, no) => setImmediate(() => no(new TypeError('offline'))))) });
+  for (const f of ['app.js', 'logic.js']) h2.store(h2.cacheName).set('https://worktask.in/' + f, new Response('kept ' + f));
+  const both = await Promise.all([h2.ask('/app.js', 'no-cors', { clientId: 'pageB' }), h2.ask('/logic.js', 'no-cors', { clientId: 'pageB' }).catch(() => 'NETWORK ERROR')]);
+  assert.equal(both[0], 'new app.js');
+  assert.ok(fails(both[1]), 'logic.js fails cleanly, never the kept copy');
+});
+
+test('review: words typed in the Add a step box while a step is sending stay (online and when kept on the phone); just the sent step: the box empties', () => {
+  const fnSrc = APP.slice(APP.indexOf('function keepTypedStep('), APP.indexOf('function addStepForm('));
+  assert.ok(fnSrc.length > 0 && fnSrc.length < 600, 'the helper is there');
+  const state = { stepDrafts: { p1: 'Call vendor for quote' } };
+  const keep = new Function('state', 'msgBoxLeft', fnSrc + '; return keepTypedStep;')(state, msgBoxLeft);
+  assert.equal(keep('p1', 'Order servo motor'), 'Call vendor for quote', 'the next step typed meanwhile stays');
+  assert.equal(state.stepDrafts.p1, 'Call vendor for quote');
+  state.stepDrafts.p1 = 'Order servo motor ';
+  assert.equal(keep('p1', 'Order servo motor'), '', 'just what went: emptied');
+  assert.ok(!('p1' in state.stepDrafts), 'the draft is gone');
+  state.stepDrafts.p1 = 'Order servo motor\tCall vendor';
+  assert.equal(keep('p1', 'Order servo motor'), 'Call vendor', 'typed on after the sent words: only the later words stay');
+  const form = APP.slice(APP.indexOf('function addStepForm('), APP.indexOf('/** Manager, top of Team today'));
+  assert.ok(!/delete state\.stepDrafts\[ref\]/.test(form), 'the draft is never simply wiped after a send');
+  assert.ok(!/inp\.value = '';/.test(form), 'the box is never simply emptied');
+  assert.match(form, /await api\('project\.addStep'[^]*const left = keepTypedStep\(ref, title\);[^]*inp\.value = left;/, 'online');
+  assert.match(form, /await queue\(\{ kind: 'step'[^\n]*inp\.value = keepTypedStep\(ref, title\);/, 'kept on the phone');
+});
+
+test('review: the one-line "Give it" box keeps a line typed while task.save was sending; only the given line is cleared', () => {
+  const fn = APP.slice(APP.indexOf('function quickBox('), APP.indexOf('// ---------- manager: team today'));
+  assert.match(fn, /const sent = box\.value\.trim\(\);[^\n]*\n\s*try \{\n\s*const out = await api\('task\.save'/, 'the line given, read at the tap');
+  assert.match(fn, /if \(q\.text\.trim\(\) === sent\) \{ state\.quick = null; box\.value = ''; box\.dataset\.init = ''; card\.replaceChildren\(\); \}/, 'cleared only when the box still holds just that line');
+  assert.ok(!/\n\s*state\.quick = null; box\.value = '';/.test(fn), 'never cleared unconditionally');
+});
+
+test('review: a given-back step never overwrites the words being typed in the Add a step box; the notice then says to copy them', () => {
+  const src = APP.slice(APP.indexOf('function giveBack(it, why) {'), APP.indexOf('/** What a waiting item belongs to'));
+  const run = (drafts) => {
+    const state = { drafts: {}, editing: {}, files: {}, stepDrafts: drafts, user: { id: 3 } };
+    const shown = [];
+    const giveBack = new Function('state', 'myProjects', 'giveBackShow', 'boxStillThere', 'knownTask', 'notice', 'toast', src + '; return giveBack;')(
+      state, () => [{ ref: 'p1' }], giveBackShow, () => true, () => null, (k, title, body) => shown.push(body), (t) => shown.push(t));
+    giveBack({ kind: 'step', projectRef: 'p1', title: 'Order servo motor' }, 'Busy.');
+    return { state, body: shown[0] };
+  };
+  const typing = run({ p1: 'Call vendor for quote' });
+  assert.equal(typing.state.stepDrafts.p1, 'Call vendor for quote', 'the words being typed stay');
+  assert.match(typing.body, /Order servo motor/, 'the old step is shown to copy');
+  assert.ok(!/back in the Add a step box/.test(typing.body), 'never claims it is back in the box');
+  assert.match(typing.body, /Copy them if you need them/);
+  const empty = run({});
+  assert.equal(empty.state.stepDrafts.p1, 'Order servo motor', 'an empty box gets the old step back');
+  assert.match(empty.body, /back in the Add a step box/);
 });

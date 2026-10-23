@@ -15,6 +15,7 @@ const OL_PAGES = 5;          // pages of 50 emails per check
 const OL_STATE_SECONDS = 600; // the sign-in must come back within 10 minutes
 const OL_THREAD_MAX = 50;    // a task keeps its newest 50 emails (THREAD_MAX in docs/rules.js)
 const OL_THREAD_PREVIEW = 300; // letters of each email kept in the thread
+const OL_SEEN_IMID = 'imid';   // ol_seen.conv_hash of the second row of an email: its internetMessageId (the same email with a new Outlook id)
 
 class OlError extends Exception {}
 
@@ -142,13 +143,13 @@ function ol_graph_error(int $code): OlError {
 
 /** New emails in the Inbox since `since` (oldest first), a few pages at most. */
 function ol_fetch(string $token, string $since): array {
-  $all = ol_list($token, 'inbox', 'id,subject,from,receivedDateTime,bodyPreview,webLink,conversationId', 'receivedDateTime', $since);
+  $all = ol_list($token, 'inbox', 'id,subject,from,receivedDateTime,bodyPreview,webLink,conversationId,internetMessageId', 'receivedDateTime', $since);
   return array_values(array_filter($all, fn($m) => is_string($m['id'] ?? null) && $m['id'] !== ''));
 }
 
 /** Emails moved into the Inbox later (from Junk or another folder: their received time is old), changed after `since`, received after `from`. */
 function ol_fetch_moved(string $token, string $since, string $from): array {
-  $all = ol_list($token, 'inbox', 'id,subject,from,receivedDateTime,lastModifiedDateTime,bodyPreview,webLink,conversationId', 'lastModifiedDateTime', $since, " and receivedDateTime gt $from");
+  $all = ol_list($token, 'inbox', 'id,subject,from,receivedDateTime,lastModifiedDateTime,bodyPreview,webLink,conversationId,internetMessageId', 'lastModifiedDateTime', $since, " and receivedDateTime gt $from");
   return array_values(array_filter($all, fn($m) => is_string($m['id'] ?? null) && $m['id'] !== ''));
 }
 
@@ -222,6 +223,9 @@ function ol_mail_info(object $mail, array $x, string $addedAt = ''): void {
   // addedAt = when the server brought this email in (not when it was received): a Finish / Delete pressed earlier but
   // saved later must not hide it (docs/ops.js newerMailThan compares addedAt || at)
   if ($addedAt !== '') $mail->addedAt = $addedAt;
+  // an older email of the thread (moved into the Inbox later: it keeps its old received time) is not the newest one
+  $was = strtotime((string)($mail->at ?? '')) ?: 0;
+  if ($was && ($x['at'] === '' || strtotime($x['at']) < $was)) return;
   if ($x['id'] !== '' && mb_strlen($x['id']) <= 400) $mail->messageId = $x['id'];
   $mail->fromName = mb_substr($x['from'], 0, 120);
   $addr = trim($x['address']);
@@ -250,8 +254,13 @@ function ol_thread_task(object $data, string $conv): ?object {
 /** Add one email to a task's thread (oldest first, newest last, at most OL_THREAD_MAX). False when it is there already. */
 function ol_thread_add(object $p, array $e): bool {
   $list = is_array($p->thread ?? null) ? $p->thread : [];
-  foreach ($list as $old) if (is_object($old) && $e['messageId'] !== '' && ($old->messageId ?? '') === $e['messageId']) return false;
   $entry = ['at' => $e['at'], 'addedAt' => (string)($e['addedAt'] ?? '') !== '' ? (string)$e['addedAt'] : ol_iso_now(), 'fromName' => mb_substr($e['fromName'], 0, 120), 'fromMe' => $e['fromMe'], 'preview' => mb_substr($e['preview'], 0, OL_THREAD_PREVIEW)];
+  foreach ($list as $old) {
+    if (!is_object($old)) continue;
+    if ($e['messageId'] !== '' && ($old->messageId ?? '') === $e['messageId']) return false;
+    // the same email with a new Outlook id (moved out of the Inbox and back): the same time, sender and words (as docs/ops.js keepServerParts)
+    if (($old->at ?? '') === $entry['at'] && ($old->fromName ?? '') === $entry['fromName'] && ($old->preview ?? '') === $entry['preview']) return false;
+  }
   if ($e['link']) $entry['link'] = $e['link'];
   if ($e['messageId'] !== '' && mb_strlen($e['messageId']) <= 400) $entry['messageId'] = $e['messageId'];
   $list[] = (object)$entry;
@@ -610,16 +619,20 @@ function ol_add(array $msgs): int {
   if (!$owner) throw new OlError('No projects on this server yet.');
   dp_migrate();
   // only the emails not put in yet (one email once, even if Microsoft sends it again)
-  $new = [];
+  // (also by its internetMessageId: Outlook gives an email a new id when it is moved out of the Inbox and back)
+  $new = []; $keys = [];
   foreach ($msgs as $m) {
     $h = hash('sha256', (string)$m['id']);
-    if (isset($new[$h]) || one('SELECT id FROM ol_seen WHERE msg_hash = ?', [$h])) continue;
-    $new[$h] = $m;
+    $imid = (string)($m['internetMessageId'] ?? '');
+    $hs = $imid !== '' ? [$h, hash('sha256', 'i|' . $imid)] : [$h];
+    if (array_intersect($hs, array_keys($keys)) || one('SELECT id FROM ol_seen WHERE msg_hash IN (' . implode(',', array_fill(0, count($hs), '?')) . ') LIMIT 1', $hs)) continue;
+    foreach ($hs as $k) $keys[$k] = true;
+    $new[$h] = [$m, $hs];
   }
   if (!$new) return 0;
   ol_write(function (object $data, array &$hist) use ($new): bool {
     $threads = [];
-    foreach ($new as $m) {
+    foreach ($new as [$m]) {
       $conv = (string)($m['conversationId'] ?? '');
       $ch = hash('sha256', 'c|' . $conv);
       $seen = $conv !== '' && (isset($threads[$ch]) || (bool)one('SELECT id FROM ol_seen WHERE conv_hash = ? LIMIT 1', [$ch]));
@@ -628,10 +641,11 @@ function ol_add(array $msgs): int {
     }
     return true;
   }, '📧 ' . count($new) . ' email' . (count($new) === 1 ? '' : 's') . ' from Outlook');
-  foreach ($new as $h => $m) {
+  foreach ($new as [$m, $hs]) {
     $r = strtotime((string)($m['receivedDateTime'] ?? ''));
-    q('INSERT IGNORE INTO ol_seen (msg_hash, conv_hash, received_at, added_at) VALUES (?, ?, ?, ?)',
-      [$h, hash('sha256', 'c|' . (string)($m['conversationId'] ?? '')), $r ? date('Y-m-d H:i:s', $r) : null, now()]);
+    // the internetMessageId row is marked OL_SEEN_IMID (not a thread, not counted as an email added)
+    foreach ($hs as $k => $h) q('INSERT IGNORE INTO ol_seen (msg_hash, conv_hash, received_at, added_at) VALUES (?, ?, ?, ?)',
+      [$h, $k ? OL_SEEN_IMID : hash('sha256', 'c|' . (string)($m['conversationId'] ?? '')), $r ? date('Y-m-d H:i:s', $r) : null, now()]);
   }
   return count($new);
 }
@@ -682,7 +696,7 @@ function ol_status(): array {
     'redirectUri' => ol_redirect_uri(), 'scopes' => OL_SCOPES,
     'connected' => setting('ol_refresh') !== '', 'account' => setting('ol_account'),
     'lastCheck' => $at ? date('Y-m-d H:i:s', $at) : null,
-    'addedToday' => (int)(one('SELECT COUNT(*) AS n FROM ol_seen WHERE added_at >= ?', [today() . ' 00:00:00'])['n'] ?? 0),
+    'addedToday' => (int)(one('SELECT COUNT(*) AS n FROM ol_seen WHERE added_at >= ? AND conv_hash <> ?', [today() . ' 00:00:00', OL_SEEN_IMID])['n'] ?? 0),
     'error' => setting('ol_error'), 'today' => today(),
   ];
 }

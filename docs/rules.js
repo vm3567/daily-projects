@@ -409,6 +409,16 @@ export function todayWithoutEmptyMains(list, today = todayIndia()) {
   return list.filter((p) => !((p.isMain || parents.has(p.id)) && !nextStep(p, today)));
 }
 
+/** What Today counts (its rows, the progress line, the Daily round, the evening check): awake, empty 📂 projects left out. */
+export function todayList(data, today = todayIndia()) {
+  return todayWithoutEmptyMains(awakeProjects(data, today), today);
+}
+
+/** Where a new step can go (Inbox, Chrome clip, a person's task box): awake tasks only — a 📂 project holds tasks, not steps. */
+export function stepTargets(data, today = todayIndia()) {
+  return awakeProjects(data, today).filter((p) => !isMainProject(data, p));
+}
+
 // ---------- People (@mentions) ----------
 
 const WORD_CHAR = /[\p{L}\p{N}_]/u;

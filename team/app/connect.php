@@ -73,8 +73,13 @@ function conn_item_out(array $it, array $c): array {
     'id' => (int)$it['id'], 'connId' => (int)$it['conn_id'], 'app' => $c['name'], 'externalId' => $it['external_id'], 'kind' => $it['kind'],
     'title' => $it['title'], 'details' => $it['details'] ?? '', 'link' => $it['link'] ?? '', 'fields' => conn_fields_of($it['fields']),
     'status' => $it['status'], 'reason' => $it['reason'] ?? '', 'decidedAt' => $it['decided_at'], 'createdAt' => $it['created_at'],
-    'updatedAt' => $it['updated_at'], 'delivery' => conn_delivery($it, $c),
+    'updatedAt' => $it['updated_at'], 'delivery' => conn_delivery($it, $c), 'version' => conn_version($it),
   ];
+}
+
+/** Which words of an item the owner saw (title, details, link, fields): conn.decide sends it back, so a change made by the app meanwhile is never decided unseen. */
+function conn_version(array $it): string {
+  return substr(hash('sha256', json_encode([$it['title'], $it['details'] ?? '', $it['link'] ?? '', $it['fields'] ?? ''], JSON_UNESCAPED_UNICODE)), 0, 16);
 }
 
 // ---------------------------------------------------------------- what the app sends
@@ -515,13 +520,18 @@ function conn_handle(string $a, array $in, array $me): ?array {
       $it = one("SELECT * FROM conn_items WHERE id = ? AND kind = 'approval'", [(int)($in['id'] ?? 0)]);
       if (!$it) throw new ApiError('That item was not found.', 404);
       if ($it['status'] !== 'pending') throw new ApiError($it['status'] === 'withdrawn' ? 'The app took this back, so there is nothing to decide.' : 'This was already decided.', 409);
+      $changed = 'The app changed this since you opened it. Look at it again, then decide.';
+      $ver = (string)($in['version'] ?? '');
+      if ($ver !== '' && !hash_equals(conn_version($it), $ver)) throw new ApiError($changed, 409);
       $reason = txt($in['reason'] ?? '', 500);
       $c = conn_get((int)$it['conn_id']);
       $hasUrl = ($c['callback_url'] ?? '') !== '';
-      $st = q('UPDATE conn_items SET status = ?, reason = ?, decided_at = ?, callback_since = ?, updated_at = ?, callback_next_at = ? WHERE id = ? AND status = ?',
-        [$decision, $reason, now(), now(), now(), $hasUrl ? date('Y-m-d H:i:s', jobs_now()) : null, $it['id'], 'pending']);
+      $st = q('UPDATE conn_items SET status = ?, reason = ?, decided_at = ?, callback_since = ?, updated_at = ?, callback_next_at = ? WHERE id = ? AND status = ?'
+        . ' AND title = BINARY ? AND details <=> BINARY ? AND link <=> BINARY ? AND fields <=> BINARY ?', // the words checked above (the app sending new ones at the same moment: refused)
+        [$decision, $reason, now(), now(), now(), $hasUrl ? date('Y-m-d H:i:s', jobs_now()) : null, $it['id'], 'pending', $it['title'], $it['details'], $it['link'], $it['fields']]);
       if ($st->rowCount() !== 1) { // decided (or taken back) on another device at the same moment: that one counts, nothing is sent twice
         $now = one('SELECT status FROM conn_items WHERE id = ?', [$it['id']]);
+        if (($now['status'] ?? '') === 'pending') throw new ApiError($changed, 409);
         throw new ApiError(($now['status'] ?? '') === 'withdrawn' ? 'The app took this back, so there is nothing to decide.' : 'This was already decided.', 409);
       }
       audit($me['id'], 'conn_decide', "#{$it['id']} $decision");

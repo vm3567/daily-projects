@@ -1,7 +1,7 @@
 // The app's data store: loads from GitHub, keeps a queue of pending operations,
 // and saves them with replay on clash.
 
-import { applyOp, applyOps, emptyData, makeOp, opMonth, commitMessage, clone } from './ops.js';
+import { applyOp, applyOps, emptyData, makeOp, opMonth, commitMessage, clone, seenMailOf } from './ops.js';
 
 /** History months an operation touches (its own, the month of a change it undoes, and where an untick's tick line is). */
 const monthsOfOp = (op) => [opMonth(op), op.args && op.args.undoMonth, ...((op.args && op.args.tickMonths) || [])].filter(Boolean);
@@ -119,12 +119,14 @@ export class Store extends EventTarget {
     const keepMonths = new Set(this.base ? Object.keys(this.base.history) : []);
     keepMonths.add(monthOf(todayIndia()));
     for (const op of this.pending) for (const m of monthsOfOp(op)) keepMonths.add(m);
+    const seq = this.baseSeq = (this.baseSeq || 0) + 1; // a later load or a save meanwhile has newer data than this one
 
     const snap = await this.repo.snapshot();
     const dataSha = snap.entries.get(DATA_PATH);
     const data = normalizeParents(dataSha ? JSON.parse(await this.repo.blobText(dataSha)) : emptyData()); // older data: parentId → parentIds
     const base = { data, history: {}, commit: snap.commit, tree: snap.tree, entries: snap.entries };
     await this.ensureMonths(base, keepMonths);
+    if (this.baseSeq !== seq) return; // never put back older data over it (a just-saved change would vanish)
     this.base = base;
     this.recompute();
     this.saveSnapshot();
@@ -220,6 +222,11 @@ export class Store extends EventTarget {
     }
     // an untick removes the step's tick line: the save must load the month it was ticked in
     if (type === 'untickStep') args = { ...args, tickMonths: tickMonthsOf(this.view.data, args) };
+    // Finish / Delete on an email task: keep the newest email you could see (server time), not the device clock
+    if (type === 'finish' || type === 'deleteProject') {
+      const p = this.view.data.projects.find((x) => x.id === args.projectId);
+      if (p && p.mail && !('seenMailAt' in args)) args = { ...args, seenMailAt: seenMailOf(p) };
+    }
     const op = makeOp(type, args);
     const ok = applyOp(this.view, op);
     if (!ok) { this.emit('change', { reason: 'noop' }); return null; } // redraw so controls show the real data
@@ -286,6 +293,7 @@ export class Store extends EventTarget {
               else entries.delete(c.path);
             }
             this.base = { ...next, commit: r.commit, tree: r.tree, entries };
+            this.baseSeq = (this.baseSeq || 0) + 1;
             this.saveSnapshot();
           }
           done = true;
@@ -310,12 +318,37 @@ export class Store extends EventTarget {
       if (e && e.refused && ops.length > 1) {
         this.oneByOne = true;
         this.setStatus('saving'); // try again, one change at a time
+      } else if (e && e.refused && await this.baseRefused(ops)) {
+        // text already in the saved data (an email the server put in) is what the firewall blocks: every save would
+        // be refused, so nothing is set aside; the changes wait on this device
+        this.oneByOne = false;
+        this.setStatus('error', 'Saving is blocked: text from an email in your data looks like code to the server. Delete or edit that task; your changes are kept on this device.');
       } else if (e && e.refused) this.setAside(ops[0]);
       else this.handleError(e);
     } finally {
       this.saving = false;
       if (this.pending.length && this.status === 'saving') this.scheduleSave(300);
     }
+  }
+
+  /**
+   * Is the firewall refusing the saved data itself, whatever the change? Sends the same files as they are now on a
+   * version that can never be made (no such parent), so nothing is saved: only the firewall's answer counts.
+   */
+  async baseRefused(ops) {
+    try {
+      const next = { data: clone(this.base.data), history: clone(this.base.history) };
+      applyOps(next, ops);
+      const same = this.diff(this.base, next).filter((c) => 'content' in c).map((c) => ({
+        path: c.path,
+        content: JSON.stringify(c.path === DATA_PATH ? this.base.data : this.base.history[c.path.slice(8, -5)] || []) + '\n',
+      }));
+      if (!same.length) return false;
+      await this.repo.commit('probe', this.base.tree, same, 'Check only');
+    } catch (e) {
+      return !!(e && e.refused);
+    }
+    return false;
   }
 
   /** A change the firewall refuses on its own can never be saved: keep a copy on the device, save the rest. */

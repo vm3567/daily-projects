@@ -2,7 +2,7 @@
 // A step is linked to a person when its text or note has "@Name", or "Waiting on" is that person.
 
 import { h, fmtDay, fmtTime } from './dom.js';
-import { mentionedPeople, initials, indiaDate, personSteps, personStatus, waitingDays, todayIndia, stepLinkedTo, awakeProjects, addDays, givenProjectsOf, nextStep, canGiveStep, givableSteps } from '../rules.js';
+import { mentionedPeople, initials, indiaDate, personSteps, personStatus, waitingDays, todayIndia, stepLinkedTo, stepTargets, addDays, givenProjectsOf, nextStep, canGiveStep, givableSteps } from '../rules.js';
 import { sentMarkOf, mailDate, teamOrder } from '../reports.js';
 import { newId } from '../ops.js';
 
@@ -142,7 +142,7 @@ function taskBox(ctx, person, give = null) {
   const textNow = () => (input()?.value || '').replace(/\s+/g, ' ').trim();
   const keep = () => { t.text = input()?.value || t.text || ''; };
   const mine = (p) => p.steps.some((st) => stepLinkedTo(st, person, people));
-  const all = awakeProjects(data, today);
+  const all = stepTargets(data, today); // tasks only: a 📂 project holds tasks, not steps
   const find = t.find.trim().toLowerCase();
   const ordered = [...all.filter(mine), ...all.filter((p) => !mine(p)).sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''))];
   const list = (find ? ordered.filter((p) => p.name.toLowerCase().includes(find)) : ordered).slice(0, find ? 8 : 5);

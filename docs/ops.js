@@ -264,23 +264,41 @@ function removeTickEvent(state, project, step) {
       if (same && (!best || e.at > best.at)) best = { m, i, at: e.at };
     });
   }
-  if (best) state.history[best.m].splice(best.i, 1);
+  if (!best) return null;
+  const [event] = state.history[best.m].splice(best.i, 1);
+  return { month: best.m, event }; // kept on the untick's line, so its Undo puts it back
 }
 
 /**
  * A task made from an email: did an email from someone else come AFTER `at`? (The server adds it to the thread, and
  * opens a finished task again.) A Finish or Delete pressed before it, and saved only later (offline, or a save that
  * had to try again), must not hide or delete that email: the server will not bring it in a second time.
+ * seen = the newest email you could see when you pressed (seenMailAt, server time): compared with that, not with the
+ * device clock, which can be behind or ahead of the server. Old saved changes without it use `at`.
  */
-function newerMailThan(p, at) {
-  const t = Date.parse(at);
-  if (!p || !p.mail || Number.isNaN(t)) return false;
+// addedAt = when the server brought the email in (an email can be received before you pressed, but come in after)
+const mailWhen = (e) => (typeof e.addedAt === 'string' && !Number.isNaN(Date.parse(e.addedAt)) ? e.addedAt : e.at);
+function theirMailTimes(p) {
   const thread = Array.isArray(p.thread) ? p.thread : [];
-  // addedAt = when the server brought the email in (an email can be received before you pressed, but come in after)
-  const when = (e) => (typeof e.addedAt === 'string' && !Number.isNaN(Date.parse(e.addedAt)) ? e.addedAt : e.at);
-  const theirs = thread.filter((e) => e && !e.fromMe && typeof when(e) === 'string').map((e) => Date.parse(when(e)));
-  if (!thread.length && !p.mail.fromMe && typeof when(p.mail) === 'string') theirs.push(Date.parse(when(p.mail)));
-  return theirs.some((x) => x > t);
+  const theirs = thread.filter((e) => e && !e.fromMe && typeof mailWhen(e) === 'string').map((e) => Date.parse(mailWhen(e)));
+  if (!thread.length && !p.mail.fromMe && typeof mailWhen(p.mail) === 'string') theirs.push(Date.parse(mailWhen(p.mail)));
+  return theirs.filter((x) => !Number.isNaN(x));
+}
+
+/** The newest email from someone else on an email task (server time), or null: kept with a Finish / Delete as seenMailAt. */
+export function seenMailOf(p) {
+  if (!p || !p.mail) return null;
+  const theirs = theirMailTimes(p);
+  return theirs.length ? new Date(Math.max(...theirs)).toISOString() : null;
+}
+
+function newerMailThan(p, at, a = {}) {
+  if (!p || !p.mail) return false;
+  const seen = a && 'seenMailAt' in a;
+  if (seen && a.seenMailAt !== null && (typeof a.seenMailAt !== 'string' || Number.isNaN(Date.parse(a.seenMailAt)))) return false;
+  const t = seen ? (a.seenMailAt === null ? -Infinity : Date.parse(a.seenMailAt)) : Date.parse(at);
+  if (Number.isNaN(t)) return false;
+  return theirMailTimes(p).some((x) => x > t);
 }
 
 /** A task leaves 📂 projects: its place in their order (taskOrder) goes too, so added back it comes after the placed ones. */
@@ -670,7 +688,7 @@ const handlers = {
   finish(state, op, a) {
     const p = findProject(state.data, a.projectId);
     if (!p || p.state === 'finished') return false;
-    if (newerMailThan(p, op.at)) return false; // an email came after you pressed Finish (a change saved late): it stays open for it
+    if (newerMailThan(p, op.at, a)) return false; // an email came after you pressed Finish (a change saved late): it stays open for it
     return setState(state, op, a, p.state, 'finished', 'finished');
   },
   reopen(state, op, a) { return setState(state, op, a, 'finished', 'active', 'reopened'); },
@@ -679,7 +697,7 @@ const handlers = {
     const { data } = state;
     const i = data.projects.findIndex((p) => p.id === a.projectId);
     if (i < 0) return false;
-    if (newerMailThan(data.projects[i], op.at)) return false; // an email came after you pressed Delete: the task (and that email) stays
+    if (newerMailThan(data.projects[i], op.at, a)) return false; // an email came after you pressed Delete: the task (and that email) stays
     const [p] = data.projects.splice(i, 1);
     for (const c of data.projects) if (parentIdsOf(c).includes(p.id)) setParents(c, parentIdsOf(c).filter((x) => x !== p.id)); // its tasks stay, just no longer in it
     dropFromOrder(data, p.id);
@@ -743,7 +761,15 @@ const handlers = {
     for (const id of undone) {
       for (const events of Object.values(state.history)) {
         const k = events.findIndex((e) => e.id === id);
-        if (k >= 0) events.splice(k, 1);
+        if (k < 0) continue;
+        const [gone] = events.splice(k, 1);
+        // an undone untick: its step is done again, so the tick line it took away comes back (if that month is loaded)
+        const t = gone.tick && gone.tick.event;
+        const back = t && state.history[gone.tick.month];
+        if (back && !back.some((e) => e.id === t.id)) {
+          const at = back.findIndex((e) => e.at > t.at);
+          back.splice(at < 0 ? back.length : at, 0, clone(t));
+        }
       }
     }
     return true;
@@ -883,8 +909,8 @@ const handlers = {
     }
     recalcLastTick(p);
     touch(p, op);
-    removeTickEvent(state, p, s);
-    addEvent(state, op, p, a.byTeam ? 'team_step_unticked' : 'step_unticked', s.text);
+    const tick = removeTickEvent(state, p, s);
+    addEvent(state, op, p, a.byTeam ? 'team_step_unticked' : 'step_unticked', s.text, tick ? { tick } : null);
     return true;
   },
 

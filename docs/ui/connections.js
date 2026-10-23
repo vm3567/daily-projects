@@ -344,7 +344,9 @@ function updateConnection(ctx, c, change, done) {
 
 function decide(ctx, it, decision, reason = '') {
   return busyCall(ctx, 'item' + it.id, async () => {
-    const out = await ctx.api('conn.decide', { id: it.id, decision, reason: String(reason || '').trim() });
+    let out;
+    // the words on the screen (version): the app changing them meanwhile is refused, and the list is loaded again to show them
+    try { out = await ctx.api('conn.decide', { id: it.id, decision, reason: String(reason || '').trim(), ...(it.version ? { version: it.version } : {}) }); } catch (e) { loadApps(ctx, true); throw e; }
     cx.items = (cx.items || []).map((x) => (x.id === it.id ? out.item : x));
     cx.rejecting = null;
     cx.reason = '';

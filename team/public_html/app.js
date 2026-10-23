@@ -219,8 +219,9 @@ function giveBack(it, why) {
     state.drafts[it.taskId] = { note: it.note, state: it.state }; state.editing[it.taskId] = true;
     if ((it.files || []).length) state.files[it.taskId] = it.files.slice(0, 5);
   }
-  else if (it.kind === 'step') { (state.stepDrafts ||= {})[it.projectRef] = it.title; }
-  const boxThere = it.kind === 'step' ? myProjects().some((p) => p.ref === it.projectRef) // (taken back or moved: no Add a step box)
+  let typing = false; // the Add a step box holds other words being typed: they stay, the old step is only shown to copy
+  if (it.kind === 'step') { if (!(state.stepDrafts ||= {})[it.projectRef]) state.stepDrafts[it.projectRef] = it.title; else typing = state.stepDrafts[it.projectRef] !== it.title; }
+  const boxThere = it.kind === 'step' ? !typing && myProjects().some((p) => p.ref === it.projectRef) // (taken back or moved: no Add a step box)
     : it.kind === 'suggest' ? false : boxStillThere(knownTask(it.taskId), state.user && state.user.id);
   const show = giveBackShow(it, why, boxThere); // (the rule: logic.js)
   if (show.sticky) notice('stuck', show.title, show.body, null, { stay: true, copy: true });
@@ -798,6 +799,13 @@ function waitingSteps(ref) {
     el('span', { class: 'prow-text' }, el('span', { class: 'prow-name' }, x.title), el('span', { class: 'prow-next' }, '⏳ Waiting to send')))))) : null;
 }
 
+/** A step went (or waits on this phone): its words leave the Add a step box; what was typed while it was sending stays. */
+function keepTypedStep(ref, title) {
+  const left = msgBoxLeft(((state.stepDrafts ||= {})[ref] || '').trim(), title);
+  if (left) state.stepDrafts[ref] = left; else delete state.stepDrafts[ref];
+  return left;
+}
+
 function addStepForm(ref) {
   const inp = el('input', { placeholder: 'e.g. Order the spare servo motor', maxlength: '300', 'aria-label': 'New step', value: (state.stepDrafts || {})[ref] || '',
     onInput: (e) => { (state.stepDrafts ||= {})[ref] = e.target.value; } }); // kept across redraws until added
@@ -814,14 +822,14 @@ function addStepForm(ref) {
       const clientId = ids[ref].id;
       try {
         await api('project.addStep', { projectRef: ref, title, clientId });
-        delete state.stepCid[ref]; if (state.stepDrafts) delete state.stepDrafts[ref];
+        delete state.stepCid[ref]; const left = keepTypedStep(ref, title);
         toast('➕ Step added. Your manager sees it in the project too.');
-        inp.value = ''; inp.blur();
-        render(); // (the box is empty again: the list below may redraw)
+        inp.value = left; if (!left) inp.blur();
+        render(); // (the box is empty again, or holds only what was typed meanwhile: the list below may redraw)
         await loadList();
       } catch (ex) {
         if (ex instanceof OfflineError) {
-          try { await queue({ kind: 'step', projectRef: ref, title, clientId }); delete state.stepCid[ref]; if (state.stepDrafts) delete state.stepDrafts[ref]; inp.value = ''; toast('📴 Saved on this phone — it will be added when you are online', 5000); render(); return; }
+          try { await queue({ kind: 'step', projectRef: ref, title, clientId }); delete state.stepCid[ref]; inp.value = keepTypedStep(ref, title); toast('📴 Saved on this phone — it will be added when you are online', 5000); render(); return; }
           catch { /* could not keep it */ }
         }
         toast(ex.message, 6000); btn.disabled = false;
@@ -1714,9 +1722,10 @@ function quickBox(people) {
     if (q.sig !== sig) { q.sig = sig; q.cid = newClientId(); } // one id per preview: a second tap gives the task once
     const give = el('button', { class: 'primary', onClick: async () => {
       give.disabled = true;
+      const sent = box.value.trim(); // the line given (typed on meanwhile: the new words stay)
       try {
         const out = await api('task.save', taskSaveBody({ assigneeId: r.person.id, title: r.title, details: '', project: '', repeat: 'once', skipSunday: true, dueDate: r.dueDate }, q.cid));
-        state.quick = null; box.value = ''; box.dataset.init = ''; card.replaceChildren(); // (an empty box is not "typing")
+        if (q.text.trim() === sent) { state.quick = null; box.value = ''; box.dataset.init = ''; card.replaceChildren(); } // (an empty box is not "typing")
         notice('update', `Given to ${out.task.assignee.name} ✓`, r.title + (r.dueDate ? ` · by ${fmtDay(r.dueDate)}` : ''), () => openDetail('task:' + out.task.id));
         if (state.view === 'followup' || state.view === 'today' || state.view === 'tasks') loadList();
       } catch (ex) { toast(ex.message, 5000); give.disabled = false; }
