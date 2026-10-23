@@ -332,7 +332,7 @@ test('project description: taken from the project\'s tasks (the first one that h
   // (one app: the team pages)
   assert.match(TEAM, /p\.projectAbout \? rules\.aboutShort\(p\.projectAbout\) \+ ' · ' : ''/, 'the Projects list row');
   assert.match(TEAM, /const about = state\.detail && sel\.startsWith\('task:'\) \? rules\.projectAboutOf\(\[state\.detail\.task\]\) : state\.detail && sel\.startsWith\('project:'\) \? rules\.projectAboutOf\(/, 'under the title of the project and task pages');
-  assert.match(readFileSync(new URL('../team/public_html/sw.js', import.meta.url), 'utf8'), /const CACHE = 'worktask-v29'/, 'new files reach the phones');
+  assert.match(readFileSync(new URL('../team/public_html/sw.js', import.meta.url), 'utf8'), /const CACHE = 'worktask-v30'/, 'new files reach the phones');
 });
 
 // ---------------------------------------------------------------- 📧 morning email (one person's pending work as a table to fill in)
@@ -1399,4 +1399,79 @@ test('Team today table: 20 rows a page (a person\'s line comes again on the next
   const s = teamBoard(d, { filter: 'sugg' });
   assert.deepEqual(s.groups.flatMap((g) => g.rows.map((r) => [r.t.id, r.status, r.colour])), [[900, 'sugg', 'yellow']], 'a suggestion: yes or no');
   assert.equal(s.groups[0].all, 0, 'a suggestion is not a task to send an update on');
+});
+
+// ---------------------------------------------------------------- Stage of a staff task (owner approved, 23 Oct)
+test('Stage of a staff task (logic.js teamStage): no update yet = not started, Working on it = in progress, Stuck = waiting (for what they chose), Finished or closed = done; "Manager" = waiting for you', async () => {
+  const { teamStage, waitForText, waitsForManager, WAIT_FOR_PICKS } = await import('../team/public_html/logic.js');
+  const t = (x = {}) => ({ id: 1, status: 'open', today: null, last: null, ...x });
+  assert.equal(teamStage(t()).stage, 'notstarted');
+  assert.equal(teamStage(t({ last: { day: '2026-10-22', state: 'progress' } })).stage, 'inprogress', 'yesterday\'s update counts');
+  assert.deepEqual(teamStage(t({ today: { day: '2026-10-23', state: 'stuck', waitingFor: 'Material: clay' } })), { stage: 'waiting', waitingFor: 'Material: clay', since: '2026-10-23', you: false });
+  assert.equal(teamStage(t({ today: { day: '2026-10-23', state: 'stuck', waitingFor: 'Manager' } })).you, true, 'waiting for the manager: "Waiting: you"');
+  assert.equal(teamStage(t({ today: { day: '2026-10-23', state: 'stuck', waitingFor: 'Manager: the drawing' } })).you, true);
+  assert.equal(teamStage(t({ today: { day: '2026-10-23', state: 'stuck', waitingFor: 'Material' } })).you, false);
+  assert.equal(teamStage(t({ today: { day: '2026-10-23', state: 'stuck' } })).stage, 'waiting', 'stuck with nothing chosen: still waiting');
+  assert.equal(teamStage(t({ today: { day: '2026-10-23', state: 'finished' } })).stage, 'done');
+  assert.equal(teamStage(t({ status: 'done' })).stage, 'done');
+  assert.deepEqual(WAIT_FOR_PICKS, ['Manager', 'Material', 'Another person', 'Other']);
+  assert.equal(waitForText('Material', '  clay  from Morbi '), 'Material: clay from Morbi');
+  assert.equal(waitForText('Manager', ''), 'Manager');
+  assert.equal(waitForText('', 'the fitter'), 'the fitter');
+  assert.equal(waitForText('Bogus', ''), '', 'only the four choices');
+  assert.equal(waitForText('Other', 'y'.repeat(200)).length, 80);
+  assert.ok(waitsForManager('manager'), 'any case');
+  assert.ok(!waitsForManager('Another person'));
+});
+
+test('Stage: the update.save body carries "waiting for" only with Stuck (never with Finished, never empty)', () => {
+  assert.equal(updateSaveBody({ taskId: 1, note: 'n', state: 'stuck', waitingFor: ' Manager ' }).waitingFor, 'Manager');
+  assert.ok(!('waitingFor' in updateSaveBody({ taskId: 1, note: 'n', state: 'progress', waitingFor: 'Manager' })));
+  assert.ok(!('waitingFor' in updateSaveBody({ taskId: 1, note: 'n', state: 'stuck', waitingFor: '  ' })));
+  assert.ok(!('waitingFor' in updateSaveBody({ taskId: 1, note: 'n', state: 'stuck', waitingFor: 'Manager', finish: true })));
+});
+
+test('Stage: Stuck in the staff view sends "waiting for what" — online, and kept on the phone (the outbox carries it when it goes later)', async () => {
+  for (const net of ['online', 'offline']) {
+    const { s: v, calls, box } = await staffView({ 'update.save': (b) => (net === 'online' ? { ok: true, update: { id: 9, note: b.note, day: '2026-10-22' } } : Promise.reject(offline())) });
+    const t = { id: 7, title: 'Kiln', status: 'open', today: null };
+    v.state.drafts[7] = { note: 'No clay', state: 'stuck', waitPick: 'Material', waitText: 'clay' };
+    await v.act.sendUpdate(t);
+    if (net === 'online') assert.equal(calls.find((c) => c.a === 'update.save').body.waitingFor, 'Material: clay');
+    else {
+      const kept = [...box.items.values()][0];
+      assert.equal(kept.waitingFor, 'Material: clay', 'kept on the phone with it');
+      assert.match(STAFFBOX, /writtenAt: it\.at, clientId: it\.clientId, waitingFor: it\.waitingFor \|\| '' \}\)/, 'the outbox sends it');
+    }
+  }
+  const { s: v2, calls: c2 } = await staffView({ 'update.save': (b) => ({ ok: true, update: { id: 9, note: b.note } }) });
+  v2.state.drafts[8] = { note: 'going on', state: 'progress', waitPick: 'Manager' };
+  await v2.act.sendUpdate({ id: 8, title: 'x', status: 'open', today: null });
+  assert.ok(!('waitingFor' in c2.find((c) => c.a === 'update.save').body), 'not stuck: no "waiting for"');
+});
+
+test('Stage: the outbox sends a kept Stuck update with its "waiting for"', async () => {
+  const { createOutbox, memOutbox } = await import('../docs/ui/staffbox.js');
+  const rules = await import('../team/public_html/logic.js');
+  const box = memOutbox(), sent = [];
+  const ob = createOutbox({ box, rules, api: async (a, b) => { sent.push({ a, b }); return { ok: true, update: { id: 3, day: b.day, note: b.note } }; }, userId: () => 3, signedIn: () => true, toast: () => {} });
+  await ob.queue({ kind: 'update', taskId: 7, note: 'No clay', state: 'stuck', waitingFor: 'Material: clay', files: [] });
+  await ob.flush();
+  assert.equal(sent.find((x) => x.a === 'update.save').b.waitingFor, 'Material: clay');
+});
+
+test('Team today: "Waiting for you" — stuck tasks waiting for the manager; its own count and filter; each row has its stage', async () => {
+  const { teamBoard } = await import('../team/public_html/logic.js');
+  const V = { id: 3, name: 'Valar' };
+  const T = (id, x = {}) => ({ id, title: 'T' + id, assignee: V, status: 'open', repeat: 'daily', today: null, stuck: false, unread: 0, ...x });
+  const d = { today: '2026-10-23', late: false, tasks: [
+    T(1, { stuck: true, today: { day: '2026-10-23', state: 'stuck', waitingFor: 'Manager: the drawing' } }),
+    T(2, { stuck: true, today: { day: '2026-10-23', state: 'stuck', waitingFor: 'Material' } }),
+    T(3, { today: { day: '2026-10-23', state: 'progress' } }),
+  ] };
+  const b = teamBoard(d);
+  assert.equal(b.you, 1);
+  assert.deepEqual(teamBoard(d, { filter: 'you' }).groups.flatMap((g) => g.rows.map((r) => r.t.id)), [1]);
+  const rows = b.groups.flatMap((g) => g.rows);
+  assert.deepEqual(rows.map((r) => [r.t.id, r.stage.stage, r.you]).sort(), [[1, 'waiting', true], [2, 'waiting', false], [3, 'inprogress', false]]);
 });

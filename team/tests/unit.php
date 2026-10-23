@@ -27,6 +27,21 @@ function throws(callable $fn, int $status = 0): bool {
 // ---- the throwaway folder is used, never the real one
 check('test folder is used for config and data', CONFIG_FILE === "$tmp/config.php" && UPLOAD_DIR === "$tmp/uploads" && DP_DIR === "$tmp/dpdata");
 
+// ---- folders: made quietly, also when another request made the same folder a moment before (no PHP warning in the answer)
+$nd = "$tmp/made/a/b";
+make_dir($nd);
+$warned = false;
+set_error_handler(function () use (&$warned) { $warned = true; return true; });
+make_dir($nd);                    // already there
+@rmdir($nd); mkdir($nd, 0750, true);
+make_dir($nd);                    // made by "another request" just before
+restore_error_handler();
+check('make_dir makes nested folders, and is quiet when the folder is already there', is_dir($nd) && !$warned);
+$bare = [];
+foreach (glob(dirname(__DIR__) . '/app/*.php') as $f) foreach (file($f) as $n => $line)
+  if (preg_match('/(?<![@\w])mkdir\(/', $line) && !str_contains($line, 'function make_dir')) $bare[] = basename($f) . ':' . ($n + 1);
+check('no bare mkdir() left in team/app (two requests at once printed "mkdir(): File exists"): ' . implode(', ', $bare), !$bare);
+
 // ---- dates and days (India)
 check('date_or_null: empty is null', date_or_null('') === null && date_or_null(null) === null);
 check('date_or_null: a real date', date_or_null('2026-10-17') === '2026-10-17');

@@ -93,12 +93,40 @@ export function afterFlush({ sent = 0, gaveBack = 0, typing = false, view = '' }
 /** A refused update or message: is there still a box this person can open to find the words? (else they are shown in full) */
 export const boxStillThere = (task, userId) => !!task && task.status === 'open' && (!task.assignee || task.assignee.id === userId);
 
+// ---------- Stage of a staff task: ⚪ Not started · 🔵 In progress · 🟠 Waiting · ✅ Done ----------
+export const WAIT_FOR_MAX = 80;
+/** "Waiting for what?" when Stuck: the quick choices (Manager = the manager / owner: they see "Waiting: you"). */
+export const WAIT_FOR_PICKS = ['Manager', 'Material', 'Another person', 'Other'];
+/** The words saved: the choice, and the short text after it ("Material: clay from Morbi"); '' when nothing chosen. */
+export function waitForText(pick, text) {
+  const p = WAIT_FOR_PICKS.includes(pick) ? pick : '';
+  const t = String(text || '').replace(/\s+/g, ' ').trim();
+  return (p && t ? `${p}: ${t}` : p || t).slice(0, WAIT_FOR_MAX);
+}
+/** Waiting for the manager (the choice "Manager"): the owner / manager sees "Waiting: you". */
+export const waitsForManager = (wf) => /^manager\b/i.test(String(wf || '').trim());
+/**
+ * The stage of a team task, from its newest update: none yet → notstarted; Working on it → inprogress;
+ * Stuck → waiting (for what they chose); Finished, or closed → done. Returns { stage, waitingFor, since, you }.
+ */
+export function teamStage(t) {
+  if (!t) return { stage: 'notstarted', waitingFor: '', since: null, you: false };
+  const u = t.today || t.last || null;
+  if (t.status === 'done' || t.status === 'cancelled') return { stage: 'done', waitingFor: '', since: null, you: false };
+  if (!u) return { stage: 'notstarted', waitingFor: '', since: null, you: false };
+  if (u.state === 'finished') return { stage: 'done', waitingFor: '', since: u.day || null, you: false };
+  if (u.state === 'stuck') { const wf = u.waitingFor || t.waitingFor || ''; return { stage: 'waiting', waitingFor: wf, since: u.day || null, you: waitsForManager(wf) }; }
+  return { stage: 'inprogress', waitingFor: '', since: null, you: false };
+}
+
 /**
  * The body of an update.save. Every save carries a clientId (online too), so a save whose answer was lost and that
  * then went to the outbox is seen by the server as the same save. The "Finished" after the photos has its own id.
  */
-export function updateSaveBody({ taskId, note, state, clientId, day, writtenAt, finish = false }) {
+export function updateSaveBody({ taskId, note, state, clientId, day, writtenAt, finish = false, waitingFor = '' }) {
   const b = { taskId, note, state: finish ? 'finished' : state };
+  const wf = String(waitingFor || '').replace(/\s+/g, ' ').trim().slice(0, WAIT_FOR_MAX);
+  if (b.state === 'stuck' && wf) b.waitingFor = wf; // Stuck: "Waiting for what?" goes with it (only with Stuck)
   if (day) b.day = day;
   if (writtenAt && !finish) { b.writtenAt = writtenAt; b.sentAt = new Date().toISOString(); } // (sentAt: the server puts a wrong phone clock right)
   if (clientId) b.clientId = finish ? clientId + '-f' : clientId;
@@ -526,7 +554,7 @@ export function oneAppAddress(search, hash) {
  * the strip on top (each a filter), and the rows grouped by person or by 📂 project (the owner's 📂 project, else the
  * work it is a step of, else 📂 Misc). The team's suggestions are rows too (they wait for a yes or no). 20 rows a page
  * (page: 1, 2, …; a person's or project's line comes again on the next page). filter: '' | 'sent' | 'notyet' |
- * 'stuck' | 'late' | 'msg' | 'sugg'. Pure: tested.
+ * 'stuck' | 'late' | 'msg' | 'sugg' | 'you' (stuck, waiting for the manager). Each row has its stage (teamStage). Pure: tested.
  */
 export const BOARD_PAGE = 20;
 export function teamBoard(d, { filter = '', group = 'person', person = 0, page = 1 } = {}) {
@@ -537,11 +565,13 @@ export function teamBoard(d, { filter = '', group = 'person', person = 0, page =
     const status = t.status === 'suggested' ? 'sugg' : t.stuck ? 'stuck' : late ? 'late' : t.today ? 'sent' : 'notyet';
     const colour = status === 'sent' ? 'green' : status === 'sugg' || (status === 'notyet' && !d.late) ? 'yellow' : 'red';
     const project = t.folder || t.project || 'Misc';
-    return { t, status, colour, project, msg: (t.unread || 0) > 0, i };
+    const stage = t.status === 'suggested' ? null : teamStage(t); // (a suggestion has no stage yet)
+    return { t, status, colour, project, msg: (t.unread || 0) > 0, stage, you: !!(stage && stage.you), i };
   });
   const counts = { sent: 0, notyet: 0, stuck: 0, late: 0, msg: 0, sugg: 0 };
-  for (const r of rows) { counts[r.status]++; if (r.msg) counts.msg++; }
-  const shown = rows.filter((r) => !filter || (filter === 'msg' ? r.msg : r.status === filter))
+  let you = 0; // waiting for you (stuck, waiting for "Manager"): its own count, beside the others
+  for (const r of rows) { counts[r.status]++; if (r.msg) counts.msg++; if (r.you) you++; }
+  const shown = rows.filter((r) => !filter || (filter === 'msg' ? r.msg : filter === 'you' ? r.you : r.status === filter))
     .sort((a, b) => RANK[a.colour] - RANK[b.colour] || a.i - b.i);
   const key = (r) => (group === 'project' ? r.project : r.t.assignee.name);
   const groups = new Map();
@@ -557,5 +587,5 @@ export function teamBoard(d, { filter = '', group = 'person', person = 0, page =
     if (!onPage.length || onPage[onPage.length - 1].name !== g.name) onPage.push({ ...g, rows: [] });
     onPage[onPage.length - 1].rows.push(r);
   }
-  return { counts, total: rows.length, shown: flat.length, page: at, pages, groups: onPage };
+  return { counts, you, total: rows.length, shown: flat.length, page: at, pages, groups: onPage };
 }

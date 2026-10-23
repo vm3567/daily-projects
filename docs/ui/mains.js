@@ -5,6 +5,8 @@
 import { h, fmtDay } from './dom.js';
 import { dotColour, nextStep, todayIndia, indiaDate, childrenOf, parentsOf, isMainProject, mainProjects, mainColour, mainSummary, mainChoices, addHereChoices, orderedTasks, movedOrder, dropSlot, droppedOrder } from '../rules.js';
 import { newId } from '../ops.js';
+import { stageCounts, byStage } from '../rules.js';
+import { stageChip, stageFilterBar, ownerStage } from './stage.js';
 import { newTaskBox, createTaskWithNote, findEditor } from './richedit.js';
 
 const ORDER = { red: 0, yellow: 1, green: 2, grey: 3 };
@@ -239,7 +241,12 @@ export function subProjectsBlock(ctx, p, today = todayIndia()) {
   const { store } = ctx;
   const data = store.view.data;
   if (!isMainProject(data, p)) return null;
-  const kids = orderedTasks(data, p, today); // your order (drag the ⋮⋮ grip), new ones after
+  const all = orderedTasks(data, p, today); // your order (drag the ⋮⋮ grip), new ones after
+  // Stage filter chips over the table (counts of this project's tasks); the drag order is kept for the ones shown
+  const stages = new Map(all.map((c) => [c.id, ownerStage(ctx, c)]));
+  const stageOfKid = (c) => stages.get(c.id).stage;
+  const sf = (ctx.ui.subStage && ctx.ui.subStage[p.id]) || 'all';
+  const kids = byStage(all, sf, stageOfKid);
   // the redraw moves the rows, which drops the keyboard focus: put it back on the same task's grip
   const refocus = (c) => {
     if (typeof document === 'undefined' || typeof document.querySelector !== 'function') return;
@@ -254,7 +261,9 @@ export function subProjectsBlock(ctx, p, today = todayIndia()) {
     save(c, movedOrder(kids, c.id, e.key === 'ArrowUp' ? -1 : 1));
   };
   return h('section', { class: 'block sub-projects', key: 'subs-' + p.id },
-    h('h3', null, `TASKS (${kids.length})`),
+    h('h3', null, `TASKS (${all.length})`),
+    all.length ? stageFilterBar(stageCounts(all, stageOfKid), sf, (k) => { (ctx.ui.subStage ||= {})[p.id] = k; ctx.render(); }) : null,
+    !kids.length && all.length ? h('p', { class: 'muted small' }, 'None in this stage.') : null,
     kids.length ? h('table', { class: 'sub-table' },
       h('thead', null, h('tr', null, h('th', null, ''), h('th', null, ''), h('th', null, 'Task'), h('th', null, 'Now'), h('th', null, 'Last update'), h('th', null, ''), h('th', null, ''))),
       h('tbody', null, kids.map((c) => {
@@ -263,7 +272,7 @@ export function subProjectsBlock(ctx, p, today = todayIndia()) {
         const done = c.state === 'finished'; // a finished task shows in green (owner asked, 22 Oct)
         return h('tr', { class: 'sub-row' + (done ? ' sub-done' : ''), key: 'sub-' + c.id, onClick: () => (ctx.ui.view === 'mains' && ctx.showHere ? ctx.showHere(c.id) : ctx.openProject(c.id)) },
           // hold the grip and drag the row up or down (mouse or finger); or ↑ ↓ (Alt+↑ ↓) on it
-          h('td', { class: 'sub-grip-cell' }, h('button', {
+          h('td', { class: 'sub-grip-cell' }, sf !== 'all' ? null : h('button', { // (moved only while every task shows: a filtered list has gaps)
             class: 'sub-grip', type: 'button', key: 'grip-' + c.id, title: 'Drag to move (or ↑ ↓)', 'aria-label': `Drag to move ${c.name}`,
             onClick: (e) => { if (e && e.stopPropagation) e.stopPropagation(); },
             onPointerdown: (e, el) => startTaskDrag(e, el || (e && e.currentTarget), kids, c, (order) => save(c, order)),
@@ -271,6 +280,7 @@ export function subProjectsBlock(ctx, p, today = todayIndia()) {
           }, '⋮⋮')),
           h('td', null, h('span', { class: `dot ${done ? 'green' : dotColour(c, today)}` })),
           h('td', null, h('button', { class: 'link sub-name', type: 'button' }, c.name), c.team ? h('span', { class: 'muted small' }, ` 👥 ${c.team.name}`) : null,
+            ' ', stageChip(stages.get(c.id)),
             c.state !== 'active' ? h('span', { class: done ? 'tag done-tag' : 'tag' }, done ? '✓ finished' : c.state) : null),
           h('td', { class: c.state !== 'active' ? 'muted' : ns ? '' : 'warn' }, c.state !== 'active' ? '—' : ns ? short(ns.text) : 'No next step'),
           h('td', { class: 'muted small' }, lu ? `${fmtDay(lu.day)} · ${short(lu.text, 50)}` : '—'),

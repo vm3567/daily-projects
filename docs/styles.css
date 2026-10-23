@@ -1197,6 +1197,30 @@ body.has-bell .layout.wide .list-head { padding-right: 60px; } /* (the 🔔 sits
   .board-table .col-extra, .board-table .board-who, .board-table th:nth-child(3) { display: none; }
 }
 
+/* ---------- Stage: ⚪ Not started · 🔵 In progress · 🟠 Waiting · ✅ Done (separate from the dot) ---------- */
+.stage-chip {
+  display: inline-block; font-size: 11.5px; line-height: 1.5; padding: 1px 8px; border-radius: 99px; margin-left: 6px;
+  border: 1px solid #e5e7eb; background: #f3f4f6; color: #4b5563; white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; vertical-align: middle;
+}
+.stage-chip.stage-inprogress { background: #eff6ff; color: #1d4ed8; border-color: #bfdbfe; }
+.stage-chip.stage-waiting { background: #fffbeb; color: #92400e; border-color: #fcd34d; }
+.stage-chip.stage-done { background: #f0fdf4; color: #166534; border-color: #bbf7d0; }
+button.stage-chip.tap { cursor: pointer; font-size: 12.5px; padding: 3px 10px; }
+.stage-chip.on { box-shadow: 0 0 0 2px var(--brand); }
+.stage-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 4px 0 6px; }
+.stage-line > .stage-chip:first-child { margin-left: 0; }
+.stage-chooser { display: flex; flex-direction: column; gap: 8px; width: 100%; padding: 8px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); }
+.stage-opts { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.stage-opts .stage-chip { margin-left: 0; }
+.stage-wait { display: flex; flex-direction: column; gap: 6px; }
+.stage-wait input { flex: 1; min-width: 0; }
+.stage-picks { display: flex; flex-wrap: wrap; gap: 6px; }
+.stage-picks .chip.on { background: var(--brand-soft); border-color: var(--brand); }
+.stage-filters { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
+.stage-filter { font-size: 12.5px; padding: 3px 10px; border-radius: 99px; border: 1px solid var(--line); background: var(--bg); color: var(--text); cursor: pointer; }
+.stage-filter.on { background: var(--brand); border-color: var(--brand); color: #fff; }
+/* (no dark colours: the app's pages are light only, so the chips stay light too) */
+
 /* ---------------------------------------------------------------- the staff view (one app: ui/staff.js)
    Staff see this app's own design. Only the few pieces this app had no style for, and only inside the staff view
    (.layout.staff), so the owner's screens never change. */
@@ -1219,4 +1243,5 @@ body.has-bell .layout.wide .list-head { padding-right: 60px; } /* (the 🔔 sits
 .layout.staff .wt-table.morning .m-no { width: 2.2em; }
 .layout.staff .wt-table.morning .m-last { width: 38%; }
 .layout.staff .wt-table tr.wt-open { cursor: pointer; }
+
 

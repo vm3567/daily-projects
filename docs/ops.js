@@ -9,7 +9,7 @@
 // applyOp(state, op) changes the state in place and returns true, or returns false
 // when the operation must be skipped (for example, its item no longer exists).
 
-import { WORK, indiaDate, monthOf, laterDate, addDays, REPEATS, nextRepeatDate, waitingAgain, WEEKDAYS, indiaDateTime, validRemindOnce, remindOnceText, canPutUnder, parentIdsOf, normalizeParents, isMainProject, THREAD_MAX, timerOn, MISC_ID } from './rules.js';
+import { WORK, indiaDate, monthOf, laterDate, addDays, REPEATS, nextRepeatDate, waitingAgain, WEEKDAYS, indiaDateTime, validRemindOnce, remindOnceText, canPutUnder, parentIdsOf, normalizeParents, isMainProject, THREAD_MAX, timerOn, MISC_ID, STAGES, STAGE_LABELS, cleanWaitingFor } from './rules.js';
 import { AI_DAILY_LIMIT, BRIEF_CLAIM_MINUTES } from './config.js';
 import { sanitizeRich, htmlToText, isRich, RICH_MAX } from './rich.js';
 
@@ -700,9 +700,38 @@ const handlers = {
     const p = findProject(state.data, a.projectId);
     if (!p || p.state === 'finished' || p.misc) return false; // (📂 Misc stays: it holds every task in no other project)
     if (newerMailThan(p, op.at, a)) return false; // an email came after you pressed Finish (a change saved late): it stays open for it
-    return setState(state, op, a, p.state, 'finished', 'finished');
+    if (!setState(state, op, a, p.state, 'finished', 'finished')) return false;
+    clearStage(p); // finished = ✅ Done (the stage worked out from it)
+    return true;
   },
-  reopen(state, op, a) { return setState(state, op, a, 'finished', 'active', 'reopened'); },
+  reopen(state, op, a) {
+    const p = findProject(state.data, a.projectId);
+    if (!setState(state, op, a, 'finished', 'active', 'reopened')) return false;
+    if (p.stage === 'done') clearStage(p); // open again: no longer done (back to the stage worked out)
+    return true;
+  },
+
+  /**
+   * The task's Stage label (rules.js stageOf): 'notstarted' | 'inprogress' | 'waiting' (+ waitingFor, up to 80 letters) | 'done';
+   * null = worked out by itself again. Not work (the dot does not change). The same change twice changes nothing.
+   */
+  setStage(state, op, a) {
+    const p = findProject(state.data, a.projectId);
+    const stage = a.stage === null || a.stage === undefined || a.stage === '' || a.stage === 'auto' ? null : a.stage;
+    if (!p || (stage !== null && !STAGES.includes(stage))) return false;
+    const wf = stage === 'waiting' ? cleanWaitingFor(a.waitingFor) : '';
+    if ((p.stage || null) === stage && (p.waitingFor || '') === wf) return false;
+    const was = p.stage || null;
+    if (!stage) clearStage(p);
+    else {
+      p.stage = stage;
+      if (wf) p.waitingFor = wf; else delete p.waitingFor;
+      if (was !== stage || !p.stageAt) p.stageAt = op.at; // (since when: a new "waiting for" keeps the day the wait began)
+    }
+    p.updatedAt = op.at;
+    addEvent(state, op, p, 'edited', stage ? `Stage: ${STAGE_LABELS[stage].replace(/^\S+ /, '')}${wf ? ` (${wf})` : ''}` : 'Stage: automatic');
+    return true;
+  },
 
   deleteProject(state, op, a) {
     const { data } = state;
@@ -1566,6 +1595,8 @@ function closeTimer(state, op, endIso) {
   addEvent(state, { ...op, id: op.id + 't' }, p, 'time_logged', `${minutes} min${capped ? ' (cut to 10 h)' : ''}`);
 }
 
+function clearStage(p) { delete p.stage; delete p.waitingFor; delete p.stageAt; }
+
 function setState(state, op, a, from, to, kind) {
   const p = findProject(state.data, a.projectId);
   if (!p || p.state !== from) return false;
@@ -1598,7 +1629,7 @@ export const CARRIED = new Set(['createProject', 'createMainProject', 'addToProj
   'setRemindOnce', 'wake', 'remindStep', 'addLink', 'markOpened', 'okForToday', 'undoOkForToday', 'moveProject', 'pause', 'unpause', 'reopen',
   'addStep', 'tickStep', 'untickStep', 'moveStep', 'chased', 'addWorkNote', 'addTag', 'renameTag', 'addInbox', 'updateInbox', 'addMailNote',
   'setReply', 'replyLater', 'inboxToStep', 'stepToProject', 'inboxToProject', 'addPerson', 'renamePerson', 'setPersonContact', 'markPersonSent',
-  'startTimer', 'stopTimer', 'addTime']);
+  'startTimer', 'stopTimer', 'addTime', 'setStage']);
 export const NOT_CARRIED = new Set(['deleteProject', 'restoreProject', 'deleteStep', 'setProjectTeam', 'addFile', 'setAiKey', 'setAiProvider',
   'removeFromProject', 'setParent', 'removeLink', 'editLink', 'finish', 'teamWorked', 'deleteWorkNote', 'editWorkNote', 'setProjectField', 'setStepField',
   'removeFile', 'setTimer', 'deleteTag', 'clearReply', 'markReplySent', 'undoReplySent', 'mailReplied', 'removeInbox', 'inboxUndo', 'deletePerson',

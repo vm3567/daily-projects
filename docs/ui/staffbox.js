@@ -79,7 +79,7 @@ export function createOutbox(opts) {
     if (it.kind === 'suggest') { await api('suggest', { title: it.title, details: it.details, repeat: it.repeat, clientId: it.clientId }); return; }
     if (it.kind === 'update' && !it.updateId) {
       const twoSteps = it.state === 'finished' && it.needsPhoto && it.files && it.files.length && !it.hadPhoto;
-      const out = await api('update.save', rules.updateSaveBody({ taskId: it.taskId, note: it.note, state: twoSteps ? 'progress' : it.state, day, writtenAt: it.at, clientId: it.clientId }));
+      const out = await api('update.save', rules.updateSaveBody({ taskId: it.taskId, note: it.note, state: twoSteps ? 'progress' : it.state, day, writtenAt: it.at, clientId: it.clientId, waitingFor: it.waitingFor || '' }));
       it.updateId = out.update.id; it.thenFinish = !!twoSteps && !out.history;
       it.day = out.update.day; // the day the server saved it for (it puts a wrong phone date right)
       if (twoSteps) it.note = out.update.note; // keep the earlier person's words (after a move) for the Finished save

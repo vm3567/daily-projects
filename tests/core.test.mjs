@@ -2844,3 +2844,92 @@ test('📂 Misc (owner, 23 Oct): every task in no other 📂 project is in Misc 
   assert.match(DET, /p\.state === 'active' && ctx\.onServer && !p\.misc \? item\(p\.team \?/);
   assert.match(readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8'), /if \(store\.canEdit\(\) && !store\.view\.data\.projects\.some\(\(p\) => p\.id === MISC_ID\)\) store\.dispatch\('makeMisc', \{\}\);/);
 });
+
+// ---------------------------------------------------------------- Stage label (owner approved, 23 Oct)
+test('Stage: setStage saves the stage (and "waiting for", up to 80 letters, with the day the wait began); the same change again changes nothing; replayed on another device it gives the same data', () => {
+  const ops = [
+    op('setStage', { projectId: 'p1', stage: 'waiting', waitingFor: '  Approval\n from   Ravi ' }, '2026-10-02'),
+    op('setStage', { projectId: 'p1', stage: 'waiting', waitingFor: 'Approval from Ravi' }, '2026-10-03'),
+    op('setStage', { projectId: 'p1', stage: 'waiting', waitingFor: 'Management' }, '2026-10-04'),
+  ];
+  const a = withProject();
+  const applied = applyOps(a, ops);
+  assert.equal(applied.length, 2, 'the same stage and the same "waiting for" again is no change');
+  const p = a.data.projects[0];
+  assert.equal(p.stage, 'waiting');
+  assert.equal(p.waitingFor, 'Management');
+  assert.equal(indiaDate(p.stageAt), '2026-10-02', 'still waiting (for someone else now): the day the wait began stays');
+  // replayed twice (two devices, or the same changes loaded again): the same data
+  const b = withProject();
+  applyOps(b, ops); applyOps(b, ops);
+  assert.deepEqual(clone(b.data.projects[0]), clone(p));
+  applyOps(b, ops);
+  assert.deepEqual(clone(b.data.projects[0]), clone(p), 'a third time: still the same');
+  assert.equal(applyOp(b, ops[2]), false, 'the newest change again: no change');
+  // up to 80 letters, one line
+  applyOp(a, op('setStage', { projectId: 'p1', stage: 'waiting', waitingFor: 'x'.repeat(200) }, '2026-10-05'));
+  assert.equal(p.waitingFor.length, 80);
+  // another stage: no "waiting for"; a bad stage or a missing task is refused
+  applyOp(a, op('setStage', { projectId: 'p1', stage: 'inprogress', waitingFor: 'Info' }, '2026-10-06'));
+  assert.equal(p.stage, 'inprogress');
+  assert.equal(p.waitingFor, undefined);
+  assert.equal(applyOp(a, op('setStage', { projectId: 'p1', stage: 'later' }, '2026-10-06')), false);
+  assert.equal(applyOp(a, op('setStage', { projectId: 'nope', stage: 'done' }, '2026-10-06')), false);
+  // null = worked out by itself again
+  assert.equal(applyOp(a, op('setStage', { projectId: 'p1', stage: null }, '2026-10-07')), true);
+  assert.equal(p.stage, undefined); assert.equal(p.stageAt, undefined);
+  assert.equal(applyOp(a, op('setStage', { projectId: 'p1', stage: null }, '2026-10-07')), false, 'already automatic');
+});
+
+test('Stage: choosing a stage is not work — the dot does not turn green', () => {
+  const s = withProject('2026-10-01');
+  applyOp(s, op('setStage', { projectId: 'p1', stage: 'inprogress' }, '2026-10-05'));
+  assert.equal(dotColour(s.data.projects[0], '2026-10-05'), 'red');
+});
+
+test('Stage: stageOf — the chosen stage wins; else finished = done, a team member stuck = waiting (for what they wrote), any real update = in progress, else not started', async () => {
+  const { stageOf, stageText, stageCounts, byStage, teamProgressOf } = await import('../docs/rules.js');
+  const s = withProject('2026-10-01');
+  const p = s.data.projects[0];
+  assert.deepEqual(stageOf(p), { stage: 'notstarted', waitingFor: '', since: null, auto: true });
+  applyOp(s, op('tickStep', { projectId: 'p1', stepId: 's1' }, '2026-10-02'));
+  assert.equal(stageOf(p).stage, 'inprogress', 'a ticked step');
+  const n = withProject('2026-10-01');
+  applyOp(n, op('addWorkNote', { projectId: 'p1', noteId: 'n1', text: 'Called' }, '2026-10-02'));
+  assert.equal(stageOf(n.data.projects[0]).stage, 'inprogress', 'a work note');
+  // given to the team, they say Stuck (waiting for Manager)
+  const tasks = [{ id: 9, projectRef: 'p1', stepRef: 'p1:whole', seq: 0, status: 'open', stuck: true, today: { day: '2026-10-03', state: 'stuck', waitingFor: 'Material: clay' } }];
+  const tp = teamProgressOf(tasks, 'p1');
+  assert.equal(tp.waitingFor, 'Material: clay');
+  assert.equal(tp.stuckSince, '2026-10-03');
+  assert.deepEqual(stageOf(p, tp), { stage: 'waiting', waitingFor: 'Material: clay', since: '2026-10-03', auto: true, team: true });
+  assert.equal(stageOf(p, teamProgressOf([{ ...tasks[0], stuck: false }], 'p1')).stage, 'inprogress', 'not stuck: back to its own stage');
+  // the chosen stage wins
+  applyOp(s, op('setStage', { projectId: 'p1', stage: 'waiting', waitingFor: 'Approval' }, '2026-10-04'));
+  assert.deepEqual(stageOf(p, tp), { stage: 'waiting', waitingFor: 'Approval', since: '2026-10-04', auto: false });
+  assert.equal(stageText(stageOf(p)), '🟠 Waiting: Approval');
+  assert.equal(stageText({ stage: 'waiting', waitingFor: 'Manager' }, { you: true }), '🟠 Waiting: you');
+  assert.equal(stageText({ stage: 'done' }), '✅ Done');
+  // finish: done (the chosen stage goes); reopen: worked out again (not done)
+  applyOp(s, op('finish', { projectId: 'p1' }, '2026-10-05'));
+  assert.equal(p.stage, undefined);
+  assert.equal(stageOf(p).stage, 'done');
+  applyOp(s, op('reopen', { projectId: 'p1' }, '2026-10-06'));
+  assert.equal(stageOf(p).stage, 'inprogress', 'reopened: back to automatic');
+  applyOp(s, op('setStage', { projectId: 'p1', stage: 'done' }, '2026-10-07'));
+  applyOp(s, op('finish', { projectId: 'p1' }, '2026-10-08'));
+  applyOp(s, op('reopen', { projectId: 'p1' }, '2026-10-09'));
+  assert.notEqual(stageOf(p).stage, 'done', 'reopening clears done');
+  // counts and the filter
+  const list = [{ s: 'waiting' }, { s: 'done' }, { s: 'waiting' }];
+  assert.deepEqual(stageCounts(list, (x) => x.s), { all: 3, notstarted: 0, inprogress: 0, waiting: 2, done: 1 });
+  assert.equal(byStage(list, 'waiting', (x) => x.s).length, 2);
+  assert.equal(byStage(list, 'all', (x) => x.s).length, 3);
+  assert.equal(byStage(list, '', (x) => x.s).length, 3);
+});
+
+test('Stage: setStage may come in through an old-address link (a harmless label)', async () => {
+  const { CARRIED, carriedOps } = await import('../docs/ops.js');
+  assert.ok(CARRIED.has('setStage'));
+  assert.equal(carriedOps([makeOp('setStage', { projectId: 'p1', stage: 'done' })]).ok.length, 1);
+});

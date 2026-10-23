@@ -38,7 +38,7 @@ function dp_put_blob(string $bytes): string {
     try { dp_get_blob($sha); return $sha; } // already kept and whole
     catch (ApiError $e) { @unlink($path); @unlink($path . '.gz'); } // damaged: write it again
   }
-  if (!is_dir(dirname($path))) mkdir(dirname($path), 0750, true);
+  make_dir(dirname($path));
   $gz = gzencode($bytes, 6);
   [$file, $data] = strlen($gz) < strlen($bytes) * 0.9 ? [$path . '.gz', $gz] : [$path, $bytes];
   $tmp = $file . '.' . bin2hex(random_bytes(4)) . '.tmp';

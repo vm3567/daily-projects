@@ -20,6 +20,8 @@ import { MockRepo } from './mockrepo.js';
 import { device } from './device.js';
 import { DATA_OWNER, DATA_REPO, DATA_BRANCH, MOVED_TO, REFRESH_MS, AI_DAILY_LIMIT, BRIEF_CLAIM_MINUTES, WAIT_RED_DAYS, NO_WORK_NOTE_DAYS } from './config.js';
 import { dotColour, greenByTeamOnly, isSnoozed, restUntil, restReason, onlyDaysLabel, openIdFromHash, awakeProjects, activeProjects, nextStep, todayIndia, isSundayIndia, colourCounts, isOverdue, indiaDate, waitingDays, daysWithoutWork, dayScore, greenStreak, addDays, monthOf, fmtMinutes, takeBackWaits, staffStepAction, pasteGoesToProject, singleStepClose, versionRequest, askDiaryAgain, pasteInForm, diaryLoadedAt, photoNeedsFetch, teamUndoKey, teamActionUndone, teamProgressOf, projectKeyIgnored, teamMovedTo, serverHolder, keepMovedStep, teamMemberFor, repliesOf, mailThreads, replyMailto, MAILTO_BODY_MAX, emailPath, pasteReason } from './rules.js';
+import { stageOf, stageCounts, byStage } from './rules.js';
+import { stageChip, stageFilterBar } from './ui/stage.js';
 import { whoFromUser, signInTag, timerOn, projectGiveChanges, UNDO_GRACE_MS, MISC_ID } from './rules.js';
 import { signInCard, firstPasswordCard } from './ui/signin.js';
 import { createBell } from './ui/bell.js';
@@ -944,11 +946,17 @@ function kindWord(p) {
 }
 
 
-function visibleProjects() {
+/** ✅ Tasks: a task's stage (a given task: stuck on the team = waiting). rules.js stageOf. */
+function taskStage(p) {
+  return stageOf(p, p.team ? teamProgress(p.id) : null);
+}
+
+function visibleProjects({ stage = true } = {}) {
   const all = store.view.data.projects;
   const q = ui.search.trim().toLowerCase();
   if (q) return all.filter((p) => projectMatches(p, q));
   if (ui.view === 'today') return todayWithoutEmptyMains(awakeProjects(store.view.data, todayIndia()), todayIndia()); // a 📂 project with no own step: its tasks show instead
+  if (ui.view === 'all' && stage) return byStage(visibleProjects({ stage: false }), ui.stageFilter, (p) => taskStage(p).stage); // ✅ Tasks: then the Stage filter chips
   if (ui.view === 'all') return activeTasks(store.view.data).filter((p) => ui.taskFilter !== 'loose' || !parentIdsOf(p).length); // ✅ Tasks: tasks only, each once; 'No project' = loose tasks
   if (ui.view === 'mains') return mainProjects(store.view.data).filter((p) => p.state !== 'finished'); // 📂 Projects: projects only, a list like Tasks
   if (ui.view === 'paused') return all.filter((p) => p.state === 'paused');
@@ -1201,7 +1209,8 @@ function projectRow(p, today, opts = {}) {
       h('span', { class: 'prow-text' },
         h('span', { class: 'prow-name' }, isMainProject(store.view.data, p) ? '📂 ' : '', p.name,
           p.state !== 'active' ? h('span', { class: 'tag' }, p.state) : null,
-          p.priority === 'high' ? h('span', { class: 'tag high' }, 'High') : null),
+          p.priority === 'high' ? h('span', { class: 'tag high' }, 'High') : null,
+          ui.view === 'all' && !isMainProject(store.view.data, p) ? stageChip(taskStage(p)) : null), // ✅ Tasks: the Stage chip on each row
         asProject ? h('span', { class: 'prow-next' }, mainSummary(childrenOf(store.view.data, p.id).filter((c) => c.state !== 'finished'), today)) : null,
         asProject ? null : h('span', { class: 'prow-next' }, ns ? `Next: ${ns.text}` : '', // (no next step: nothing said — the + on the left adds one)
           ns && ns.waiting ? waitingTag(ns) : null,
@@ -1939,6 +1948,12 @@ function taskFilterSwitch() {
   return h('div', { class: 'segmented', role: 'group', 'aria-label': 'Which tasks' }, opt('all', `All tasks ${all.length}`), opt('loose', `No project ${loose}`));
 }
 
+/** ✅ Tasks: All N | Not started N | In progress N | Waiting N | Done N — counts within the list shown (All tasks or No project). */
+function stageFilterChips() {
+  return stageFilterBar(stageCounts(visibleProjects({ stage: false }), (p) => taskStage(p).stage), ui.stageFilter,
+    (k) => { ui.stageFilter = k === 'all' ? '' : k; resetRedOrder(); rememberUi(); render(); });
+}
+
 function sortSwitch() {
   const opt = (value, label) => h('button', {
     class: 'seg' + (ui.sort === value ? ' on' : ''), 'aria-pressed': String(ui.sort === value),
@@ -2125,6 +2140,7 @@ function renderListColumn() {
       ui.view === 'mains' && !ui.search ? renderProjectsHead(ctx) : ui.view === 'finished' || ui.view === 'paused' || ui.search ? null : newProjectForm(),
       taskListView() && !ui.search && !ui.adding ? taskFilterSwitch() : showSort && !ui.adding ? sortSwitch() : null,
       !ui.search && list.length && ui.view !== 'mains' ? h('button', { class: 'btn small copy-list', type: 'button', title: 'Copy these as a numbered list (for an AI chat or an email)', onClick: () => copyList(currentList(), { title: viewTitle() }) }, '📋 Copy list') : null),
+    taskListView() && !ui.search && !ui.adding ? stageFilterChips() : null,
     pickBar(list),
     ...listParts(list, today),
     empty,

@@ -53,6 +53,12 @@ class ApiError extends Exception {
   public function __construct(string $message, int $status = 400) { parent::__construct($message); $this->status = $status; }
 }
 
+/** Make a folder (and its parents) if it is not there. Two requests at the same moment may both try: the second
+ *  finds it made by the first, which is fine (no warning printed into the answer). */
+function make_dir(string $dir): void {
+  if (!is_dir($dir) && !@mkdir($dir, 0750, true) && !is_dir($dir)) throw new ApiError('Could not make a folder. Try again.', 500);
+}
+
 function q(string $sql, array $args = []): PDOStatement {
   $st = db()->prepare($sql);
   $st->execute($args);
@@ -293,6 +299,8 @@ function migrate(PDO $pdo): void {
       read_at DATETIME NULL,
       INDEX (user_id, id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+    // v38: Stuck — "Waiting for what?" (Manager, Material, Another person, Other + a few words); NULL when not stuck
+    "ALTER TABLE updates ADD COLUMN waiting_for VARCHAR(80) NULL",
   ];
   $pdo->exec($steps[0]);
   $done = (int)($pdo->query("SELECT v FROM settings WHERE k = 'schema'")->fetchColumn() ?: 0);

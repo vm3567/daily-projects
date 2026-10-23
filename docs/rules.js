@@ -854,8 +854,10 @@ export function teamProgressOf(tasks, projectId) {
   const list = given.filter((t) => !String(t.stepRef).endsWith(':whole'));
   const open = list.filter((t) => t.status === 'open'), done = list.filter((t) => t.status === 'done');
   const days = tasks.filter((t) => t.projectRef === projectId).map((t) => (t.today || t.last || {}).day).filter(Boolean).sort();
+  const stuckOne = given.find((t) => t.status === 'open' && t.stuck);
+  const su = stuckOne ? (stuckOne.today || stuckOne.last || {}) : {};
   return { open: open.length, done: done.length, current: open.find((t) => !t.queued) || null, lastUpdate: days[days.length - 1] || null,
-    stuck: given.some((t) => t.status === 'open' && t.stuck) };
+    stuck: !!stuckOne, waitingFor: stuckOne ? su.waitingFor || '' : '', stuckSince: stuckOne ? su.day || null : null }; // (what they wait for: the Stage chip)
 }
 
 /** Keys that act on the open project (x tick, s add step, w work note, i): not while its page is not on screen. */
@@ -1157,4 +1159,53 @@ export function signInTag(token) {
   let x = 2166136261;
   for (const c of String(token || '')) { x ^= c.charCodeAt(0); x = Math.imul(x, 16777619) >>> 0; }
   return token ? x.toString(36) : '';
+}
+
+// ---------- Stage: a label on every task (separate from the dot, which keeps meaning "worked on recently") ----------
+
+export const STAGES = ['notstarted', 'inprogress', 'waiting', 'done'];
+export const STAGE_LABELS = { notstarted: '⚪ Not started', inprogress: '🔵 In progress', waiting: '🟠 Waiting', done: '✅ Done' };
+export const WAITING_MAX = 80; // "Waiting for whom?" — a short line
+export const WAIT_PICKS = ['Approval', 'Management', 'Info']; // quick picks (with the people's names)
+
+/** A "waiting for" text, cleaned: one line, at most 80 letters. */
+export function cleanWaitingFor(v) {
+  return String(v == null ? '' : v).replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, WAITING_MAX);
+}
+
+/**
+ * A task's stage: { stage, waitingFor, since (India date or null), auto }.
+ * The stage you chose wins. Otherwise it is worked out: finished → done; given to a team member who says Stuck →
+ * waiting (for what they wrote); any real update (a work note, a ticked step, time, a team update) → in progress;
+ * else not started. `team` = teamProgressOf(...) for a given task (or null).
+ */
+export function stageOf(p, team = null) {
+  if (!p) return { stage: 'notstarted', waitingFor: '', since: null, auto: true };
+  if (STAGES.includes(p.stage)) {
+    return { stage: p.stage, waitingFor: p.stage === 'waiting' ? cleanWaitingFor(p.waitingFor) : '', since: p.stageAt ? indiaDate(p.stageAt) : null, auto: false };
+  }
+  if (p.state === 'finished') return { stage: 'done', waitingFor: '', since: p.stateChangedAt ? indiaDate(p.stateChangedAt) : null, auto: true };
+  if (team && team.stuck) return { stage: 'waiting', waitingFor: cleanWaitingFor(team.waitingFor), since: team.stuckSince || null, auto: true, team: true };
+  const worked = lastWorkDate(p) || (p.workNotes || []).some((n) => !n.mail && !n.app) || (p.steps || []).some((s) => s.done);
+  return { stage: worked ? 'inprogress' : 'notstarted', waitingFor: '', since: null, auto: true };
+}
+
+/** The words on a stage chip: "🟠 Waiting: Approval" (`you` = shown as "Waiting: you"). */
+export function stageText(info, { you = false } = {}) {
+  const s = info && STAGES.includes(info.stage) ? info.stage : 'notstarted';
+  if (s !== 'waiting') return STAGE_LABELS[s];
+  const who = you ? 'you' : cleanWaitingFor(info.waitingFor);
+  return who ? `${STAGE_LABELS.waiting}: ${who}` : STAGE_LABELS.waiting;
+}
+
+/** How many of a list are in each stage: { all, notstarted, inprogress, waiting, done }. `stage(x)` gives the stage. */
+export function stageCounts(list, stage) {
+  const out = { all: list.length, notstarted: 0, inprogress: 0, waiting: 0, done: 0 };
+  for (const x of list) { const s = stage(x); if (s in out && s !== 'all') out[s]++; }
+  return out;
+}
+
+/** Only those in a stage ('' or 'all' = every one). */
+export function byStage(list, want, stage) {
+  return !want || want === 'all' ? list : list.filter((x) => stage(x) === want);
 }

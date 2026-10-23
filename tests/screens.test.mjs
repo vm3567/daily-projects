@@ -1060,7 +1060,7 @@ test('📂 Projects page: a click on a project row selects it and stays on the p
   assert.match(mainsSrc, /ctx\.ui\.view === 'mains' && ctx\.showHere \? ctx\.showHere\(c\.id\)/, 'a task in the TASKS table while on the Projects page');
   const here = app.slice(app.indexOf('  showHere: (id) => {'), app.indexOf('  openProject: (id) => {'));
   assert.match(here, /select\(id\);/);
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-35'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-36'/, 'phones get the new copy');
 });
 
 test('📂 project page: "✕ Remove" on a task row takes it out of this project only — the task is kept (and stays in its other projects)', () => {
@@ -1845,7 +1845,7 @@ test('🔌 app wiring (app.js): "🔌 From apps" after ✉ Replies with the wait
   assert.match(app, /function go\(view\) \{\n\s*if \(view !== 'settings'\) forgetOnce\(\);/);
   assert.match(app, /if \(onServer\) loadApps\(appsCtx, force \|\| ui\.view === 'apps'\);/);
   assert.match(app, /replies: '✉ Replies', apps: '🔌 From apps', mains: '📂 Projects' \}\[ui\.view\]/, 'its page title');
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-35'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-36'/, 'phones get the new copy');
 });
 
 test('🔌 the PHP connector (team/connector/worktask-connector.php): the same text the app downloads, placeholders only (no real key), valid PHP 7.4+ (php -l), with wt_push / wt_withdraw / wt_decisions / wt_receive_decision', async () => {
@@ -3448,4 +3448,151 @@ test('Team today table on screen: 20 tasks a page, ‹ Previous / Next ›, and 
   assert.match(t.view().textContent, /Page 2 of 2/);
   find(t.view(), (n) => n.nodeName === 'BUTTON' && (n.textContent || '').startsWith('⏳ Not yet')).__on.click();
   assert.equal(t.state.boardPage, 1, 'a count pressed: page 1');
+});
+
+// ---------------------------------------------------------------- Stage label (owner approved, 23 Oct)
+const stageChips = (el) => rAll(el, (n) => / stage-chip /.test(' ' + (n.className || '') + ' ') && !/\bstage-opts\b/.test(n.parentNode && n.parentNode.className || ''));
+const btnText = (el, t) => rFind(el, (n) => n.nodeName === 'BUTTON' && (n.textContent || '').startsWith(t));
+
+test('Stage on a task page: the chip near the top (worked out by itself), tap → the 4 stages; a stage chosen is saved; "Automatic" puts it back', () => {
+  const s = sampleState(); // p1 Kiln has a ticked step: in progress by itself
+  const ui = { selected: 'p1', update: {} };
+  const ctx = liveCtx(s, ui);
+  let el = renderDetail(ctx);
+  const chip = stageChips(el)[0];
+  assert.equal(chip.textContent, '🔵 In progress');
+  assert.match(chip.className, /stage-inprogress/, 'blue');
+  assert.equal(chip.nodeName, 'BUTTON', 'tap to change');
+  chip.__on.click();
+  el = renderDetail(ctx);
+  const opts = rAll(el, (n) => n.nodeName === 'BUTTON' && /\bstage-chip\b/.test(n.className || '') && /stage-opts/.test(n.parentNode.className || ''));
+  assert.deepEqual(opts.map((o) => o.textContent), ['⚪ Not started', '🔵 In progress', '🟠 Waiting', '✅ Done']);
+  assert.ok(!el.textContent.includes('Automatic'), 'already automatic: no "Automatic"');
+  opts[3].__on.click();
+  assert.deepEqual(ctx.calls.at(-1), ['setStage', { projectId: 'p1', stage: 'done' }]);
+  assert.equal(s.data.projects[0].stage, 'done');
+  assert.equal(ui.stageOpen, null, 'the chooser closes');
+  el = renderDetail(ctx);
+  assert.equal(stageChips(el)[0].textContent, '✅ Done');
+  stageChips(el)[0].__on.click();
+  btnText(renderDetail(ctx), 'Automatic').__on.click();
+  assert.deepEqual(ctx.calls.at(-1), ['setStage', { projectId: 'p1', stage: null }]);
+  assert.equal(stageChips(renderDetail(ctx))[0].textContent, '🔵 In progress');
+});
+
+test('Stage on a task page: Waiting asks "Waiting for whom?" on the page (no prompt) — quick picks Approval, Management, Info and the people; or a few words typed and Save', () => {
+  const s = sampleState(); // People: Ravi
+  const ui = { selected: 'p1', update: {} };
+  const ctx = liveCtx(s, ui);
+  stageChips(renderDetail(ctx))[0].__on.click();
+  btnText(renderDetail(ctx), '🟠 Waiting').__on.click();
+  let el = renderDetail(ctx);
+  assert.ok(el.textContent.includes('Waiting for whom?'));
+  const picks = rAll(el, (n) => n.nodeName === 'BUTTON' && /stage-picks/.test(n.parentNode.className || '')).map((b) => b.textContent);
+  assert.deepEqual(picks, ['Approval', 'Management', 'Info', 'Ravi']);
+  btnText(el, 'Ravi').__on.click();
+  assert.deepEqual(ctx.calls.at(-1), ['setStage', { projectId: 'p1', stage: 'waiting', waitingFor: 'Ravi' }]);
+  el = renderDetail(ctx);
+  assert.equal(stageChips(el)[0].textContent, '🟠 Waiting: Ravi');
+  assert.match(stageChips(el)[0].className, /stage-waiting/, 'amber');
+  assert.match(stageChips(el)[0].getAttribute('title'), /Waiting since/, 'the day the wait began');
+  // typed words
+  stageChips(el)[0].__on.click();
+  rFind(renderDetail(ctx), (n) => n.nodeName === 'BUTTON' && /stage-opts/.test(n.parentNode.className || '') && n.textContent === '🟠 Waiting').__on.click();
+  el = renderDetail(ctx);
+  const input = rFind(el, (n) => n.nodeName === 'INPUT' && n.getAttribute('aria-label') === 'Waiting for whom?');
+  assert.equal(input.value, 'Ravi', 'what it waits for now, to change');
+  assert.equal(input.getAttribute('maxlength'), '80');
+  input.__on.input({}, { value: 'Drawing from the client' });
+  rFind(el, (n) => n.nodeName === 'FORM' && /stage-wait/.test(n.className)).__on.submit({ preventDefault() {} });
+  assert.deepEqual(ctx.calls.at(-1), ['setStage', { projectId: 'p1', stage: 'waiting', waitingFor: 'Drawing from the client' }]);
+  const src = readFileSync(new URL('../docs/ui/stage.js', import.meta.url), 'utf8');
+  assert.ok(!/\bprompt\(/.test(src), 'no prompt()');
+  assert.ok(!/style=/.test(src), 'no inline style (strict CSP)');
+});
+
+test('Stage on a task page: a task given to the team that is stuck shows "Waiting" with what they wait for; a 📂 project has no stage chip', () => {
+  const s = mainsState(); // c2 given to Ravi; m = 📂 Kilns
+  const ctx = liveCtx(s, { selected: 'c2', update: {} });
+  ctx.teamProgress = () => ({ stuck: true, waitingFor: 'Material: clay', stuckSince: '2026-10-21' });
+  assert.equal(stageChips(renderDetail(ctx))[0].textContent, '🟠 Waiting: Material: clay');
+  ctx.ui.selected = 'm';
+  assert.ok(!rFind(renderDetail(ctx), (n) => /\bstage-line\b/.test(n.className || '')), 'a 📂 project: no chip of its own (its tasks have theirs)');
+});
+
+test('Stage in a 📂 project\'s task table: a chip on each row, filter chips with counts (All N | Not started N | In progress N | Waiting N | Done N); the grip moves rows only when all show', () => {
+  const s = mainsState(); // 📂 Kilns: p1 (ticked: in progress), c2 (nothing yet)
+  applyOps(s, [makeOp('setStage', { projectId: 'c2', stage: 'waiting', waitingFor: 'Approval' })]);
+  const ctx = liveCtx(s, { selected: 'm' });
+  const m = s.data.projects.find((p) => p.id === 'm');
+  let el = mains.subProjectsBlock(ctx, m);
+  const bar = rFind(el, (n) => /\bstage-filters\b/.test(n.className || ''));
+  assert.deepEqual(rAll(bar, (n) => n.nodeName === 'BUTTON').map((b) => b.textContent), ['All 2', 'Not started 0', 'In progress 1', 'Waiting 1', 'Done 0']);
+  const rowText = () => rAll(el, (n) => n.nodeName === 'TR' && /sub-row/.test(n.className)).map((r) => r.textContent);
+  assert.ok(rowText().some((t) => t.includes('Kiln 2') && t.includes('🟠 Waiting: Approval')));
+  assert.ok(rowText().some((t) => t.includes('Kiln') && t.includes('🔵 In progress')));
+  rAll(bar, (n) => n.nodeName === 'BUTTON')[3].__on.click();
+  assert.equal(ctx.ui.subStage.m, 'waiting');
+  el = mains.subProjectsBlock(ctx, m);
+  assert.equal(rowText().length, 1, 'only the waiting one');
+  assert.equal(rAll(el, (n) => n.className === 'sub-grip').length, 0, 'no moving while filtered (the order has gaps)');
+  assert.match(el.textContent, /TASKS \(2\)/, 'the title still counts them all');
+});
+
+test('Stage on ✅ Tasks (app.js): the chip on each row, the filter chips under All tasks | No project (counts in that list), 📋 Copy list copies what is on screen', () => {
+  const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
+  assert.match(app, /if \(ui\.view === 'all' && stage\) return byStage\(visibleProjects\(\{ stage: false \}\), ui\.stageFilter, \(p\) => taskStage\(p\)\.stage\);/);
+  assert.match(app, /stageFilterBar\(stageCounts\(visibleProjects\(\{ stage: false \}\), \(p\) => taskStage\(p\)\.stage\), ui\.stageFilter,/, 'counts within the All / No project list');
+  assert.match(app, /taskListView\(\) && !ui\.search && !ui\.adding \? stageFilterChips\(\) : null,/);
+  assert.match(app, /ui\.view === 'all' && !isMainProject\(store\.view\.data, p\) \? stageChip\(taskStage\(p\)\) : null/);
+  assert.match(app, /return stageOf\(p, p\.team \? teamProgress\(p\.id\) : null\);/, 'a given task: stuck on the team = waiting');
+  const css = readFileSync(new URL('../docs/styles.css', import.meta.url), 'utf8');
+  for (const c of ['.stage-chip.stage-inprogress', '.stage-chip.stage-waiting', '.stage-chip.stage-done', '.stage-filter.on']) assert.ok(css.includes(c), c);
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /'ui\/stage\.js'/, 'offline copy has it');
+});
+
+test('Stage in the staff view: a chip on each row, filter chips on Today and ✅ Tasks; Stuck asks "Waiting for what?" (Manager, Material, Another person, Other + a few words)', async () => {
+  const data = staffData();
+  data.tasks[2].today = { id: 90, note: 'No clay', state: 'stuck', waitingFor: 'Material: clay', day: STAFF_DAY, at: STAFF_DAY + ' 10:30:00', photos: [] };
+  const { s } = fakeStaff2({ 'my.today': () => data, 'task.get': (b) => ({ task: data.tasks.find((t) => t.id === b.id), updates: [], comments: [] }) });
+  await s.load();
+  let v = s.view();
+  assert.ok(v.textContent.includes('🟠 Waiting: Material: clay'));
+  assert.ok(v.textContent.includes('⚪ Not started'));
+  const bar = rFind(v, (n) => /\bstage-filters\b/.test(n.className || ''));
+  assert.deepEqual(rAll(bar, (n) => n.nodeName === 'BUTTON').map((b) => b.textContent), ['All 3', 'Not started 2', 'In progress 0', 'Waiting 1', 'Done 0']);
+  rAll(bar, (n) => n.nodeName === 'BUTTON')[3].__on.click();
+  v = s.view();
+  assert.ok(v.textContent.includes('Order clay') && !v.textContent.includes('Pack the samples'), 'only the waiting one');
+  s.act.show('tasks');
+  assert.ok(rFind(s.view(), (n) => /\bstage-filters\b/.test(n.className || '')), '✅ Tasks has them too');
+  // Stuck in the update box: "Waiting for what?"
+  s.state.stageFilter = '';
+  s.act.open('task:11'); await new Promise((r) => setTimeout(r, 0));
+  s.state.drafts[11] = { note: 'x', state: 'stuck' };
+  v = s.view();
+  assert.ok(v.textContent.includes('Waiting for what?'));
+  for (const k of ['Manager', 'Material', 'Another person', 'Other']) assert.ok(btnText(v, k), k);
+  btnText(v, 'Manager').__on.click();
+  assert.equal(s.state.drafts[11].waitPick, 'Manager');
+  s.state.drafts[11].state = 'progress';
+  assert.ok(!s.view().textContent.includes('Waiting for what?'), 'only with Stuck');
+});
+
+test('Stage on the Team today table and a team task: the chip on each row; stuck for "Manager" shows "Waiting: you"; a "Waiting for you" filter', async () => {
+  const today = teamToday();
+  today.tasks[0].today.waitingFor = 'Manager: which fan?';
+  const { t } = fakeTeam({ 'team.today': () => today, 'task.get': () => ({ task: today.tasks[0], updates: [], comments: [] }) });
+  t.go('today'); await new Promise((r) => setTimeout(r, 0)); await new Promise((r) => setTimeout(r, 0));
+  const v = t.view();
+  assert.ok(v.textContent.includes('🟠 Waiting: you'), 'waiting for the manager: "you"');
+  assert.ok(v.textContent.includes('⚪ Not started'));
+  const you = btnText(v, '🟠 Waiting for you');
+  assert.equal(you.textContent, '🟠 Waiting for you 1');
+  you.__on.click();
+  assert.equal(t.state.boardFilter, 'you');
+  const rows = rAll(t.view(), (n) => n.nodeName === 'TR' && /board-row/.test(n.className || ''));
+  assert.deepEqual(rows.map((r) => r.textContent.includes('Fix kiln 2 fan')), [true], 'only the one waiting for you');
+  rows[0].__on.click(); await new Promise((r) => setTimeout(r, 0)); await new Promise((r) => setTimeout(r, 0));
+  assert.ok(rFind(t.view(), (n) => /\bstage-line\b/.test(n.className || '') && n.textContent === '🟠 Waiting: you'), 'on the task page too');
 });

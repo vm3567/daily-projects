@@ -7,6 +7,7 @@
 
 import { h, morph, errLine } from './dom.js';
 import { createOutbox } from './staffbox.js';
+import { stageChip } from './stage.js';
 import { fmtDay, fmtTime, LONG_DAYS, stateTag, newClientId, istDay, daysBetween, repeatLabel, block, sec, taskRow, chipsFor, makePics, photosRow, filesBlock, diaryBlock, messagesBlock, phoneBack } from './workparts.js';
 
 const KEEP_FAIL = 'Could not keep this on the phone. Try again when online.';
@@ -639,7 +640,8 @@ export function createTeam(opts) {
       return h('tr', { key: 'b-' + t.id, class: 'sub-row board-row' + (state.sel === 'task:' + t.id ? ' current' : ''), onClick: () => open('task:' + t.id) },
         cell('', h('span', { class: 'dot ' + dotOf(r.colour) })),
         cell('board-task', h('button', { class: 'link sub-name', type: 'button' }, t.title), ' ', state.boardGroup === 'project' ? null : h('span', { class: 'tag main-tag' }, '📂 ' + r.project), // (by 📂 project: its line says it)
-          state.newIds.has(t.id) ? h('span', { class: 'tag high' }, 'New') : null),
+          state.newIds.has(t.id) ? h('span', { class: 'tag high' }, 'New') : null,
+          r.stage ? [' ', stageChip(r.stage, { you: r.you })] : null), // its Stage; stuck waiting for "Manager": "Waiting: you"
         cell('board-who', t.assignee.name),
         cell('board-today col-extra' + (u ? '' : ' muted'), u ? [h('span', { class: 'muted small' }, fmtTime(u.at) + ' '), u.note, (u.photos || []).length ? ` 📷${u.photos.length}` : ''] : '—'),
         cell('board-status', h('span', { class: 'tag ' + STATUS[r.status][1] }, r.status === 'late' ? `⏰ Late (by ${fmtDay(t.dueDate)})` : STATUS[r.status][0])),
@@ -651,7 +653,7 @@ export function createTeam(opts) {
       g.person ? [' ', h('button', { class: 'chip', onClick: (e) => { if (e && e.stopPropagation) e.stopPropagation(); morningEmail(g.person); } }, '📧 Morning email'), sentMark(g.person)] : null));
     return [
       h('div', { class: 'board-counts row' }, chip('sent', `✓ Sent ${b.counts.sent}`), chip('notyet', `⏳ Not yet ${b.counts.notyet}`), chip('stuck', `⚠️ Stuck ${b.counts.stuck}`),
-        chip('late', `⏰ Late ${b.counts.late}`), chip('msg', `💬 New messages ${b.counts.msg}`), b.counts.sugg ? chip('sugg', `💡 Suggestions ${b.counts.sugg}`) : null),
+        chip('late', `⏰ Late ${b.counts.late}`), chip('you', `🟠 Waiting for you ${b.you}`), chip('msg', `💬 New messages ${b.counts.msg}`), b.counts.sugg ? chip('sugg', `💡 Suggestions ${b.counts.sugg}`) : null),
       h('div', { class: 'segmented board-group-by', role: 'group', 'aria-label': 'Group the table' }, seg('person', 'By person'), seg('project', 'By 📂 project')),
       !b.total ? h('p', { class: 'empty-list' }, 'No tasks today.') : !b.groups.length ? h('p', { class: 'empty-list' }, 'None of these. ', h('button', { class: 'link', onClick: pick(state.boardFilter) }, 'Show all')) :
         h('table', { class: 'sub-table board-table' },
@@ -968,6 +970,7 @@ export function createTeam(opts) {
     const whole = t.seq !== null && t.seq !== undefined;
     return [
       taskMenu(t),
+      t.status === 'suggested' ? null : h('div', { class: 'stage-line' }, stageChip(rules.teamStage(t), { you: rules.teamStage(t).you })), // Stuck for "Manager": "Waiting: you"
       chipsFor(t, td, { who: true }),
       t.details ? h('p', { class: 'pre muted' }, t.details) : null,
       filesBlock(t, { pic, openFile, onRemove: removeFile }),

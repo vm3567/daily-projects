@@ -1960,7 +1960,7 @@ test('connections: Rotate key — the old key stops at once, the new key and a n
   const log = sqlOut("SELECT GROUP_CONCAT(action, ' ', detail SEPARATOR '\\n') FROM wt.audit WHERE action LIKE 'conn\\_%'");
   for (const a of ['conn_create #', 'conn_rotate #', 'conn_delete #', 'conn_update #', 'conn_decide #']) assert.ok(log.includes(a), a);
   assert.ok(!/wt[cs]_[0-9a-f]{20}/.test(log), 'no key or secret in the log');
-  assert.equal(sqlOut("SELECT v FROM wt.settings WHERE k = 'schema'").trim(), '37', 'the tables steps ran (v37: notifs — the 🔔 list in the app)');
+  assert.equal(sqlOut("SELECT v FROM wt.settings WHERE k = 'schema'").trim(), '38', 'the tables steps ran (v38: updates.waiting_for — Stuck: waiting for what)');
 });
 
 // ---------------------------------------------------------------- review round 12 (connect.php / outlook.php)
@@ -2997,4 +2997,40 @@ test('review round 2 (whole code): the setup code cannot be guessed fast — aft
     assert.match(await post('fresh-setup-code-9'), /Too many wrong setup codes/, 'paused, even for the right code');
     assert.ok(!existsSync(join(fresh, 'config.php')), 'nothing set up');
   } finally { web2.kill(); rmSync(fresh, { recursive: true, force: true }); }
+});
+
+// ---------------------------------------------------------------- Stage: Stuck — "Waiting for what?" (v38, owner approved 23 Oct)
+test('Stage: a Stuck update saves "waiting for what" (one short line, up to 80) and returns it; not with Working on it / Finished; only the person doing the task; the manager sees it', { skip }, async () => {
+  const t = (await call('task.save', { assigneeId: id.suresh, title: 'Glaze test tiles', repeat: 'daily', skipSunday: false }, tok.boss)).task;
+  let u = (await call('update.save', { taskId: t.id, note: 'No glaze', state: 'stuck', waitingFor: '  Material:\n  zircon ' }, tok.suresh)).update;
+  assert.equal(u.state, 'stuck');
+  assert.equal(u.waitingFor, 'Material: zircon', 'one line, trimmed');
+  assert.equal(sqlOut(`SELECT waiting_for FROM wt.updates WHERE id = ${u.id}`).trim(), 'Material: zircon');
+  // the manager's list and the task carry it
+  const got = await call('task.get', { id: t.id }, tok.boss);
+  assert.equal(got.task.today.waitingFor, 'Material: zircon');
+  assert.equal((await call('team.today', {}, tok.boss)).tasks.find((x) => x.id === t.id).today.waitingFor, 'Material: zircon');
+  // up to 80 letters
+  u = (await call('update.save', { taskId: t.id, note: 'No glaze', state: 'stuck', waitingFor: 'M'.repeat(300) }, tok.suresh)).update;
+  assert.equal(u.waitingFor.length, 80);
+  // not stuck any more: nothing waited for
+  u = (await call('update.save', { taskId: t.id, note: 'Got it', state: 'progress', waitingFor: 'Manager' }, tok.suresh)).update;
+  assert.equal(u.waitingFor, null);
+  assert.equal(sqlOut(`SELECT IFNULL(waiting_for, 'NULL') FROM wt.updates WHERE id = ${u.id}`).trim(), 'NULL');
+  // only the person doing the task (other staff: refused, nothing saved)
+  const r = await call('update.save', { taskId: t.id, note: 'me too', state: 'stuck', waitingFor: 'Manager' }, tok.anita);
+  assert.ok(!r.ok, 'other staff cannot write it');
+  assert.equal(sqlOut(`SELECT IFNULL(waiting_for, 'NULL') FROM wt.updates WHERE task_id = ${t.id}`).trim(), 'NULL');
+  // not a string: ignored
+  u = (await call('update.save', { taskId: t.id, note: 'stuck again', state: 'stuck', waitingFor: { x: 1 } }, tok.suresh)).update;
+  assert.equal(u.waitingFor, null);
+});
+
+test('Stage: migration v38 (updates.waiting_for) runs again safely — the column already there is not an error, the schema stays 38', { skip }, async () => {
+  sql("UPDATE wt.settings SET v = '37' WHERE k = 'schema'");
+  await phpRun('migrate(db()); echo "ok";');
+  assert.equal(sqlOut("SELECT v FROM wt.settings WHERE k = 'schema'").trim(), '38');
+  await phpRun('migrate(db()); echo "ok";');
+  assert.equal(sqlOut("SELECT v FROM wt.settings WHERE k = 'schema'").trim(), '38');
+  assert.match(sqlOut("SHOW COLUMNS FROM wt.updates LIKE 'waiting_for'"), /waiting_for\s+varchar\(80\)\s+YES/i);
 });

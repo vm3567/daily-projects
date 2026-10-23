@@ -8,6 +8,7 @@
 
 import { h, morph, errLine } from './dom.js';
 import { createOutbox } from './staffbox.js';
+import { stageChip, stageFilterBar } from './stage.js';
 import { fmtDay, fmtTime, STATES, stateTag, newClientId, istDay, repeatLabel, block, chipsFor, makePics, photosRow, filesBlock, diaryBlock, messagesBlock } from './workparts.js';
 
 export { STATES, repeatLabel }; // (the pieces of a task page are shared with the team pages: ui/workparts.js)
@@ -195,6 +196,13 @@ export function staffFolders(d, waiting = () => false) {
  *   push (browserPush or a stand-in), copy(text) }.
  * Returns { state, render, load, open, act, view, start }.
  */
+/** An update's "waiting for" back in the box (✎ Edit): "Material: clay" → the Material choice and "clay". */
+function waitDraft(wf) {
+  const v = String(wf || '');
+  const m = /^(Manager|Material|Another person|Other)(?::\s*(.*))?$/.exec(v);
+  return m ? { waitPick: m[1], waitText: m[2] || '' } : { waitPick: '', waitText: v };
+}
+
 export function createStaff(opts) {
   const { root, api, rules, toast = () => {}, signOut = () => {} } = opts;
   const onAuth = opts.onAuth || (() => signOut());
@@ -336,14 +344,15 @@ export function createStaff(opts) {
     const twoSteps = d.state === 'finished' && t.needsPhoto && files.length && !hadPhoto;
     const cid = newClientId(); // the same id online and in the outbox: a save whose answer was lost is kept once
     const sentNote = d.note;
+    const waitingFor = d.state === 'stuck' ? rules.waitForText(d.waitPick, d.waitText) : ''; // Stuck: "Waiting for what?"
     let updateId = 0, left = files, savedNote = sentNote; // how far it got (what is still to send, if the internet goes)
     const typedOn = () => { // words typed while it was sending stay in the box (the rule: logic.js)
       const more = rules.updateBoxLeft(d.note, sentNote);
-      if (more) { state.drafts[t.id] = { note: more, state: d.state }; state.editing[t.id] = true; } else { delete state.drafts[t.id]; delete state.editing[t.id]; }
+      if (more) { state.drafts[t.id] = { note: more, state: d.state, ...(d.waitPick || d.waitText ? { waitPick: d.waitPick || '', waitText: d.waitText || '' } : {}) }; state.editing[t.id] = true; } else { delete state.drafts[t.id]; delete state.editing[t.id]; }
       delete state.files[t.id];
     };
     try {
-      const out = await api('update.save', rules.updateSaveBody({ taskId: t.id, note: sentNote, state: twoSteps ? 'progress' : d.state, clientId: cid }));
+      const out = await api('update.save', rules.updateSaveBody({ taskId: t.id, note: sentNote, state: twoSteps ? 'progress' : d.state, clientId: cid, waitingFor }));
       updateId = out.update.id; savedNote = out.update.note;
       for (let i = 0; i < files.length; i++) {
         left = files.slice(i);
@@ -362,7 +371,7 @@ export function createStaff(opts) {
         for (const f of updateId ? left : files) blobs.push(await shrink(f));
         const item = updateId
           ? { kind: 'photos', taskId: t.id, updateId, note: savedNote, state: d.state, thenFinish: !!twoSteps, files: blobs, clientId: cid, photoNo: e.photoNo || 0 }
-          : { kind: 'update', taskId: t.id, note: sentNote, state: d.state, needsPhoto: !!t.needsPhoto, hadPhoto, files: blobs, clientId: cid };
+          : { kind: 'update', taskId: t.id, note: sentNote, state: d.state, ...(waitingFor ? { waitingFor } : {}), needsPhoto: !!t.needsPhoto, hadPhoto, files: blobs, clientId: cid };
         if (!(await keep(item))) return KEEP_FAIL; // the words stay in the box
         typedOn();
         return '';
@@ -631,8 +640,18 @@ export function createStaff(opts) {
       h('button', { class: 'prow-btn', onClick: () => open('task:' + t.id) },
         h('span', { class: 'dot ' + dot, 'aria-label': dot }),
         h('span', { class: 'prow-text' },
-          h('span', { class: 'prow-name' }, t.title, state.newIds.has(t.id) ? h('span', { class: 'tag high' }, 'New') : null, t.unread ? h('span', { class: 'tag on-step', title: `${t.unread} new message(s)` }, '💬 New') : null),
+          h('span', { class: 'prow-name' }, t.title, state.newIds.has(t.id) ? h('span', { class: 'tag high' }, 'New') : null, t.unread ? h('span', { class: 'tag on-step', title: `${t.unread} new message(s)` }, '💬 New') : null,
+            t.status === 'suggested' ? null : stageChip(rules.teamStage(t))),
           h('span', { class: 'prow-next' + (warn ? ' warn' : '') }, sub))));
+  }
+
+  /** The Stage filter chips over a list (counts within it); the list cut to the chosen stage. */
+  const stageOfTask = (t) => rules.teamStage(t).stage;
+  function stageCut(list, of = (x) => x) {
+    const counts = { all: list.length, notstarted: 0, inprogress: 0, waiting: 0, done: 0 };
+    for (const x of list) counts[stageOfTask(of(x))]++;
+    const f = state.stageFilter || 'all';
+    return { bar: stageFilterBar(counts, f, (k) => { state.stageFilter = k === 'all' ? '' : k; render(); }), list: f === 'all' ? list : list.filter((x) => stageOfTask(of(x)) === f) };
   }
 
   function chipRow(x) {
@@ -646,7 +665,7 @@ export function createStaff(opts) {
         h('span', { class: 'dot ' + x.dot, 'aria-label': x.dot }),
         h('span', { class: 'prow-text' },
           h('span', { class: 'prow-name' }, t.title, t.unread ? h('span', { class: 'tag on-step', title: `${t.unread} new message(s)` }, '💬 New') : null),
-          h('span', { class: 'prow-chips' }, h('span', { class: 'tag main-tag' }, `📂 ${x.folder.name}`)),
+          h('span', { class: 'prow-chips' }, h('span', { class: 'tag main-tag' }, `📂 ${x.folder.name}`), stageChip(rules.teamStage(t))),
           h('span', { class: 'prow-next' + (t.dueDate && t.repeat === 'once' && t.dueDate < td && !t.today ? ' warn' : '') }, sub))));
   }
 
@@ -742,8 +761,9 @@ export function createStaff(opts) {
                 h('span', { class: 'prow-next' }, `${x.who} · ${fmtDay(x.at)} — ${x.text}`))))))];
     } else if (state.section === 'tasks') {
       const { tasks } = folders();
-      body = [sec(`${tasks.length} open task${tasks.length === 1 ? '' : 's'} · red first`),
-        h('ul', { class: 'plist' }, tasks.map((x) => chipRow(x))),
+      const cut = stageCut(tasks, (x) => x.t);
+      body = [sec(`${tasks.length} open task${tasks.length === 1 ? '' : 's'} · red first`), cut.bar,
+        h('ul', { class: 'plist' }, cut.list.map((x) => chipRow(x))),
         tasks.length ? null : h('p', { class: 'empty-list' }, 'No open tasks. 🎉')];
     } else if (state.section === 'projects') {
       const { folders: fs } = folders();
@@ -771,7 +791,8 @@ export function createStaff(opts) {
       body = [
         d.stale ? h('p', { class: 'empty-list' }, `📴 Saved copy from ${fmtDay(d.today)} — today's updates are not shown yet.`) : null,
         sec(`${fmtDay(td)} · ${sent} of ${d.tasks.length} sent`, h('span', { class: 'tag' }, `by ${d.fillBy}`)),
-        h('ul', { class: 'plist' }, d.tasks.map((t) => {
+        d.tasks.length ? stageCut(d.tasks).bar : null,
+        h('ul', { class: 'plist' }, stageCut(d.tasks).list.map((t) => {
           const waiting = !!waitingFor(t.id);
           const late = t.repeat === 'once' && t.dueDate && t.dueDate < td;
           const sub = waiting ? '⏳ Waiting to send' : t.today ? `✓ Sent ${fmtTime(t.today.at)}${t.today.state === 'stuck' ? ' · stuck' : t.today.state === 'finished' ? ' · finished' : ''}`
@@ -804,7 +825,7 @@ export function createStaff(opts) {
       const u = t.today;
       // what was sent is the "Today" row under it (as on the owner's page): here only the buttons to change it
       return todayBox(h('div', { class: 'row' }, h('span', { class: 'info-chip static good' }, `✓ Today's update sent ${fmtTime(u.at)}`),
-        h('button', { class: 'btn small', onClick: () => { state.editing[t.id] = true; state.drafts[t.id] = { note: u.note, state: u.state }; render(); } }, '✎ Edit'),
+        h('button', { class: 'btn small', onClick: () => { state.editing[t.id] = true; state.drafts[t.id] = { note: u.note, state: u.state, ...waitDraft(u.waitingFor) }; render(); } }, '✎ Edit'),
         (u.photos || []).length < 5 ? h('label', { class: 'btn small' }, '📷 Add photo', h('input', { type: 'file', accept: 'image/*', multiple: true, class: 'visually-hidden',
           onChange: (e, el) => { const f = [...el.files].slice(0, 5); el.value = ''; addPhotos(t, f).then((m) => { if (m) toast(m, 5000); }); } })) : null));
     }
@@ -818,12 +839,25 @@ export function createStaff(opts) {
       h('textarea', { key: 'up-' + t.id, placeholder: 'What happened today? (you can tap 🎤 on the keyboard to speak)', value: d.note, onInput: (e, el) => { d.note = el.value; err.clear(); } }),
       h('div', { class: 'segmented', role: 'group', 'aria-label': 'How is it going' }, STATES.map(([k, label]) =>
         h('button', { class: 'seg' + (d.state === k ? ' on' : ''), type: 'button', 'aria-pressed': String(d.state === k), onClick: () => { d.state = k; render(); } }, label))),
+      d.state === 'stuck' ? waitForBox(t, d) : null,
       picked.length ? h('span', { class: 'small muted' }, `📷 ${picked.length} photo${picked.length === 1 ? '' : 's'} ready `, h('button', { class: 'link small', onClick: () => { delete state.files[t.id]; render(); } }, 'Remove')) : null,
       err,
       h('div', { class: 'row' },
         h('button', { class: 'btn primary small', disabled: state.sending[t.id] ? true : undefined, onClick: () => sendUpdate(t).then(say) }, state.sending[t.id] ? 'Sending…' : 'Send'),
         picked.length < 5 ? h('label', { class: 'btn small' }, '📷 Add photo', pick) : null,
         state.editing[t.id] ? h('button', { class: 'btn small', onClick: () => { delete state.editing[t.id]; delete state.drafts[t.id]; render(); } }, 'Cancel') : null)));
+  }
+
+  /** Stuck: "Waiting for what?" — Manager, Material, Another person, Other (+ a short line). Saved with the update. */
+  function waitForBox(t, d) {
+    return h('div', { class: 'stage-wait', key: 'wf-' + t.id },
+      h('span', { class: 'small' }, 'Waiting for what?'),
+      h('div', { class: 'stage-picks', role: 'group', 'aria-label': 'Waiting for what?' }, rules.WAIT_FOR_PICKS.map((k) => h('button', {
+        class: 'chip' + (d.waitPick === k ? ' on' : ''), type: 'button', key: 'wfp-' + k, 'aria-pressed': String(d.waitPick === k),
+        onClick: () => { d.waitPick = d.waitPick === k ? '' : k; render(); },
+      }, k))),
+      h('input', { key: 'wft-' + t.id, value: d.waitText || '', maxlength: String(rules.WAIT_FOR_MAX), placeholder: 'A few words (optional)', 'aria-label': 'Waiting for what (a few words)',
+        onInput: (e, el) => { d.waitText = el.value; } }));
   }
 
   function messages(taskId, comments) {
@@ -848,6 +882,7 @@ export function createStaff(opts) {
     const td = today();
     const f = folders().tasks.find((x) => x.t.id === t.id);
     return [
+      t.status === 'suggested' ? null : h('div', { class: 'stage-line' }, stageChip(rules.teamStage(t))), // its Stage (from your updates)
       chips(t, td),
       // its 📂 project, as on the owner's task: opens it (a given project: its steps, where a step can be added)
       f ? h('div', { class: 'main-chips' }, h('button', { class: 'main-chip', title: `Open the project ${f.folder.name}`, onClick: () => openFolder(f.folder) }, `📂 ${f.folder.name} ›`),

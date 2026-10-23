@@ -14,6 +14,7 @@ import { enterAction, richFileIds, textToHtml } from '../rich.js';
 import { projectEmailCards, emailThreadBlock } from './replies.js';
 import { mainBox, mainChip, subProjectsBlock, openMainBox } from './mains.js';
 import { isMainProject, timerOn, childrenOf } from '../rules.js';
+import { stageLine } from './stage.js';
 
 /** 'project' for a 📂 project, 'task' for everything else (what the app once called a project). */
 const kindWord = (ctx, p) => (isMainProject(ctx.store.view.data, p) ? 'project' : 'task');
@@ -1090,6 +1091,7 @@ export function renderDetail(ctx) {
       }, '✎'),
       h('div', { class: 'state-buttons' }, stateButtons(ctx, p))),
     aboutLine(ctx, p),
+    stageLine(ctx, p), // the Stage chip near the top: ⚪ Not started · 🔵 In progress · 🟠 Waiting: … · ✅ Done (tap to change)
     projectMenu(ctx, p),
     mainBox(ctx, p, 'parent'),
     snoozeBar(ctx, p),

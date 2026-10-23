@@ -50,6 +50,7 @@ function user_name(int $id): string {
 function update_out(?array $u, array $photos = []): ?array {
   if (!$u) return null;
   return ['id' => (int)$u['id'], 'day' => $u['day'], 'note' => $u['note'], 'state' => $u['state'], 'at' => $u['updated_at'], 'photos' => $photos[$u['id']] ?? [],
+    'waitingFor' => $u['state'] === 'stuck' && ($u['waiting_for'] ?? null) !== null && $u['waiting_for'] !== '' ? $u['waiting_for'] : null, // Stuck: waiting for what
     'byId' => (int)$u['user_id'], 'by' => user_name((int)$u['user_id'])];
 }
 
@@ -331,6 +332,9 @@ function handle(string $a, array $in): array {
       if ($t['status'] !== 'open' && !$mine) throw new ApiError('This task is closed.');
       $note = txt($in['note'] ?? '', 4000, true, 'The update');
       $state = in_array($in['state'] ?? '', ['progress', 'stuck', 'finished'], true) ? $in['state'] : 'progress';
+      // Stuck: "Waiting for what?" (one short line, up to 80 letters); nothing when not stuck
+      $wf = $state === 'stuck' && is_string($in['waitingFor'] ?? null) ? txt(preg_replace('/\s+/u', ' ', $in['waitingFor']) ?? '', 80) : '';
+      $wf = $wf === '' ? null : $wf;
       if ($state === 'finished' && $t['needs_photo']) { // only photos added by this person (not the one before a move)
         $n = one('SELECT COUNT(*) AS n FROM photos p JOIN updates u ON u.id = p.update_id WHERE u.task_id = ? AND u.day = ? AND u.user_id = ? AND p.created_at >= u.created_at', [$t['id'], $uday, $me['id']]);
         if (!(int)$n['n']) throw new ApiError('A photo is needed to finish this task. Add a photo, then tap Finished.');
@@ -347,12 +351,12 @@ function handle(string $a, array $in): array {
         // their photos stay on the row but are marked as older than this take-over (created_at)
         $before = trim((string)$old['note']);
         if ($before !== '') $note = mb_substr(user_name((int)$old['user_id']) . ': ' . $before . "\n\n" . $note, 0, 8000);
-        q('UPDATE updates SET user_id = ?, note = ?, state = ?, created_at = ?, updated_at = ?, written_at = ? WHERE task_id = ? AND day = ?', [$me['id'], $note, $state, now(), now(), $wrote ?? now(), $t['id'], $uday]);
+        q('UPDATE updates SET user_id = ?, note = ?, state = ?, waiting_for = ?, created_at = ?, updated_at = ?, written_at = ? WHERE task_id = ? AND day = ?', [$me['id'], $note, $state, $wf, now(), now(), $wrote ?? now(), $t['id'], $uday]);
       } else {
         // (written_at: when it was written, so the next offline one is compared with that, not with when this arrived)
-        q('INSERT INTO updates (task_id, user_id, day, note, state, created_at, updated_at, written_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-           ON DUPLICATE KEY UPDATE user_id = VALUES(user_id), note = VALUES(note), state = VALUES(state), updated_at = VALUES(updated_at), written_at = VALUES(written_at)',
-          [$t['id'], $me['id'], $uday, $note, $state, now(), now(), $wrote ?? now()]);
+        q('INSERT INTO updates (task_id, user_id, day, note, state, waiting_for, created_at, updated_at, written_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON DUPLICATE KEY UPDATE user_id = VALUES(user_id), note = VALUES(note), state = VALUES(state), waiting_for = VALUES(waiting_for), updated_at = VALUES(updated_at), written_at = VALUES(written_at)',
+          [$t['id'], $me['id'], $uday, $note, $state, $wf, now(), now(), $wrote ?? now()]);
       }
       if ($ucid) q('UPDATE updates SET client_id = ? WHERE task_id = ? AND day = ?', [$ucid, $t['id'], $uday]);
       // a late update for an earlier day (sent from the outbox) is kept as history: it never reopens or closes the task
@@ -432,7 +436,7 @@ function handle(string $a, array $in): array {
       if (!in_array($mime, ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif'], true)) throw new ApiError('Only photos can be added.');
       $jpeg = shrink_photo($f['tmp_name'], $mime);
       $dir = 'msg/' . date('Y-m');
-      if (!is_dir(UPLOAD_DIR . "/$dir")) mkdir(UPLOAD_DIR . "/$dir", 0750, true);
+      make_dir(UPLOAD_DIR . "/$dir");
       $file = "$dir/" . bin2hex(random_bytes(12)) . '.jpg';
       file_put_contents(UPLOAD_DIR . "/$file", $jpeg);
       $text = txt($_POST['text'] ?? '', 2000);
@@ -1205,7 +1209,7 @@ function add_photo(array $me, int $updateId): int {
   if (!in_array($mime, ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif'], true)) throw new ApiError('Only photos can be added.');
   $jpeg = shrink_photo($f['tmp_name'], $mime);
   $dir = date('Y-m');
-  if (!is_dir(UPLOAD_DIR . "/$dir")) mkdir(UPLOAD_DIR . "/$dir", 0750, true);
+  make_dir(UPLOAD_DIR . "/$dir");
   $file = "$dir/" . bin2hex(random_bytes(12)) . '.jpg';
   file_put_contents(UPLOAD_DIR . "/$file", $jpeg);
   // the limit, again under a lock on the update: photos sent at the same moment are counted one after the other
@@ -1292,7 +1296,7 @@ function add_task_file(array $me, array $t): int {
   elseif ($mime === 'application/pdf') { $bytes = (string)file_get_contents($f['tmp_name']); $ext = 'pdf'; }
   else throw new ApiError('Photos and PDF files only.');
   $dir = 'files/' . date('Y-m');
-  if (!is_dir(UPLOAD_DIR . "/$dir")) mkdir(UPLOAD_DIR . "/$dir", 0750, true);
+  make_dir(UPLOAD_DIR . "/$dir");
   $file = "$dir/" . bin2hex(random_bytes(12)) . ".$ext";
   file_put_contents(UPLOAD_DIR . "/$file", $bytes);
   // the limit, again under a lock on the task: files sent at the same moment are counted one after the other
