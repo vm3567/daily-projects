@@ -3458,3 +3458,13 @@ test('Team today table on screen: the 💡 Suggestions count stays while it is p
   t.go('today'); await new Promise((r) => setTimeout(r, 0)); await new Promise((r) => setTimeout(r, 0));
   assert.match(t.view().textContent, /💡 Suggestions 0/);
 });
+
+test('Team today (review): a stuck task of someone no longer on the team list, with nothing due today, still shows the table (never "No team members yet")', async () => {
+  const gone = { id: 9, name: 'Mohan' };
+  const stuck = { id: 77, title: 'Fix the dryer', assignee: gone, status: 'open', repeat: 'weekly', dueToday: false, today: null, stuck: true, unread: 0, last: { note: 'part missing' } };
+  const { t } = fakeTeam({ 'team.today': () => ({ ok: true, today: '2026-10-23', fillBy: '18:00', late: false, people: [], tasks: [], stuck: [stuck], unread: [], suggestions: [] }) });
+  t.go('today'); await new Promise((r) => setTimeout(r, 0)); await new Promise((r) => setTimeout(r, 0));
+  const text = t.view().textContent;
+  assert.ok(!text.includes('No team members yet'));
+  assert.ok(text.includes('Fix the dryer') && text.includes('Mohan'), 'the stuck task is a row');
+});

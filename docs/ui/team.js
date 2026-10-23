@@ -599,7 +599,8 @@ export function createTeam(opts) {
     const d = state.data;
     const filt = state.personFilter;
     const people = [...(d.people || [])];
-    for (const t of d.tasks) if (!people.some((p) => p.id === t.assignee.id)) people.push({ id: t.assignee.id, name: t.assignee.name });
+    // (everyone with a row of the table: today's tasks, and stuck ones, new messages and suggestions not due today)
+    for (const t of [...d.tasks, ...(d.stuck || []), ...(d.unread || []), ...(d.suggestions || [])]) if (!people.some((p) => p.id === t.assignee.id)) people.push({ id: t.assignee.id, name: t.assignee.name });
     const sentMark = (p) => { const tm = rules.sentTime(sentAtOf(p.id, p.morningSentAt), istDay()); return tm ? h('span', { class: 'muted small', title: 'Morning email sent today' }, ' ✓ ' + tm) : null; };
     return [
       d.stale ? h('p', { class: 'empty-list' }, `📴 Saved copy from ${fmtDay(d.today)} — today's updates are not shown yet.`) : null,

@@ -536,22 +536,25 @@ export function teamBoard(d, { filter = '', group = 'person', person = 0, page =
   // list) and the suggestions; each task once
   const ids = new Set((d.tasks || []).map((t) => t.id));
   const more = [...(d.stuck || []), ...(d.unread || []), ...(d.suggestions || [])].filter((t) => !ids.has(t.id) && ids.add(t.id));
-  const all = [...(d.tasks || []), ...more.map((t) => ({ ...t, notDue: t.status !== 'suggested' }))];
+  const all = [...(d.tasks || []), ...more];
   const rows = all.filter((t) => !person || t.assignee.id === person).map((t, i) => {
-    const late = t.status === 'open' && t.repeat === 'once' && !!t.dueDate && t.dueDate < today && !t.today;
-    const status = t.status === 'suggested' ? 'sugg' : t.stuck ? 'stuck' : late ? 'late' : t.today ? 'sent' : t.notDue ? 'notdue' : 'notyet';
+    // not due today: the server's own word (dueToday), never which list it came from; a step waiting its turn is
+    // never Late (it cannot be worked on yet) and is not counted in "x of y sent"
+    const notDue = t.status !== 'suggested' && t.dueToday === false && !t.today;
+    const late = !notDue && t.status === 'open' && t.repeat === 'once' && !!t.dueDate && t.dueDate < today && !t.today;
+    const status = t.status === 'suggested' ? 'sugg' : t.stuck ? 'stuck' : late ? 'late' : t.today ? 'sent' : notDue ? 'notdue' : 'notyet';
     const colour = status === 'sent' ? 'green' : status === 'sugg' || status === 'notdue' || (status === 'notyet' && !d.late) ? 'yellow' : 'red';
     const project = t.folder || t.project || 'Misc';
-    return { t, status, colour, project, msg: (t.unread || 0) > 0, i };
+    return { t, status, colour, project, msg: (t.unread || 0) > 0, notDue, i };
   });
-  const counts = { sent: 0, notyet: 0, stuck: 0, late: 0, msg: 0, sugg: 0 };
-  for (const r of rows) { counts[r.status] = (counts[r.status] || 0) + 1; if (r.msg) counts.msg++; }
+  const counts = { sent: 0, notyet: 0, stuck: 0, late: 0, notdue: 0, msg: 0, sugg: 0 };
+  for (const r of rows) { counts[r.status]++; if (r.msg) counts.msg++; }
   const shown = rows.filter((r) => !filter || (filter === 'msg' ? r.msg : r.status === filter))
     .sort((a, b) => RANK[a.colour] - RANK[b.colour] || a.i - b.i);
   const key = (r) => (group === 'project' ? r.project : r.t.assignee.name);
   const groups = new Map();
   for (const r of shown) { if (!groups.has(key(r))) groups.set(key(r), []); groups.get(key(r)).push(r); }
-  const list = [...groups].map(([name, rs]) => ({ name, rows: rs, all: rs.filter((r) => r.status !== 'sugg' && !r.t.notDue).length, sent: rs.filter((r) => r.status === 'sent').length, person: group === 'person' ? rs[0].t.assignee : null }))
+  const list = [...groups].map(([name, rs]) => ({ name, rows: rs, all: rs.filter((r) => r.status !== 'sugg' && !r.notDue).length, sent: rs.filter((r) => r.status === 'sent').length, person: group === 'person' ? rs[0].t.assignee : null }))
     .sort((a, b) => (group === 'project' && (a.name === 'Misc') - (b.name === 'Misc')) || RANK[a.rows[0].colour] - RANK[b.rows[0].colour] || a.name.localeCompare(b.name));
   // this page's 20 rows, each under its line (the line's "x of y sent" counts the whole group)
   const flat = list.flatMap((g) => g.rows.map((r) => [g, r]));

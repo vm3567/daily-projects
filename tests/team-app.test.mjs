@@ -1368,7 +1368,7 @@ test('Team today as one table (owner, 23 Oct): status of each task (sent / not y
     T(4, R, { unread: 2, folder: 'Kilns' }),
   ] };
   let b = teamBoard(d);
-  assert.deepEqual(b.counts, { sent: 1, notyet: 1, stuck: 1, late: 1, msg: 1, sugg: 0 });
+  assert.deepEqual(b.counts, { sent: 1, notyet: 1, stuck: 1, late: 1, notdue: 0, msg: 1, sugg: 0 });
   assert.deepEqual(b.groups.map((g) => [g.name, g.rows.map((r) => [r.t.id, r.status, r.colour]), g.sent]),
     [['Ravi', [[3, 'late', 'red'], [4, 'notyet', 'yellow']], 0], ['Valar', [[2, 'stuck', 'red'], [1, 'sent', 'green']], 1]], 'by person, red first (both red: by name)');
   assert.equal(b.groups[1].person.id, 3, 'a person\'s line has the person (📧 Morning email)');
@@ -1406,9 +1406,24 @@ test('Team today table: a stuck task or one with new messages that is not due to
   const V = { id: 3, name: 'Valar' };
   const T = (id, x = {}) => ({ id, title: 'T' + id, assignee: V, status: 'open', repeat: 'daily', today: null, stuck: false, unread: 0, ...x });
   const due = T(1, { unread: 1 });
-  const d = { today: '2026-10-23', late: true, tasks: [due], stuck: [T(2, { repeat: 'weekly', stuck: true })], unread: [due, T(3, { repeat: 'weekly', unread: 2 })], suggestions: [] };
+  const d = { today: '2026-10-23', late: true, tasks: [due], stuck: [T(2, { repeat: 'weekly', stuck: true, dueToday: false })], unread: [due, T(3, { repeat: 'weekly', unread: 2, dueToday: false })], suggestions: [] }; // (dueToday as the server sends it)
   const b = teamBoard(d);
   assert.deepEqual(b.groups.flatMap((g) => g.rows.map((r) => [r.t.id, r.status])), [[1, 'notyet'], [2, 'stuck'], [3, 'notdue']], 'the stuck one and the one with new messages are in the table; today\'s task once');
   assert.deepEqual([b.counts.stuck, b.counts.msg, b.counts.notyet], [1, 2, 1], 'a task not due today is not "Not yet"');
   assert.equal(b.groups[0].all, 1, '"x of y sent" counts only today\'s tasks');
+});
+
+test('Team today table (review): a step waiting its turn with a by-date gone is "Not due today", never ⏰ Late; not due = the server\'s dueToday, not the list it came from; every status has its count', async () => {
+  const { teamBoard } = await import('../team/public_html/logic.js');
+  const V = { id: 3, name: 'Valar' };
+  const T = (id, x = {}) => ({ id, title: 'T' + id, assignee: V, status: 'open', repeat: 'once', today: null, stuck: false, unread: 0, ...x });
+  const waiting = T(2, { dueDate: '2026-10-20', unread: 1, dueToday: false, queued: true });
+  const dueButMissing = T(4, { stuck: false, unread: 1, dueToday: true }); // due today but (a changed list) not in tasks
+  const b = teamBoard({ today: '2026-10-23', late: false, tasks: [T(1, { dueToday: true })], stuck: [], unread: [waiting, dueButMissing], suggestions: [] });
+  const st = Object.fromEntries(b.groups.flatMap((g) => g.rows.map((r) => [r.t.id, r.status])));
+  assert.deepEqual(st, { 1: 'notyet', 2: 'notdue', 4: 'notyet' });
+  assert.equal(b.counts.late, 0, 'not Late');
+  assert.deepEqual(Object.keys(b.counts).sort(), ['late', 'msg', 'notdue', 'notyet', 'sent', 'stuck', 'sugg'], 'every status listed');
+  assert.equal(b.counts.notdue, 1);
+  assert.equal(b.groups[0].all, 2, 'the due ones count in "x of y sent", the waiting step does not');
 });
