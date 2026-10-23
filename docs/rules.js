@@ -282,6 +282,38 @@ export function parentIdsOf(p) {
  * Older saved data, read the new way (in place; done when data loads and before changes): parentId → parentIds,
  * and every object that holds tasks is marked isMain (so it stays a project when it is emptied).
  */
+/**
+ * Groups are gone (the owner asked, 23 Oct): an older data file is brought up to date when it is read. The tags of all
+ * groups become one list (the same name: one tag), the timer stays on if any group had it on, and every task loses its
+ * groupId (and the formerGroup kept for a few days). A file without groups is left as it is (only data.tags is made sure).
+ */
+export function dropGroups(data) {
+  if (!data || typeof data !== 'object') return data;
+  if (!Array.isArray(data.tags)) data.tags = [];
+  if (Array.isArray(data.groups)) {
+    const map = new Map(); // old tag id -> the kept tag's id
+    for (const g of data.groups) {
+      for (const t of (g && Array.isArray(g.tags) ? g.tags : [])) {
+        if (!t || typeof t.name !== 'string') continue;
+        const same = data.tags.find((x) => x.name.toLowerCase() === t.name.toLowerCase());
+        if (!same) data.tags.push({ id: t.id, name: t.name });
+        else if (same.id !== t.id) map.set(t.id, same.id);
+      }
+    }
+    if (!data.settings || typeof data.settings !== 'object') data.settings = {};
+    if (typeof data.settings.timer !== 'boolean') { // (a group had the timer unless switched off; Personal was off by default)
+      data.settings.timer = data.groups.some((g) => g && (typeof g.timer === 'boolean' ? g.timer : String(g.name || '').trim().toLowerCase() !== 'personal'));
+    }
+    for (const p of data.projects || []) if (p && map.has(p.tagId)) p.tagId = map.get(p.tagId);
+    delete data.groups;
+  }
+  for (const p of data.projects || []) if (p && typeof p === 'object') { delete p.groupId; delete p.formerGroup; }
+  return data;
+}
+
+/** The timer (and the Time report) is on unless switched off in Settings. */
+export const timerOn = (data) => !(data && data.settings && data.settings.timer === false);
+
 export function normalizeParents(data) {
   if (!data || !Array.isArray(data.projects)) return data;
   const ids = new Set(data.projects.filter((p) => p && typeof p === 'object').map((p) => p.id));
@@ -621,15 +653,13 @@ export function weekStart(day) {
 }
 
 /**
- * Time in a group between two India dates, split by tag (or by project).
+ * Time between two India dates, split by tag (or by project).
  * Returns [{ key, name, minutes }] biggest first; projects without a tag are "No tag".
  */
-export function timeSplit(data, groupId, fromDay, toDay, by = 'tag', now = new Date()) {
-  const g = data.groups.find((x) => x.id === groupId);
-  const tags = (g && g.tags) || [];
+export function timeSplit(data, fromDay, toDay, by = 'tag', now = new Date()) {
+  const tags = data.tags || [];
   const rows = new Map();
   for (const p of data.projects) {
-    if (p.groupId !== groupId) continue;
     const m = minutesBetween(p, fromDay, toDay, data.timer, now);
     if (!m) continue;
     let key;

@@ -10,7 +10,7 @@ const fresh = () => ({ data: emptyData(), history: {} });
 
 function withProject(date = '2026-10-01') {
   const s = fresh();
-  applyOp(s, op('createProject', { projectId: 'p1', name: 'Kiln trial', groupId: 'g2' }, date));
+  applyOp(s, op('createProject', { projectId: 'p1', name: 'Kiln trial' }, date));
   applyOp(s, op('addStep', { projectId: 'p1', stepId: 's1', text: 'Order clay' }, date));
   applyOp(s, op('addStep', { projectId: 'p1', stepId: 's2', text: 'Call supplier' }, date));
   return s;
@@ -70,7 +70,7 @@ test('a step ticked for the team is their work on their day, not your work today
 test('team work on an earlier day (page closed that day) counts for that day box, and raises its score', async () => {
   const { dayScore } = await import('../docs/rules.js');
   const s = fresh();
-  applyOp(s, op('createProject', { projectId: 'p1', name: 'Kiln', groupId: 'g2' }, '2026-10-01'));
+  applyOp(s, op('createProject', { projectId: 'p1', name: 'Kiln' }, '2026-10-01'));
   applyOp(s, op('recordScores', { scores: { '2026-10-03': { green: 0, total: 1 } } }, '2026-10-06'));
   assert.ok(applyOp(s, op('teamWorked', { projectId: 'p1', day: '2026-10-05' }, '2026-10-06')));
   assert.ok(applyOp(s, op('teamWorked', { projectId: 'p1', day: '2026-10-03' }, '2026-10-06')), 'an older day is still added');
@@ -148,12 +148,14 @@ test('move uses after/before ids', () => {
   assert.deepEqual(s.data.projects.map((p) => p.id), ['c', 'b', 'a']);
 });
 
-test('groups: cannot delete a group in use', () => {
+test('groups are gone (owner, 23 Oct): a new data file has no groups, a task has no group, and an old change about groups (from a device not updated yet) does nothing', () => {
   const s = withProject();
-  assert.equal(applyOp(s, op('deleteGroup', { groupId: 'g2' }, '2026-10-02')), false);
-  assert.equal(applyOp(s, op('deleteGroup', { groupId: 'g3' }, '2026-10-02')), true);
-  const ev = s.history['2026-10'].find((e) => e.kind === 'group_deleted');
-  assert.equal(ev.projectId, null);
+  assert.equal(s.data.groups, undefined); assert.deepEqual(s.data.tags, []); assert.equal(s.data.settings.timer, true);
+  assert.ok(!('groupId' in s.data.projects[0]), 'a task has no group');
+  for (const [type, args] of [['addGroup', { groupId: 'g9', name: 'New' }], ['deleteGroup', { groupId: 'g2' }], ['renameGroup', { groupId: 'g1', name: 'X' }], ['setGroupTimer', { groupId: 'g1', on: false }], ['setProjectField', { projectId: 'p1', field: 'groupId', value: 'g1' }]]) {
+    assert.equal(applyOp(s, op(type, args, '2026-10-02')), false, type + ' does nothing');
+  }
+  assert.ok(!('groupId' in s.data.projects[0]) && s.data.groups === undefined && s.data.settings.timer === true);
 });
 
 test('links: only http and https', () => {
@@ -399,7 +401,6 @@ test('@name matching follows people added or renamed later', async () => {
 test('time log: start, stop, switching projects, 10-hour cut, manual time, totals', async () => {
   const { minutesBetween, fmtMinutes, weekStart } = await import('../docs/rules.js');
   const s = withProject('2026-10-01');
-  applyOp(s, op('setProjectField', { projectId: 'p1', field: 'groupId', value: 'g1' }, '2026-10-01')); // Acton has the timer
   applyOp(s, op('createProject', { projectId: 'p2', name: 'B' }, '2026-10-01'));
   applyOp(s, op('startTimer', { projectId: 'p1' }, '2026-10-05', '09:00:00'));
   assert.equal(applyOp(s, op('startTimer', { projectId: 'p1' }, '2026-10-05', '09:10:00')), false, 'already running');
@@ -432,42 +433,43 @@ test('time log: start, stop, switching projects, 10-hour cut, manual time, total
   assert.equal(p1.timeLogs.length, 2);
 });
 
-test('tags per group, one tag per project, timer only in timer groups, time split by tag', async () => {
+test('one tag list (no groups), one tag per project, the timer on or off in Settings, time split by tag', async () => {
   const { timeSplit, percents } = await import('../docs/rules.js');
   const s = { data: emptyData(), history: {} };
-  const [acton, personal] = [s.data.groups[0], s.data.groups[1]]; // Acton, Personal
   applyOps(s, [
-    op('addTag', { groupId: acton.id, tagId: 'kiln', name: 'Kiln' }, '2026-10-05'),
-    op('addTag', { groupId: acton.id, tagId: 'glaze', name: 'Glaze' }, '2026-10-05'),
-    op('createProject', { projectId: 'a1', name: 'Electric kiln', groupId: acton.id }, '2026-10-05'),
-    op('createProject', { projectId: 'a2', name: 'New glaze', groupId: acton.id }, '2026-10-05'),
-    op('createProject', { projectId: 'a3', name: 'Misc', groupId: acton.id }, '2026-10-05'),
-    op('createProject', { projectId: 'h1', name: 'Home', groupId: personal.id }, '2026-10-05'),
+    op('addTag', { tagId: 'kiln', name: 'Kiln' }, '2026-10-05'),
+    op('addTag', { tagId: 'glaze', name: 'Glaze' }, '2026-10-05'),
+    op('createProject', { projectId: 'a1', name: 'Electric kiln' }, '2026-10-05'),
+    op('createProject', { projectId: 'a2', name: 'New glaze' }, '2026-10-05'),
+    op('createProject', { projectId: 'a3', name: 'Misc' }, '2026-10-05'),
     op('setProjectField', { projectId: 'a1', field: 'tagId', value: 'kiln' }, '2026-10-05'),
     op('setProjectField', { projectId: 'a2', field: 'tagId', value: 'glaze' }, '2026-10-05'),
   ]);
-  assert.equal(applyOp(s, op('setProjectField', { projectId: 'h1', field: 'tagId', value: 'kiln' }, '2026-10-05')), false, 'tag from another group refused');
-  assert.equal(applyOp(s, op('addTag', { groupId: acton.id, tagId: 'x', name: 'kiln' }, '2026-10-05')), false, 'no duplicate names');
-  assert.equal(applyOp(s, op('startTimer', { projectId: 'h1' }, '2026-10-05')), false, 'Personal has no timer');
+  assert.equal(applyOp(s, op('setProjectField', { projectId: 'a3', field: 'tagId', value: 'nope' }, '2026-10-05')), false, 'only a tag that exists');
+  assert.equal(applyOp(s, op('addTag', { tagId: 'x', name: 'kiln' }, '2026-10-05')), false, 'no duplicate names');
   applyOps(s, [
     op('addTime', { projectId: 'a1', minutes: 120 }, '2026-10-06'),
     op('addTime', { projectId: 'a2', minutes: 60 }, '2026-10-06'),
     op('addTime', { projectId: 'a3', minutes: 60 }, '2026-10-07'),
     op('addTime', { projectId: 'a1', minutes: 60 }, '2026-09-20'), // outside the range
   ]);
-  const byTag = timeSplit(s.data, acton.id, '2026-10-01', '2026-10-31');
+  const byTag = timeSplit(s.data, '2026-10-01', '2026-10-31');
   assert.deepEqual(byTag.map((r) => [r.name, r.minutes]), [['Kiln', 120], ['Glaze', 60], ['No tag', 60]]);
   assert.deepEqual(percents(byTag), [50, 25, 25]);
   assert.equal(percents([{ minutes: 1 }, { minutes: 1 }, { minutes: 1 }]).reduce((a, b) => a + b, 0), 100, 'always adds up to 100');
-  assert.equal(timeSplit(s.data, acton.id, '2026-10-01', '2026-10-31', 'project')[0].name, 'Electric kiln');
-  // moving a project to another group clears its tag; deleting a tag leaves projects untagged
-  applyOp(s, op('setProjectField', { projectId: 'a2', field: 'groupId', value: personal.id }, '2026-10-08'));
-  assert.equal(s.data.projects.find((p) => p.id === 'a2').tagId, null);
-  applyOp(s, op('deleteTag', { groupId: acton.id, tagId: 'kiln' }, '2026-10-08'));
+  assert.equal(timeSplit(s.data, '2026-10-01', '2026-10-31', 'project')[0].name, 'Electric kiln');
+  // renaming and deleting a tag; deleting leaves projects untagged
+  assert.equal(applyOp(s, op('renameTag', { tagId: 'glaze', name: 'Kiln' }, '2026-10-08')), false, 'not to a name already used');
+  assert.equal(applyOp(s, op('renameTag', { tagId: 'glaze', name: 'Glazes' }, '2026-10-08')), true);
+  applyOp(s, op('deleteTag', { tagId: 'kiln' }, '2026-10-08'));
   assert.equal(s.data.projects.find((p) => p.id === 'a1').tagId, null);
-  applyOp(s, op('setGroupTimer', { groupId: personal.id, on: true }, '2026-10-08'));
-  assert.equal(applyOp(s, op('startTimer', { projectId: 'h1' }, '2026-10-08')), true, 'switched on in Settings');
+  // the timer: off in Settings → cannot start; on again → it can
+  assert.equal(applyOp(s, op('setTimer', { on: false }, '2026-10-08')), true);
+  assert.equal(applyOp(s, op('startTimer', { projectId: 'a3' }, '2026-10-08')), false, 'switched off');
+  assert.equal(applyOp(s, op('setTimer', { on: true }, '2026-10-08')), true);
+  assert.equal(applyOp(s, op('startTimer', { projectId: 'a3' }, '2026-10-08')), true, 'switched on in Settings');
 });
+
 
 test('snooze: hidden for N days (grey, not counted), back by itself, wake early', async () => {
   const { isSnoozed, colourCounts, dayScore } = await import('../docs/rules.js');
@@ -504,7 +506,7 @@ test('inbox: capture, turn into a step or a new project, delete', () => {
   assert.equal(applyOp(s, op('addInbox', { itemId: 'i4', text: '   ' }, '2026-10-02')), false);
   assert.ok(applyOp(s, op('inboxToStep', { itemId: 'i1', projectId: 'p1', stepId: 'sx' }, '2026-10-03')));
   assert.ok(s.data.projects[0].steps.some((x) => x.id === 'sx' && x.text === 'Ask Sandeep about kiln quote'));
-  assert.ok(applyOp(s, op('inboxToProject', { itemId: 'i2', projectId: 'pn', groupId: 'g1' }, '2026-10-03')));
+  assert.ok(applyOp(s, op('inboxToProject', { itemId: 'i2', projectId: 'pn' }, '2026-10-03')));
   assert.equal(s.data.projects.find((x) => x.id === 'pn').name, 'Video on pinholes');
   assert.equal(applyOp(s, op('inboxToStep', { itemId: 'i3', projectId: 'nope', stepId: 'sy' }, '2026-10-03')), false, 'item kept if the project is gone');
   assert.ok(applyOp(s, op('removeInbox', { itemId: 'i3' }, '2026-10-03')));
@@ -513,7 +515,7 @@ test('inbox: capture, turn into a step or a new project, delete', () => {
 
 test('review fixes: timer + pause keeps both history lines; undo removes both', async () => {
   const s = withProject('2026-10-01');
-  s.data.groups.find((g) => g.id === 'g2').timer = true;
+  s.data.settings.timer = true;
   applyOp(s, op('startTimer', { projectId: 'p1' }, '2026-10-05', '10:00:00'));
   const pause = op('pause', { projectId: 'p1' }, '2026-10-05', '11:00:00');
   applyOp(s, pause);
@@ -564,7 +566,7 @@ test('review fixes: long inbox text keeps everything; inbox undo puts the item b
   const long = 'Idea '.repeat(60).trim();
   applyOp(s, op('addInbox', { itemId: 'i1', text: long }, '2026-10-02'));
   applyOp(s, op('addInbox', { itemId: 'i2', text: 'Ask Ravi' }, '2026-10-02'));
-  applyOp(s, op('inboxToProject', { itemId: 'i1', projectId: 'pn', groupId: 'g1' }, '2026-10-03'));
+  applyOp(s, op('inboxToProject', { itemId: 'i1', projectId: 'pn' }, '2026-10-03'));
   const pn = s.data.projects.find((x) => x.id === 'pn');
   assert.ok(pn.name.length <= 120);
   assert.equal(pn.notes, long);
@@ -622,7 +624,7 @@ test('Chrome button: a step, Inbox item and new project keep the mail link; bad 
   applyOp(s, op('inboxToStep', { itemId: 'i1', projectId: 'p1', stepId: 's11' }, '2026-10-02'));
   assert.deepEqual(s.data.projects[0].steps.find((x) => x.id === 's11').link, mail);
   applyOp(s, op('addInbox', { itemId: 'i2', text: 'New kiln quote', link: mail }, '2026-10-02'));
-  applyOp(s, op('inboxToProject', { itemId: 'i2', projectId: 'p2', groupId: 'g2' }, '2026-10-02'));
+  applyOp(s, op('inboxToProject', { itemId: 'i2', projectId: 'p2' }, '2026-10-02'));
   assert.equal(s.data.projects.find((p) => p.id === 'p2').links[0].url, mail.url);
 });
 
@@ -1010,7 +1012,7 @@ test('inbox from email: made into a step or a project, the thread (mail) and the
   assert.deepEqual(step.mail, { conversationId: 'conv-AAA' });
   assert.equal(step.note, 'first lines');
   assert.equal(step.link.url, OUTLOOK);
-  assert.ok(applyOp(s, op('inboxToProject', { itemId: 'm2', projectId: 'pm', groupId: 'g1' }, '2026-10-22')));
+  assert.ok(applyOp(s, op('inboxToProject', { itemId: 'm2', projectId: 'pm' }, '2026-10-22')));
   const made = s.data.projects.find((p) => p.id === 'pm');
   assert.deepEqual(made.mail, { conversationId: 'conv-BBB' });
   assert.match(made.notes, /glaze lines/);
@@ -1050,7 +1052,7 @@ test('inbox from email: the Inbox shows the note and "Open in Outlook"; a reply 
 function pendingState() {
   const s = fresh();
   applyOp(s, op('addPerson', { personId: 'r', name: 'Ravi Kumar' }, '2026-10-01'));
-  applyOp(s, op('createProject', { projectId: 'p1', name: 'Kiln trial', groupId: 'g2' }, '2026-10-01'));
+  applyOp(s, op('createProject', { projectId: 'p1', name: 'Kiln trial' }, '2026-10-01'));
   applyOp(s, op('setProjectField', { projectId: 'p1', field: 'deadline', value: '2026-11-30' }, '2026-10-01'));
   applyOp(s, op('addStep', { projectId: 'p1', stepId: 'd1', text: 'Check <b>glaze</b> & "fit" with @Ravi Kumar' }, '2026-10-01'));
   applyOp(s, op('setStepField', { projectId: 'p1', stepId: 'd1', field: 'dueDate', value: '2026-10-20' }, '2026-10-01'));
@@ -1059,7 +1061,7 @@ function pendingState() {
   applyOp(s, op('setStepField', { projectId: 'p1', stepId: 'w1', field: 'waitingOn', value: 'Ravi Kumar' }, '2026-10-19'));
   applyOp(s, op('addWorkNote', { projectId: 'p1', noteId: 'n1', stepId: 'd1', text: 'Glaze looked thin on the rim, asked for a new batch ' + 'x'.repeat(100) }, '2026-10-21'));
   // a project given to him on Work Task ("Give project to…")
-  applyOp(s, op('createProject', { projectId: 'p2', name: 'Basin mould', groupId: 'g2' }, '2026-10-01'));
+  applyOp(s, op('createProject', { projectId: 'p2', name: 'Basin mould' }, '2026-10-01'));
   applyOp(s, op('setProjectField', { projectId: 'p2', field: 'deadline', value: '2026-10-15' }, '2026-10-01'));
   applyOp(s, op('addStep', { projectId: 'p2', stepId: 'g1', text: 'Cast 3 trial moulds' }, '2026-10-01'));
   applyOp(s, op('setProjectTeam', { projectId: 'p2', userId: 7, name: 'Ravi' }, '2026-10-02'));
@@ -1075,9 +1077,9 @@ test('givenProjectsOf: projects given on Work Task match the person by name, fir
   assert.deepEqual(givenProjectsOf(s.data, ravi).map((p) => p.id), ['p2'], 'full name, any case, extra spaces');
   applyOp(s, op('pause', { projectId: 'p2' }, '2026-10-04'));
   assert.equal(givenProjectsOf(s.data, ravi).length, 1, 'paused still shows');
-  applyOp(s, op('createProject', { projectId: 'p3', name: 'Other', groupId: 'g2' }, '2026-10-01'));
+  applyOp(s, op('createProject', { projectId: 'p3', name: 'Other' }, '2026-10-01'));
   applyOp(s, op('setProjectTeam', { projectId: 'p3', userId: 8, name: 'Valar' }, '2026-10-02'));
-  applyOp(s, op('createProject', { projectId: 'p4', name: 'Old', groupId: 'g2' }, '2026-10-01'));
+  applyOp(s, op('createProject', { projectId: 'p4', name: 'Old' }, '2026-10-01'));
   applyOp(s, op('setProjectTeam', { projectId: 'p4', userId: 7, name: 'Ravi' }, '2026-10-02'));
   applyOp(s, op('finish', { projectId: 'p4' }, '2026-10-05'));
   assert.deepEqual(givenProjectsOf(s.data, ravi).map((p) => p.id), ['p2'], 'another person and a finished project are left out');
@@ -1231,7 +1233,7 @@ test('replies: a Claude draft keeps the email it was written for (forMessageId);
 test('replies: an Inbox item\'s draft goes with it to a step or project', () => {
   const s = withMails();
   applyOp(s, op('setReply', { itemId: 'i2', text: 'Thanks Anil', by: 'claude' }, '2026-10-22'));
-  applyOp(s, op('inboxToProject', { itemId: 'i2', projectId: 'p9', groupId: 'g2' }, '2026-10-22'));
+  applyOp(s, op('inboxToProject', { itemId: 'i2', projectId: 'p9' }, '2026-10-22'));
   assert.equal(s.data.projects.find((p) => p.id === 'p9').reply.text, 'Thanks Anil');
 });
 
@@ -1278,7 +1280,7 @@ test('repliesOf: ready / waiting lists, days and colours, later until its day, s
   // project with its own email, and one from yourself, and a finished project
   applyOp(s, op('addInbox', { itemId: 'i4', text: 'Me', mail: rmail('i4', T('2026-10-18'), { fromMe: true }) }, '2026-10-18'));
   applyOp(s, op('addInbox', { itemId: 'i5', text: 'Old', mail: rmail('i5', T('2026-10-10')) }, '2026-10-10'));
-  applyOp(s, op('inboxToProject', { itemId: 'i5', projectId: 'pf', groupId: 'g2' }, '2026-10-10'));
+  applyOp(s, op('inboxToProject', { itemId: 'i5', projectId: 'pf' }, '2026-10-10'));
   applyOp(s, op('finish', { projectId: 'pf' }, '2026-10-11'));
   let r = repliesOf(s.data, '2026-10-22');
   assert.deepEqual(r.waiting.map((m) => [m.id, m.days, m.colour]), [['i1', 2, 'orange'], ['s3', 1, 'orange'], ['i2', 0, 'grey']], 'longest first; your own email and finished projects left out');
@@ -1360,7 +1362,7 @@ test('no-paste email rule (docs/rules.js): draft only when Outlook is connected 
 test('make it a project (stepToProject): a new active project from the step (name, group, tag, priority, about, target date, email + reply); the old step done with movedTo; counts as work; one Undo puts both back', async () => {
   const { dayScore, singleStepClose } = await import('../docs/rules.js');
   const s = withProject('2026-10-01');
-  applyOp(s, op('addTag', { groupId: 'g2', tagId: 't1', name: 'Plant' }, '2026-10-01'));
+  applyOp(s, op('addTag', { tagId: 't1', name: 'Plant' }, '2026-10-01'));
   applyOp(s, op('setProjectField', { projectId: 'p1', field: 'tagId', value: 't1' }, '2026-10-01'));
   applyOp(s, op('setProjectField', { projectId: 'p1', field: 'priority', value: 'high' }, '2026-10-01'));
   applyOp(s, op('setStepField', { projectId: 'p1', stepId: 's1', field: 'note', value: '  Ask  for\n3 quotes  ' }, '2026-10-01'));
@@ -1374,7 +1376,7 @@ test('make it a project (stepToProject): a new active project from the step (nam
   assert.ok(applyOp(s, t));
   const made = s.data.projects.find((p) => p.id === 'pn');
   const old = s.data.projects.find((p) => p.id === 'p1');
-  assert.deepEqual([made.name, made.state, made.groupId, made.tagId, made.priority, made.about, made.deadline], ['Order clay for line 2', 'active', 'g2', 't1', 'high', 'Ask for 3 quotes', '2026-10-20']);
+  assert.deepEqual([made.name, made.state, made.tagId, made.priority, made.about, made.deadline], ['Order clay for line 2', 'active', 't1', 'high', 'Ask for 3 quotes', '2026-10-20']);
   assert.deepEqual(made.mail, { conversationId: 'C-1', messageId: 'M-1' }, 'the email thread moves');
   assert.deepEqual(made.reply, { text: 'Dear Ravi', state: 'ready' }, 'the reply draft moves');
   const s1 = old.steps.find((x) => x.id === 's1');
@@ -1596,10 +1598,10 @@ test('pending list: steps of a project given to the person are not listed again 
 
 function withMains(date = '2026-10-01') {
   const s = fresh();
-  applyOp(s, op('createProject', { projectId: 'k1', name: 'Kiln 1', groupId: 'g1' }, date));
-  applyOp(s, op('createProject', { projectId: 'k2', name: 'Kiln 2', groupId: 'g2' }, date));
-  applyOp(s, op('createProject', { projectId: 'm', name: 'Kilns', groupId: 'g1' }, date));
-  applyOp(s, op('createProject', { projectId: 'x', name: 'Other', groupId: 'g1' }, date));
+  applyOp(s, op('createProject', { projectId: 'k1', name: 'Kiln 1' }, date));
+  applyOp(s, op('createProject', { projectId: 'k2', name: 'Kiln 2' }, date));
+  applyOp(s, op('createProject', { projectId: 'm', name: 'Kilns' }, date));
+  applyOp(s, op('createProject', { projectId: 'x', name: 'Other' }, date));
   return s;
 }
 const allEvents = (s) => Object.values(s.history).flat();
@@ -1647,7 +1649,7 @@ test('📂 setParent / addToProject checks — exists, not itself, a project is 
 
 test('📂 addToProject / removeFromProject: a task in two projects (history on both, not work); out of one keeps the other; Undo via restoreProject', () => {
   const s = withMains();
-  applyOp(s, op('createMainProject', { projectId: 'sa', name: 'Supplier approval', groupId: 'g1' }, '2026-10-02'));
+  applyOp(s, op('createMainProject', { projectId: 'sa', name: 'Supplier approval' }, '2026-10-02'));
   const before = clone(P(s, 'k1'));
   const a1 = op('addToProject', { projectId: 'k1', parentId: 'm' }, '2026-10-02', '10:01:00');
   assert.equal(applyOp(s, a1), true);
@@ -1705,20 +1707,20 @@ test('📂 parentIds: older data with parentId reads as parentIds (when data loa
   // the app's store and Claude's tracker read old data the same way
   const { readFileSync } = await import('node:fs');
   assert.match(readFileSync(new URL('../docs/store.js', import.meta.url), 'utf8'), /normalizeParents\(dataSha \?/);
-  assert.match(readFileSync(new URL('../docs/store.js', import.meta.url), 'utf8'), /data: normalizeParents\(snap\.data\)/);
+  assert.match(readFileSync(new URL('../docs/store.js', import.meta.url), 'utf8'), /data: dropGroups\(normalizeParents\(snap\.data\)\)/);
   assert.match(readFileSync(new URL('../tools/tracker.mjs', import.meta.url), 'utf8'), /normalizeParents\(existsSync\(dataFile\)/);
 });
 
-test('📂 createMainProject makes an active isMain project in the task\'s group, with the task in it (and still in its other projects); Undo (restoreProject) takes back both', () => {
+test('📂 createMainProject makes an active isMain project, with the task in it (and still in its other projects); Undo (restoreProject) takes back both', () => {
   const s = withMains();
   applyOp(s, op('addToProject', { projectId: 'k2', parentId: 'm' }, '2026-10-02'));
   const before = clone(P(s, 'k2'));
-  const o = op('createMainProject', { projectId: 'nm', name: 'Furnaces', groupId: 'g1', childId: 'k2' }, '2026-10-02', '10:01:00');
+  const o = op('createMainProject', { projectId: 'nm', name: 'Furnaces', childId: 'k2' }, '2026-10-02', '10:01:00');
   assert.equal(applyOp(s, o), true);
   const main = P(s, 'nm');
   assert.equal(main.state, 'active');
   assert.equal(main.isMain, true);
-  assert.equal(main.groupId, 'g2', 'same group as the task');
+  assert.ok(!('groupId' in main), 'no group (groups are gone, owner 23 Oct)');
   assert.deepEqual(P(s, 'k2').parentIds, ['m', 'nm'], 'added; still in Kilns');
   assert.ok(allEvents(s).some((e) => e.projectId === 'k2' && e.detail === 'Added to 📂 Furnaces'));
   assert.ok(allEvents(s).some((e) => e.projectId === 'nm' && e.detail === 'Kiln 2 added'));
@@ -1726,16 +1728,15 @@ test('📂 createMainProject makes an active isMain project in the task\'s group
   assert.ok(!P(s, 'nm'), 'the new project is gone');
   assert.deepEqual(P(s, 'k2').parentIds, ['m'], 'the task as it was');
   assert.ok(!allEvents(s).some((e) => e.projectId === 'nm'), 'its history lines gone');
-  assert.equal(applyOp(s, op('createMainProject', { projectId: 'em', name: 'Empty', groupId: 'g3' }, '2026-10-02')), true);
+  assert.equal(applyOp(s, op('createMainProject', { projectId: 'em', name: 'Empty' }, '2026-10-02')), true);
   assert.equal(P(s, 'em').isMain, true);
-  assert.equal(P(s, 'em').groupId, 'g3');
-  assert.equal(applyOp(s, op('createMainProject', { projectId: 'zz', name: 'Z', groupId: 'g1', childId: 'em' }, '2026-10-02')), false, 'a project cannot go into a new one');
+  assert.equal(applyOp(s, op('createMainProject', { projectId: 'zz', name: 'Z', childId: 'em' }, '2026-10-02')), false, 'a project cannot go into a new one');
   assert.ok(!P(s, 'zz'));
 });
 
 test('📂 deleting a project keeps its tasks (it leaves their parentIds, the other projects stay); Undo puts them back; finishing a project keeps open tasks', () => {
   const s = withMains();
-  applyOp(s, op('createMainProject', { projectId: 'sa', name: 'Supplier approval', groupId: 'g1' }, '2026-10-02'));
+  applyOp(s, op('createMainProject', { projectId: 'sa', name: 'Supplier approval' }, '2026-10-02'));
   applyOp(s, op('addToProject', { projectId: 'k1', parentId: 'm' }, '2026-10-02'));
   applyOp(s, op('addToProject', { projectId: 'k1', parentId: 'sa' }, '2026-10-02', '10:00:30'));
   applyOp(s, op('addToProject', { projectId: 'k2', parentId: 'm' }, '2026-10-02', '10:01:00'));
@@ -1759,11 +1760,11 @@ test('📂 deleting a project keeps its tasks (it leaves their parentIds, the ot
 
 test('📂 "+ New task here" — createProject with parentId makes it already in the project (never in a task)', () => {
   const s = withMains();
-  applyOp(s, op('createProject', { projectId: 'n1', name: 'Kiln 3', groupId: 'g1', parentId: 'm' }, '2026-10-02'));
+  applyOp(s, op('createProject', { projectId: 'n1', name: 'Kiln 3', parentId: 'm' }, '2026-10-02'));
   assert.deepEqual(P(s, 'n1').parentIds, ['m']);
   assert.equal(P(s, 'm').isMain, true);
   assert.ok(allEvents(s).some((e) => e.projectId === 'm' && e.detail === 'Kiln 3 added'));
-  applyOp(s, op('createProject', { projectId: 'n2', name: 'Deep', groupId: 'g1', parentId: 'n1' }, '2026-10-02'));
+  applyOp(s, op('createProject', { projectId: 'n2', name: 'Deep', parentId: 'n1' }, '2026-10-02'));
   assert.ok(P(s, 'n2'), 'still made');
   assert.equal(P(s, 'n2').parentIds, undefined, 'but not inside a task that is in a project');
 });
@@ -1798,7 +1799,7 @@ test('📂 rules: childrenOf, parentsOf, isMainProject, mainColour (worst; resti
 test('📂 a red task in two projects makes both red; colour counts and Today count it once and never count a project with no own step', async () => {
   const { mainColour, childrenOf, colourCounts, todayWithoutEmptyMains, awakeProjects } = await import('../docs/rules.js');
   const s = withMains('2026-10-01');
-  applyOp(s, op('createMainProject', { projectId: 'sa', name: 'Supplier approval', groupId: 'g1' }, '2026-10-01'));
+  applyOp(s, op('createMainProject', { projectId: 'sa', name: 'Supplier approval' }, '2026-10-01'));
   applyOp(s, op('addToProject', { projectId: 'k1', parentId: 'm' }, '2026-10-01'));
   applyOp(s, op('addToProject', { projectId: 'k1', parentId: 'sa' }, '2026-10-01', '10:01:00'));
   applyOp(s, op('addToProject', { projectId: 'k2', parentId: 'sa' }, '2026-10-01', '10:02:00'));
@@ -1830,7 +1831,7 @@ test('📂 the "Add to a project" box choices (projects only, ✓ on the ones it
   const { mainChoices, addHereChoices } = await import('../docs/rules.js');
   const s = withMains();
   applyOp(s, op('addToProject', { projectId: 'k1', parentId: 'm' }, '2026-10-02'));
-  applyOp(s, op('createMainProject', { projectId: 'sa', name: 'Supplier approval', groupId: 'g1' }, '2026-10-02'));
+  applyOp(s, op('createMainProject', { projectId: 'sa', name: 'Supplier approval' }, '2026-10-02'));
   const c = mainChoices(s.data, P(s, 'k2'), '');
   assert.deepEqual(c.items.map((x) => `${x.p.id}:${x.in}`).sort(), ['m:false', 'sa:false'], 'only projects: never a task');
   assert.equal(c.create, null, 'nothing typed: no create line');
@@ -1849,7 +1850,7 @@ test('📂 Today leaves out a project with no own step (its tasks show instead),
   const s = withMains();
   applyOp(s, op('addToProject', { projectId: 'k1', parentId: 'm' }, '2026-10-02'));
   applyOp(s, op('addToProject', { projectId: 'k2', parentId: 'm' }, '2026-10-02', '10:01:00'));
-  applyOp(s, op('createMainProject', { projectId: 'em', name: 'Empty', groupId: 'g1' }, '2026-10-02'));
+  applyOp(s, op('createMainProject', { projectId: 'em', name: 'Empty' }, '2026-10-02'));
   const list = ['k2', 'x', 'm', 'k1', 'em'].map((id) => P(s, id));
   assert.deepEqual(todayWithoutEmptyMains(list, '2026-10-02').map((p) => p.id), ['k2', 'x', 'k1'], 'projects with no own step: their tasks show instead');
   applyOp(s, op('addStep', { projectId: 'm', stepId: 'ms', text: 'Budget' }, '2026-10-02'));
@@ -1860,9 +1861,9 @@ test('main projects: a main with no step of its own (left off Today) is not coun
   const { colourCounts, todayIndia } = await import('../docs/rules.js');
   const s = { data: emptyData(), history: {} };
   const day = todayIndia();
-  applyOp(s, op('createProject', { projectId: 'k1', name: 'Kiln 1', groupId: s.data.groups[0].id }, day));
+  applyOp(s, op('createProject', { projectId: 'k1', name: 'Kiln 1' }, day));
   applyOp(s, op('addStep', { projectId: 'k1', stepId: 'a', text: 'Check' }, day));
-  applyOp(s, op('createMainProject', { projectId: 'm', name: 'Kilns', groupId: s.data.groups[0].id, childId: 'k1' }, day));
+  applyOp(s, op('createMainProject', { projectId: 'm', name: 'Kilns', childId: 'k1' }, day));
   const c = colourCounts(s.data, day);
   assert.equal(c.red + c.yellow + c.green, 1, 'only Kiln 1 is counted; the empty main "Kilns" is not');
 });
@@ -1871,9 +1872,9 @@ test('main projects: a main with no step of its own takes its colour only from i
   const { mainColour, childrenOf, dotColour, todayIndia } = await import('../docs/rules.js');
   const s = { data: emptyData(), history: {} };
   const day = todayIndia();
-  applyOp(s, op('createProject', { projectId: 'k1', name: 'MOR test', groupId: s.data.groups[0].id }, day));
+  applyOp(s, op('createProject', { projectId: 'k1', name: 'MOR test' }, day));
   applyOp(s, op('addStep', { projectId: 'k1', stepId: 'a', text: 'Prepare the mould' }, day));
-  applyOp(s, op('createMainProject', { projectId: 'm', name: 'Material testing', groupId: s.data.groups[0].id, childId: 'k1' }, day));
+  applyOp(s, op('createMainProject', { projectId: 'm', name: 'Material testing', childId: 'k1' }, day));
   const m = s.data.projects.find((p) => p.id === 'm');
   const kids = childrenOf(s.data, 'm');
   assert.equal(mainColour(m, kids, day), dotColour(kids[0], day), 'same colour as its only project');
@@ -1884,7 +1885,7 @@ test('main projects: a main with no step of its own takes its colour only from i
 test('✉ Replies from tasks made from an email: waiting while the newest email in the thread is theirs (preview, link, count from the thread); not when the newest is yours', async () => {
   const { repliesOf, mailThreads, mailThreadOf } = await import('../docs/rules.js');
   const s = fresh();
-  applyOp(s, op('createProject', { projectId: 't1', name: '📧 Price list', groupId: 'g1' }, '2026-10-20'));
+  applyOp(s, op('createProject', { projectId: 't1', name: '📧 Price list' }, '2026-10-20'));
   const t = s.data.projects.find((p) => p.id === 't1');
   t.mail = { conversationId: 'C1', messageId: 'M2', fromName: 'Ravi', fromAddress: 'ravi@x.test', subject: 'Price list', at: '2026-10-20T05:00:00.000Z' };
   t.thread = [
@@ -1922,10 +1923,9 @@ test('📋 Copy list: just the task names, numbered (owner asked: no other detai
 test('📂 delete question: a project says its tasks are kept (they only leave it); a task asks plainly', async () => {
   const { deleteQuestion } = await import('../docs/rules.js');
   const s = { data: emptyData(), history: {} };
-  const g = s.data.groups[0].id;
-  applyOp(s, op('createProject', { projectId: 'k1', name: 'Kiln 1', groupId: g }, '2026-10-22'));
-  applyOp(s, op('createProject', { projectId: 'k2', name: 'Kiln 2', groupId: g }, '2026-10-22'));
-  applyOp(s, op('createMainProject', { projectId: 'm', name: 'Kilns', groupId: g, childId: 'k1' }, '2026-10-22'));
+  applyOp(s, op('createProject', { projectId: 'k1', name: 'Kiln 1' }, '2026-10-22'));
+  applyOp(s, op('createProject', { projectId: 'k2', name: 'Kiln 2' }, '2026-10-22'));
+  applyOp(s, op('createMainProject', { projectId: 'm', name: 'Kilns', childId: 'k1' }, '2026-10-22'));
   applyOp(s, op('addToProject', { projectId: 'k2', parentId: 'm' }, '2026-10-22'));
   const main = s.data.projects.find((p) => p.id === 'm');
   assert.match(deleteQuestion(s.data, main), /Delete the project "Kilns"\?\n\nIts 2 tasks are kept — they just leave this project\./);
@@ -1937,10 +1937,9 @@ test('📂 delete question: a project says its tasks are kept (they only leave i
 test('📂 "Add tasks" list: tasks in no project come first, then tasks already in another project', async () => {
   const { addHereChoices } = await import('../docs/rules.js');
   const s = { data: emptyData(), history: {} };
-  const g = s.data.groups[0].id;
-  for (const [id, name] of [['a', 'Alpha in Kilns'], ['b', 'Beta loose'], ['c', 'Gamma loose']]) applyOp(s, op('createProject', { projectId: id, name, groupId: g }, '2026-10-22'));
-  applyOp(s, op('createMainProject', { projectId: 'k', name: 'Kilns', groupId: g, childId: 'a' }, '2026-10-22'));
-  applyOp(s, op('createMainProject', { projectId: 'd', name: 'Diwali', groupId: g }, '2026-10-22'));
+  for (const [id, name] of [['a', 'Alpha in Kilns'], ['b', 'Beta loose'], ['c', 'Gamma loose']]) applyOp(s, op('createProject', { projectId: id, name }, '2026-10-22'));
+  applyOp(s, op('createMainProject', { projectId: 'k', name: 'Kilns', childId: 'a' }, '2026-10-22'));
+  applyOp(s, op('createMainProject', { projectId: 'd', name: 'Diwali' }, '2026-10-22'));
   const names = addHereChoices(s.data, s.data.projects.find((p) => p.id === 'd')).map((x) => x.name);
   assert.deepEqual(names.slice(0, 2).sort(), ['Beta loose', 'Gamma loose'], 'loose tasks first');
   assert.equal(names[2], 'Alpha in Kilns', 'the task already in Kilns comes after');
@@ -1949,9 +1948,8 @@ test('📂 "Add tasks" list: tasks in no project come first, then tasks already 
 test('📂 task order in a project: setTaskOrder keeps your order (new tasks after, red first), ↑ ↓ on the grip swap neighbours; not work', async () => {
   const { orderedTasks, movedOrder, dayScore } = await import('../docs/rules.js');
   const s = { data: emptyData(), history: {} };
-  const g = s.data.groups[0].id;
-  for (const [id, name] of [['a', 'A'], ['b', 'B'], ['c', 'C']]) applyOp(s, op('createProject', { projectId: id, name, groupId: g }, '2026-10-22'));
-  applyOp(s, op('createMainProject', { projectId: 'm', name: 'AI class', groupId: g, childId: 'a' }, '2026-10-22'));
+  for (const [id, name] of [['a', 'A'], ['b', 'B'], ['c', 'C']]) applyOp(s, op('createProject', { projectId: id, name }, '2026-10-22'));
+  applyOp(s, op('createMainProject', { projectId: 'm', name: 'AI class', childId: 'a' }, '2026-10-22'));
   applyOp(s, op('addToProject', { projectId: 'b', parentId: 'm' }, '2026-10-22'));
   applyOp(s, op('addToProject', { projectId: 'c', parentId: 'm' }, '2026-10-22'));
   const main = () => s.data.projects.find((p) => p.id === 'm');
@@ -1963,7 +1961,7 @@ test('📂 task order in a project: setTaskOrder keeps your order (new tasks aft
   assert.equal(JSON.stringify(dayScore(s.data, s.history, '2026-10-22')), before, 'arranging is not work');
   assert.deepEqual(movedOrder(orderedTasks(s.data, main(), '2026-10-22'), 'a', 1), ['c', 'b', 'a']);
   assert.equal(movedOrder(orderedTasks(s.data, main(), '2026-10-22'), 'c', -1), null, 'the first cannot go up');
-  applyOp(s, op('createProject', { projectId: 'd', name: 'D new', groupId: g }, '2026-10-22'));
+  applyOp(s, op('createProject', { projectId: 'd', name: 'D new' }, '2026-10-22'));
   applyOp(s, op('addToProject', { projectId: 'd', parentId: 'm' }, '2026-10-22'));
   assert.equal(orderedTasks(s.data, main(), '2026-10-22').at(-1).id, 'd', 'a new task goes after the arranged ones');
 });
@@ -2099,7 +2097,7 @@ test('🔌 a task an app sent (server-made, with an "app" note and an app_task h
   const { lastWorkDate, dayScore } = await import('../docs/rules.js');
   const at = T('2026-10-05');
   const task = {
-    id: 'ct1', groupId: 'g1', name: 'Check kiln 3', priority: 'medium', deadline: null, notes: '', about: 'Top zone runs hot.',
+    id: 'ct1', name: 'Check kiln 3', priority: 'medium', deadline: null, notes: '', about: 'Top zone runs hot.',
     links: [{ id: 'ct1-link', title: 'Open in Purchase', url: 'https://erp.example/t/1' }], state: 'active', lastTickDate: null,
     lastActivityDate: '2026-10-05', activeSince: '2026-10-05', stateChangedAt: at, createdAt: at, updatedAt: at, steps: [], files: [], fromApp: 'Purchase',
     workNotes: [{ id: 'an1', text: 'Line: 3\nShift: B', stepId: null, createdAt: at, updatedAt: at, app: true }],
@@ -2118,8 +2116,8 @@ test('day score skips an empty 📂 project the same way colourCounts does, so o
   const { colourCounts, dayScore, greenStreak } = await import('../docs/rules.js');
   const s = fresh();
   const d = '2026-10-02';
-  applyOp(s, op('createMainProject', { projectId: 'e', name: 'Empty holder', groupId: 'g1' }, '2026-10-01'));
-  applyOp(s, op('createProject', { projectId: 't', name: 'Task', groupId: 'g1', parentId: 'e' }, '2026-10-01'));
+  applyOp(s, op('createMainProject', { projectId: 'e', name: 'Empty holder' }, '2026-10-01'));
+  applyOp(s, op('createProject', { projectId: 't', name: 'Task', parentId: 'e' }, '2026-10-01'));
   applyOp(s, op('addStep', { projectId: 't', stepId: 'ts', text: 'Do it' }, '2026-10-01'));
   applyOp(s, op('addWorkNote', { projectId: 't', noteId: 'n1', text: 'Done some' }, d));
   assert.deepEqual(colourCounts(s.data, d), { green: 1, yellow: 0, red: 0 });
@@ -2198,7 +2196,7 @@ test('Undo (restoreProject) never puts a project inside a project (it became one
 
 /** A task made from an email, as outlook.php makes it (straight into the data, not a change). */
 function mailTask(s, id = 'mt', conv = 'conv-1') {
-  applyOp(s, op('createProject', { projectId: id, name: '📧 Invoice query', groupId: 'g1' }, '2026-10-01'));
+  applyOp(s, op('createProject', { projectId: id, name: '📧 Invoice query' }, '2026-10-01'));
   const p = P(s, id);
   p.mail = { conversationId: conv, messageId: 'e1', fromName: 'Ravi', subject: 'Invoice query', at: '2026-10-01T04:00:00.000Z' };
   p.thread = [{ at: '2026-10-01T04:00:00.000Z', fromName: 'Ravi', fromMe: false, preview: 'Please check', messageId: 'e1' }];
@@ -2243,7 +2241,7 @@ test('Undo of deleting a task made from an email: a new task the server made for
   const del = op('deleteProject', { projectId: 'mt' }, '2026-10-02', '10:00:00');
   applyOp(s, del);
   // the server: a new email in the thread, no task for it → ol_new_task makes a second task
-  applyOp(s, op('createProject', { projectId: 'dup', name: '📧 Invoice query', groupId: 'g1' }, '2026-10-02', '10:01:00'));
+  applyOp(s, op('createProject', { projectId: 'dup', name: '📧 Invoice query' }, '2026-10-02', '10:01:00'));
   const dup = P(s, 'dup');
   dup.mail = { ...before.mail, messageId: 'e2', at: '2026-10-02T04:31:00.000Z' };
   dup.thread = [{ at: '2026-10-02T04:31:00.000Z', fromName: 'Ravi', fromMe: false, preview: 'Any news?', messageId: 'e2' }];
@@ -2277,7 +2275,7 @@ test('Undo of "Create … as a new project": a task put into the new project mea
   const s = withMains();
   const before = clone(P(s, 'k1'));
   const index = s.data.projects.findIndex((p) => p.id === 'k1');
-  const o = op('createMainProject', { projectId: 'nm', name: 'Furnaces', groupId: 'g1', childId: 'k1' }, '2026-10-02', '10:01:00');
+  const o = op('createMainProject', { projectId: 'nm', name: 'Furnaces', childId: 'k1' }, '2026-10-02', '10:01:00');
   assert.ok(applyOp(s, o));
   assert.ok(applyOp(s, op('addToProject', { projectId: 'k2', parentId: 'nm' }, '2026-10-02', '10:01:30')), 'another task goes into it within the Undo time');
   assert.ok(applyOp(s, op('restoreProject', { project: before, index, undoOpId: o.id, removeProjectId: 'nm' }, '2026-10-02', '10:02:00')));
@@ -2436,7 +2434,7 @@ test('Inbox Undo takes back only the step it added (by id): another device\'s wo
 test('Inbox Undo of "make it a project": tasks another device put into that project lose the link to it (and its order)', () => {
   const s = withMains();
   applyOp(s, op('addInbox', { itemId: 'i1', text: 'New kiln' }, '2026-10-01'));
-  applyOp(s, op('inboxToProject', { itemId: 'i1', projectId: 'pn', groupId: 'g1' }, '2026-10-02'));
+  applyOp(s, op('inboxToProject', { itemId: 'i1', projectId: 'pn' }, '2026-10-02'));
   applyOp(s, op('addToProject', { projectId: 'k1', parentId: 'pn' }, '2026-10-02')); // another device
   applyOp(s, op('setTaskOrder', { projectId: 'm', order: ['pn'] }, '2026-10-02'));
   assert.deepEqual(P(s, 'k1').parentIds, ['pn']);
@@ -2527,7 +2525,7 @@ test('make it a project, then un-ticked, then ticked the normal way: no longer m
 test('review r15: Undo of Pause / Finish while the timer ran starts the timer again — the timed minutes are never lost', () => {
   for (const kind of ['pause', 'finish']) {
     const s = withProject('2026-10-01');
-    s.data.groups.find((g) => g.id === 'g2').timer = true;
+    s.data.settings.timer = true;
     const start = op('startTimer', { projectId: 'p1' }, '2026-10-05', '10:00:00');
     applyOp(s, start);
     const timerBefore = clone(s.data.timer);
@@ -2544,8 +2542,8 @@ test('review r15: Undo of Pause / Finish while the timer ran starts the timer ag
 
 test('review r15: Undo of Pause when another timer runs by now keeps the paused one\'s minutes logged', () => {
   const s = withProject('2026-10-01');
-  s.data.groups.find((g) => g.id === 'g2').timer = true;
-  applyOp(s, op('createProject', { projectId: 'p2', name: 'Other', groupId: 'g2' }, '2026-10-01'));
+  s.data.settings.timer = true;
+  applyOp(s, op('createProject', { projectId: 'p2', name: 'Other' }, '2026-10-01'));
   applyOp(s, op('startTimer', { projectId: 'p1' }, '2026-10-05', '10:00:00'));
   const timerBefore = clone(s.data.timer);
   const before = clone(s.data.projects.find((x) => x.id === 'p1'));
@@ -2563,8 +2561,8 @@ test('review r15: Undo of Pause when another timer runs by now keeps the paused 
 
 test('review r15: a late Stop or Start from another device never stops a timer started since', () => {
   const s = withProject('2026-10-01');
-  s.data.groups.find((g) => g.id === 'g2').timer = true;
-  applyOp(s, op('createProject', { projectId: 'p2', name: 'Other', groupId: 'g2' }, '2026-10-01'));
+  s.data.settings.timer = true;
+  applyOp(s, op('createProject', { projectId: 'p2', name: 'Other' }, '2026-10-01'));
   const a = op('startTimer', { projectId: 'p1', running: null }, '2026-10-05', '09:30:00');
   applyOp(s, a);
   applyOp(s, op('stopTimer', { timerId: a.id }, '2026-10-05', '10:30:00')); // the PC stops A
@@ -2618,7 +2616,7 @@ test('+ Add time answer: hours, minutes, "1h 30m" and "1:30" are read whole; any
 test('inbox Undo (as the app builds it: the whole item, cloned): an email item comes back whole — thread, note and reply draft — after → task, + New task and 🗑', async () => {
   for (const [type, args] of [
     ['inboxToStep', { itemId: 'i1', projectId: 'p1', stepId: 'sx' }],
-    ['inboxToProject', { itemId: 'i1', projectId: 'pn', groupId: 'g1' }],
+    ['inboxToProject', { itemId: 'i1', projectId: 'pn' }],
     ['removeInbox', { itemId: 'i1' }],
   ]) {
     const s = withMails();
@@ -2640,9 +2638,9 @@ test('inbox Undo (as the app builds it: the whole item, cloned): an email item c
 test('todayList: what Today counts — an empty 📂 project (no own step) is left out, so 4 green tasks are "4 of 4"; stepTargets: tasks only, never a 📂 project', async () => {
   const { todayList, stepTargets, dotColour: dot } = await import('../docs/rules.js');
   const s = fresh();
-  applyOp(s, op('createMainProject', { projectId: 'm', name: 'Kilns', groupId: 'g1' }, '2026-10-01'));
+  applyOp(s, op('createMainProject', { projectId: 'm', name: 'Kilns' }, '2026-10-01'));
   for (const id of ['t1', 't2', 't3', 't4']) {
-    applyOp(s, op('createProject', { projectId: id, name: 'Task ' + id, groupId: 'g1' }, '2026-10-01'));
+    applyOp(s, op('createProject', { projectId: id, name: 'Task ' + id }, '2026-10-01'));
     applyOp(s, op('addToProject', { projectId: id, parentId: 'm' }, '2026-10-01'));
     applyOp(s, op('addStep', { projectId: id, stepId: id + 's', text: 'Do ' + id }, '2026-10-01'));
     applyOp(s, op('addWorkNote', { projectId: id, noteId: id + 'n', text: 'Done today', stepId: id + 's' }, '2026-10-22'));
@@ -2669,31 +2667,32 @@ test('one app: who signed in — the owner, a team member (staff view) or anothe
   assert.equal(signInTag(''), '');
 });
 
-test('groups are off for now (owner, 23 Oct): mergeGroups puts every task in the first group once — each keeps the name of its old group, tags of the same name become one, the timer stays on if it was on anywhere; nothing else changes', () => {
-  const s = fresh();
-  const [a, p, c] = s.data.groups.map((g) => g.id); // Acton, Personal, Ceramic Ninja
-  applyOp(s, op('addTag', { groupId: a, tagId: 'ta', name: 'Kiln' }, '2026-10-01'));
-  applyOp(s, op('addTag', { groupId: c, tagId: 'tc', name: 'kiln' }, '2026-10-01'));
-  applyOp(s, op('addTag', { groupId: c, tagId: 'tg', name: 'Glaze' }, '2026-10-01'));
-  applyOp(s, op('createProject', { projectId: 'x1', name: 'Fire tiles', groupId: c }, '2026-10-01'));
-  applyOp(s, op('setProjectField', { projectId: 'x1', field: 'tagId', value: 'tc' }, '2026-10-01'));
-  applyOp(s, op('createProject', { projectId: 'x2', name: 'Gym', groupId: p }, '2026-10-01'));
-  applyOp(s, op('createProject', { projectId: 'x3', name: 'Glaze test', groupId: c }, '2026-10-01'));
-  applyOp(s, op('setProjectField', { projectId: 'x3', field: 'tagId', value: 'tg' }, '2026-10-01'));
-  applyOp(s, op('setGroupTimer', { groupId: a, on: false }, '2026-10-01'));
-  const steps = clone(s.data.projects.map((x) => x.steps));
-  assert.equal(applyOp(s, op('mergeGroups', {}, '2026-10-02')), true);
-  assert.deepEqual(s.data.groups.map((g) => g.id), [a], 'one list');
-  assert.ok(s.data.projects.every((x) => x.groupId === a));
-  const P = (id) => s.data.projects.find((x) => x.id === id);
-  assert.equal(P('x1').formerGroup, 'Ceramic Ninja'); assert.equal(P('x2').formerGroup, 'Personal');
-  assert.equal(P('x1').tagId, 'ta', 'the same tag name becomes one tag');
-  assert.equal(P('x3').tagId, 'tg', 'another tag comes along');
-  assert.deepEqual(s.data.groups[0].tags.map((t) => t.name), ['Kiln', 'Glaze']);
-  assert.equal(s.data.groups[0].timer, true, 'on, because Ceramic Ninja had it on');
-  assert.deepEqual(s.data.projects.map((x) => x.steps), steps, 'the tasks are otherwise as they were');
-  assert.equal(applyOp(s, op('mergeGroups', {}, '2026-10-03')), false, 'once: nothing to do the second time');
-  // a change made on another device with an old group still works: it goes into the one list
-  assert.equal(applyOp(s, op('createProject', { projectId: 'x4', name: 'Old phone task', groupId: p }, '2026-10-03')), true);
-  assert.equal(P('x4').groupId, a);
+test('groups are gone (owner, 23 Oct): an older data file is brought up to date when read — tags of all groups become one list (the same name: one tag), the timer stays on if any group had it, every task loses its group', async () => {
+  const { dropGroups, timerOn } = await import('../docs/rules.js');
+  const old = {
+    groups: [{ id: 'g1', name: 'Acton', tags: [{ id: 'ta', name: 'Kiln' }], timer: false }, { id: 'g2', name: 'Personal' },
+      { id: 'g3', name: 'Ceramic Ninja', tags: [{ id: 'tc', name: 'kiln' }, { id: 'tg', name: 'Glaze' }] }],
+    projects: [{ id: 'x1', name: 'Fire tiles', groupId: 'g3', tagId: 'tc', steps: [{ id: 's1', text: 'Load' }] }, { id: 'x2', name: 'Gym', groupId: 'g2', formerGroup: 'Personal', steps: [] },
+      { id: 'x3', name: 'Glaze test', groupId: 'g3', tagId: 'tg', steps: [] }],
+    settings: { aiProvider: 'claude' },
+  };
+  const d = dropGroups(old);
+  assert.equal(d.groups, undefined, 'no groups');
+  assert.ok(d.projects.every((p) => !('groupId' in p) && !('formerGroup' in p)), 'no task has a group');
+  assert.deepEqual(d.tags, [{ id: 'ta', name: 'Kiln' }, { id: 'tg', name: 'Glaze' }], 'one tag list');
+  assert.equal(d.projects[0].tagId, 'ta', 'the same name became one tag');
+  assert.equal(d.projects[2].tagId, 'tg');
+  assert.deepEqual(d.projects[0].steps, [{ id: 's1', text: 'Load' }], 'nothing else changes');
+  assert.equal(d.settings.timer, true, 'on: Ceramic Ninja had the timer (on unless switched off; only Personal was off)');
+  assert.equal(timerOn(d), true);
+  assert.equal(dropGroups({ groups: [{ id: 'g2', name: 'Personal' }], projects: [] }).settings.timer, false, 'only Personal: off');
+  const again = clone(d);
+  assert.deepEqual(dropGroups(again), d, 'reading it again changes nothing');
+  // the app and the tracker read every data file through it
+  const { readFileSync } = await import('node:fs');
+  const store = readFileSync(new URL('../docs/store.js', import.meta.url), 'utf8');
+  assert.equal((store.match(/dropGroups\(normalizeParents\(/g) || []).length, 2, 'from the server and from the copy on the device');
+  const tracker = readFileSync(new URL('../tools/tracker.mjs', import.meta.url), 'utf8');
+  assert.equal((tracker.match(/dropGroups\(normalizeParents\(/g) || []).length, 2, 'the tracker too');
 });
+

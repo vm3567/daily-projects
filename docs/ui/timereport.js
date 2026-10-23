@@ -1,11 +1,10 @@
-// Time report: a group, a date range, a pie chart by tag (or by project), in % or hours,
+// Time report: a date range, a pie chart by tag (or by project), in % or hours,
 // and a PNG image (PowerPoint size) to download or copy.
 
 import { h } from './dom.js';
-import { todayIndia, addDays, timeSplit, percents, fmtMinutes, weekStart, monthOf } from '../rules.js';
+import { todayIndia, addDays, timeSplit, percents, fmtMinutes, weekStart, monthOf, timerOn } from '../rules.js';
 import { workDoneByTag } from '../reports.js';
 import { device } from '../device.js';
-import { groupHasTimer } from '../ops.js';
 
 const COLOURS = ['#2563eb', '#16a34a', '#f59e0b', '#dc2626', '#7c3aed', '#0891b2', '#db2777', '#65a30d', '#ea580c', '#475569'];
 const NO_TAG_COLOUR = '#cbd5e1';
@@ -195,20 +194,17 @@ const PRESETS_OK = ['thisWeek', 'lastWeek', 'thisMonth', 'lastMonth'];
 export function renderTimeReport(ctx) {
   const { store, ui } = ctx;
   const data = store.view.data;
-  const groups = data.groups.filter(groupHasTimer).slice(0, 1); // (groups are off for now: one list)
-  if (!groups.length) return h('div', { class: 'report' }, h('p', { class: 'muted' }, 'The timer is off. Turn it on in Settings → Tags and timer.'));
+  if (!timerOn(data)) return h('div', { class: 'report' }, h('p', { class: 'muted' }, 'The timer is off. Turn it on in Settings → Tags and timer.'));
   if (!ui.timeReport) {
     const saved = device.report();
     ui.timeReport = {
-      groupId: saved.groupId || groups[0].id, preset: startPreset(todayIndia(), saved.preset),
+      preset: startPreset(todayIndia(), saved.preset),
       by: saved.by === 'project' ? 'project' : 'tag', mode: saved.mode === 'hours' ? 'hours' : 'pct', custom: {},
     };
   }
   const tr = ui.timeReport;
-  if (!groups.some((g) => g.id === tr.groupId)) tr.groupId = groups[0].id;
-  const group = groups.find((g) => g.id === tr.groupId);
   const [from, to] = rangeFor(tr.preset, todayIndia(), tr.custom);
-  const rows = timeSplit(data, group.id, from, to, tr.by);
+  const rows = timeSplit(data, from, to, tr.by);
   // the history months this period needs (for "Work done")
   const need = new Set();
   for (let d = from; d <= to; d = addDays(d, 27)) need.add(monthOf(d));
@@ -220,8 +216,8 @@ export function renderTimeReport(ctx) {
       store.loadMonth(m).catch(() => loading.delete(m));
     }
   }
-  const work = workDoneByTag(data, store.view.history, group.id, from, to);
-  const tagRows = tr.by === 'tag' ? rows : timeSplit(data, group.id, from, to, 'tag');
+  const work = workDoneByTag(data, store.view.history, from, to);
+  const tagRows = tr.by === 'tag' ? rows : timeSplit(data, from, to, 'tag');
   const tagColours = {};
   tagRows.forEach((r, i) => { tagColours[r.key] = colourFor(r, i); });
   const pcts = percents(rows);
@@ -231,7 +227,7 @@ export function renderTimeReport(ctx) {
   const set = (k, v) => {
     if (k === 'preset' && v === 'custom') tr.custom = { from, to }; // start from the dates on screen, so changing one box works
     tr[k] = v;
-    device.setReport({ groupId: tr.groupId, preset: tr.preset, by: tr.by, mode: tr.mode }); // opens the same way next time
+    device.setReport({ preset: tr.preset, by: tr.by, mode: tr.mode }); // opens the same way next time
     ctx.render();
   };
   const seg = (k, opts) => h('div', { class: 'segmented' }, opts.map(([v, label]) => h('button', {
@@ -247,7 +243,7 @@ export function renderTimeReport(ctx) {
     ctx.toast('Image downloaded — insert it in PowerPoint', 2500);
   };
   const fullTitle = 'Time and work done';
-  const statuses = data.projects.filter((p) => p.groupId === group.id && p.state === 'active' && p.status).map((p) => ({ name: p.name, status: p.status }));
+  const statuses = data.projects.filter((p) => p.state === 'active' && p.status).map((p) => ({ name: p.name, status: p.status }));
   const fullPng = () => fullReportPng({ title: fullTitle, period, rows: tagRows, pcts: percents(tagRows), work, tagColours, statuses });
   const downloadFull = async () => {
     const blob = await fullPng();
@@ -319,6 +315,6 @@ export function renderTimeReport(ctx) {
         h('button', { class: 'btn primary', onClick: downloadFull }, '⬇ Full report image'),
         h('button', { class: 'btn', onClick: copyFull }, '📋 Copy full report'),
         h('span', { class: 'muted small' }, 'Time by tag + work done + status, PowerPoint size'))),
-    (group.tags || []).length ? null
+    (data.tags || []).length ? null
       : h('p', { class: 'muted small' }, 'Tip: make some tags in Settings → Tags and timer (or inside a task) to see time by tag.'));
 }

@@ -272,14 +272,14 @@ export const editorPhoto = (d, files) => (id) => draftPhoto(d, files, id);
  * Make a new task (inside a 📂 project when parentId is given) and, if the box has something, save it as the task's
  * first update — the same way as "What happened today?" (html + plain words + photos). Returns the new id, or null.
  */
-export function createTaskWithNote(ctx, { name, groupId, parentId = null, d, editor = null }) {
+export function createTaskWithNote(ctx, { name, parentId = null, d, editor = null }) {
   const clean = String(name || '').trim();
   if (!clean) return null;
   if (d.uploading) { ctx.toast('A photo is still uploading — try again in a moment', 2500); return null; }
   const r = readDraft(d, editor);
   if (r.tooBig) { ctx.toast('The notes are too big (over 100 KB). Make the table smaller, or add it as a file.', 5000); return null; }
   const projectId = newId();
-  if (!ctx.store.dispatch('createProject', { projectId, name: clean, groupId, ...(parentId ? { parentId } : {}) })) return null;
+  if (!ctx.store.dispatch('createProject', { projectId, name: clean, ...(parentId ? { parentId } : {}) })) return null;
   if (r.text || r.photos.length) {
     const noteId = newId();
     ctx.store.dispatch('addWorkNote', { projectId, noteId, text: r.text || r.photoWord, ...(r.rich ? { html: r.html } : {}) });

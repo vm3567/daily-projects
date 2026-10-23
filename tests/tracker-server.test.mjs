@@ -99,11 +99,11 @@ test('server: tick needs step words, and never guesses when several steps match'
 
 test('server: new-project --steps stops at the next flag', () => {
   const t = setup();
-  const r = t.run('new-project', 'Kiln trial', '--steps', 'Call Ravi', 'Call supplier', '--group', 'Personal', '--priority', 'high');
+  const r = t.run('new-project', 'Kiln trial', '--steps', 'Call Ravi', 'Call supplier', '--priority', 'high');
   assert.ok(r.ok, r.out);
   const p = t.read().data.projects[0];
   assert.deepEqual(p.steps.map((s) => s.text), ['Call Ravi', 'Call supplier']);
-  assert.equal(p.groupId, emptyData().groups.find((g) => g.name === 'Personal').id);
+  assert.ok(!('groupId' in p), 'no groups (owner, 23 Oct)');
   assert.equal(p.priority, 'high');
 });
 
@@ -173,7 +173,7 @@ function withMailData(t) {
   const iso = (daysAgo) => new Date(now - daysAgo * 86400e3).toISOString();
   const d = emptyData();
   d.inbox = [{ id: 'mi1', text: '📧 Glaze order — from Anil', createdAt: iso(2), note: 'Please confirm the glaze order', mail: { conversationId: 'C1', count: 1, messageId: 'M1', fromName: 'Anil', fromAddress: 'anil@x.test', subject: 'Glaze order', at: iso(2) } }];
-  d.projects = [{ id: 'mp1', name: 'Kiln repair', groupId: d.groups[0].id, priority: 'medium', state: 'active', createdAt: iso(9), notes: '', links: [], files: [],
+  d.projects = [{ id: 'mp1', name: 'Kiln repair', priority: 'medium', state: 'active', createdAt: iso(9), notes: '', links: [], files: [],
     workNotes: [{ id: 'n1', text: 'Called the kiln fitter', stepId: null, createdAt: iso(1), updatedAt: iso(1) }],
     steps: [{ id: 'ms1', text: 'Answer the fitter', done: false, createdAt: iso(5), note: 'Can we come on Monday?', mail: { conversationId: 'C2', messageId: 'M2', fromName: 'Ravi', subject: 'Kiln repair visit', at: iso(4) } },
       { id: 'ms2', text: 'Answer about the glaze kiln', done: false, createdAt: iso(5), mail: { conversationId: 'C3', messageId: 'M3', fromName: 'Meena', subject: 'Glaze kiln price', at: iso(0) } }] }];

@@ -5,7 +5,7 @@ import { h, fmtDay, fmtTime, fmtSize, HAS_KEYBOARD } from './dom.js';
 const MOD = /Mac|iPhone|iPad/.test(globalThis.navigator ? navigator.platform || navigator.userAgent || '' : '') ? '⌘' : 'Ctrl';
 import { dotColour, isSnoozed, restUntil, restReason, onlyDaysOf, onlyDaysLabel, onlyDaysChip, remindOnceChip, indiaDateTime, WEEKDAYS, weekdayOf, stepWaitsForReminder, daysBetween, addDays, todayIndia, isOverdue, indiaDate, waitingDays, lastWorkDate, nextStep, stepLinkedTo, personStatus, minutesBetween, fmtMinutes, weekStart, seenUpTo, deleteQuestion, parseDuration } from '../rules.js';
 import { WAIT_RED_DAYS } from '../config.js';
-import { newId, PRIORITIES, cleanUrl, groupHasTimer, MAX_SNOOZE_DAYS, ABOUT_MAX } from '../ops.js';
+import { newId, PRIORITIES, cleanUrl, MAX_SNOOZE_DAYS, ABOUT_MAX } from '../ops.js';
 
 const STATUS_OLD_DAYS = 7; // a status older than this turns grey and asks for an update
 import { uploadFiles, openFile, photoThumb } from './files.js';
@@ -13,7 +13,7 @@ import { richArea, richView, addDraftPhotos, readDraft, clearDraft, photoArgs, f
 import { enterAction, richFileIds, textToHtml } from '../rich.js';
 import { projectEmailCards, emailThreadBlock } from './replies.js';
 import { mainBox, mainChip, subProjectsBlock, openMainBox } from './mains.js';
-import { isMainProject } from '../rules.js';
+import { isMainProject, timerOn } from '../rules.js';
 
 /** 'project' for a 📂 project, 'task' for everything else (what the app once called a project). */
 const kindWord = (ctx, p) => (isMainProject(ctx.store.view.data, p) ? 'project' : 'task');
@@ -701,8 +701,8 @@ function notesBox(ctx, p) {
     h('div', { class: 'save-row', key: 'notes-sign-' + p.id }, sign));
 }
 
-function tagName(g, p) {
-  const t = g && p.tagId && (g.tags || []).find((x) => x.id === p.tagId);
+function tagName(data, p) {
+  const t = p.tagId && (data.tags || []).find((x) => x.id === p.tagId);
   return t ? t.name : '';
 }
 
@@ -711,8 +711,8 @@ function timeLine(ctx, p, today) {
   const { store, ui } = ctx;
   const timer = store.view.data.timer;
   const logs = p.timeLogs || [];
-  const timed = groupHasTimer(store.view.data.groups.find((g) => g.id === p.groupId));
-  if (!timed && !logs.length) return null; // no timer in this group (e.g. Personal)
+  const timed = timerOn(store.view.data);
+  if (!timed && !logs.length) return null; // the timer is switched off
   if (!logs.length && !(timer && timer.projectId === p.id)) {
     return h('div', { class: 'time-line', key: 'time-' + p.id },
       h('button', { class: 'link small', onClick: () => addTimePrompt(ctx, p) }, '⏱ + Add time'));
@@ -780,7 +780,7 @@ function stateButtons(ctx, p) {
   if (p.state === 'active') {
     const t = store.view.data.timer;
     const running = t && t.projectId === p.id;
-    const timed = groupHasTimer(store.view.data.groups.find((g) => g.id === p.groupId));
+    const timed = timerOn(store.view.data);
     return [
       running
         ? h('button', { class: 'btn timer-on', title: 'Stop the timer', onClick: () => ctx.stopTimer() }, `⏸ ${ctx.clockText(t.start)}`)
@@ -838,7 +838,7 @@ function projectMenu(ctx, p) {
   if (ui.projMenu !== p.id) return null;
   const today = todayIndia();
   const go = (fn) => () => { ui.projMenu = null; fn(); ctx.render(); };
-  const timed = groupHasTimer(store.view.data.groups.find((g) => g.id === p.groupId)) || (p.timeLogs || []).length;
+  const timed = timerOn(store.view.data) || (p.timeLogs || []).length;
   const item = (label, fn, cls = '') => h('button', { class: 'menu-row' + cls, onClick: go(fn) }, label);
   return h('div', { class: 'proj-menu', key: 'pm-' + p.id, role: 'menu' },
     p.state === 'active' && (!isSnoozed(p, today) || restReason(p, today) === 'onlyDays') ? item('💤 Snooze…', () => { ui.snoozeOpen = p.id; setTimeout(() => { const n = document.querySelector(`[data-key="snooze-${p.id}"]`); if (n) { n.focus(); n.select(); } }, 30); }) : null,
@@ -848,7 +848,7 @@ function projectMenu(ctx, p) {
     p.state === 'active' ? item('🔔 Remind me once…', () => { ui.remindOnceOpen = p.id; }) : null,
     p.state === 'active' ? item('⏸ Pause', () => ctx.act('pause', { projectId: p.id }, `Paused: ${p.name}`)) : null,
     timed ? item('⏱ Add time', () => addTimePrompt(ctx, p)) : null,
-    item('✎ Group, priority, target date', () => { ui.editMeta = true; }),
+    item('✎ Tag, priority, target date', () => { ui.editMeta = true; }),
     // 📂 a task can be in several projects; a project is never inside another one
     !isMainProject(store.view.data, p) ? item('📂 Add to a project…', () => openMainBox(ctx, p, 'parent')) : null,
     item(`🗑 Delete ${kindWord(ctx, p)}`, () => {
@@ -876,10 +876,10 @@ function oldStepsBlock(ctx, p, openSteps) {
       h('button', { class: 'btn small', type: 'button', onClick: () => makeTask(st) }, '↗ Make it a task')))));
 }
 
-/** One line of small chips: who has it, group, priority, target, steps done, time, people. Tap one to change it. */
+/** One line of small chips: who has it, tag, priority, target, steps done, time, people. Tap one to change it. */
 function infoChips(ctx, p, today) {
   const { store, ui } = ctx;
-  const g = store.view.data.groups.find((x) => x.id === p.groupId);
+  const data = store.view.data;
   const overdue = isOverdue(p, today);
   const editMeta = () => { ui.editMeta = !ui.editMeta; ctx.render(); };
   const chip = (text, title, onClick, cls = '') => onClick
@@ -900,14 +900,13 @@ function infoChips(ctx, p, today) {
     out.push(chip(onlyDaysChip(p), 'Comes up only on these days / phone reminder — tap to change',
       () => { ui.onlyDaysOpen = ui.onlyDaysOpen === p.id ? null : p.id; ctx.render(); }));
   }
-  out.push(chip(g ? g.name : 'No group', 'Group — tap to change', editMeta));
-  if (tagName(g, p)) out.push(chip(`🏷 ${tagName(g, p)}`, 'Tag — tap to change', editMeta));
+  if (tagName(data, p)) out.push(chip(`🏷 ${tagName(data, p)}`, 'Tag — tap to change', editMeta));
   out.push(chip(p.priority[0].toUpperCase() + p.priority.slice(1), 'Priority — tap to change', editMeta, p.priority === 'high' ? ' bad' : ''));
   out.push(chip(p.deadline ? `${overdue ? 'Overdue' : 'Target'} ${fmtDay(p.deadline)}` : '+ Target date', 'Target date — tap to change', editMeta, overdue ? ' bad' : ''));
   if (p.steps.length && !isMainProject(ctx.store.view.data, p)) out.push(chip(`✓ ${p.steps.filter((x) => x.done).length} of ${p.steps.length} steps done`, 'Steps done', null));
   const timer = store.view.data.timer;
   const logs = p.timeLogs || [];
-  const timed = groupHasTimer(g);
+  const timed = timerOn(data);
   if (timed || logs.length) {
     const total = minutesBetween(p, '0000-01-01', today, timer);
     out.push(total ? chip(`⏱ ${fmtMinutes(total)}`, `Time on this ${kindWord(ctx, p)} — tap for details`, () => { ui.showTime = ui.showTime === p.id ? null : p.id; ctx.render(); })
@@ -931,12 +930,12 @@ function deleteButton(ctx, p) {
 
 function metaLine(ctx, p, today) {
   const { store, ui } = ctx;
-  const g = store.view.data.groups.find((x) => x.id === p.groupId);
+  const data = store.view.data;
   const pri = p.priority[0].toUpperCase() + p.priority.slice(1);
   const overdue = isOverdue(p, today);
   if (!ui.editMeta) {
     return h('button', { class: 'meta-line', key: 'meta-' + p.id, title: 'Change tag, priority or target date', onClick: () => { ui.editMeta = true; ctx.render(); } },
-      tagName(g, p) ? [h('span', { class: 'tag tag-chip' }, `🏷 ${tagName(g, p)}`), ' · '] : '', // (groups are off for now: not shown)
+      tagName(data, p) ? [h('span', { class: 'tag tag-chip' }, `🏷 ${tagName(data, p)}`), ' · '] : '',
       h('span', { class: p.priority === 'high' ? 'meta-high' : '' }, pri),
       p.deadline ? [' · ', h('span', { class: overdue ? 'late' : '' }, `${overdue ? 'Overdue' : 'Target'} ${fmtDay(p.deadline)}`)] : ' · No target date',
       h('span', { class: 'meta-edit', 'aria-hidden': 'true' }, ' ✎'));
@@ -948,10 +947,10 @@ function metaLine(ctx, p, today) {
         onChange: (e, el) => {
           if (el.value === '__new') {
             const name = prompt('New tag:');
-            if (name && name.trim() && g) {
+            if (name && name.trim()) {
               const tagId = newId();
-              if (store.dispatch('addTag', { groupId: g.id, tagId, name: name.trim() })) store.dispatch('setProjectField', { projectId: p.id, field: 'tagId', value: tagId });
-              else ctx.toast(`"${name.trim()}" already exists in ${g.name}`);
+              if (store.dispatch('addTag', { tagId, name: name.trim() })) store.dispatch('setProjectField', { projectId: p.id, field: 'tagId', value: tagId });
+              else ctx.toast(`"${name.trim()}" already exists`);
             }
             ctx.render();
             return;
@@ -960,7 +959,7 @@ function metaLine(ctx, p, today) {
         },
       },
       h('option', { value: '' }, 'No tag'),
-      ((g && g.tags) || []).map((t) => h('option', { value: t.id }, t.name)),
+      (data.tags || []).map((t) => h('option', { value: t.id }, t.name)),
       h('option', { value: '__new' }, '+ New tag…'))),
     h('label', null, 'Priority ',
       h('select', {

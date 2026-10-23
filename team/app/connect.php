@@ -299,10 +299,9 @@ function conn_make_task(array $it, array $c, ?bool &$mine = null): bool {
       }
       $at = ol_iso_now();
       $day = date('Y-m-d');
-      $groups = is_array($data->groups ?? null) ? $data->groups : [];
       $details = (string)($it['details'] ?? '');
       $task = (object)[
-        'id' => $taskId, 'groupId' => (string)(is_object($groups[0] ?? null) ? ($groups[0]->id ?? 'g1') : 'g1'),
+        'id' => $taskId,
         'name' => mb_substr((string)$it['title'], 0, 200), 'priority' => 'medium', 'deadline' => null, 'notes' => '',
         'about' => mb_substr($details, 0, 1000),
         'links' => [], 'state' => 'active', 'lastTickDate' => null, 'lastActivityDate' => $day, 'activeSince' => $day,

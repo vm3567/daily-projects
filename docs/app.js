@@ -20,10 +20,10 @@ import { MockRepo } from './mockrepo.js';
 import { device } from './device.js';
 import { DATA_OWNER, DATA_REPO, DATA_BRANCH, MOVED_TO, REFRESH_MS, AI_DAILY_LIMIT, BRIEF_CLAIM_MINUTES, WAIT_RED_DAYS, NO_WORK_NOTE_DAYS } from './config.js';
 import { dotColour, greenByTeamOnly, isSnoozed, restUntil, restReason, onlyDaysLabel, openIdFromHash, awakeProjects, activeProjects, nextStep, todayIndia, isSundayIndia, colourCounts, isOverdue, indiaDate, waitingDays, daysWithoutWork, dayScore, greenStreak, addDays, monthOf, fmtMinutes, takeBackWaits, staffStepAction, pasteGoesToProject, singleStepClose, versionRequest, askDiaryAgain, pasteInForm, diaryLoadedAt, photoNeedsFetch, teamUndoKey, teamActionUndone, teamProgressOf, projectKeyIgnored, teamMovedTo, serverHolder, keepMovedStep, teamMemberFor, repliesOf, mailThreads, replyMailto, MAILTO_BODY_MAX, emailPath, pasteReason } from './rules.js';
-import { whoFromUser, signInTag } from './rules.js';
+import { whoFromUser, signInTag, timerOn } from './rules.js';
 import { signInCard, firstPasswordCard } from './ui/signin.js';
 import { parentIdsOf, isMainProject, mainProjects, activeTasks, todayWithoutEmptyMains, todayList, stepTargets, mainSummary, childrenOf, deleteQuestion, pickEnterTarget } from './rules.js';
-import { newId, clone, opMonth, groupHasTimer, cleanLink, carriedOps, orderPosOf } from './ops.js';
+import { newId, clone, opMonth, cleanLink, carriedOps, orderPosOf } from './ops.js';
 import * as ai from './ai.js';
 import { parseVoice } from './voice.js';
 
@@ -274,7 +274,7 @@ async function startStaff(user, openTask = 0) {
 
 const saved = device.ui();
 const ui = {
-  view: saved.view && !String(saved.view).startsWith('group:') ? saved.view : saved.view ? 'all' : 'today', // today | all | mains | paused | finished | diary | settings (groups are off for now: an old group view opens ✅ Tasks)
+  view: saved.view && !String(saved.view).startsWith('group:') ? saved.view : saved.view ? 'all' : 'today', // today | all | mains | paused | finished | diary | settings (groups are gone: an old group view opens ✅ Tasks)
   selected: saved.selected || null,
   search: '',
   mobile: 'list', // list | detail (phone only)
@@ -943,11 +943,6 @@ function markOpened(id) {
 }
 
 /** Save the green score of each of the last 7 days that has none yet (one save, once a day). */
-/** Groups are off for now (the owner asked, 23 Oct): an older data file with several groups is merged into one, once. */
-function oneGroup() {
-  if (store && store.base && store.canEdit() && store.view.data.groups.length > 1) store.dispatch('mergeGroups', {});
-}
-
 async function recordPastScores() {
   if (!store || !store.base || !store.canEdit()) return;
   const today = todayIndia();
@@ -1068,7 +1063,7 @@ function renderMenu() {
         h('span', { class: 'dot red' }), String(counts.red), ' ',
         h('span', { class: 'dot yellow' }), String(counts.yellow), ' ',
         h('span', { class: 'dot green' }), String(counts.green)),
-      // order the owner chose (22 Oct): Today, Tasks, Projects, Replies, Inbox, Paused, Finished, People, Settings, More (groups are off for now, 23 Oct)
+      // order the owner chose (22 Oct): Today, Tasks, Projects, Replies, Inbox, Paused, Finished, People, Settings, More (no groups, 23 Oct)
       item('all', '✅ Tasks', activeTasks(data).length),
       item('mains', '📂 Projects', mainProjects(data).length),
       item('replies', '✉ Replies', readyCount(data, today)), // replies ready to send
@@ -1135,7 +1130,7 @@ function projectRow(p, today, opts = {}) {
   const due = nextStep(p, today, { dueOnly: true }); // what the tick box ticks
   const asProject = ui.view === 'mains' && !ui.search; // 📂 Projects list: "3 tasks · 1 red" instead of the next step
   const canTick = due && p.state === 'active' && !asProject;
-  const picking = canPickRows(); // ✅ Tasks and groups: a select box for moving many tasks at once
+  const picking = canPickRows(); // ✅ Tasks: a select box for moving many tasks at once
   return h('li', {
     key: 'p-' + p.id, 'data-id': p.id, class: 'prow' + (ui.selected === p.id ? ' current' : '') + (isMainProject(store.view.data, p) ? ' main-row' : ''),
     onContextmenu: (e) => { e.preventDefault(); ui.rowMenu = { id: p.id, x: e.clientX, y: e.clientY }; render(); },
@@ -1179,7 +1174,7 @@ function projectRow(p, today, opts = {}) {
     ui.quickAdd === p.id ? quickAddForm(p) : null);
 }
 
-/** ✅ Tasks and groups: rows can be selected, then put into one 📂 project together. Today keeps its tick box. */
+/** ✅ Tasks: rows can be selected, then put into one 📂 project together. Today keeps its tick box. */
 const picked = new Set();
 function canPickRows() {
   return !ui.search && ui.view === 'all';
@@ -1200,7 +1195,7 @@ function pickBar(list) {
   const create = (name) => {
     const ids = [...picked];
     const projectId = newId();
-    if (!store.dispatch('createMainProject', { projectId, name, groupId: data.groups[0] && data.groups[0].id, childId: ids[0] })) return;
+    if (!store.dispatch('createMainProject', { projectId, name, childId: ids[0] })) return;
     for (const id of ids.slice(1)) store.dispatch('addToProject', { projectId: id, parentId: projectId });
     toast(`New project 📂 ${name} with ${ids.length} task${ids.length === 1 ? '' : 's'}`);
     picked.clear(); ui.pickBox = null; render();
@@ -1474,8 +1469,7 @@ function clipBox() {
     const text = textNow();
     if (!text) { toast('Write the name first'); return; }
     const projectId = newId();
-    const groupId = data.groups[0] && data.groups[0].id;
-    const ok = store.dispatch('createProject', { projectId, name: text, groupId });
+    const ok = store.dispatch('createProject', { projectId, name: text });
     if (ok) ensurePeople(clip.people);
     if (ok && clip.link) store.dispatch('addLink', { projectId, linkId: newId(), title: clip.link.title, url: clip.link.url });
     if (ok) { ui.capture = false; toast(`New task: ${text}`, 3000); select(projectId); }
@@ -1665,10 +1659,9 @@ function renderInbox() {
             onChange: (e, el) => {
               const v = el.value;
               el.value = '';
-              if (v.startsWith('new:')) {
-                const groupId = v.slice(4);
+              if (v === 'new') {
                 const projectId = newId();
-                if (inboxAct('inboxToProject', { itemId: item.id, projectId, groupId }, item, `New task: ${item.text}`)) render();
+                if (inboxAct('inboxToProject', { itemId: item.id, projectId }, item, `New task: ${item.text}`)) render();
               } else {
                 const p = data.projects.find((x) => x.id === v);
                 if (p) toStep(item, p);
@@ -1677,7 +1670,7 @@ function renderInbox() {
           },
           h('option', { value: '' }, 'Send to task…'),
           projects.map((p) => h('option', { value: p.id }, p.name)),
-          data.groups.length ? h('option', { value: 'new:' + data.groups[0].id }, '+ New task') : null),
+          h('option', { value: 'new' }, '+ New task')),
           h('button', { class: 'icon', title: 'Delete', 'aria-label': 'Delete', onClick: () => inboxAct('removeInbox', { itemId: item.id }, item, 'Removed from Inbox') }, '🗑')));
     })) : h('p', { class: 'empty-list' }, 'Inbox is empty. Press Q anywhere (or 📥 at the top) to write something down fast.'));
 }
@@ -1697,7 +1690,6 @@ function rowMenu() {
   if (!p) return null;
   const today = todayIndia();
   const due = p.state === 'active' && nextStep(p, today, { dueOnly: true });
-  const g = store.view.data.groups.find((x) => x.id === p.groupId);
   const timing = store.view.data.timer && store.view.data.timer.projectId === p.id;
   const item = (icon, label, fn) => h('button', {
     class: 'row-menu-item', role: 'menuitem',
@@ -1712,7 +1704,7 @@ function rowMenu() {
     p.state === 'active' ? (p.snoozedUntil && p.snoozedUntil > today
       ? item('⏰', 'Wake up now', () => act('wake', { projectId: p.id }, `Back on Today: ${p.name}`))
       : item('💤', 'Snooze…', () => { select(p.id); ui.snoozeOpen = p.id; focusKey('snooze-' + p.id); })) : null,
-    p.state === 'active' && groupHasTimer(g || {}) ? item(timing ? '⏹' : '▶', timing ? 'Stop timer' : 'Start timer', () => (timing ? stopTimer() : startTimer(p))) : null,
+    p.state === 'active' && timerOn(store.view.data) ? item(timing ? '⏹' : '▶', timing ? 'Stop timer' : 'Start timer', () => (timing ? stopTimer() : startTimer(p))) : null,
     p.state === 'active' ? item('⏸', `Pause ${kindWord(p)}`, () => act('pause', { projectId: p.id }, `Paused: ${p.name}`))
       : p.state === 'paused' ? item('▶', `Unpause ${kindWord(p)}`, () => act('unpause', { projectId: p.id }, `Back on Today: ${p.name}`)) : null,
     onServer && p.state === 'active' ? (p.team
@@ -1749,7 +1741,7 @@ function canDrag() {
   return !ui.search && ui.sort === 'mine' && !taskListView();
 }
 
-/** ✅ Tasks and the groups: the 'All tasks | No project' switch, always red first. */
+/** ✅ Tasks: the 'All tasks | No project' switch, always red first. */
 function taskListView() {
   return ui.view === 'all';
 }
@@ -1877,7 +1869,7 @@ let redOrder = null; // fixed "Red first" order, so rows do not jump while you o
 function resetRedOrder() { redOrder = null; }
 
 function sortForView(list, today) {
-  if ((ui.sort !== 'red' && !taskListView()) || ui.search) return list; // (✅ Tasks and groups are always red first)
+  if ((ui.sort !== 'red' && !taskListView()) || ui.search) return list; // (✅ Tasks is always red first)
   const ids = list.map((p) => p.id);
   if (redOrder && redOrder.view === ui.view && ids.length === redOrder.ids.length && ids.every((id) => redOrder.pos.has(id))) {
     return [...list].sort((a, b) => redOrder.pos.get(a.id) - redOrder.pos.get(b.id));
@@ -2012,7 +2004,6 @@ function newProjectForm() {
   if (!ui.adding) {
     return h('button', { class: 'btn primary new-project', onClick: () => { ui.adding = true; render(); focusKey('new-name'); } }, '+ New task', keyHint('N'));
   }
-  const defaultGroup = store.view.data.groups[0]?.id; // (groups are off for now: one list)
   const d = ((ui.newTaskDraft ||= {}).list ||= {});
   const close = () => { ui.adding = false; render(); };
   // a name, then notes you can paste a screenshot, a table or words into (they become the task's first update)
@@ -2020,7 +2011,7 @@ function newProjectForm() {
     key: 'new',
     onCancel: close,
     onCreate: (name, editor) => {
-      const projectId = createTaskWithNote(ctx, { name, groupId: defaultGroup, d, editor });
+      const projectId = createTaskWithNote(ctx, { name, d, editor });
       if (!projectId) return;
       ui.adding = false;
       if (ui.view !== 'today' && ui.view !== 'all') ui.view = 'today';
@@ -2258,31 +2249,31 @@ function renderSettings() {
       keyForm('gemini', 'Gemini', 'Optional backup. From aistudio.google.com → Get API key. Shared with all your devices. On the free plan Google may read the text.')),
     h('section', { class: 'block' }, h('h3', null, 'Tags and timer'),
       h('p', { class: 'muted small' }, 'Each task can pick one tag. The Time report shows your time by tag.'),
-      data.groups.slice(0, 1).map((g) => h('div', { class: 'group-set', key: 'gs-' + g.id }, // (groups are off for now: one list)
+      h('div', { class: 'group-set' },
         h('div', { class: 'row' },
           h('label', { class: 'check' },
-            h('input', { type: 'checkbox', checked: groupHasTimer(g), onChange: (e, el) => store.dispatch('setGroupTimer', { groupId: g.id, on: el.checked }) }),
+            h('input', { type: 'checkbox', checked: timerOn(data), onChange: (e, el) => store.dispatch('setTimer', { on: el.checked }) }),
             ' Timer')),
         h('div', { class: 'tag-list' },
-          (g.tags || []).map((t) => h('span', { class: 'tag tag-chip', key: 'tg-' + t.id }, `🏷 ${t.name}`,
+          (data.tags || []).map((t) => h('span', { class: 'tag tag-chip', key: 'tg-' + t.id }, `🏷 ${t.name}`,
             h('button', {
               class: 'icon tiny-x', title: 'Rename tag',
-              onClick: () => { const n = prompt('Rename tag:', t.name); if (n && n.trim()) store.dispatch('renameTag', { groupId: g.id, tagId: t.id, name: n.trim() }); },
+              onClick: () => { const n = prompt('Rename tag:', t.name); if (n && n.trim()) store.dispatch('renameTag', { tagId: t.id, name: n.trim() }); },
             }, '✎'),
             h('button', {
               class: 'icon tiny-x', title: 'Delete tag',
               onClick: () => {
                 const used = data.projects.filter((p) => p.tagId === t.id).length;
-                if (confirm(`Delete the tag "${t.name}"?${used ? `\n\n${used} project(s) use it; they will have no tag (their time is kept).` : ''}`)) store.dispatch('deleteTag', { groupId: g.id, tagId: t.id });
+                if (confirm(`Delete the tag "${t.name}"?${used ? `\n\n${used} project(s) use it; they will have no tag (their time is kept).` : ''}`)) store.dispatch('deleteTag', { tagId: t.id });
               },
             }, '✕'))),
           h('button', {
             class: 'btn small',
             onClick: () => {
               const n = prompt('New tag:');
-              if (n && n.trim() && !store.dispatch('addTag', { groupId: g.id, tagId: newId(), name: n.trim() })) toast(`"${n.trim()}" already exists`);
+              if (n && n.trim() && !store.dispatch('addTag', { tagId: newId(), name: n.trim() })) toast(`"${n.trim()}" already exists`);
             },
-          }, '+ Tag'))))),
+          }, '+ Tag')))),
     onServer ? renderConnectionsSettings(appsCtx) : null, // 🔌 other apps send tasks and approvals (worktask.in only)
     h('section', { class: 'block' }, h('h3', null, 'Backup'),
       h('p', { class: 'muted' }, 'Every save is kept as a version, so nothing is lost. You can also download a copy.'),
@@ -2688,7 +2679,6 @@ function renderRound() {
   const ns = nextStep(p, today);
   const due = nextStep(p, today, { dueOnly: true });
   const colour = dotColour(p, today);
-  const g = store.view.data.groups.find((x) => x.id === p.groupId);
   const open = p.steps.filter((s) => !s.done);
   const lastNote = p.workNotes[0];
   const mode = r.mode;
@@ -2700,7 +2690,7 @@ function renderRound() {
       h('div', { class: 'round-name' },
         h('span', { class: `dot ${colour}` }),
         h('button', { class: 'link round-title', title: 'Open the full task', onClick: () => { const id = p.id; ui.round = null; select(id); } }, p.name)),
-      h('p', { class: 'muted small round-meta' }, [g ? g.name : '', p.priority === 'high' ? 'High' : '', p.deadline ? `${isOverdue(p, today) ? 'Overdue' : 'Target'} ${fmtDay(p.deadline)}` : '']
+      h('p', { class: 'muted small round-meta' }, [p.priority === 'high' ? 'High' : '', p.deadline ? `${isOverdue(p, today) ? 'Overdue' : 'Target'} ${fmtDay(p.deadline)}` : '']
         .filter(Boolean).join(' · ')),
       h('div', { class: 'round-next' + (ns ? '' : ' warn') },
         ns ? ['Next: ', h('strong', null, ns.text)] : 'No next step yet',
@@ -2799,7 +2789,7 @@ function goBack() {
   render();
 }
 
-/** Next / previous project in the tab you are in (Today, All, a group, Paused…). */
+/** Next / previous project in the tab you are in (Today, All, Paused…). */
 function neighbourProject(step) {
   const list = currentList();
   if (!list.length || !ui.selected) return null;
@@ -3577,7 +3567,7 @@ function startOwner() {
   });
   render();
   if (onServer && !isMock) takeTeamFromHash(); // "#team…": the team pages of this app (from 👥, a team task chip, Give to team)
-  store.init().then(() => { if (store.status === 'saved') dataFreshAt = Date.now(); render(); if (ui.capture) focusKey('capture-input'); voiceReady = true; runVoice(); loadTeam(true); if (onServer) loadApps(appsCtx, true); shareLocalKeys(); markShownOpened(); makeBrief(); recordPastScores(); oneGroup(); });
+  store.init().then(() => { if (store.status === 'saved') dataFreshAt = Date.now(); render(); if (ui.capture) focusKey('capture-input'); voiceReady = true; runVoice(); loadTeam(true); if (onServer) loadApps(appsCtx, true); shareLocalKeys(); markShownOpened(); makeBrief(); recordPastScores(); });
   if (started) return;
   started = true;
   // redraw now and then: the running timer, and the "not sent yet" bar appearing after a minute

@@ -113,12 +113,11 @@ test('pending list message for one person: waiting and to-discuss items, no "@"'
 test('work done by tag for the owner report', async () => {
   const { workDoneByTag } = await import('../docs/reports.js');
   const s = { data: emptyData(), history: {} };
-  const acton = s.data.groups[0];
   applyOps(s, [
-    op('addTag', { groupId: acton.id, tagId: 'kiln', name: 'Kiln' }, '2026-10-01'),
-    op('createProject', { projectId: 'a1', name: 'Electric kiln', groupId: acton.id }, '2026-10-01'),
-    op('createProject', { projectId: 'a2', name: 'Misc', groupId: acton.id }, '2026-10-01'),
-    op('createProject', { projectId: 'h1', name: 'Home', groupId: s.data.groups[1].id }, '2026-10-01'),
+    op('addTag', { tagId: 'kiln', name: 'Kiln' }, '2026-10-01'),
+    op('createProject', { projectId: 'a1', name: 'Electric kiln' }, '2026-10-01'),
+    op('createProject', { projectId: 'a2', name: 'Misc' }, '2026-10-01'),
+    op('createProject', { projectId: 'h1', name: 'Home' }, '2026-10-01'),
     op('setProjectField', { projectId: 'a1', field: 'tagId', value: 'kiln' }, '2026-10-01'),
     op('addStep', { projectId: 'a1', stepId: 'x1', text: 'Replace element with @Ravi' }, '2026-10-01'),
     op('addStep', { projectId: 'a1', stepId: 'x2', text: 'Test firing' }, '2026-10-01'),
@@ -129,11 +128,12 @@ test('work done by tag for the owner report', async () => {
     op('tickStep', { projectId: 'a2', stepId: 'y1' }, '2026-10-04'),
     op('tickStep', { projectId: 'h1', stepId: 'z1' }, '2026-10-04'),
   ]);
-  const out = workDoneByTag(s.data, s.history, acton.id, '2026-10-01', '2026-10-31');
-  assert.deepEqual(out.map((g) => [g.name, g.items.length]), [['Kiln', 2], ['No tag', 1]]);
+  const out = workDoneByTag(s.data, s.history, '2026-10-01', '2026-10-31');
+  // (groups are gone, owner 23 Oct: every task counts — "Home" was left out as Personal before)
+  assert.deepEqual(out.map((g) => [g.name, g.items.length]), [['Kiln', 2], ['No tag', 2]]);
   assert.equal(out[0].items[0].text, 'Test firing', 'newest first');
   assert.equal(out[0].items[1].text, 'Replace element with Ravi');
-  assert.equal(workDoneByTag(s.data, s.history, acton.id, '2026-10-04', '2026-10-04').length, 1, 'date range respected');
+  assert.equal(workDoneByTag(s.data, s.history, '2026-10-04', '2026-10-04').length, 1, 'date range respected');
 });
 
 test('pending list: a longer name that starts with the person\'s name is kept whole', async () => {

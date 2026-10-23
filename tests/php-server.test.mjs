@@ -1223,8 +1223,8 @@ test('outlook: each new email thread → one task "📧 subject" (mail + email t
     groups: [{ id: 'g1', name: 'Acton' }],
     inbox: [{ id: 'oi1', text: '📧 Old topic — from Kavi', createdAt: at, mail: { conversationId: 'C-OLD', count: 1 } }], // from before emails became tasks
     projects: [
-      { id: 'olp1', name: 'Kiln quote', state: 'active', groupId: 'g1', createdAt: at, activeSince: istDay(3), steps: [{ id: 'ols1', text: 'Reply to Ravi', done: false, mail: { conversationId: 'C-STEP' } }], workNotes: [] },
-      { id: 'olp2', name: 'Glaze trial', state: 'paused', groupId: 'g1', createdAt: at, stateChangedAt: at, steps: [], workNotes: [], mail: { conversationId: 'C-PROJ' } },
+      { id: 'olp1', name: 'Kiln quote', state: 'active', createdAt: at, activeSince: istDay(3), steps: [{ id: 'ols1', text: 'Reply to Ravi', done: false, mail: { conversationId: 'C-STEP' } }], workNotes: [] },
+      { id: 'olp2', name: 'Glaze trial', state: 'paused', createdAt: at, stateChangedAt: at, steps: [], workNotes: [], mail: { conversationId: 'C-PROJ' } },
     ] }) }] }, tok.boss)).ok);
   ms.reqs = [];
   ms.token = (f) => (f.grant_type === 'refresh_token' && f.refresh_token === 'RT-1' ? [200, { access_token: 'AT-1', refresh_token: 'RT-2' }] : [400, { error: 'invalid_grant' }]);
@@ -1252,7 +1252,7 @@ test('outlook: each new email thread → one task "📧 subject" (mail + email t
   const t1 = tasks.find((p) => p.mail.conversationId === 'C1');
   const t2 = tasks.find((p) => p.mail.conversationId === 'C2');
   assert.equal(data.projects[0].id, t2.id, 'new tasks go to the top');
-  assert.deepEqual([t1.state, t1.groupId, t1.steps, t1.workNotes, t1.isMain, t1.parentIds], ['active', 'g1', [], [], undefined, undefined], 'a plain active task');
+  assert.deepEqual([t1.state, t1.groupId, t1.steps, t1.workNotes, t1.isMain, t1.parentIds], ['active', undefined, [], [], undefined, undefined], 'a plain active task (no group: groups are gone, owner 23 Oct)');
   // (r14: each email also carries addedAt = when the server brought it in; the owner asked for it, so a late Finish never hides it)
   const noAt = ({ at: when, addedAt, ...rest }) => { assert.match(when, /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.000Z$/); assert.match(addedAt, /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.000Z$/, 'addedAt'); return rest; };
   assert.deepEqual(t1.thread.map(noAt), [
@@ -1365,7 +1365,7 @@ async function replyProjects() {
     groups: [{ id: 'g1', name: 'Acton' }], people: [],
     inbox: [{ id: 'ri1', text: '📧 Price R4 — from Ravi', createdAt: at, mail: { ...rMail('R4', 120), count: 1 } }],
     projects: [
-      { id: 'rp1', name: 'Kiln price', state: 'active', groupId: 'g1', createdAt: at, workNotes: [], links: [], files: [], notes: '',
+      { id: 'rp1', name: 'Kiln price', state: 'active', createdAt: at, workNotes: [], links: [], files: [], notes: '',
         steps: [
           { id: 'rs1', text: 'Answer Ravi', done: false, mail: rMail('R1', 120), reply: { text: 'Dear Ravi,\nThe price is fine.\nRegards, Venkat', at: isoAgo(60), by: 'claude', forMessageId: 'MSG-R1', state: 'ready' } },
           { id: 'rs2', text: 'Answer Anil', done: false, mail: rMail('R2', 120) },
@@ -1492,7 +1492,7 @@ test('replies: your reply in Outlook (Sent Items) joins the task\'s email thread
   sql('UPDATE wt.settings SET v = UNIX_TIMESTAMP() + 86400 WHERE k = \'jobs_at\'');
   const head = (await call('dp.head', {}, tok.boss)).head;
   const at = new Date(Date.now() - 86400e3).toISOString();
-  const tt = { id: 'tt1', name: '📧 Price list', state: 'active', groupId: 'g1', createdAt: at, steps: [], workNotes: [], links: [], files: [], notes: '',
+  const tt = { id: 'tt1', name: '📧 Price list', state: 'active', createdAt: at, steps: [], workNotes: [], links: [], files: [], notes: '',
     mail: { conversationId: 'C-T1', messageId: 'T1-1', fromName: 'Ravi', fromAddress: 'ravi@x.test', subject: 'Price list', at: isoAgo(60) },
     thread: [{ at: isoAgo(60), fromName: 'Ravi', fromMe: false, preview: 'Can you send the price?', messageId: 'T1-1' }] };
   assert.ok((await call('dp.commit', { parent: head, changes: [{ path: 'data.json', content: JSON.stringify({ groups: [{ id: 'g1', name: 'Acton' }], projects: [tt] }) }], message: 'thread task' }, tok.boss)).ok);
@@ -2068,10 +2068,10 @@ test('review r12: a new email from them in the thread of a FINISHED 📧 task (o
   await fakeMicrosoft();
   await connectOutlook();
   const at = new Date(Date.now() - 3 * 86400e3).toISOString();
-  const fin = (id, conv, name, extra = {}) => ({ id, name, state: 'finished', stateChangedAt: at, groupId: 'g1', createdAt: at, steps: [], workNotes: [], links: [], files: [], notes: '',
+  const fin = (id, conv, name, extra = {}) => ({ id, name, state: 'finished', stateChangedAt: at, createdAt: at, steps: [], workNotes: [], links: [], files: [], notes: '',
     mail: { conversationId: conv, messageId: conv + '-1', fromName: 'Ravi', fromAddress: 'ravi@x.test', subject: name, at },
     thread: [{ at, fromName: 'Ravi', fromMe: false, preview: 'First', messageId: conv + '-1' }], ...extra });
-  const finProj = { id: 'r12p', name: 'Kiln order', state: 'finished', stateChangedAt: at, groupId: 'g1', createdAt: at, steps: [], workNotes: [], mail: { conversationId: 'C-R12P' } };
+  const finProj = { id: 'r12p', name: 'Kiln order', state: 'finished', stateChangedAt: at, createdAt: at, steps: [], workNotes: [], mail: { conversationId: 'C-R12P' } };
   const head = (await call('dp.head', {}, tok.boss)).head;
   assert.ok((await call('dp.commit', { parent: head, message: 'finished threads', changes: [{ path: 'data.json', content: JSON.stringify({
     groups: [{ id: 'g1', name: 'Acton' }], projects: [fin('r12a', 'C-R12A', '📧 PO 4411'), fin('r12b', 'C-R12B', '📧 PO 4412'), finProj] }) }] }, tok.boss)).ok);
@@ -2100,9 +2100,9 @@ test('an older email moved into the Inbox later (from Junk) joins the thread but
   const added = iso(50);
   const mailOf = (conv, id) => ({ conversationId: conv, messageId: id, fromName: 'Bob', fromAddress: 'bob@x.test', subject: 'Order 55', at: newer, addedAt: added });
   await saveProjects([
-    { id: 'old1', name: '📧 Order 55', state: 'active', groupId: 'g1', createdAt: newer, steps: [], workNotes: [], links: [], files: [], notes: '',
+    { id: 'old1', name: '📧 Order 55', state: 'active', createdAt: newer, steps: [], workNotes: [], links: [], files: [], notes: '',
       mail: mailOf('C-OLD1', 'old1-bob'), thread: [{ at: newer, fromName: 'Bob', fromMe: false, preview: 'Newest from Bob', messageId: 'old1-bob' }] },
-    { id: 'old2', name: 'Kiln order', state: 'active', groupId: 'g1', createdAt: newer, steps: [], workNotes: [], links: [], files: [], notes: '', mail: mailOf('C-OLD2', 'old2-bob') },
+    { id: 'old2', name: 'Kiln order', state: 'active', createdAt: newer, steps: [], workNotes: [], links: [], files: [], notes: '', mail: mailOf('C-OLD2', 'old2-bob') },
   ]);
   ms.sent = []; ms.pages = [[]];
   const mod = new Date().toISOString().replace(/\.\d+Z$/, 'Z');
@@ -2152,7 +2152,7 @@ test('the same email again with a new Outlook id (moved out of the Inbox and bac
   assert.equal((await call('outlook.status', {}, tok.boss)).outlook.addedToday, before + 1, 'one email added today (its second key is not counted)');
   // an email kept before internetMessageIds were looked at: the thread knows it by its time, sender and words
   const at = new Date(Date.now() - 40 * 60000).toISOString().replace(/\.\d+Z$/, 'Z');
-  await saveProjects([{ id: 'dupold', name: '📧 Invoice 8', state: 'finished', stateChangedAt: at, groupId: 'g1', createdAt: at, steps: [], workNotes: [], links: [], files: [], notes: '',
+  await saveProjects([{ id: 'dupold', name: '📧 Invoice 8', state: 'finished', stateChangedAt: at, createdAt: at, steps: [], workNotes: [], links: [], files: [], notes: '',
     mail: { conversationId: 'C-DUP8', messageId: 'dup8-a', fromName: 'Bob', subject: 'Invoice 8', at: at.replace('Z', '.000Z') },
     thread: [{ at: at.replace('Z', '.000Z'), fromName: 'Bob', fromMe: false, preview: 'Invoice 8 attached.', messageId: 'dup8-a' }] }]);
   ms.moved = [{ ...mail('dup8-b', 'C-DUP8', 'Invoice 8', 'Bob', 0, 'Invoice 8 attached.'), receivedDateTime: at, lastModifiedDateTime: new Date().toISOString().replace(/\.\d+Z$/, 'Z') }];

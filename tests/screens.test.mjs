@@ -37,9 +37,8 @@ function sampleState() {
   const now = new Date();
   const at = (minAgo) => new Date(now - minAgo * 60000).toISOString();
   const s = { data: emptyData(), history: {} };
-  const g = s.data.groups[0].id;
   applyOps(s, [
-    makeOp('createProject', { projectId: 'p1', name: 'Kiln', groupId: g }, at(300)),
+    makeOp('createProject', { projectId: 'p1', name: 'Kiln' }, at(300)),
     makeOp('addStep', { projectId: 'p1', stepId: 's1', text: 'Call @Ravi' }, at(299)),
     makeOp('addStep', { projectId: 'p1', stepId: 's2', text: 'Fire samples' }, at(298)),
     makeOp('addPerson', { personId: 'r', name: 'Ravi' }, at(297)),
@@ -50,7 +49,7 @@ function sampleState() {
     makeOp('addTime', { projectId: 'p1', minutes: 45 }, at(100)),
     makeOp('startTimer', { projectId: 'p1' }, at(20)),
     makeOp('addLink', { projectId: 'p1', linkId: newId(), title: 'Spec', url: 'https://example.com' }, at(10)),
-    makeOp('addTag', { groupId: g, tagId: 'kiln', name: 'Kiln' }, at(9)),
+    makeOp('addTag', { tagId: 'kiln', name: 'Kiln' }, at(9)),
     makeOp('setProjectField', { projectId: 'p1', field: 'tagId', value: 'kiln' }, at(8)),
   ]);
   return s;
@@ -101,12 +100,12 @@ test('people list and person page draw', () => {
 
 test('time report draws (pie, legend in % and hours) and date ranges are right', () => {
   const s = sampleState();
-  const ui = { timeReport: { groupId: s.data.groups[0].id, preset: 'thisWeek', by: 'tag', mode: 'pct', custom: {} } };
+  const ui = { timeReport: { preset: 'thisWeek', by: 'tag', mode: 'pct', custom: {} } };
   const text = renderTimeReport(fakeCtx(s, ui)).textContent;
-  assert.ok(text.includes('Time by tag'), 'no group name in the title (groups are off for now, owner 23 Oct)');
+  assert.ok(text.includes('Time by tag'), 'no group name in the title (groups are gone, owner 23 Oct)');
   assert.ok(!text.includes('Group '), 'no group picker');
   const empty = renderTimeReport(fakeCtx(s, { timeReport: { ...ui.timeReport, preset: 'custom', custom: { from: '2020-01-01', to: '2020-01-02' } } })).textContent;
-  assert.ok(empty.includes('No time logged for this period.') && !empty.includes(s.data.groups[0].name), 'no group name when empty either');
+  assert.ok(empty.includes('No time logged for this period.') && !empty.includes('Acton'), 'no group name when empty either');
   assert.ok(text.includes('Kiln'));
   assert.ok(text.includes('100%'));
   ui.timeReport.mode = 'hours';
@@ -135,7 +134,7 @@ test('time report opens on "Last month" in the first week of a month, else on wh
 test('project page: "Save + done" button, and the next project offer when green', () => {
   const s = sampleState();
   applyOps(s, [
-    makeOp('createProject', { projectId: 'p2', name: 'Glaze trial', groupId: s.data.groups[0].id }),
+    makeOp('createProject', { projectId: 'p2', name: 'Glaze trial' }),
     makeOp('okForToday', { projectId: 'p1' }),
   ]);
   const ctx = fakeCtx(s, { selected: 'p1', update: {} });
@@ -301,7 +300,7 @@ test('person page: "📋 Send again" and a green "✓ Sent today 9:05" once sent
 
 test('person page: projects given here show as "📁 Projects given to …" with the next step, and the list counts them', () => {
   const s = sampleState();
-  applyOps(s, [makeOp('createProject', { projectId: 'p9', name: 'Basin mould', groupId: s.data.groups[0].id }),
+  applyOps(s, [makeOp('createProject', { projectId: 'p9', name: 'Basin mould' }),
     makeOp('addStep', { projectId: 'p9', stepId: 'g1', text: 'Cast 3 trial moulds' }),
     makeOp('setProjectTeam', { projectId: 'p9', userId: 7, name: 'ravi' })]);
   const ctx = fakeCtx(s, { person: 'r' });
@@ -840,11 +839,10 @@ function mainsState() {
   const s = sampleState(); // p1 'Kiln' (has steps)
   const now = Date.now();
   const at = (minAgo) => new Date(now - minAgo * 60000).toISOString();
-  const g = s.data.groups[0].id;
   applyOps(s, [
-    makeOp('createMainProject', { projectId: 'm', name: 'Kilns', groupId: g, childId: 'p1' }, at(90)),
-    makeOp('createProject', { projectId: 'c2', name: 'Kiln 2', groupId: g, parentId: 'm' }, at(80)),
-    makeOp('createProject', { projectId: 'o', name: 'Office move', groupId: g }, at(70)),
+    makeOp('createMainProject', { projectId: 'm', name: 'Kilns', childId: 'p1' }, at(90)),
+    makeOp('createProject', { projectId: 'c2', name: 'Kiln 2', parentId: 'm' }, at(80)),
+    makeOp('createProject', { projectId: 'o', name: 'Office move' }, at(70)),
     makeOp('setProjectTeam', { projectId: 'c2', userId: 7, name: 'Ravi' }, at(60)),
   ]);
   return s;
@@ -864,9 +862,8 @@ function liveCtx(s, ui = {}) {
 test('✅ Tasks list: tasks only (📂 projects left out), a task in two projects listed once, with a small chip for each project under its row', async () => {
   const { activeTasks } = await import('../docs/rules.js');
   const s = mainsState();
-  const g = s.data.groups[0].id;
   applyOps(s, [
-    makeOp('createMainProject', { projectId: 'sa', name: 'Supplier approval', groupId: g }),
+    makeOp('createMainProject', { projectId: 'sa', name: 'Supplier approval' }),
     makeOp('addToProject', { projectId: 'p1', parentId: 'sa' }),
   ]);
   assert.deepEqual(activeTasks(s.data).map((p) => p.id).sort(), ['c2', 'o', 'p1'], 'the projects Kilns and Supplier approval are not tasks; Kiln is there once');
@@ -881,8 +878,7 @@ test('✅ Tasks list: tasks only (📂 projects left out), a task in two project
 
 test('📂 smart box: ⋯ → "📂 Add to a project…"; projects only (typed any case), ↓ / Enter adds; it stays open to add more; ✓ on the ones it is in, tap again takes it out; a create line; Esc closes', () => {
   const s = mainsState();
-  const g = s.data.groups[0].id;
-  applyOps(s, [makeOp('createMainProject', { projectId: 'sa', name: 'Supplier approval', groupId: g })]);
+  applyOps(s, [makeOp('createMainProject', { projectId: 'sa', name: 'Supplier approval' })]);
   const ui = { selected: 'o', update: {}, projMenu: 'o' };
   const ctx = liveCtx(s, ui);
   btn(renderDetail(ctx), '📂 Add to a project…').__on.click();
@@ -957,7 +953,7 @@ test('📂 project page: TASKS (N) table (dot, name + 👥, Now / "No next step"
 
 test('📂 a task shows a chip "📂 Kilns ›" for each project it is in (opens it); others do not', () => {
   const s = mainsState();
-  applyOps(s, [makeOp('createMainProject', { projectId: 'sa', name: 'Supplier approval', groupId: s.data.groups[0].id, childId: 'p1' })]);
+  applyOps(s, [makeOp('createMainProject', { projectId: 'sa', name: 'Supplier approval', childId: 'p1' })]);
   const ctx = liveCtx(s, { selected: 'p1', update: {} });
   const page = renderDetail(ctx);
   assert.ok(btn(page, '📂 Supplier approval ›'), 'a chip for each project');
@@ -1019,7 +1015,7 @@ test('📂 app wiring (app.js): ✅ Tasks and 📂 Projects menu items (keys; li
 
 test('📧 a task made from an email: EMAIL THREAD under the steps (📧 them / ↩ you, date, first lines, Open ↗), the Reply ready box, and the ✉ Replies page lists it', () => {
   const s = sampleState();
-  applyOps(s, [makeOp('createProject', { projectId: 'et', name: '📧 Price list', groupId: s.data.groups[0].id })]);
+  applyOps(s, [makeOp('createProject', { projectId: 'et', name: '📧 Price list' })]);
   const t = s.data.projects.find((p) => p.id === 'et');
   const ago = (min) => new Date(Date.now() - min * 60000).toISOString();
   t.mail = { conversationId: 'C1', messageId: 'M2', fromName: 'Ravi', fromAddress: 'ravi@x.test', subject: 'Price list', at: ago(10) };
@@ -1104,7 +1100,7 @@ test('✅ Tasks: "All tasks N" | "No project N" switch (both red first, remember
   assert.match(app, /opt\('all', `All tasks \$\{all\.length\}`\), opt\('loose', `No project \$\{loose\}`\)/);
   assert.match(app, /if \(ui\.view === 'all'\) return activeTasks\(store\.view\.data\)\.filter\(\(p\) => ui\.taskFilter !== 'loose' \|\| !parentIdsOf\(p\)\.length\);/, '"No project" = tasks in no project');
   assert.match(app, /taskListView\(\) && !ui\.search && !ui\.adding \? taskFilterSwitch\(\) : showSort/, 'the switch replaces My order / Red first on Tasks and in groups (owner asked, 22 Oct)');
-  // (groups are off for now, owner 23 Oct: ✅ Tasks only)
+  // (groups are gone, owner 23 Oct: ✅ Tasks only)
   assert.match(app, /function taskListView\(\) \{\n  return ui\.view === 'all';/);
   assert.match(app, /if \(\(ui\.sort !== 'red' && !taskListView\(\)\) \|\| ui\.search\) return list;/, 'Tasks and groups are always red first');
   assert.match(app, /taskFilter: ui\.taskFilter,/, 'remembered');
@@ -1139,31 +1135,38 @@ test('task lists: a task with no next step shows no red "No next step — add on
   assert.match(row, /class: 'quick-add', title: 'Add the first step'/, 'the + to add a step stays');
 });
 
-test('groups are off for now (owner, 23 Oct): no Groups in the menu, no group pages, no group box on a task or + New task, no group in Settings, the Time report or the Dashboard; an older data file is merged into one list once', async () => {
+test('groups are gone (owner, 23 Oct): no Groups in the menu, no group pages, no group on a task or + New task, one tag list and one timer switch in Settings, no group in the Time report or the Dashboard', async () => {
   const { readFileSync } = await import('node:fs');
   const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
   const detail = readFileSync(new URL('../docs/ui/detail.js', import.meta.url), 'utf8');
   const dash = readFileSync(new URL('../docs/ui/dashboard.js', import.meta.url), 'utf8');
-  for (const gone of ["'groups-head'", 'function addGroup(', 'function editGroup(', "go('group:'", "'Group: '", "name: 'group'", '+ New task in ']) assert.ok(!app.includes(gone), 'gone: ' + gone);
+  for (const gone of ["'groups-head'", 'function addGroup(', 'function editGroup(', "go('group:'", "'Group: '", "name: 'group'", '+ New task in ', 'groupHasTimer', 'mergeGroups', '.groups']) assert.ok(!app.includes(gone), 'gone: ' + gone);
+  for (const f of ['detail.js', 'timereport.js', 'dashboard.js', 'mains.js', 'people.js', 'richedit.js']) {
+    const src = readFileSync(new URL('../docs/ui/' + f, import.meta.url), 'utf8');
+    assert.ok(!/groupId|\.groups\b|groupHasTimer/.test(src), f + ': no groups');
+  }
   assert.equal((app.match(/group:/g) || []).length, 1, 'only the old saved group page, which opens ✅ Tasks');
   assert.match(app, /view: saved\.view && !String\(saved\.view\)\.startsWith\('group:'\) \? saved\.view : saved\.view \? 'all' : 'today'/);
   assert.ok(!/'Group ',/.test(detail), 'no group box on a task');
   assert.ok(!/time-groups/.test(dash), 'no time by group on the Dashboard');
-  assert.match(app, /h\('h3', null, 'Tags and timer'\)/); assert.ok(!/'Groups and tags'/.test(app));
-  assert.match(app, /store\.view\.data\.groups\.length > 1\) store\.dispatch\('mergeGroups', \{\}\);/, 'merged into one list once');
-  assert.match(app, /recordPastScores\(\); oneGroup\(\); \}\);/, 'after the data is loaded');
-  // drawn: the task page shows no group name; the Settings tags have no group name
+  assert.match(app, /h\('h3', null, 'Tags and timer'\)/);
+  assert.match(app, /checked: timerOn\(data\), onChange: \(e, el\) => store\.dispatch\('setTimer', \{ on: el\.checked \}\)/, 'one timer switch');
+  assert.match(app, /\(data\.tags \|\| \[\]\)\.map\(\(t\) => h\('span', \{ class: 'tag tag-chip'/, 'one tag list');
+  // drawn: the task page shows its tag, no group chip
   const s = sampleState();
+  applyOps(s, [makeOp('setProjectField', { projectId: 'p1', field: 'tagId', value: 'kiln' })]);
   const text = renderDetail(fakeCtx(s, { selected: 'p1', update: {} })).textContent;
-  assert.ok(!text.includes(s.data.groups[0].name + ' ·'), 'no group name on the task page');
+  assert.ok(text.includes('🏷 Kiln'), 'the tag shows');
+  assert.ok(!/Acton|No group/.test(text), 'no group');
 });
+
 
 
 test('menu order (owner, 22 Oct): Today, Tasks, Projects, Replies, Inbox, Groups, Paused, Finished, People, Settings, More ▸ (Diary, Dashboard, Time report); no people listed under People', async () => {
   const { readFileSync } = await import('node:fs');
   const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
   const menu = app.slice(app.indexOf("h('ul', { class: 'menu-list' },"), app.indexOf('// ---------------------------------------------------------------- Today box'));
-  // (groups are off for now, owner 23 Oct: no Groups between Inbox and Paused)
+  // (groups are gone, owner 23 Oct: no Groups between Inbox and Paused)
   const order = ["item('today'", "item('all'", "item('mains'", "item('replies'", "item('inbox'", "item('paused'", "item('finished'", "item('people'", "item('settings'", "'more-menu'", "item('diary'", "item('dashboard'", "item('time'"];
   let at = -1;
   for (const bit of order) { const i = menu.indexOf(bit); assert.ok(i > at, `${bit} in its place`); at = i; }
@@ -1175,10 +1178,10 @@ test('menu order (owner, 22 Oct): Today, Tasks, Projects, Replies, Inbox, Groups
 test('✅ Tasks and groups: a select box on each row (instead of +), a bar "N selected · 📂 Add to project… · Select all · Clear" that puts all selected tasks into one project (or a new one); Today keeps its tick box', async () => {
   const { readFileSync } = await import('node:fs');
   const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
-  assert.match(app, /function canPickRows\(\) \{\n  return !ui\.search && ui\.view === 'all';/, 'Tasks only (not Today; groups are off for now, owner 23 Oct)');
+  assert.match(app, /function canPickRows\(\) \{\n  return !ui\.search && ui\.view === 'all';/, 'Tasks only (not Today; groups are gone, owner 23 Oct)');
   assert.match(app, /picking\n      \? h\('input', \{\n        type: 'checkbox', class: 'row-pick'/, 'the select box takes the place of + and the tick');
   assert.match(app, /for \(const id of picked\) if \(store\.dispatch\('addToProject', \{ projectId: id, parentId: main\.id \}\)\) n\+\+;/, 'all selected go into the chosen project');
-  assert.match(app, /store\.dispatch\('createMainProject', \{ projectId, name, groupId: data\.groups\[0\] && data\.groups\[0\]\.id, childId: ids\[0\] \}\)/, 'or a new project made with them');
+  assert.match(app, /store\.dispatch\('createMainProject', \{ projectId, name, childId: ids\[0\] \}\)/, 'or a new project made with them');
   assert.match(app, /`\$\{picked\.size\} selected`/);
   assert.match(app, /pickBar\(list\),\n    \.\.\.listParts\(list, today\),/);
 });
@@ -1203,7 +1206,7 @@ test('a task or project page shows its links and files as chips near the top (�
 // Drag-to-move (owner asked, 23 Oct): a ⋮⋮ grip on each task row replaces the ▲ ▼ buttons.
 function threeTasks() {
   const s = mainsState();
-  applyOps(s, [makeOp('createProject', { projectId: 'c3', name: 'Kiln 3', groupId: s.data.groups[0].id, parentId: 'm' })]);
+  applyOps(s, [makeOp('createProject', { projectId: 'c3', name: 'Kiln 3', parentId: 'm' })]);
   return s;
 }
 const isSubRow = (n) => /(^| )sub-row( |$)/.test(n.className || '');
@@ -1400,7 +1403,7 @@ const clip = ({ html = '', text = '', files = [] }) => ({ files, getData: (t) =>
 test('rich box: pasting an update copied from another task brings its photo along (same picture, new id here); a photo found nowhere is left out with a note', async () => {
   const s = sampleState();
   applyOps(s, [
-    makeOp('createProject', { projectId: 'pB', name: 'Glaze', groupId: s.data.groups[0].id }),
+    makeOp('createProject', { projectId: 'pB', name: 'Glaze' }),
     makeOp('addFile', { projectId: 'p1', fileId: 'fA', name: 'kiln.jpg', sha: 'shaA', size: 9, type: 'image/jpeg' }),
     makeOp('addFile', { projectId: 'pB', fileId: 'fB', name: 'own.jpg', sha: 'shaB', size: 9, type: 'image/jpeg' }),
   ]);
@@ -1621,7 +1624,7 @@ test('"+ New task here" (📂 project) and "+ New task": a box with a name and t
   const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
   const form = app.slice(app.indexOf('function newProjectForm()'), app.indexOf('function statusText()'));
   assert.match(form, /newTaskBox\(ctx, d, \{/);
-  assert.match(form, /createTaskWithNote\(ctx, \{ name, groupId: defaultGroup, d, editor \}\)/); // (groups are off for now: no group box)
+  assert.match(form, /createTaskWithNote\(ctx, \{ name, d, editor \}\)/); // (groups are gone: no group box)
   assert.ok(!/name: 'group'/.test(form), 'no group box on + New task');
   assert.ok(!/prompt\(/.test(form));
   const mainsSrc = readFileSync(new URL('../docs/ui/mains.js', import.meta.url), 'utf8');
@@ -1633,7 +1636,7 @@ test('new task box: Enter in the name creates the task when the notes are empty 
   const ctx = liveCtx(s, { selected: 'm', update: {} });
   const d = {};
   let made = null;
-  const box = richedit.newTaskBox(ctx, d, { key: 'new', onCancel: () => {}, onCreate: (name, editor) => { made = richedit.createTaskWithNote(ctx, { name, groupId: s.data.groups[0].id, d, editor }); } });
+  const box = richedit.newTaskBox(ctx, d, { key: 'new', onCancel: () => {}, onCreate: (name, editor) => { made = richedit.createTaskWithNote(ctx, { name, d, editor }); } });
   await withEditor({ 'new-rich': fakeEditor('') }, () => {
     const name = rFind(box, (n) => n.nodeName === 'INPUT' && keyOf(n) === 'new-name');
     name.__on.input(null, { value: 'Glaze check' });
@@ -1876,7 +1879,7 @@ test('🔌 a task an app sent shows like any task: the "🔗 Open in <app>" chip
   const s = sampleState();
   const at = new Date().toISOString();
   s.data.projects.unshift({
-    id: 'ct1', groupId: s.data.groups[0].id, name: 'Check kiln 3', priority: 'medium', deadline: null, notes: '', about: 'The top zone runs hot.',
+    id: 'ct1', name: 'Check kiln 3', priority: 'medium', deadline: null, notes: '', about: 'The top zone runs hot.',
     links: [{ id: 'ct1-link', title: 'Open in Purchase', url: 'https://erp.example/t/1' }], state: 'active', lastTickDate: null,
     lastActivityDate: at.slice(0, 10), activeSince: at.slice(0, 10), stateChangedAt: at, createdAt: at, updatedAt: at, steps: [], files: [], fromApp: 'Purchase',
     workNotes: [{ id: 'an1', text: 'Line: 3\nShift: B', stepId: null, createdAt: at, updatedAt: at, app: true }],
@@ -1906,10 +1909,9 @@ test('🔌 From apps: ✕ Reject puts the cursor straight into the reason box', 
 // ---------------------------------------------------------------- review round 12 (Daily Projects screens)
 test('dashboard and the top bar\'s score leave out an empty 📂 project (as colourCounts), so one green task is an all-green day', () => {
   const s = { data: emptyData(), history: {} };
-  const g = s.data.groups[0].id;
   applyOps(s, [
-    makeOp('createMainProject', { projectId: 'e', name: 'Holder', groupId: g }),
-    makeOp('createProject', { projectId: 't', name: 'Task', groupId: g, parentId: 'e' }),
+    makeOp('createMainProject', { projectId: 'e', name: 'Holder' }),
+    makeOp('createProject', { projectId: 't', name: 'Task', parentId: 'e' }),
     makeOp('addStep', { projectId: 't', stepId: 'ts', text: 'Do it' }),
     makeOp('addWorkNote', { projectId: 't', noteId: 'n1', text: 'Did some' }),
   ]);
@@ -2214,9 +2216,8 @@ test('Give a Work Task sign-in: a retry after a lost reply does not make a secon
 
 test('people: "Add a task with Ravi" offers tasks only — a 📂 project (even one with an old @Ravi step) is never a chip or the Enter target', () => {
   const s = sampleState();
-  const g = s.data.groups[0].id;
   applyOps(s, [
-    makeOp('createMainProject', { projectId: 'm1', name: 'Kilns', groupId: g }),
+    makeOp('createMainProject', { projectId: 'm1', name: 'Kilns' }),
     makeOp('addStep', { projectId: 'm1', stepId: 'ms', text: 'Old step with @Ravi' }),
   ]);
   const el = renderPerson(fakeCtx(s, { person: 'r' }));

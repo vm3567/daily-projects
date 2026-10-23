@@ -282,13 +282,12 @@ function ol_thread_add(object $p, array $e): bool {
 
 /** A new email thread → a new task "📧 subject" at the top of the list (not your work: no step, the dot is not green). */
 function ol_new_task(object $data, array &$hist, array $x, string $at): object {
-  $groups = is_array($data->groups ?? null) ? $data->groups : [];
   $day = date('Y-m-d', strtotime($at));
   $id = ol_rand_id('mt');
   $mail = (object)['conversationId' => $x['conv']];
   ol_mail_info($mail, $x, $at);
   $task = (object)[
-    'id' => $id, 'groupId' => (string)(is_object($groups[0] ?? null) ? ($groups[0]->id ?? 'g1') : 'g1'),
+    'id' => $id,
     'name' => mb_substr('📧 ' . $x['subject'], 0, 200), 'priority' => 'medium', 'deadline' => null, 'notes' => '',
     'links' => [], 'state' => 'active', 'lastTickDate' => null, 'lastActivityDate' => $day, 'activeSince' => $day,
     'stateChangedAt' => $at, 'createdAt' => $at, 'updatedAt' => $at, 'steps' => [], 'workNotes' => [], 'files' => [],

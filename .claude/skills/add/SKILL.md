@@ -14,7 +14,7 @@ The user is not a programmer. Use short, plain English.
 
 ```bash
 node tools/tracker.mjs summary
-node tools/tracker.mjs new-task "<name>" --group "<Acton|Personal|Ceramic Ninja|...>" --priority <high|medium|low> --steps "<step>" "<step>" [--project "<📂 project>"]
+node tools/tracker.mjs new-task "<name>" --priority <high|medium|low> --steps "<step>" "<step>" [--project "<📂 project>"]
 node tools/tracker.mjs add-steps "<task id or name>" "<step>" "<step>"
 node tools/tracker.mjs add-to "<task>" "<📂 project>" [--create]      (put a task into a project; it can be in several)
 node tools/tracker.mjs remove-from "<task>" "<📂 project>"
@@ -28,11 +28,11 @@ Run it from the Task folder.
 2. Run `summary` to see the existing tasks, 📂 projects and their ids.
 3. Decide:
    - If it belongs to an existing task → add steps to that task.
-   - Otherwise → a new task. Pick the best group. Use priority medium unless the user says otherwise.
+   - Otherwise → a new task. Use priority medium unless the user says otherwise.
    - If it belongs in a 📂 project (or several), say so in the plan; add it with `--project` or `add-to`.
    - Split the description into short, clear steps (max 7). Each step is one action.
 4. Show the plan in plain words, for example:
-   - "New task: **Glaze test** (group Ceramic, priority medium, in 📂 Kilns)"
+   - "New task: **Glaze test** (priority medium, in 📂 Kilns)"
    - "Steps: 1. Mix batch 2. Fire samples 3. Check colour"
 5. Ask: "Save this?" Change it if the user asks.
 6. Only after a yes, run the command. Then confirm in one line.

@@ -89,7 +89,7 @@ export function renderDashboard(ctx) {
   // Finished projects shelf
   const shelf = data.projects.filter((p) => p.state === 'finished').sort((a, b) => (a.stateChangedAt < b.stateChangedAt ? 1 : -1));
 
-  // Time this week (Monday to today), by group and by project, and last week's total
+  // Time this week (Monday to today), by project, and last week's total
   const wk = mondayOf(today);
   const lastWkStart = addDays(wk, -7);
   const lastWkEnd = addDays(wk, -1);
@@ -167,7 +167,7 @@ export function renderDashboard(ctx) {
         card('Time this week', timeTotal ? h('div', null,
           h('div', { class: 'time-total' }, h('strong', null, fmtMinutes(timeTotal)),
             lastTotal ? h('span', { class: timeTotal >= lastTotal ? 'up' : 'down' }, timeTotal >= lastTotal ? ` ↑ ${fmtMinutes(timeTotal - lastTotal)} vs last week` : ` ↓ ${fmtMinutes(lastTotal - timeTotal)} vs last week`) : h('span', { class: 'muted small' }, ' since Monday')),
-          // (groups are off for now: no "time by group" line)
+          // (no groups)
           h('ul', { class: 'dash-bars' }, timeRows.slice(0, 5).map(({ p, m }) => h('li', { key: 'tm-' + p.id },
             h('button', { class: 'link', onClick: () => ctx.openProject(p.id) }, p.name),
             h('div', { class: 'dash-bar' }, bar(m, maxTime, 6)), h('span', { class: 'muted small' }, fmtMinutes(m))))))

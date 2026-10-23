@@ -18,7 +18,7 @@
 //   node tools/tracker.mjs edit-step <project> "<step text or id>" "<new text>"
 //   node tools/tracker.mjs add-note <project> "<text>"
 //   node tools/tracker.mjs add-inbox "<text>" [--note "<up to 600 letters>"]   (📥 Inbox: you decide later; the same one twice is skipped)
-//   node tools/tracker.mjs new-task "<name>" [--group "<group>"] [--priority high|medium|low] [--steps "<a>" "<b>" ...] [--project "<project>"]
+//   node tools/tracker.mjs new-task "<name>" [--priority high|medium|low] [--steps "<a>" "<b>" ...] [--project "<project>"]
 //                         (new-project: the older name, the same)
 //   node tools/tracker.mjs restore <YYYY-MM-DD>          (shows that version; add --yes to restore it)
 //   node tools/tracker.mjs replies                       (emails waiting for your reply, for /replies)
@@ -32,7 +32,7 @@ import { existsSync, readFileSync, writeFileSync, readdirSync, mkdirSync } from 
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { applyOps, makeOp, newId, emptyData } from '../docs/ops.js';
-import { dotColour, nextStep, todayIndia, isOverdue, colourCounts, isSnoozed, restUntil, onlyDaysOf, onlyDaysLabel, awakeProjects, repliesOf, mailThreads, findMailThread, indiaDate, parentOf, parentsOf, parentIdsOf, childrenOf, isMainProject, canPutUnder, mainColour, mainSummary, normalizeParents, mailThreadOf } from '../docs/rules.js';
+import { dotColour, nextStep, todayIndia, isOverdue, colourCounts, isSnoozed, restUntil, onlyDaysOf, onlyDaysLabel, awakeProjects, repliesOf, mailThreads, findMailThread, indiaDate, parentOf, parentsOf, parentIdsOf, childrenOf, isMainProject, canPutUnder, mainColour, mainSummary, normalizeParents, mailThreadOf, dropGroups } from '../docs/rules.js';
 import { DATA_OWNER, DATA_REPO, MOVED_TO } from '../docs/config.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -101,9 +101,9 @@ function pull() {
 }
 
 function readState() {
-  if (SERVER) { const st = JSON.parse(JSON.stringify({ data: server.data, history: server.history })); normalizeParents(st.data); return st; }
+  if (SERVER) { const st = JSON.parse(JSON.stringify({ data: server.data, history: server.history })); dropGroups(normalizeParents(st.data)); return st; }
   const dataFile = join(DATA, 'data.json');
-  const data = normalizeParents(existsSync(dataFile) ? JSON.parse(readFileSync(dataFile, 'utf8')) : emptyData()); // older data: parentId → parentIds
+  const data = dropGroups(normalizeParents(existsSync(dataFile) ? JSON.parse(readFileSync(dataFile, 'utf8')) : emptyData())); // older data: parentId → parentIds; groups gone
   const history = {};
   const hdir = join(DATA, 'history');
   if (existsSync(hdir)) {
@@ -236,18 +236,12 @@ function line(p, today, data = null) {
     isSnoozed(p, today) ? `snoozed until ${restUntil(p, today)}` : null,
     onlyDaysOf(p).length ? `only on: ${onlyDaysLabel(p.onlyDays)}` : null,
     p.status ? `status: ${p.status}` : null,
-    `group: ${p.groupName}`,
     `priority: ${p.priority}`,
     p.deadline ? `target date: ${p.deadline}${isOverdue(p, today) ? ' (PASSED)' : ''}` : null,
     ns ? `next: ${ns.text}${ns.waiting ? ` (WAITING${ns.waitingOn ? ' on ' + ns.waitingOn : ''})` : ''}` : 'next: NONE',
     (p.lastActivityDate || p.lastTickDate) ? `last activity: ${p.lastActivityDate || p.lastTickDate}` : 'no activity yet',
   ];
   return bits.filter(Boolean).join(' | ');
-}
-
-function withGroups(data) {
-  for (const p of data.projects) p.groupName = (data.groups.find((g) => g.id === p.groupId) || {}).name || '';
-  return data;
 }
 
 function sorted(projects, today) {
@@ -272,7 +266,6 @@ try {
     case 'summary': {
       pull();
       const { data } = readState();
-      withGroups(data);
       const c = colourCounts(data, today);
       const active = data.projects.filter((p) => p.state === 'active');
       const awake = awakeProjects(data, today);
@@ -286,7 +279,6 @@ try {
     case 'list': {
       pull();
       const { data } = readState();
-      withGroups(data);
       let list = data.projects.filter((p) => p.state === 'active');
       if (args.includes('--today')) list = list.filter((p) => ['red', 'yellow'].includes(dotColour(p, today))); // not green, not snoozed
       if (!list.length) console.log(args.includes('--today') ? 'All active tasks are green today.' : 'No active tasks.');
@@ -305,7 +297,6 @@ try {
     case 'show': {
       pull();
       const { data, history } = readState();
-      withGroups(data);
       const p = findProject(data, args.join(' '));
       console.log(line(p, today, data));
       console.log(`State: ${p.state}${isSnoozed(p, today) ? ` (snoozed until ${restUntil(p, today)})` : ''}`);
@@ -393,7 +384,7 @@ try {
         if (!main) {
           if (isMainProject(state.data, p)) throw new Error(`${p.name} is a project, so it cannot go into another project.`);
           made = `New project ${mainQuery}; ${p.name} is in it`;
-          return [makeOp('createMainProject', { projectId: newId(), name: mainQuery, groupId: p.groupId, childId: p.id })];
+          return [makeOp('createMainProject', { projectId: newId(), name: mainQuery, childId: p.id })];
         }
         if (inIds.includes(main.id)) throw new Error(`${p.name} is already in ${main.name}.`);
         if (!canPutUnder(state.data, p, main)) {
@@ -469,24 +460,20 @@ try {
     case 'new-project': { // (new-project: the older name of new-task)
       const name = args[0];
       if (!name || name.startsWith('--')) throw new Error('Give the task name first.');
+      if (args.includes('--group')) throw new Error('There are no groups any more: leave out --group.');
       const inProject = argValue(args, '--project');
-      const groupName = argValue(args, '--group');
       const priority = argValue(args, '--priority');
       const si = args.indexOf('--steps');
       const rest = si >= 0 ? args.slice(si + 1) : [];
-      const end = rest.findIndex((s) => s.startsWith('--')); // steps stop at the next flag (--group …)
+      const end = rest.findIndex((s) => s.startsWith('--')); // steps stop at the next flag (--project …)
       const steps = end < 0 ? rest : rest.slice(0, end);
       commitOps((state) => {
-        const g = groupName
-          ? state.data.groups.find((x) => x.name.toLowerCase() === groupName.toLowerCase())
-          : state.data.groups[0];
-        if (!g) throw new Error(`No group called "${groupName}". Groups: ${state.data.groups.map((x) => x.name).join(', ')}`);
         const main = inProject ? findProject(state.data, inProject) : null;
         if (main && !isMainProject(state.data, main)) throw new Error(`${main.name} is a task, not a 📂 project.`);
         // a finished 📂 project (or one that cannot hold tasks): say so, never make the task outside any project quietly
         if (main && !canPutUnder(state.data, { id: '\u0000new' }, main)) throw new Error(main.state === 'finished' ? `${main.name} is finished. Open it again first, or leave out --project.` : `${main.name} cannot hold tasks.`);
         const projectId = newId();
-        const ops = [makeOp('createProject', { projectId, name, groupId: main ? main.groupId : g.id, priority, ...(main ? { parentId: main.id } : {}) })];
+        const ops = [makeOp('createProject', { projectId, name, priority, ...(main ? { parentId: main.id } : {}) })];
         for (const text of steps) ops.push(makeOp('addStep', { projectId, stepId: newId(), text }));
         return ops;
       }, `New task: ${name}`);
