@@ -9,7 +9,7 @@
 // applyOp(state, op) changes the state in place and returns true, or returns false
 // when the operation must be skipped (for example, its item no longer exists).
 
-import { WORK, indiaDate, monthOf, laterDate, addDays, REPEATS, nextRepeatDate, waitingAgain, WEEKDAYS, indiaDateTime, validRemindOnce, remindOnceText, canPutUnder, parentIdsOf, normalizeParents, isMainProject, THREAD_MAX, timerOn } from './rules.js';
+import { WORK, indiaDate, monthOf, laterDate, addDays, REPEATS, nextRepeatDate, waitingAgain, WEEKDAYS, indiaDateTime, validRemindOnce, remindOnceText, canPutUnder, parentIdsOf, normalizeParents, isMainProject, THREAD_MAX, timerOn, MISC_ID } from './rules.js';
 import { AI_DAILY_LIMIT, BRIEF_CLAIM_MINUTES } from './config.js';
 import { sanitizeRich, htmlToText, isRich, RICH_MAX } from './rich.js';
 
@@ -461,6 +461,17 @@ const handlers = {
   },
 
   /** A new project (isMain, so it shows even while empty); with childId, that task is added to it in the same change (one Undo). */
+  /** 📂 Misc, made once (its fixed id: made on two devices at once, it is still one). See rules.js MISC_ID. */
+  makeMisc(state, op) {
+    if (findProject(state.data, MISC_ID)) return false;
+    if (!handlers.createProject(state, op, { projectId: MISC_ID, name: 'Misc', deadline: null })) return false;
+    const m = findProject(state.data, MISC_ID);
+    m.isMain = true; m.misc = true; m.about = 'Every task that is in no other project';
+    state.data.projects.splice(state.data.projects.indexOf(m), 1);
+    state.data.projects.push(m); // (at the end of the list)
+    return true;
+  },
+
   createMainProject(state, op, a) {
     const { data } = state;
     const child = typeof a.childId === 'string' && a.childId ? findProject(data, a.childId) : null;
@@ -687,7 +698,7 @@ const handlers = {
   unpause(state, op, a) { return setState(state, op, a, 'paused', 'active', 'unpaused'); },
   finish(state, op, a) {
     const p = findProject(state.data, a.projectId);
-    if (!p || p.state === 'finished') return false;
+    if (!p || p.state === 'finished' || p.misc) return false; // (📂 Misc stays: it holds every task in no other project)
     if (newerMailThan(p, op.at, a)) return false; // an email came after you pressed Finish (a change saved late): it stays open for it
     return setState(state, op, a, p.state, 'finished', 'finished');
   },
@@ -696,7 +707,7 @@ const handlers = {
   deleteProject(state, op, a) {
     const { data } = state;
     const i = data.projects.findIndex((p) => p.id === a.projectId);
-    if (i < 0) return false;
+    if (i < 0 || data.projects[i].misc) return false; // (📂 Misc is never deleted)
     if (newerMailThan(data.projects[i], op.at, a)) return false; // an email came after you pressed Delete: the task (and that email) stays
     const [p] = data.projects.splice(i, 1);
     for (const c of data.projects) if (parentIdsOf(c).includes(p.id)) setParents(c, parentIdsOf(c).filter((x) => x !== p.id)); // its tasks stay, just no longer in it
@@ -812,7 +823,7 @@ const handlers = {
   /** worktask.in: the whole project is given to a team member ({userId, name}), or taken back (userId null). */
   setProjectTeam(state, op, a) {
     const p = findProject(state.data, a.projectId);
-    if (!p) return false;
+    if (!p || p.misc) return false; // (📂 Misc is never given: it holds every loose task)
     const userId = Number.isInteger(a.userId) && a.userId > 0 ? a.userId : null;
     const name = cleanText(a.name || '', 80).trim();
     const needsPhoto = !!a.needsPhoto;
@@ -1359,10 +1370,11 @@ const handlers = {
     if (people.some((x) => x.id !== person.id && x.name.toLowerCase() === name.toLowerCase())) return false;
     const old = person.name;
     // Change "@Old Name" to "@New Name" everywhere, so the links stay.
+    // Never inside an email address (x@acton-finishing.com).
     // Skip places where a LONGER name of someone else matches (e.g. "@Ravi Kumar" when renaming "Ravi").
     const longer = people.filter((x) => x.id !== person.id && x.name.length > old.length
       && x.name.toLowerCase().startsWith(old.toLowerCase())).map((x) => x.name.toLowerCase());
-    const re = new RegExp('@' + old.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(?![\\p{L}\\p{N}_])', 'giu');
+    const re = new RegExp('(?<![\\p{L}\\p{N}_.+-])@' + old.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(?![\\p{L}\\p{N}_])', 'giu');
     const wordChar = /[\p{L}\p{N}_]/u;
     const fix = (t, nm = name) => (typeof t !== 'string' ? t : t.replace(re, (match, offset) => {
       const rest = t.slice(offset + 1).toLowerCase();
@@ -1590,7 +1602,7 @@ export const CARRIED = new Set(['createProject', 'createMainProject', 'addToProj
 export const NOT_CARRIED = new Set(['deleteProject', 'restoreProject', 'deleteStep', 'setProjectTeam', 'addFile', 'setAiKey', 'setAiProvider',
   'removeFromProject', 'setParent', 'removeLink', 'editLink', 'finish', 'teamWorked', 'deleteWorkNote', 'editWorkNote', 'setProjectField', 'setStepField',
   'removeFile', 'setTimer', 'deleteTag', 'clearReply', 'markReplySent', 'undoReplySent', 'mailReplied', 'removeInbox', 'inboxUndo', 'deletePerson',
-  'recordScores', 'removeTime', 'incrementAiUsage', 'claimBrief', 'setBriefReady', 'addEvent']);
+  'recordScores', 'removeTime', 'incrementAiUsage', 'claimBrief', 'setBriefReady', 'addEvent', 'makeMisc']);
 
 /** Changes carried from the old address (#ops=): keeps only known, harmless ones. Returns { ok, files, dropped }. */
 export function carriedOps(list) {

@@ -2,7 +2,7 @@
 // (ui/team.js): one task page, one message box, one day-by-day history — so a change here reaches everyone.
 // The rules behind them (the history rows, what is late) come from Work Task's logic.js, passed in as `rules`.
 
-import { h, fmtDay as dayOf } from './dom.js';
+import { h, fmtDay as dayOf, errLine } from './dom.js';
 
 // the server's times are India time as "2026-10-22 10:30:00"
 export const fmtDay = (d) => (d ? dayOf(String(d).slice(0, 10)) : '');
@@ -55,7 +55,7 @@ export function chipsFor(t, td, { who = false } = {}) {
   const late = t.status === 'open' && t.dueDate && t.dueDate < td;
   return h('div', { class: 'info-chips' },
     who && t.assignee ? c(`👤 ${t.assignee.name}`, ' team') : null,
-    t.project ? c(`📁 ${t.project}`) : null,
+    t.project && t.project !== t.title ? c(`📁 ${t.project}`) : null, // (not when it only says the task's own name again)
     c(repeatLabel({ ...t, dueDate: null }, td)),
     t.dueDate ? c(late ? `⏰ Late — was by ${fmtDay(t.dueDate)}` : `By ${fmtDay(t.dueDate)}`, late ? ' bad' : '') : null,
     t.needsPhoto ? c('📷 Photo to finish') : null,
@@ -99,21 +99,37 @@ export function filesBlock(t, { pic, openFile, onRemove = null }) {
 
 /**
  * 📅 What's happening on a task, day by day (the rule: logic.js diaryRows): every update with its time, Sunday = Off,
- * a due day with nothing = No progress. staff: their own words say "You", today has its own box above.
+ * a due day with nothing = No progress. staff: their own words say "You". Drawn exactly like the owner's
+ * "What's happening" (ui/detail.js): the last-7-days strip, box (today's update form) under the heading, the day in
+ * bold with its date under it, the time on the right, the same day tags.
  */
-export function diaryBlock({ rules, t, updates, td, staff, meId, n, fillBy, photos, onMore }) {
-  const { rows, more } = rules.diaryRows(t, updates, td, { staff, n, fillBy, nowHm: nowHm() });
-  return h('section', { class: 'block' },
-    h('div', { class: 'diary-head' }, h('h3', null, "📅 What's happening")),
+export function diaryBlock({ rules, t, updates, td, staff, meId, n, fillBy, photos, onMore, box = null, todayInRows = false }) {
+  // todayInRows: today's update is a "Today" row too (the box above only writes or changes it)
+  const { rows, more } = rules.diaryRows(t, updates, td, { staff: staff && !todayInRows, n, fillBy, nowHm: nowHm() });
+  const SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const dayOfWeek = (day) => new Date(day + 'T00:00:00Z').getUTCDay();
+  const back = (day, k) => new Date(Date.parse(day + 'T00:00:00Z') - k * 864e5).toISOString().slice(0, 10);
+  const byDay = new Map(rows.map((r) => [r.day, r.kind]));
+  const STATE = { ups: 'ok', off: 'off', wait: 'wait', miss: 'miss' }, WHAT = { ok: 'updated', off: 'off', wait: 'waiting', miss: 'no progress', none: '—' };
+  const week = [];
+  for (let i = 6; i >= 0; i--) {
+    const day = back(td, i), st = STATE[byDay.get(day)] || (dayOfWeek(day) === 0 ? 'off' : 'none');
+    week.push(h('span', { class: `wk ${st}`, key: 'wk-' + day, title: `${SHORT[dayOfWeek(day)]} ${fmtDay(day)}: ${WHAT[st]}` }, SHORT[dayOfWeek(day)][0]));
+  }
+  return h('section', { class: 'block diary' },
+    h('div', { class: 'diary-head' }, h('h3', null, "📅 What's happening"), h('div', { class: 'week', title: 'Last 7 days' }, week)),
+    box,
     rows.length ? h('ul', { class: 'diary-days' }, rows.map(({ day, kind, ups }) => h('li', { class: 'diary-day', key: 'd-' + day },
-      h('div', { class: 'diary-date' }, day === td ? 'Today' : LONG_DAYS[new Date(day + 'T00:00:00Z').getUTCDay()], h('div', { class: 'muted small' }, fmtDay(day))),
-      h('div', { class: 'diary-items' }, kind === 'ups' ? ups.map((u) => h('div', { class: 'diary-line' },
-        h('span', { class: 'diary-icon' }, u.state === 'stuck' ? '⚠️' : u.state === 'finished' ? '✅' : '📝'),
-        h('div', { class: 'diary-text' }, h('strong', null, (staff && u.byId === meId ? 'You' : u.by) + ' '), u.state !== 'progress' ? [stateTag(u.state), ' '] : null, u.note, photos('photo', u.photos)),
-        h('span', { class: 'muted small' }, fmtTime(u.at))))
-        : kind === 'off' ? h('span', { class: 'muted' }, 'Off')
-          : kind === 'wait' ? h('span', { class: 'diary-none wait' }, 'Waiting for today\'s update')
-            : h('span', { class: 'diary-none' }, 'No progress'))))) : h('p', { class: 'muted small' }, 'Nothing yet.'),
+      h('div', { class: 'diary-date' }, h('strong', null, day === td ? 'Today' : LONG_DAYS[dayOfWeek(day)]),
+        h('span', { class: 'muted small' }, day === td ? `${SHORT[dayOfWeek(day)]} ${fmtDay(day)}` : fmtDay(day))),
+      h('div', { class: 'diary-items' }, kind === 'ups' ? ups.map((u) => h('div', { class: 'diary-entry', key: 'u-' + u.at },
+        h('div', { class: 'diary-line' },
+          h('span', { class: 'diary-icon' }, u.state === 'stuck' ? '⚠️' : u.state === 'finished' ? '✅' : '📝'),
+          h('div', { class: 'diary-text' }, h('strong', null, (staff && u.byId === meId ? 'You' : u.by) + ' '), u.state !== 'progress' ? [stateTag(u.state), ' '] : null, `“${u.note}”`, photos('photo', u.photos))),
+        h('span', { class: 'diary-time' }, fmtTime(u.at))))
+        : kind === 'off' ? h('span', { class: 'day-tag off' }, 'Off')
+          : kind === 'wait' ? h('span', { class: 'day-tag wait' }, 'Waiting for today\'s update')
+            : [h('span', { class: 'day-tag miss' }, 'No progress'), h('span', { class: 'muted small' }, staff ? ' no update' : ' no update from anyone')])))) : h('p', { class: 'muted small' }, 'Nothing yet.'),
     more ? h('button', { class: 'link small', onClick: onMore }, 'Show older days') : null);
 }
 
@@ -122,21 +138,32 @@ export function diaryBlock({ rules, t, updates, td, staff, meId, n, fillBy, phot
  * what waits on the phone, the box and Send, and 📷 a photo with the words in the box.
  * onSend / onPhoto resolve to '' or the words to show under the box.
  */
+/**
+ * The ticks on my own message, like WhatsApp: ✓ sent (grey), ✓✓ seen (blue) once someone else on the task has read it;
+ * null on someone else's message and on the server's own notes. Pure: tested.
+ */
+export function msgTicks(c) {
+  if (!c || !c.mine || c.kind === 'move' || c.kind === 'chase') return null;
+  const by = Array.isArray(c.seenBy) ? c.seenBy : [];
+  return by.length ? { cls: 'ticks seen', text: '✓✓', title: 'Seen by ' + by.join(', ') } : { cls: 'ticks', text: '✓', title: 'Sent — not seen yet' };
+}
+
 export function messagesBlock({ taskId, comments, waiting = [], draft, sending, placeholder, onInput, onSend, onPhoto, onEdit, onDelete, photos }) {
-  const err = h('p', { class: 'warn', key: 'merr-' + taskId, hidden: true });
-  const say = (m) => { if (m) { err.textContent = m; err.hidden = false; } };
+  const err = errLine('merr-' + taskId);
+  const say = (m) => err.say(m);
   const pick = h('input', { type: 'file', accept: 'image/*', class: 'visually-hidden', onChange: (e, el) => { const f = el.files[0]; el.value = ''; if (f) onPhoto(f).then(say); } });
   return block('💬 Messages', h('div', { class: 'banner team-msgs' },
     comments.length ? comments.map((c) => h('div', { class: 'team-msg' + (c.mine ? ' mine' : ''), key: 'c-' + c.id },
       h('div', { class: 'row small' }, h('strong', null, c.mine ? 'You' : c.by), h('span', { class: 'muted' }, `${fmtDay(c.at)} ${fmtTime(c.at)}${c.editedAt ? ' · edited' : ''}`),
-        c.mine && !String(c.text || '').startsWith('↔ Moved') ? h('span', { class: 'msg-acts' },
+        ((t) => (t ? h('span', { class: t.cls, title: t.title, 'aria-label': t.title }, t.text) : null))(msgTicks(c)),
+        c.mine && !String(c.text || '').startsWith('↔ Moved') && c.kind !== 'move' && c.kind !== 'chase' ? h('span', { class: 'msg-acts' }, // (the server's own notes stay as they are)
           h('button', { class: 'link small', title: 'Change', 'aria-label': 'Change this message', onClick: () => onEdit(c) }, '✎'),
           h('button', { class: 'link small', title: 'Delete', 'aria-label': 'Delete this message', onClick: () => onDelete(c) }, '✕')) : null),
       c.photo ? photos('comment.photo', [c.id]) : null,
       c.text ? h('div', { class: 'pre' }, c.text) : null)) : (waiting.length ? null : h('span', { class: 'muted small' }, 'No messages yet.')),
     waiting.map((x) => h('div', { class: 'team-msg mine', key: 'wc-' + x.id },
       h('div', { class: 'row small' }, h('strong', null, 'You'), h('span', { class: 'tag remind' }, '⏳ Waiting to send')), h('div', { class: 'pre' }, x.text))),
-    h('textarea', { key: 'msg-' + taskId, placeholder, value: draft || '', onInput: (e, el) => { onInput(el.value); err.hidden = true; } }),
+    h('textarea', { key: 'msg-' + taskId, placeholder, value: draft || '', onInput: (e, el) => { onInput(el.value); err.clear(); } }),
     err,
     h('div', { class: 'row' },
       h('button', { class: 'btn primary small', disabled: sending ? true : undefined, onClick: () => onSend().then(say) }, 'Send message'),

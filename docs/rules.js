@@ -245,7 +245,11 @@ export function nextRepeatDate(repeat, anchor, doneDay, dayOfMonth = null) {
     return `${ny}-${String(nm).padStart(2, '0')}-${String(Math.min(day, last)).padStart(2, '0')}`;
   };
   let d = step(anchor || doneDay); // always at least one step on, so an early tick never repeats the same date
-  for (let i = 0; i < 400 && d <= doneDay; i++) d = step(d);
+  if ((repeat === 'daily' || repeat === 'weekly') && d <= doneDay) { // a date long ago: straight past the tick day (same weekday)
+    const n = repeat === 'daily' ? 1 : 7;
+    d = addDays(d, (Math.floor(daysBetween(d, doneDay) / n) + 1) * n);
+  }
+  for (let i = 0; i < 1200 && d <= doneDay; i++) d = step(d); // (monthly: 100 years)
   return d;
 }
 
@@ -359,12 +363,26 @@ export function projectGiveChanges(data) {
 }
 
 export function childrenOf(data, id) {
-  return id ? data.projects.filter((p) => p.id !== id && parentIdsOf(p).includes(id)) : [];
+  if (!id) return [];
+  const misc = id === MISC_ID && hasMisc(data);
+  return data.projects.filter((p) => p.id !== id && (parentIdsOf(p).includes(id) || (misc && looseTask(data, p))));
+}
+
+/**
+ * 📂 Misc (owner, 23 Oct): every task that is in no other 📂 project is in it, so everything can be seen in a folder.
+ * Worked out each time (never written on the task): a task put in a real project leaves Misc by itself, and comes
+ * back when it is taken out of its last one. Misc itself is made once (makeMisc), never deleted, finished or given.
+ */
+export const MISC_ID = 'misc';
+export const hasMisc = (data) => data.projects.some((p) => p.id === MISC_ID && p.misc);
+export function looseTask(data, p) {
+  return !!p && p.id !== MISC_ID && !isMainProject(data, p) && !parentIdsOf(p).some((id) => data.projects.some((x) => x.id === id));
 }
 
 /** The projects this task is in (the ones that still exist), in the order it was added to them. */
 export function parentsOf(data, p) {
-  return parentIdsOf(p).map((id) => data.projects.find((x) => x.id === id)).filter(Boolean);
+  const out = parentIdsOf(p).map((id) => data.projects.find((x) => x.id === id)).filter(Boolean);
+  return !out.length && hasMisc(data) && looseTask(data, p) ? [data.projects.find((x) => x.id === MISC_ID)] : out; // (📂 Misc)
 }
 
 /** The first project this task is in, or null. */
@@ -378,7 +396,8 @@ export function isMainProject(data, p) {
 }
 
 export function mainProjects(data) {
-  return data.projects.filter((p) => p.state !== 'finished' && isMainProject(data, p));
+  const list = data.projects.filter((p) => p.state !== 'finished' && isMainProject(data, p));
+  return [...list.filter((p) => p.id !== MISC_ID), ...list.filter((p) => p.id === MISC_ID)]; // 📂 Misc last
 }
 
 /** The tasks: every object that is not a project. */
@@ -421,6 +440,7 @@ export function mainSummary(children, today = todayIndia()) {
 /** Can the task `child` go into the project `main`? (never itself; a project is never inside another; the project is active or paused). */
 export function canPutUnder(data, child, main) {
   if (!child || !main || child.id === main.id) return false;
+  if (main.id === MISC_ID) return false; // 📂 Misc holds what is in no other project by itself: nothing is put in it
   if (parentIdsOf(main).length || main.state === 'finished') return false; // something inside a project cannot hold tasks
   if (isMainProject(data, child)) return false; // a project is never inside another project
   return true;
@@ -480,6 +500,8 @@ export function stepTargets(data, today = todayIndia()) {
 // ---------- People (@mentions) ----------
 
 const WORD_CHAR = /[\p{L}\p{N}_]/u;
+// an "@" right after one of these is inside an email address (accounts@ravi-traders.com), never a mention
+const EMAIL_CHAR = /[\p{L}\p{N}_.+-]/u;
 
 /**
  * Ids of people mentioned as "@Name" in a text. At each "@", the LONGEST matching name wins,
@@ -497,6 +519,7 @@ export function mentionedPeople(text, people) {
   const sorted = c.sorted;
   const lower = text.toLowerCase();
   for (let i = lower.indexOf('@'); i >= 0; i = lower.indexOf('@', i + 1)) {
+    if (i > 0 && EMAIL_CHAR.test(text.charAt(i - 1))) continue;
     for (const p of sorted) {
       const n = p.name.toLowerCase();
       if (lower.startsWith(n, i + 1) && !WORD_CHAR.test(text.charAt(i + 1 + n.length))) { found.add(p.id); break; }
@@ -519,7 +542,7 @@ export function replaceMentions(text, people, replace) {
     const at = text.indexOf('@', i);
     if (at < 0) { out += text.slice(i); break; }
     out += text.slice(i, at);
-    const hit = sorted.find((p) => lower.startsWith(p.name.toLowerCase(), at + 1) && !WORD_CHAR.test(text.charAt(at + 1 + p.name.length)));
+    const hit = !(at > 0 && EMAIL_CHAR.test(text.charAt(at - 1))) && sorted.find((p) => lower.startsWith(p.name.toLowerCase(), at + 1) && !WORD_CHAR.test(text.charAt(at + 1 + p.name.length)));
     if (hit) { out += replace(hit, text.substr(at + 1, hit.name.length)); i = at + 1 + hit.name.length; } else { out += '@'; i = at + 1; }
   }
   return out;

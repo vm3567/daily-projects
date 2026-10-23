@@ -127,6 +127,13 @@ function change_password(array $me, string $old, string $new): void {
   audit($me['id'], 'password_changed');
 }
 
-function logout(): void {
-  if (isset($GLOBALS['token_id'])) q('DELETE FROM tokens WHERE id = ?', [$GLOBALS['token_id']]);
+/**
+ * Sign out on this phone: its sign-in goes, and so do the notifications it linked (never another phone's). An older link
+ * (from before notifications knew their sign-in) is found by the phone's own address, when the app sends it.
+ */
+function logout(string $endpoint = ''): void {
+  if (!isset($GLOBALS['token_id'])) return;
+  q('DELETE FROM push_subs WHERE token_id = ?', [$GLOBALS['token_id']]);
+  if ($endpoint !== '') q('DELETE FROM push_subs WHERE ep_hash = ? AND user_id = ?', [hash('sha256', $endpoint), (int)($GLOBALS['me']['id'] ?? 0)]);
+  q('DELETE FROM tokens WHERE id = ?', [$GLOBALS['token_id']]);
 }

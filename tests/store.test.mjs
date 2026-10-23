@@ -393,3 +393,36 @@ test('Finish / Delete on an email task works right after an email came in, even 
     assert.equal(op.args.seenMailAt, addedAt, `${kind}: keeps the newest email seen`);
   }
 });
+
+test('review r4-1 (whole code): two tabs — a change the other tab already saved is never sent again from here (it would put back an old value over a newer edit from another device); it stays on screen until the newest data comes', async () => {
+  const repo = await freshRepoWithProject();
+  localStorage.clear();
+  const tabA = await device(repo.s);
+  const tabB = await device(repo.s); // the same device: one shared queue
+  tabA.dispatch('setProjectField', { projectId: 'p1', field: 'status', value: 'Waiting for clay' });
+  stop(tabA);
+  tabB.takeOtherTab(); // tab B hears about it
+  assert.equal(tabB.view.data.projects[0].status, 'Waiting for clay');
+  await tabA.flush(); stop(tabA); // tab A saves it
+  // another device then changes the same field
+  const other = await device(repo.s);
+  other.pending = [];
+  other.dispatch('setProjectField', { projectId: 'p1', field: 'status', value: 'Drawings came' });
+  await other.flush(); stop(other);
+  const before = repo.s.head;
+  tabB.load = async () => {}; // (the newest data has not arrived in tab B yet)
+  tabB.takeOtherTab();
+  assert.equal(tabB.view.data.projects[0].status, 'Waiting for clay', 'still shown here meanwhile (never vanishes)');
+  assert.equal(tabB.toSend().length, 0, 'nothing of it to send');
+  await tabB.save(); stop(tabB);
+  assert.equal(repo.s.head, before, 'not sent again');
+  assert.equal(JSON.parse(repo.read('data.json')).projects[0].status, 'Drawings came', 'the newer edit stays');
+  // tab B's own change afterwards: saved on the newest data, the old one not replayed with it
+  delete tabB.load;
+  tabB.dispatch('addStep', { projectId: 'p1', stepId: 's7', text: 'Glaze test' });
+  await tabB.flush(); stop(tabB);
+  const p = JSON.parse(repo.read('data.json')).projects[0];
+  assert.equal(p.status, 'Drawings came', 'still the newer edit');
+  assert.ok(p.steps.some((s) => s.id === 's7'), 'tab B\'s own change saved');
+  assert.equal(tabB.pending.length, 0, 'and the other tab\'s copy is gone once the newest data came');
+});

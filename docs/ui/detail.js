@@ -124,7 +124,11 @@ function teamMessages(ctx, p) {
     form.elements.reply.disabled = true;
     const cids = (ui.teamReplyCid = ui.teamReplyCid || {});
     if (!cids[p.id] || cids[p.id].text !== text) cids[p.id] = { id: 'r' + newId() + newId(), text }; // a retry of the same words: the same id (never twice)
-    try { await ctx.teamReply(p, list[list.length - 1].taskId, text, taskIds, cids[p.id].id, upTo); delete (ui.teamReply ||= {})[p.id]; delete cids[p.id]; }
+    // the answer goes on the newest message's task: only that person's messages count as answered (another person's
+    // question stays new, so it is never marked read without an answer)
+    const to = list[list.length - 1];
+    const answered = [...new Set(list.filter((c) => c.by === to.by).map((c) => c.taskId))];
+    try { await ctx.teamReply(p, to.taskId, text, answered, cids[p.id].id, upTo); delete (ui.teamReply ||= {})[p.id]; delete cids[p.id]; }
     catch (e) { ctx.toast(e.message, 5000); form.elements.reply.disabled = false; }
   };
   return h('div', { class: 'banner team-msgs', key: 'tmsg-' + p.id },
@@ -820,7 +824,7 @@ function stateButtons(ctx, p) {
         class: 'btn', title: 'Hide it from Today for some days',
         onClick: () => { ui.snoozeOpen = p.id; ctx.render(); setTimeout(() => { const n = document.querySelector(`[data-key="snooze-${p.id}"]`); if (n) { n.focus(); n.select(); } }, 30); },
       }, '💤 Snooze') : null,
-      h('button', { class: 'btn', onClick: () => ctx.act('finish', { projectId: p.id }, `Finished: ${p.name} (moved to Finished)`) }, `Finish ${kindWord(ctx, p)}`),
+      p.misc ? null : h('button', { class: 'btn', onClick: () => ctx.act('finish', { projectId: p.id }, `Finished: ${p.name} (moved to Finished)`) }, `Finish ${kindWord(ctx, p)}`),
       menuButton(ctx, p),
       navButtons(ctx),
     ];
@@ -828,8 +832,8 @@ function stateButtons(ctx, p) {
   if (p.state === 'paused') {
     return [
       h('button', { class: 'btn primary', onClick: () => store.dispatch('unpause', { projectId: p.id }) }, 'Unpause'),
-      h('button', { class: 'btn', onClick: () => ctx.act('finish', { projectId: p.id }, `Finished: ${p.name} (moved to Finished)`) }, `Finish ${kindWord(ctx, p)}`),
-      deleteButton(ctx, p),
+      p.misc ? null : h('button', { class: 'btn', onClick: () => ctx.act('finish', { projectId: p.id }, `Finished: ${p.name} (moved to Finished)`) }, `Finish ${kindWord(ctx, p)}`),
+      p.misc ? null : deleteButton(ctx, p),
       navButtons(ctx),
     ];
   }
@@ -872,7 +876,7 @@ function projectMenu(ctx, p) {
   const item = (label, fn, cls = '') => h('button', { class: 'menu-row' + cls, onClick: go(fn) }, label);
   return h('div', { class: 'proj-menu', key: 'pm-' + p.id, role: 'menu' },
     p.state === 'active' && (!isSnoozed(p, today) || restReason(p, today) === 'onlyDays') ? item('💤 Snooze…', () => { ui.snoozeOpen = p.id; setTimeout(() => { const n = document.querySelector(`[data-key="snooze-${p.id}"]`); if (n) { n.focus(); n.select(); } }, 30); }) : null,
-    p.state === 'active' && ctx.onServer ? item(p.team ? `👥 Change person (now ${p.team.name})` : `👥 Give ${kindWord(ctx, p)} to…`, () => { ui.giveOpen = p.id; ui.givePhoto = p.team ? !!p.team.needsPhoto : false; }) : null,
+    p.state === 'active' && ctx.onServer && !p.misc ? item(p.team ? `👥 Change person (now ${p.team.name})` : `👥 Give ${kindWord(ctx, p)} to…`, () => { ui.giveOpen = p.id; ui.givePhoto = p.team ? !!p.team.needsPhoto : false; }) : null,
     p.state === 'active' && ctx.onServer && p.team ? item('↩ Take back from ' + p.team.name, () => { if (confirm(takeBackQuestion(ctx.store.view.data, p))) ctx.takeBackProject(p); }) : null,
     p.state === 'active' ? item('📅 Only on…', () => { ui.onlyDaysOpen = p.id; }) : null,
     p.state === 'active' ? item('🔔 Remind me once…', () => { ui.remindOnceOpen = p.id; }) : null,
@@ -881,7 +885,7 @@ function projectMenu(ctx, p) {
     item('✎ Tag, priority, target date', () => { ui.editMeta = true; }),
     // 📂 a task can be in several projects; a project is never inside another one
     !isMainProject(store.view.data, p) ? item('📂 Add to a project…', () => openMainBox(ctx, p, 'parent')) : null,
-    item(`🗑 Delete ${kindWord(ctx, p)}`, () => {
+    p.misc ? null : item(`🗑 Delete ${kindWord(ctx, p)}`, () => { // (📂 Misc stays: it holds every task in no other project)
       if (!confirm(deleteQuestion(ctx.store.view.data, p))) return;
       ctx.act('deleteProject', { projectId: p.id }, `Deleted: ${p.name}`, 10000);
       ui.selected = null; ui.mobile = 'list';

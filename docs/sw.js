@@ -3,11 +3,11 @@
 // Offline or very slow: the copy on the device.
 // Your data is NOT handled here (it goes to GitHub directly; the app keeps its own data copy).
 
-const CACHE = 'daily-projects-app-32'; // new name: drops the old copy (so phones get the new Projects list at once; -3 had no ui/mains.js; -2 also held data files ../api/)
+const CACHE = 'daily-projects-app-34'; // new name: drops the old copy (so phones get the new code at once; -3 had no ui/mains.js; -2 also held data files ../api/)
 const FILES = [
   './', 'index.html', 'styles.css', 'manifest.webmanifest',
   'app.js', 'ai.js', 'config.js', 'device.js', 'github.js', 'mockrepo.js', 'ops.js', 'reports.js', 'rich.js', 'rules.js', 'store.js', 'voice.js', 'serverrepo.js',
-  'ui/autocorrect.js', 'ui/connections.js', 'ui/dashboard.js', 'ui/detail.js', 'ui/dom.js', 'ui/files.js', 'ui/mains.js', 'ui/mention.js', 'ui/people.js', 'ui/replies.js', 'ui/richedit.js', 'ui/signin.js', 'ui/staff.js', 'ui/staffbox.js', 'ui/team.js', 'ui/timereport.js', 'ui/workparts.js',
+  'ui/autocorrect.js', 'ui/bell.js', 'ui/connections.js', 'ui/dashboard.js', 'ui/detail.js', 'ui/dom.js', 'ui/files.js', 'ui/mains.js', 'ui/mention.js', 'ui/people.js', 'ui/replies.js', 'ui/richedit.js', 'ui/signin.js', 'ui/staff.js', 'ui/staffbox.js', 'ui/team.js', 'ui/timereport.js', 'ui/workparts.js',
   'vendor/sortable.min.js', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png',
 ];
 // Work Task's rules, used by the staff view (one app): kept here too, so a team member's phone opens it offline.

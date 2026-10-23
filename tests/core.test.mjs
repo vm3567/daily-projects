@@ -2778,3 +2778,69 @@ test('review round 2 (whole code): a #ops= link (it can come from anyone) carrie
   assert.equal(r.dropped, bad.length);
   for (const t of OP_TYPES) assert.ok(CARRIED.has(t) !== NOT_CARRIED.has(t), `${t}: sorted into exactly one list (a new kind of change must be decided)`);
 });
+
+test('review r4-1 (whole code): a repeating step with a date long ago gets its next date after the tick day (it used to stop 400 steps on, still in the past, and show as overdue at once); the weekday stays', async () => {
+  const { nextRepeatDate } = await import('../docs/rules.js');
+  assert.equal(nextRepeatDate('daily', '2024-01-01', '2026-10-23'), '2026-10-24');
+  assert.equal(nextRepeatDate('weekly', '2015-01-05', '2026-10-23'), '2026-10-26', 'a Monday, as the old date');
+  assert.equal(new Date('2026-10-26T00:00:00Z').getUTCDay(), new Date('2015-01-05T00:00:00Z').getUTCDay());
+  assert.equal(nextRepeatDate('monthly', '1950-01-31', '2026-10-23'), '2026-10-31');
+  // as before: always at least one step on from the date it had
+  assert.equal(nextRepeatDate('daily', '2026-10-24', '2026-10-23'), '2026-10-25');
+  assert.equal(nextRepeatDate('weekly', '2026-10-19', '2026-10-23'), '2026-10-26');
+});
+
+test('review r4-3 (whole code): an email address is never read as an @mention, and renaming a person leaves email addresses as they are', async () => {
+  const { mentionedPeople, replaceMentions } = await import('../docs/rules.js');
+  const people = [{ id: 'r', name: 'Ravi' }, { id: 'a', name: 'Acton' }];
+  assert.equal(mentionedPeople('send to accounts@ravi-traders.com', people).size, 0);
+  assert.equal(mentionedPeople('mail x.y+z@acton.in', people).size, 0);
+  assert.deepEqual([...mentionedPeople('(@Ravi) and,@Acton', people)].sort(), ['a', 'r'], 'real mentions still count');
+  assert.equal(replaceMentions('a@ravi-traders.com @Ravi', people, (p) => '#' + p.id), 'a@ravi-traders.com #r');
+  const s = withProject();
+  applyOp(s, op('addPerson', { personId: 'a', name: 'Acton' }, '2026-10-02'));
+  applyOp(s, op('setStepField', { projectId: 'p1', stepId: 's2', field: 'text', value: 'Ask @Acton, copy ceramic.ops@acton-finishing.com' }, '2026-10-02'));
+  applyOp(s, op('setStepField', { projectId: 'p1', stepId: 's2', field: 'note', value: 'reply to ravi@Acton.com' }, '2026-10-02'));
+  applyOp(s, op('renamePerson', { personId: 'a', name: 'Acton Ltd' }, '2026-10-03'));
+  const st = s.data.projects[0].steps.find((x) => x.id === 's2');
+  assert.equal(st.text, 'Ask @Acton Ltd, copy ceramic.ops@acton-finishing.com');
+  assert.equal(st.note, 'reply to ravi@Acton.com');
+});
+
+test('📂 Misc (owner, 23 Oct): every task in no other 📂 project is in Misc — worked out, so it leaves Misc when put in a project and comes back when taken out; Misc is made once and never deleted, finished, given or filled by hand', async () => {
+  const { childrenOf, parentsOf, mainProjects, isMainProject, MISC_ID, canPutUnder } = await import('../docs/rules.js');
+  const s = withProject();
+  applyOp(s, op('createProject', { projectId: 't2', name: 'Loose two' }, '2026-10-02'));
+  applyOp(s, op('createMainProject', { projectId: 'm1', name: 'Kilns' }, '2026-10-02'));
+  assert.equal(applyOp(s, op('makeMisc', {}, '2026-10-03')), true);
+  assert.equal(applyOp(s, op('makeMisc', {}, '2026-10-03', '10:01')), false, 'made once (the same id on every device)');
+  const d = s.data;
+  const misc = d.projects.find((p) => p.id === MISC_ID);
+  assert.ok(misc.isMain && misc.misc && isMainProject(d, misc));
+  const inMisc = () => childrenOf(d, MISC_ID).map((p) => p.id).sort();
+  assert.deepEqual(inMisc(), ['p1', 't2'], 'both loose tasks; never a 📂 project');
+  assert.deepEqual(parentsOf(d, d.projects.find((p) => p.id === 't2')).map((p) => p.name), ['Misc'], 'the task shows 📂 Misc');
+  applyOp(s, op('addToProject', { projectId: 't2', parentId: 'm1' }, '2026-10-04'));
+  assert.deepEqual(inMisc(), ['p1'], 'put in Kilns: it leaves Misc by itself');
+  assert.deepEqual(parentsOf(d, d.projects.find((p) => p.id === 't2')).map((p) => p.name), ['Kilns']);
+  applyOp(s, op('removeFromProject', { projectId: 't2', parentId: 'm1' }, '2026-10-05'));
+  assert.deepEqual(inMisc(), ['p1', 't2'], 'taken out of its last project: back in Misc');
+  assert.equal(mainProjects(d).at(-1).id, MISC_ID, 'Misc last in the 📂 Projects list');
+  assert.equal(canPutUnder(d, d.projects.find((p) => p.id === 't2'), misc), false, 'nothing is put in Misc by hand');
+  assert.equal(applyOp(s, op('addToProject', { projectId: 't2', parentId: MISC_ID }, '2026-10-05', '10:05')), false);
+  assert.equal(applyOp(s, op('deleteProject', { projectId: MISC_ID }, '2026-10-05', '10:06')), false, 'never deleted');
+  assert.equal(applyOp(s, op('finish', { projectId: MISC_ID }, '2026-10-05', '10:07')), false, 'never finished');
+  assert.equal(applyOp(s, op('setProjectTeam', { projectId: MISC_ID, userId: 3, name: 'Valar' }, '2026-10-05', '10:08')), false, 'never given (it would give every loose task)');
+  assert.ok(d.projects.some((p) => p.id === MISC_ID));
+  const { todayList } = await import('../docs/rules.js');
+  assert.ok(!todayList(d, '2026-10-05').some((p) => p.id === MISC_ID), 'not a row on Today (it has no steps of its own)');
+  // its page: no "✕ Remove" / "+ Add tasks" (they would do nothing), no Finish / Delete / Give; made once when the app opens
+  const { readFileSync } = await import('node:fs');
+  const MAINS = readFileSync(new URL('../docs/ui/mains.js', import.meta.url), 'utf8');
+  assert.match(MAINS, /h\('td', null, p\.misc \? null : h\('button', \{/);
+  assert.match(MAINS, /p\.misc \? null : h\('button', \{ class: 'btn small', type: 'button', onClick: \(\) => openAddTasks\(ctx, p\) \}, '\+ Add tasks'\)/);
+  const DET = readFileSync(new URL('../docs/ui/detail.js', import.meta.url), 'utf8');
+  assert.match(DET, /p\.misc \? null : deleteButton\(ctx, p\)/);
+  assert.match(DET, /p\.state === 'active' && ctx\.onServer && !p\.misc \? item\(p\.team \?/);
+  assert.match(readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8'), /if \(store\.canEdit\(\) && !store\.view\.data\.projects\.some\(\(p\) => p\.id === MISC_ID\)\) store\.dispatch\('makeMisc', \{\}\);/);
+});

@@ -20,8 +20,9 @@ import { MockRepo } from './mockrepo.js';
 import { device } from './device.js';
 import { DATA_OWNER, DATA_REPO, DATA_BRANCH, MOVED_TO, REFRESH_MS, AI_DAILY_LIMIT, BRIEF_CLAIM_MINUTES, WAIT_RED_DAYS, NO_WORK_NOTE_DAYS } from './config.js';
 import { dotColour, greenByTeamOnly, isSnoozed, restUntil, restReason, onlyDaysLabel, openIdFromHash, awakeProjects, activeProjects, nextStep, todayIndia, isSundayIndia, colourCounts, isOverdue, indiaDate, waitingDays, daysWithoutWork, dayScore, greenStreak, addDays, monthOf, fmtMinutes, takeBackWaits, staffStepAction, pasteGoesToProject, singleStepClose, versionRequest, askDiaryAgain, pasteInForm, diaryLoadedAt, photoNeedsFetch, teamUndoKey, teamActionUndone, teamProgressOf, projectKeyIgnored, teamMovedTo, serverHolder, keepMovedStep, teamMemberFor, repliesOf, mailThreads, replyMailto, MAILTO_BODY_MAX, emailPath, pasteReason } from './rules.js';
-import { whoFromUser, signInTag, timerOn, projectGiveChanges, UNDO_GRACE_MS } from './rules.js';
+import { whoFromUser, signInTag, timerOn, projectGiveChanges, UNDO_GRACE_MS, MISC_ID } from './rules.js';
 import { signInCard, firstPasswordCard } from './ui/signin.js';
+import { createBell } from './ui/bell.js';
 import { parentIdsOf, isMainProject, mainProjects, activeTasks, todayWithoutEmptyMains, todayList, stepTargets, mainSummary, childrenOf, deleteQuestion, pickEnterTarget } from './rules.js';
 import { newId, clone, opMonth, cleanLink, carriedOps, orderPosOf } from './ops.js';
 import * as ai from './ai.js';
@@ -42,8 +43,22 @@ function toSignIn() { signInAgain(); }
 // The sign-in card sits where the owner's key screen does; the person's own screens stay hidden behind it.
 const LAST_USER_KEY = 'wt.lastUser';
 const signScreen = () => document.getElementById('keyscreen');
-function showCard(el) { const s = signScreen(); root.hidden = true; s.hidden = false; s.replaceChildren(el); }
-function hideCard() { const s = signScreen(); s.hidden = true; s.replaceChildren(); root.hidden = false; }
+function showCard(el) { const s = signScreen(); root.hidden = true; s.hidden = false; s.replaceChildren(el); if (bell) bell.el.hidden = true; }
+function hideCard() { const s = signScreen(); s.hidden = true; s.replaceChildren(); root.hidden = false; if (bell) bell.el.hidden = false; }
+
+/** 🔔 Notifications inside the app (ui/bell.js), on top of whichever screens are open: worktask.in, signed in. */
+let bell = null;
+function startBell() {
+  if (bell || !onServer || !serverToken()) return;
+  bell = createBell({ post: async (a, body) => {
+    const r = await fetch('../api/?a=' + a, { method: 'POST', cache: 'no-store', headers: { Authorization: 'Bearer ' + serverToken(), 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
+    const out = await r.json();
+    if (!out || !out.ok) throw new Error((out && out.error) || 'Something went wrong.');
+    return out;
+  } });
+  document.body.appendChild(bell.el);
+  document.body.classList.add('has-bell'); // (room for it in the headers: styles.css)
+}
 async function postNoToken(a, body, token = '') {
   const r = await fetch(`../api/?a=${a}`, { method: 'POST', cache: 'no-store', headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}) }, body: JSON.stringify(body) });
   let out = null; try { out = await r.json(); } catch { /* not an answer */ }
@@ -249,6 +264,7 @@ async function startManager(user, teamTask = 0) {
   space = 'team';
   const how = teamHowFromHash() || (teamTask ? { sel: 'task:' + teamTask } : {});
   teamView.start({ ...how, fromProjects: false }); // (they have no projects page to go back to)
+  startBell();
   window.addEventListener('hashchange', () => { const h2 = teamHowFromHash(); if (h2) teamView.start({ ...h2, fromProjects: false }); }); // a notification tapped while open
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') teamView.act.reload(); });
   document.addEventListener('paste', (e) => pasteToView(teamView, e, TEAM_BOX));
@@ -282,6 +298,7 @@ async function startStaff(user, openTask = 0) {
   staffView = staff;
   if (openTask) { if (teamTaskInHash() === openTask) history.replaceState(null, '', location.pathname + location.search); staff.open('task:' + openTask); } // a phone notification: that task (taken off the address, so a reload does not open it again)
   staff.start();
+  startBell();
   window.addEventListener('hashchange', () => { // a notification tapped while open
     const id = teamTaskInHash();
     if (location.hash) history.replaceState(null, '', location.pathname + location.search);
@@ -2313,7 +2330,14 @@ async function signOutServer() {
   if (waiting && !confirm(`${waiting} change(s) are not saved yet and will be lost. Sign out anyway?`)) return;
   clearTimeout(store.saveTimer);
   store.forgetPending(); // before clearing storage below; also stops the leave-page check from sending them
-  try { await fetch('../api/?a=logout', { method: 'POST', headers: { Authorization: 'Bearer ' + serverToken() } }); } catch { /* signed out anyway */ }
+  // this phone's notifications stop too (the next person on it must not get the owner's messages)
+  let endpoint = '';
+  try {
+    const r = navigator.serviceWorker && await navigator.serviceWorker.getRegistration('../');
+    const sub = r && await r.pushManager.getSubscription();
+    if (sub) { endpoint = sub.endpoint; await sub.unsubscribe().catch(() => {}); }
+  } catch { /* no notifications here */ }
+  try { await fetch('../api/?a=logout', { method: 'POST', headers: { Authorization: 'Bearer ' + serverToken(), 'Content-Type': 'application/json' }, body: JSON.stringify({ endpoint }) }); } catch { /* signed out anyway */ }
   try { localStorage.removeItem(SERVER_TOKEN_KEY); localStorage.removeItem(WHO_KEY); localStorage.removeItem('dp.pending'); localStorage.removeItem('dp.snapshot'); } catch { /* blocked */ }
   location.replace(location.pathname); // this app's sign-in
 }
@@ -3304,7 +3328,7 @@ async function giveProject(p, person, needsPhoto = !!ui.givePhoto, keep = ui.giv
     await withSyncLock(async () => {
       const steps = person ? projectSteps(p) : [];
       // (the change of person is saved right after this: the server must not act on the older saved copy meanwhile)
-      const out = await teamApi('project.sync', { projectRef: p.id, project: p.name, about: p.about || '', assigneeId: person ? person.id : 0, steps, needsPhoto, reason: person ? '' : 'taken', baseCommit: store.base && store.base.commit, pending: true });
+      const out = await teamApi('project.sync', { projectRef: p.id, project: p.name, about: p.about || '', folder: folderOf(p), assigneeId: person ? person.id : 0, steps, needsPhoto, reason: person ? '' : 'taken', baseCommit: store.base && store.base.commit, pending: true });
       team.gen++; // a list fetched before this change is old now: it must not move the project back
       store.dispatch('setProjectTeam', { projectId: p.id, userId: person ? person.id : null, name: person ? person.name : '', needsPhoto, ...(main && person ? { giveTasks: true } : {}), ...(!main && !person ? { keepOff: true } : {}) });
       const kids = new Set(main ? childrenOf(store.view.data, p.id).map((c) => c.id) : []);
@@ -3368,7 +3392,12 @@ function notSent(out, steps) {
 
 /** What was sent for a given project: a change in any part (the short description too) sends it again. */
 function syncSig(userId, p, steps, needsPhoto) {
-  return JSON.stringify([userId, p.name, steps, !!needsPhoto, p.about || '']);
+  return JSON.stringify([userId, p.name, steps, !!needsPhoto, folderOf(p), p.about || '']);
+}
+/** The 📂 project a given task is in (its first one; '' = in none, 📂 Misc too): the team sees the same folders. */
+function folderOf(p) {
+  const m = parentIdsOf(p).map((id) => store.view.data.projects.find((x) => x.id === id)).find((x) => x && !x.misc);
+  return m ? m.name : '';
 }
 
 function rememberSync(id, sig) {
@@ -3406,7 +3435,7 @@ async function syncGivenNow(gen) {
     if (m[p.id] === sig) continue;
     const name = p.name, about = p.about || '', who = p.team.name;
     try {
-      const out = await teamApi('project.sync', { projectRef: p.id, project: name, about, assigneeId: p.state === 'active' ? p.team.userId : 0, steps, needsPhoto: !!p.team.needsPhoto, reason: p.state,
+      const out = await teamApi('project.sync', { projectRef: p.id, project: name, about, folder: folderOf(p), assigneeId: p.state === 'active' ? p.team.userId : 0, steps, needsPhoto: !!p.team.needsPhoto, reason: p.state,
         baseCommit: store.base && store.base.commit, pending: store.pending.length > 0 });
       // a re-opened step that was just finished is not made yet: sent again next time
       rememberSync(id, notSent(out, steps).length ? SYNC_RETRY : sig);
@@ -3646,7 +3675,8 @@ function startOwner() {
   });
   render();
   if (onServer && !isMock) takeTeamFromHash(); // "#team…": the team pages of this app (from 👥, a team task chip, Give to team)
-  store.init().then(() => { if (store.status === 'saved') dataFreshAt = Date.now(); render(); if (ui.capture) focusKey('capture-input'); voiceReady = true; runVoice(); loadTeam(true); if (onServer) loadApps(appsCtx, true); shareLocalKeys(); markShownOpened(); makeBrief(); recordPastScores(); });
+  if (onServer && !isMock) startBell();
+  store.init().then(() => { if (store.status === 'saved') dataFreshAt = Date.now(); if (store.canEdit() && !store.view.data.projects.some((p) => p.id === MISC_ID)) store.dispatch('makeMisc', {}); render(); if (ui.capture) focusKey('capture-input'); voiceReady = true; runVoice(); loadTeam(true); if (onServer) loadApps(appsCtx, true); shareLocalKeys(); markShownOpened(); makeBrief(); recordPastScores(); });
   if (started) return;
   started = true;
   // redraw now and then: the running timer, and the "not sent yet" bar appearing after a minute

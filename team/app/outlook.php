@@ -572,7 +572,8 @@ function ol_clean_html(string $html): string {
   $html = (string)preg_replace('#</?(script|iframe|object|embed|frame|frameset|base|meta|link|svg|math)\b[^>]*>#i', '', $html);
   // a whole tag, also when a quoted value holds a ">" (else the rest of the tag would slip past as plain text)
   return (string)preg_replace_callback('#<[a-z](?:[^>"\']|"[^"]*"|\'[^\']*\')*>#i', function ($m) {
-    $tag = (string)preg_replace('#\s+on[a-z]+\s*=\s*("[^"]*"|\'[^\']*\'|[^\s>]+)#i', '', $m[0]);
+    // a browser also starts a new attribute after "/" or right after a quoted value (<img src="x"/onerror=…>)
+    $tag = (string)preg_replace('#(?<=[\s/"\'])on[a-z]+\s*=\s*("[^"]*"|\'[^\']*\'|[^\s>]+)#i', '', $m[0]);
     // links and pictures: only web and mail addresses — read as the browser reads them (&#x73; = s, tabs and spaces dropped)
     return (string)preg_replace_callback('#\b(href|src|action|formaction|xlink:href)\s*=\s*("[^"]*"|\'[^\']*\'|[^\s>]+)#i', function ($a) {
       $v = trim($a[2], '"\'');

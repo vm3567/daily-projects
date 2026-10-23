@@ -12,6 +12,7 @@ class Node {
     this.dataset = {}; this.style = { cssText: '' }; this.className = ''; this.value = ''; this.checked = false;
   }
   appendChild(c) { this.childNodes.push(c); c.parentNode = this; return c; }
+  replaceChildren(...cs) { this.childNodes = []; cs.forEach((c) => this.appendChild(typeof c === 'string' ? { nodeType: 3, nodeValue: c } : c)); }
   setAttribute(n, v) { this.attributes.push({ name: n, value: v }); }
   getAttribute(n) { const a = this.attributes.find((x) => x.name === n); return a ? a.value : null; }
   hasAttribute(n) { return !!this.attributes.find((x) => x.name === n); }
@@ -721,7 +722,7 @@ test('project page: a 💤 Snooze button sits next to Finish (not only in the �
   const { readFileSync } = await import('node:fs');
   const src = readFileSync(new URL('../docs/ui/detail.js', import.meta.url), 'utf8');
   const top = src.slice(src.indexOf('function stateButtons('), src.indexOf("if (p.state === 'paused')", src.indexOf('function stateButtons(')));
-  assert.match(top, /'💤 Snooze'\) : null,\s*h\('button', \{ class: 'btn', onClick: \(\) => ctx\.act\('finish'/, 'Snooze right before Finish');
+  assert.match(top, /'💤 Snooze'\) : null,\s*p\.misc \? null : h\('button', \{ class: 'btn', onClick: \(\) => ctx\.act\('finish'/, 'Snooze right before Finish (none on 📂 Misc: it is never finished)');
   assert.match(top, /ui\.snoozeOpen = p\.id; ctx\.render\(\);/, 'it opens the snooze box');
 });
 
@@ -1059,7 +1060,7 @@ test('📂 Projects page: a click on a project row selects it and stays on the p
   assert.match(mainsSrc, /ctx\.ui\.view === 'mains' && ctx\.showHere \? ctx\.showHere\(c\.id\)/, 'a task in the TASKS table while on the Projects page');
   const here = app.slice(app.indexOf('  showHere: (id) => {'), app.indexOf('  openProject: (id) => {'));
   assert.match(here, /select\(id\);/);
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-32'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-34'/, 'phones get the new copy');
 });
 
 test('📂 project page: "✕ Remove" on a task row takes it out of this project only — the task is kept (and stays in its other projects)', () => {
@@ -1844,7 +1845,7 @@ test('🔌 app wiring (app.js): "🔌 From apps" after ✉ Replies with the wait
   assert.match(app, /function go\(view\) \{\n\s*if \(view !== 'settings'\) forgetOnce\(\);/);
   assert.match(app, /if \(onServer\) loadApps\(appsCtx, force \|\| ui\.view === 'apps'\);/);
   assert.match(app, /replies: '✉ Replies', apps: '🔌 From apps', mains: '📂 Projects' \}\[ui\.view\]/, 'its page title');
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-32'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-34'/, 'phones get the new copy');
 });
 
 test('🔌 the PHP connector (team/connector/worktask-connector.php): the same text the app downloads, placeholders only (no real key), valid PHP 7.4+ (php -l), with wt_push / wt_withdraw / wt_decisions / wt_receive_decision', async () => {
@@ -2281,13 +2282,17 @@ test('one app — staff view: the same layout as Daily Projects (menu, list, pag
   const tree = s.view();
   assert.match(tree.className, /\blayout\b/, 'the same layout classes as the owner\'s app');
   const text = tree.textContent;
-  for (const bit of ['Today', 'Coming next', 'My suggestions', '📁 Kiln trial', '💡 Suggest a task', '👤 Valar', 'Sign out', 'Check kiln temperature', 'Pack the samples', '1 of 3 sent', 'by 18:00', '✓ Sent 10:30 am']) assert.ok(text.includes(bit), bit);
+  for (const bit of ['Today', '✅ Tasks', '📂 Projects', 'Coming next', 'My suggestions', '💡 Suggest a task', '👤 Valar', 'Sign out', 'Check kiln temperature', 'Pack the samples', '1 of 3 sent', 'by 18:00', '✓ Sent 10:30 am']) assert.ok(text.includes(bit), bit);
   for (const gone of ['📥 Inbox', '✉ Replies', 'Settings', 'People', 'Groups', '🔌 From apps', 'Dashboard', 'Time report', '+ Give a task']) assert.ok(!text.includes(gone), 'no owner screen: ' + gone);
   // dots as on the owner's Today: green = sent today, red = not yet
   const kilnRow = rFind(tree, (n) => n.nodeName === 'LI' && n.textContent.includes('Check kiln temperature'));
   assert.ok(rFind(kilnRow, (n) => /\bdot red\b/.test(n.className || '')), 'not sent yet: red');
   assert.ok(kilnRow.textContent.includes('💬 New'), 'a new message shows on the row');
   assert.ok(calls.every((c) => staffMod.STAFF_CALLS.includes(c.a)));
+  // (owner, 23 Oct: projects are on 📂 Projects, as on the owner's pages — not listed in the menu or on Today any more)
+  assert.ok(!text.includes('📂 Kiln trial'), 'projects are on the 📂 Projects page');
+  s.act.show('projects');
+  assert.ok(s.view().textContent.includes('📂 Kiln trial'), 'there they are');
 });
 
 test('one app — staff view: the staff server calls never include the owner\'s projects (dp.*), Outlook or connections; staffApi refuses them before asking', async () => {
@@ -2354,11 +2359,12 @@ test('one app — staff view: a task page shows chips, today\'s update box, mess
   s.open('task:12');
   await new Promise((r) => setTimeout(r, 0));
   const page = s.view().textContent;
-  for (const bit of ['Pack the samples', '⏰ Late — was by', "Today's update", 'Working on it', 'Stuck', 'Finished', 'Send', '💬 Messages', 'Please send a photo', "📅 What's happening"]) assert.ok(page.includes(bit), bit);
+  for (const bit of ['Pack the samples', '⏰ Late — was by', 'Working on it', 'Stuck', 'Finished', 'Send', '💬 Messages', 'Please send a photo', "📅 What's happening"]) assert.ok(page.includes(bit), bit);
+  assert.ok(page.indexOf("📅 What's happening") < page.indexOf('Working on it'), 'today\'s update box is under "What\'s happening", as on the owner\'s page (owner, 23 Oct: every page the same)');
   s.open('project:p1');
   await new Promise((r) => setTimeout(r, 0));
   const proj = s.view().textContent;
-  for (const bit of ['📁 Kiln trial', '✓ 1 done', 'Buy clay', 'Step 2 · current', 'Order clay', 'Step 3 · next', 'Fire the second batch']) assert.ok(proj.includes(bit), bit);
+  for (const bit of ['📂 Kiln trial', '✓ 1 done', 'Buy clay', 'Step 2 · current', 'Order clay', 'Step 3 · next', 'Fire the second batch']) assert.ok(proj.includes(bit), bit);
   assert.ok(rFind(s.view(), (n) => n.nodeName === 'INPUT' && n.getAttribute('placeholder') === '+ Add the next step…'), 'the owner\'s add-step box');
 });
 
@@ -2653,7 +2659,7 @@ test('one app wiring (step 2): offline sending, the shared outbox, #open from a 
 test('one app — staff view: 🔍 Search (their own tasks, messages, updates; 2 letters or more) opens the task', async () => {
   const { s, calls } = fakeStaff2({ search: (b) => ({ ok: true, results: [{ taskId: 12, title: 'Pack the samples', who: 'Valar', kind: 'message', text: 'brown boxes', at: '2026-10-22 10:00:00' }] }) }, { searchWait: 0 });
   await s.load();
-  assert.ok(btn(s.view(), '🔍 Search'));
+  assert.ok(btn(s.view(), '🔍'), '🔍 at the top of the list (owner, 23 Oct: the staff view looks like the projects page — a search box in the menu, 🔍 on the list)');
   s.act.show('search');
   assert.match(s.view().textContent, /Type 2 or more letters/);
   s.act.search('b'); await tick(); await tick();
@@ -2813,14 +2819,23 @@ test('one app — team pages: Team today in the owner\'s design (progress line, 
   t.go('today'); await tick(); await tick();
   const v = t.view();
   const text = v.textContent;
-  for (const bit of ['📋 My projects', 'Team today', '🔁 Follow-up', 'Tasks', 'Done / cancelled', '📁 Projects', '📊 Weekly report', '🔍 Search', 'People', 'Settings', '+ Give a task',
-    '1 of 3', 'updates in today', 'Not yet: Valar, Ravi', 'Stuck: Valar (2 days)', 'No update for: Ravi (3 days)', '⚠︎ Needs you', 'Valar: Stuck — Fan part missing', 'Ravi: 💬 1 new', 'Valar: 💡 Suggestion', 'Pack samples', '⏰ Late (by', '📧 Morning email']) assert.ok(text.includes(bit), bit);
+  // (owner, 23 Oct: the team menu is the same as the projects page's — a search box on top instead of "🔍 Search", 📂 Projects)
+  assert.match(readFileSync(new URL('../docs/ui/team.js', import.meta.url), 'utf8'), /h\('input', \{ class: 'search', type: 'search', placeholder: 'Search…', key: 'team-menu-search'/);
+  assert.match(readFileSync(new URL('../docs/ui/team.js', import.meta.url), 'utf8'), /h\('button', \{ class: 'icon', title: 'Search', 'aria-label': 'Search', onClick: \(\) => go\('search'\) \}, '🔍'\)/, 'and 🔍 at the top of the list (phones)');
+  const TEAMSRC = readFileSync(new URL('../docs/ui/team.js', import.meta.url), 'utf8');
+  assert.match(TEAMSRC, /h\('button', \{ class: 'btn primary new-project', onClick: \(\) => open\('give'\) \}, '\+ Give a task'\)/, '"+ Give a task" at the top of the list, as "+ New task"');
+  assert.match(TEAMSRC, /h\('li', \{ class: 'menu-dots', key: 'dots'/, 'the red / yellow / green count under Team today');
+  assert.doesNotMatch(TEAMSRC, /menu-give/, 'no longer in the menu');
+  for (const bit of ['📋 My projects', 'Team today', '🔁 Follow-up', 'Tasks', 'Done / cancelled', '📂 Projects', '📊 Weekly report', 'People', 'Settings', '+ Give a task',
+    '1 of 3', 'updates in today', 'Not yet: Valar, Ravi', 'Stuck: Valar (2 days)', 'No update for: Ravi (3 days)', '⚠️ Stuck 1', '💬 New messages 1', '💡 Suggestions 1', '💡 Suggestion — yes or no?', 'Pack samples', '⏰ Late (by', '📧 Morning email']) assert.ok(text.includes(bit), bit);
+  assert.ok(!text.includes('Needs you'), 'owner, 23 Oct: no "Needs you" list — stuck, new messages and suggestions are in the table with their counts');
   const has = (cls) => rFind(v, (n) => (' ' + (n.className || '') + ' ').includes(' ' + cls + ' '));
-  for (const cls of ['layout', 'progress', 'progress-bar', 'plist', 'prow', 'list-sec']) assert.ok(has(cls), 'the owner\'s .' + cls);
+  for (const cls of ['layout', 'progress', 'progress-bar', 'board-table', 'sub-table']) assert.ok(has(cls), 'the owner\'s .' + cls + ' (owner, 23 Oct: Team today is one table, as the owner\'s Tasks table)');
   assert.ok(!has('card') && !has('summary') && !has('trow'), 'no Work Task-only styles');
-  const pack = rFind(v, (n) => n.nodeName === 'LI' && n.textContent.includes('Pack samples'));
+  // (owner, 23 Oct: Team today is one table — each task a row of it)
+  const pack = rFind(v, (n) => n.nodeName === 'TR' && n.textContent.includes('Pack samples'));
   assert.ok(rFind(pack, (n) => /\bdot red\b/.test(n.className || '')), 'late: red');
-  const sweep = rFind(v, (n) => n.nodeName === 'LI' && n.textContent.includes('Sweep kiln room') && !n.textContent.includes('Ravi:'));
+  const sweep = rFind(v, (n) => n.nodeName === 'TR' && n.textContent.includes('Sweep kiln room'));
   assert.ok(rFind(sweep, (n) => /\bdot yellow\b/.test(n.className || '')), 'not yet (before the time): the owner\'s yellow');
   btn(v, '📋 My projects').__on.click();
   assert.equal(back, 1, 'back to the projects');
@@ -2836,10 +2851,10 @@ test('one app — team pages: a task\'s page (who, Mark done, ⋯ Edit / Move / 
   t.go('today'); await tick();
   t.open('task:22'); await tick(); await tick();
   let v = t.view();
-  for (const bit of ['👤 Valar', '⏰ Late — was by', '📎 Instructions', 'guide.pdf', '💬 Messages', 'Please hurry', "📅 What's happening", '✓ Mark done']) assert.ok(v.textContent.includes(bit), bit);
+  for (const bit of ['👤 Valar', '⏰ Late — was by', '📎 Instructions', 'guide.pdf', '💬 Messages', 'Please hurry', "📅 What's happening", 'Finish task']) assert.ok(v.textContent.includes(bit), bit);
   assert.ok(rFind(v, (n) => n.nodeName === 'TEXTAREA' && /^Reply or give an instruction/.test(n.getAttribute('placeholder') || '')));
   assert.ok(rFind(v, (n) => n.nodeName === 'BUTTON' && n.getAttribute('aria-label') === 'Remove guide.pdf'), 'the manager can take an instruction file off');
-  btn(v, '✓ Mark done').__on.click(); await tick();
+  btn(v, 'Finish task').__on.click(); await tick();
   assert.deepEqual(calls.filter((c) => c.a === 'task.status').map((c) => c.body), [{ id: 22, status: 'done' }]);
   rFind(v, (n) => n.nodeName === 'BUTTON' && n.getAttribute('aria-label') === 'More actions').__on.click();
   v = t.view();
@@ -3033,7 +3048,7 @@ test('one app wiring (step 4 part 2): no sign-in → this app\'s sign-in card, t
   assert.ok(!/location\.href = '\.\.\/'/.test(app), 'nothing goes to the old Work Task page');
   assert.match(app, /import \{ signInCard, firstPasswordCard \} from '\.\/ui\/signin\.js';/);
   const fns = app.slice(app.indexOf('// ---------------------------------------------------------------- signing in'), app.indexOf('// ---------------------------------------------------------------- one app for everyone'));
-  assert.match(fns, /function showCard\(el\) \{ const s = signScreen\(\); root\.hidden = true; s\.hidden = false; s\.replaceChildren\(el\); \}/, 'the card covers the app (nothing of it shows or is drawn over it)');
+  assert.match(fns, /function showCard\(el\) \{ const s = signScreen\(\); root\.hidden = true; s\.hidden = false; s\.replaceChildren\(el\); if \(bell\) bell\.el\.hidden = true; \}/, 'the card covers the app (nothing of it shows or is drawn over it; the 🔔 hides too)');
   assert.match(fns, /onSignedIn: \(\{ token, user \}\) => \{ keepSignIn\(token, user\); hideCard\(\); then\(user\); \}/);
   assert.match(fns, /localStorage\.setItem\(SERVER_TOKEN_KEY, token\);\n\s*localStorage\.removeItem\(WHO_KEY\);/, 'the new sign-in is kept; who it is is asked again');
   assert.match(fns, /if \(localStorage\.getItem\(LAST_USER_KEY\) !== String\(user\.id\)\) \{\n\s*for \(const k of Object\.keys\(localStorage\)\) if \(k\.startsWith\('wt\.c\.'\)\) localStorage\.removeItem\(k\);/, 'someone else on this phone: the last person\'s saved lists go');
@@ -3184,4 +3199,253 @@ test('giving a 📂 project (owner, 23 Oct): the give box lists its tasks — ti
   // the chip on a task that went with its project
   const t1 = renderDetail({ ...ctx, ui: { selected: 't1', update: {} } }).textContent;
   assert.ok(t1.includes('👥 Valar (with 📂 Kilns)'));
+});
+
+test('review r4-1 (whole code): typing the same phone number written another way (spaces, +91) is not called "not a phone number" and is left as it is; a wrong one still is', () => {
+  const s = sampleState();
+  applyOps(s, [makeOp('setPersonContact', { personId: 'r', phone: '919876543210' })]);
+  const toasts = [];
+  const ctx = { ...fakeCtx(s, { person: 'r' }), toast: (t) => toasts.push(t) };
+  ctx.store.dispatch = (type, args) => applyOps(s, [makeOp(type, args)]).length > 0;
+  const box = () => rFind(renderPerson(ctx), (n) => n.nodeName === 'INPUT' && n.getAttribute('type') === 'tel');
+  for (const typed of ['98765 43210', '+91 98765 43210', '0098 7654 3210'.replace('0098', '0091 98')]) {
+    const el = { value: typed };
+    box().__on.change({}, el);
+    assert.equal(el.value, '+919876543210', 'shown as it is saved: ' + typed);
+  }
+  assert.deepEqual(toasts, [], 'no "That does not look like a phone number"');
+  const bad = { value: '12' };
+  box().__on.change({}, bad);
+  assert.deepEqual(toasts, ['That does not look like a phone number']);
+});
+
+test('review r4-2 (whole code): the server\'s own notes (a move, a chase) show no change/delete buttons; the owner\'s sign out sends this phone\'s notification address so it stops', async () => {
+  const { readFileSync } = await import('node:fs');
+  const parts = readFileSync(new URL('../docs/ui/workparts.js', import.meta.url), 'utf8');
+  assert.match(parts, /c\.mine && [^?]*c\.kind !== 'move' && c\.kind !== 'chase' \? h\('span', \{ class: 'msg-acts' \}/);
+  const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
+  const out = app.slice(app.indexOf('async function signOutServer()'), app.indexOf('// ---------------------------------------------------------------- key screen'));
+  assert.match(out, /pushManager\.getSubscription\(\)/);
+  assert.match(out, /a=logout'[^\n]*body: JSON\.stringify\(\{ endpoint \}\)/);
+});
+
+test('review r4-4 (whole code): an error under a form shows even after the screen was drawn again, and stays through later redraws until it is cleared', async () => {
+  const { h, morph, errLine } = await import('../docs/ui/dom.js');
+  // a little more of a page than the pretend DOM above: enough for morph() (attributes, moving and removing children)
+  class El {
+    constructor(tag) { this.nodeName = tag.toUpperCase(); this.nodeType = 1; this.childNodes = []; this.attributes = []; this.dataset = {}; this.style = { cssText: '' }; this.className = ''; this.value = ''; }
+    appendChild(c) { return this.insertBefore(c, null); }
+    insertBefore(c, at) { if (c.parentNode) c.parentNode.childNodes.splice(c.parentNode.childNodes.indexOf(c), 1); const i = at ? this.childNodes.indexOf(at) : -1; this.childNodes.splice(i < 0 ? this.childNodes.length : i, 0, c); c.parentNode = this; return c; }
+    remove() { if (this.parentNode) this.parentNode.childNodes.splice(this.parentNode.childNodes.indexOf(this), 1); this.parentNode = null; }
+    replaceWith(n) { this.parentNode.insertBefore(n, this); this.remove(); }
+    setAttribute(n, v) { this.removeAttribute(n); this.attributes.push({ name: n, value: String(v) }); }
+    removeAttribute(n) { this.attributes = this.attributes.filter((x) => x.name !== n); }
+    getAttribute(n) { const a = this.attributes.find((x) => x.name === n); return a ? a.value : null; }
+    hasAttribute(n) { return this.attributes.some((x) => x.name === n); }
+    get hidden() { return this.hasAttribute('hidden'); }
+    set hidden(v) { if (v) this.setAttribute('hidden', ''); else this.removeAttribute('hidden'); }
+    set textContent(t) { this.childNodes = [{ nodeType: 3, nodeValue: String(t), remove() {} }]; }
+    get textContent() { return this.childNodes.map((c) => (c.nodeType === 3 ? c.nodeValue : c.textContent)).join(''); }
+  }
+  const realDoc = globalThis.document, RealNode = globalThis.Node;
+  globalThis.Node = El;
+  globalThis.document = { createElement: (t) => new El(t), createTextNode: (t) => ({ nodeType: 3, nodeValue: t, remove() { if (this.parentNode) this.parentNode.childNodes.splice(this.parentNode.childNodes.indexOf(this), 1); } }), activeElement: null };
+  try {
+  const draw = () => { const err = errLine('t-err'); return { err, el: h('div', null, h('input', { key: 'box' }), err) }; };
+  const page = draw().el;
+  const again = draw();
+  morph(page, again.el); // e.g. a photo picked: the page keeps its own error line
+  again.err.say('📷 Add a photo to finish this task.');
+  const line = () => page.childNodes[1];
+  assert.equal(line().textContent, '📷 Add a photo to finish this task.', 'written into the line on the page');
+  assert.equal(line().hidden, false);
+  const later = draw();
+  morph(page, later.el); // the next redraw (new work every 20 s) keeps it
+  assert.equal(line().textContent, '📷 Add a photo to finish this task.');
+  assert.ok(!line().hasAttribute('hidden'), 'still shown');
+  later.err.clear(); // typing again
+  assert.equal(line().hidden, true);
+  morph(page, draw().el);
+  assert.ok(line().hasAttribute('hidden'), 'and stays gone');
+  for (const f of ['staff.js', 'team.js', 'workparts.js']) {
+    const src = (await import('node:fs')).readFileSync(new URL('../docs/ui/' + f, import.meta.url), 'utf8');
+    assert.doesNotMatch(src, /err\.(textContent|hidden) =/, f + ': every form error goes through errLine');
+  }
+  } finally { globalThis.document = realDoc; globalThis.Node = RealNode; }
+});
+
+test('review r4-5 (whole code): an answer in the team box goes on the newest message\'s task and marks only that person\'s messages read; another person\'s question stays new', async () => {
+  const s = sampleState();
+  const ctx = fakeCtx(s, { selected: 'p1', update: {} });
+  ctx.onServer = true;
+  ctx.teamInfo = () => ({ byStep: new Map(), fillBy: '18:00' });
+  ctx.teamPeople = () => [];
+  ctx.teamTask = () => null;
+  ctx.teamDaily = () => ({ data: { tasks: [], updates: [], comments: [
+    { id: 45, taskId: 7, by: 'Valar', at: '2026-10-21 10:05:00', text: 'Fired', unread: true },
+    { id: 44, taskId: 6, by: 'Valar', at: '2026-10-21 10:01:00', text: 'Step 1 done', unread: true },
+    { id: 43, taskId: 8, by: 'Ravi', at: '2026-10-21 10:00:00', text: 'Which clay?', unread: true },
+  ] } });
+  const calls = [];
+  ctx.teamReply = (p, taskId, text, ids, cid, upTo) => { calls.push([taskId, ids.slice().sort(), upTo]); return Promise.resolve(); };
+  const el = renderDetail(ctx);
+  const find = (node, f) => (f(node) ? node : (node.childNodes || []).map((c) => find(c, f)).find(Boolean));
+  const form = find(el, (n) => n.nodeName === 'FORM' && find(n, (x) => x.textContent === 'Send'));
+  form.elements = { reply: { value: 'Well done', disabled: false } };
+  form.__on.submit({ preventDefault() {}, target: form });
+  await new Promise((r) => setTimeout(r, 0));
+  assert.deepEqual(calls, [[7, [6, 7], 45]], 'to Valar; Ravi\'s question (task 8) is not marked read');
+});
+
+test('🔔 in the app (23 Oct): the bell counts what is not seen, lists the newest, and a tap opens its task (the phone notification\'s address) and marks it seen; on every screen', async () => {
+  const { createBell, bellHash, bellCount, bellWhen } = await import('../docs/ui/bell.js');
+  assert.equal(bellHash('/projects/#team-task=41'), '#team-task=41');
+  assert.equal(bellHash('/projects/#open=kp1'), '#open=kp1');
+  assert.equal(bellHash('/projects/#apps'), '#apps');
+  assert.equal(bellHash('/'), '', 'nothing to open: the list is enough');
+  assert.equal(bellHash('/projects/#team-task=4;evil'), '');
+  assert.deepEqual([bellCount(0), bellCount(3), bellCount(140)], ['', '3', '99+']);
+  assert.match(bellWhen('2026-10-23 10:05:00', '2026-10-23'), /^10:05/);
+  assert.match(bellWhen('2026-10-21 10:05:00', '2026-10-23'), /^21 Oct 10:05/);
+  // the bell itself, with a pretend server and page
+  const calls = [];
+  const list = [{ id: 7, kind: 'msg', title: '💬 Valar · Kiln', body: 'Is it at 1150?', url: '/projects/#team-task=41', at: '2026-10-23 10:05:00', read: false },
+    { id: 6, kind: 'task', title: '📥 New task for you', body: 'Pack', url: '/', at: '2026-10-22 09:00:00', read: true }];
+  const post = async (a, body) => { calls.push([a, body]); return a === 'notifs.list' ? { notifs: list.map((x) => ({ ...x })), unread: 1 } : {}; };
+  const on = {};
+  const win = { location: { hash: '' }, addEventListener: () => {}, document: { visibilityState: 'visible', addEventListener: (t, f) => { on[t] = f; } } };
+  const bell = createBell({ post, every: 0, today: () => '2026-10-23', win });
+  await new Promise((r) => setTimeout(r, 0));
+  const find = (node, f) => (f(node) ? node : (node.childNodes || []).map((c) => find(c, f)).find(Boolean));
+  const btn = () => find(bell.el, (n) => n.nodeName === 'BUTTON' && (n.className || '').startsWith('bell-btn'));
+  assert.equal(btn().textContent, '🔔1', 'one not seen');
+  await btn().__on.click();
+  await new Promise((r) => setTimeout(r, 0));
+  const items = [];
+  (function walk(n) { if ((n.className || '').startsWith('bell-item')) items.push(n); (n.childNodes || []).forEach(walk); })(bell.el);
+  assert.deepEqual(items.map((n) => n.className), ['bell-item new', 'bell-item'], 'newest first; the new one stands out');
+  assert.match(items[0].textContent, /Valar · Kiln.*Is it at 1150\?/);
+  await items[0].__on.click();
+  assert.equal(win.location.hash, '#team-task=41', 'its task opens');
+  assert.deepEqual(calls.at(-1), ['notifs.read', { ids: [7] }]);
+  assert.equal(btn().textContent, '🔔', 'nothing new now');
+  // wiring: the owner, a manager and a team member all get it (signed in on worktask.in); it is kept for offline
+  const { readFileSync } = await import('node:fs');
+  const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
+  assert.equal((app.match(/startBell\(\);/g) || []).length, 3, 'staff view, team pages, owner');
+  assert.match(app, /if \(onServer && !isMock\) startBell\(\);/);
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /'ui\/bell\.js'/);
+  assert.match(readFileSync(new URL('../docs/styles.css', import.meta.url), 'utf8'), /body\.has-bell \.detail-top \{ padding-right: 56px; \}/, 'it never covers a header\'s buttons');
+});
+
+test('every page the same as the owner\'s (23 Oct): "What\'s happening" on the team pages and the staff view is drawn like the owner\'s — 7-day strip, the box under the heading, day + date, time on the right, the same day tags; buttons under the title', async () => {
+  const { diaryBlock } = await import('../docs/ui/workparts.js');
+  const { readFileSync } = await import('node:fs');
+  const TODAY = '2026-10-21', TEAM = readFileSync(new URL('../docs/ui/team.js', import.meta.url), 'utf8');
+  const rules = await import('../team/public_html/logic.js');
+  const t = { status: 'open', repeat: 'daily', skipSunday: true, startDate: '2026-10-15', createdAt: '2026-10-15 09:00:00' };
+  const ups = [{ day: TODAY, note: 'plates kept for drying', state: 'progress', at: `${TODAY} 14:24:00`, by: 'Valar', byId: 3, photos: [] }];
+  const all = (n, f, out = []) => { if (f(n)) out.push(n); (n.childNodes || []).forEach((c) => all(c, f, out)); return out; };
+  const cls = (n, c) => (n.className || '').split(' ').includes(c);
+  const box = document.createElement('div');
+  const el = diaryBlock({ rules, t, updates: ups, td: TODAY, staff: true, meId: 3, n: 14, fillBy: '18:00', photos: () => null, onMore: () => {}, box, todayInRows: true });
+  assert.ok(cls(el, 'diary'), 'the owner\'s diary section');
+  assert.equal(all(el, (n) => cls(n, 'wk')).length, 7, 'the last-7-days strip');
+  assert.ok(el.childNodes.includes(box), 'the update box is under the heading');
+  const today = all(el, (n) => cls(n, 'diary-day'))[0];
+  assert.match(today.textContent, /^Today.*Wed 21 Oct/, 'the day in bold, its date under it');
+  assert.ok(all(today, (n) => cls(n, 'diary-time')).length === 1, 'the time on the right');
+  assert.match(today.textContent, /You “plates kept for drying”/, 'staff: their own words say You; today is a row too');
+  assert.ok(all(el, (n) => cls(n, 'day-tag') && cls(n, 'miss')).length > 0 && all(el, (n) => cls(n, 'day-tag') && cls(n, 'off')).length > 0, 'No progress / Off tags');
+  assert.match(TEAM, /h\('h2', null, title\), actions \? h\('div', \{ class: 'state-buttons' \}, actions\) : null\)/, 'team pages: the buttons under the title');
+  assert.match(readFileSync(new URL('../docs/styles.css', import.meta.url), 'utf8'), /\.detail-top h2 ~ \.state-buttons \{ flex-basis: 100%; justify-content: flex-start; \}/);
+});
+
+test('staff view looks like the owner\'s projects page (owner, 23 Oct): search box on top of the menu, Today with its count and dots, 📂 projects, "💡 Suggest a task" at the top of the list, 🔍 on the list, a project\'s steps in a Steps box', async () => {
+  const { readFileSync } = await import('node:fs');
+  const S = readFileSync(new URL('../docs/ui/staff.js', import.meta.url), 'utf8');
+  assert.match(S, /h\('input', \{ class: 'search', type: 'search', placeholder: 'Search…', key: 'staff-menu-search'/);
+  assert.match(S, /item\('Today', !state\.sel && state\.section === 'today', \(\) => show\('today'\), d \? String\(d\.tasks\.length\) : null\)/);
+  assert.match(S, /h\('li', \{ class: 'menu-dots', key: 'dots'/);
+  assert.match(S, /h\('button', \{ class: 'btn primary new-project', onClick: \(\) => open\('suggest'\) \}, '💡 Suggest a task'\)/);
+  assert.doesNotMatch(S, /item\('💡 Suggest a task'/, 'no longer in the menu');
+  assert.match(S, /block\('Steps', h\('ul', \{ class: 'plist' \}/);
+  assert.match(S, /h\('form', \{ class: 'row add-step'/, 'the add-step box takes the line, as the owner\'s');
+  assert.doesNotMatch(S, /'📁 '|sec\('📁/, 'projects are 📂, as on the owner\'s page');
+});
+
+test('staff ✅ Tasks / 📂 Projects pages: the menu as the owner\'s, ✅ Tasks lists each task with its 📂, ‹ › go one by one, a 📂 project lists its tasks; the owner\'s app sends the 📂 name with each given task', async () => {
+  const task = (id, x = {}) => ({ id, title: 'Task ' + id, status: 'open', seq: null, repeat: 'once', dueToday: true, today: null, ...x });
+  const data = { today: '2026-10-23', fillBy: '18:00', tasks: [task(11, { folder: 'Ceramic Media', projectRef: 'a', seq: 1, project: 'A' }), task(12)], other: [task(13, { dueToday: false })], suggestions: [] };
+  const { s } = fakeStaff2({ 'my.today': () => data, 'task.get': (b) => ({ task: { ...[...data.tasks, ...data.other].find((t) => t.id === b.id) }, updates: [], comments: [] }) });
+  await s.load();
+  const text = () => s.view().textContent;
+  assert.match(text(), /✅ Tasks3/, 'menu: ✅ Tasks with its count');
+  assert.match(text(), /📂 Projects2/, 'menu: 📂 Projects with its count');
+  s.act.show('tasks');
+  assert.match(text(), /3 open tasks · red first/);
+  assert.match(text(), /Task 11📂 Ceramic Media/, 'each task with its 📂');
+  assert.match(text(), /Task 13📂 Misc/);
+  s.act.open('task:11'); await new Promise((r) => setTimeout(r, 0));
+  const nav = (label) => { let f = null; (function w(n) { if (!f && n.nodeName === 'BUTTON' && n.getAttribute && n.getAttribute('aria-label') === label) f = n; (n.childNodes || []).forEach(w); })(s.view()); return f; };
+  assert.ok(nav('Previous task').hasAttribute('disabled'), 'first: no previous');
+  nav('Next task').__on.click(); await new Promise((r) => setTimeout(r, 0));
+  assert.equal(s.state.sel, 'task:12', '› the next one');
+  assert.match(text(), /📂 Misc ›/, 'its 📂 on the task, as on the owner\'s task');
+  s.act.show('projects');
+  assert.match(text(), /📂 Ceramic Media1 task · 1 red/);
+  s.act.open('folder:f:Ceramic Media');
+  assert.match(text(), /Tasks \(1\).*Task 11/, 'a 📂 project lists its tasks');
+  const { readFileSync } = await import('node:fs');
+  const DP = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
+  assert.equal((DP.match(/teamApi\('project\.sync', \{ projectRef: p\.id, [^}]*folder: folderOf\(p\)/g) || []).length, 2, 'both sends carry the 📂 name');
+  assert.match(DP, /JSON\.stringify\(\[userId, p\.name, steps, !!needsPhoto, folderOf\(p\), p\.about \|\| ''\]\)/, 'a new 📂 sends it again');
+  assert.match(DP, /\.find\(\(x\) => x && !x\.misc\)/, '📂 Misc is no folder for the team');
+});
+
+test('a task\'s chips never repeat its own name as its project (one task given alone)', async () => {
+  const { chipsFor } = await import('../docs/ui/workparts.js');
+  const base = { status: 'open', repeat: 'once', seq: 1, today: null };
+  assert.ok(!chipsFor({ ...base, title: 'Feldspar testing', project: 'Feldspar testing' }, '2026-10-23').textContent.includes('📁'));
+  assert.ok(chipsFor({ ...base, title: 'Shoot the tiles', project: 'Glaze photos' }, '2026-10-23').textContent.includes('📁 Glaze photos'));
+});
+
+test('Team today table on screen: the counts filter it, By person | By 📂 project, a row opens the task, the table fills the screen until a task is open', async () => {
+  const today = { ok: true, today: '2026-10-23', fillBy: '18:00', late: false, people: [{ id: 3, name: 'Valar' }],
+    tasks: [{ id: 41, title: 'Fire the kiln', assignee: { id: 3, name: 'Valar' }, status: 'open', repeat: 'daily', today: { at: '2026-10-23 10:00:00', note: 'at 1150', photos: [1] }, unread: 1, lastMessage: { by: 'Valar', text: 'Which clay?', mine: false }, folder: 'Kilns' },
+      { id: 42, title: 'Order clay', assignee: { id: 3, name: 'Valar' }, status: 'open', repeat: 'daily', today: null, unread: 0, folder: '' }],
+    stuck: [], unread: [], suggestions: [] };
+  const { t } = fakeTeam({ 'team.today': () => today, 'task.get': () => ({ task: today.tasks[0], updates: [], comments: [] }), 'users.list': () => ({ users: [] }) });
+  t.go('today'); await new Promise((r) => setTimeout(r, 0)); await new Promise((r) => setTimeout(r, 0));
+  let v = t.view();
+  assert.match(v.className, /\bwide\b/, 'fills the screen');
+  const text = () => t.view().textContent;
+  for (const bit of ['✓ Sent 1', '⏳ Not yet 1', '⚠️ Stuck 0', '⏰ Late 0', '💬 New messages 1', 'By person', 'By 📂 project', 'Fire the kiln', '📂 Kilns', 'at 1150', '📷1', 'Valar: Which clay?', '💬 New', '📂 Misc', '📧 Morning email'])
+    assert.ok(text().includes(bit), bit);
+  const find = (n, f) => (f(n) ? n : (n.childNodes || []).map((c) => find(c, f)).find(Boolean));
+  find(t.view(), (n) => n.nodeName === 'BUTTON' && (n.textContent || '').startsWith('✓ Sent')).__on.click();
+  assert.ok(!text().includes('Order clay') && text().includes('Fire the kiln'), 'only the sent ones');
+  find(t.view(), (n) => n.nodeName === 'BUTTON' && (n.textContent || '').startsWith('✓ Sent')).__on.click();
+  assert.ok(text().includes('Order clay'), 'pressed again: all');
+  find(t.view(), (n) => n.nodeName === 'BUTTON' && n.textContent === 'By 📂 project').__on.click();
+  assert.equal(t.state.boardGroup, 'project');
+  find(t.view(), (n) => n.nodeName === 'TR' && (n.textContent || '').includes('Fire the kiln')).__on.click();
+  assert.equal(t.state.sel, 'task:41', 'a row opens its task');
+  assert.doesNotMatch(t.view().className, /\bwide\b/, 'with a task open: the table and the task side by side');
+});
+
+test('Team today table on screen: 20 tasks a page, ‹ Previous / Next ›, and back to page 1 when the counts or the grouping change', async () => {
+  const V = { id: 3, name: 'Valar' };
+  const tasks = Array.from({ length: 23 }, (_, i) => ({ id: i + 1, title: 'Job ' + (i + 1), assignee: V, status: 'open', repeat: 'daily', today: null, unread: 0 }));
+  const { t } = fakeTeam({ 'team.today': () => ({ ok: true, today: '2026-10-23', fillBy: '18:00', late: false, people: [V], tasks, stuck: [], unread: [], suggestions: [] }) });
+  t.go('today'); await new Promise((r) => setTimeout(r, 0)); await new Promise((r) => setTimeout(r, 0));
+  const find = (n, f) => (f(n) ? n : (n.childNodes || []).map((c) => find(c, f)).find(Boolean));
+  const rows = () => { const out = []; (function w(n) { if (n.nodeName === 'TR' && / board-row/.test(' ' + (n.className || ''))) out.push(n); (n.childNodes || []).forEach(w); })(t.view()); return out; };
+  assert.equal(rows().length, 20, '20 on a page');
+  assert.match(t.view().textContent, /Page 1 of 2 · 23 tasks/);
+  find(t.view(), (n) => n.nodeName === 'BUTTON' && n.textContent === 'Next ›').__on.click();
+  assert.equal(rows().length, 3, 'the rest');
+  assert.match(t.view().textContent, /Page 2 of 2/);
+  find(t.view(), (n) => n.nodeName === 'BUTTON' && (n.textContent || '').startsWith('⏳ Not yet')).__on.click();
+  assert.equal(t.state.boardPage, 1, 'a count pressed: page 1');
 });
