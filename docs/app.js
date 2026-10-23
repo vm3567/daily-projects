@@ -59,17 +59,8 @@ async function askWho() {
   } catch { return { who: '' }; } finally { clearTimeout(timer); }
 }
 
-/** A team member: the staff view, in the same layout and look as this app (the rules come from Work Task's logic.js). */
-async function startStaff(user, openTask = 0) {
-  // (staff see this app's own design: only its styles, never Work Task's on top)
-  root.replaceChildren(h('div', { class: 'loading' }, 'Loading…'));
-  const [{ createStaff, staffApi, shrinkPhoto, browserPush }, { idbOutbox }, rules] = await Promise.all([import('./ui/staff.js'), import('./ui/staffbox.js'), import('../logic.js')]);
-  let staff = null;
-  const api = staffApi(serverToken(), '../api/', { onNet: (on) => { if (staff) staff.setOffline(!on); } });
-  if (!user) {
-    try { user = (await api('me')).user; } // (offline: the saved copy)
-    catch (e) { if (e.auth) { location.href = '../'; return; } root.replaceChildren(h('div', { class: 'loading' }, e.message)); return; }
-  }
+/** What the staff view and the team pages share: photos fetched with the sign-in, the viewer, signing out. */
+function serverTools(api) {
   const photos = new Map();
   const photo = (kind, id) => {
     const k = kind + ':' + id;
@@ -96,6 +87,85 @@ async function startStaff(user, openTask = 0) {
       h('div', { class: 'viewer-body' }, image ? h('img', { src: url, alt: name }) : h('iframe', { src: url, title: name })));
     v.hidden = false;
   };
+  return { photo, viewer, signOut };
+}
+
+/** The team pages (ui/team.js): the owner's "👥 Team" space, or all a manager who is not the owner gets. */
+let teamView = null, space = 'owner'; // space: 'owner' (Daily Projects) | 'team' (the team pages)
+async function teamPages(user, more = {}) {
+  const [{ createTeam }, { staffApi, shrinkPhoto, browserPush }, { idbOutbox }, rules] = await Promise.all([import('./ui/team.js'), import('./ui/staff.js'), import('./ui/staffbox.js'), import('../logic.js')]);
+  let t = null;
+  const api = staffApi(serverToken(), '../api/', { allow: null, onNet: (on) => { if (t) t.setOffline(!on); } }); // (the server decides what a manager may do)
+  if (!user) user = (await api('me')).user;
+  const { photo, viewer, signOut } = serverTools(api);
+  t = createTeam({ root, api, rules, user, toast, signOut, onAuth: () => { location.href = '../'; }, photo, viewer, box: idbOutbox(), shrink: shrinkPhoto, push: browserPush(api, user.id), appLink: location.origin + '/', ...more });
+  setInterval(() => { if (document.visibilityState === 'visible' && (space === 'team' || !store)) t.act.liveCheck(); }, 20000); // new work comes in by itself
+  setInterval(() => { if (t.state.outbox.length) t.act.flush(); }, 30000);
+  window.addEventListener('online', () => { t.setOffline(false); t.act.flush(); });
+  window.addEventListener('offline', () => t.setOffline(true));
+  return t;
+}
+
+/** The owner: open "👥 Team" inside this app (from 👥, a team task chip, or "Give to team"); "📋 My projects" comes back. */
+async function openTeam(how = {}) {
+  if (!onServer || isMock) return;
+  try {
+    if (!teamView) {
+      teamView = await teamPages(null, {
+        toProjects: () => { leaveTeam(); render(); },
+        openPeople: () => { leaveTeam(); go('people'); },
+      });
+    }
+  } catch (e) { toast(e.message, 5000); return; }
+  space = 'team'; teamView.state.hidden = false;
+  root.replaceChildren();
+  teamView.start(how);
+}
+
+/** Back from the team pages to the owner's projects. */
+function leaveTeam() { space = 'owner'; if (teamView) teamView.state.hidden = true; root.replaceChildren(); }
+
+/** worktask.in/projects/#team (👥), #team-task=<id> (a team task chip), #team-new=<what to give> ("Give to team"). */
+function takeTeamFromHash() {
+  const hsh = location.hash;
+  let how = null;
+  const m = /^#team-task=(\d+)$/.exec(hsh);
+  if (hsh === '#team') how = {};
+  else if (m) how = { sel: 'task:' + m[1], fromProjects: true };
+  else if (hsh.startsWith('#team-new=')) { try { const p = JSON.parse(decodeURIComponent(hsh.slice(10))); how = { sel: 'give', prefill: p && typeof p === 'object' ? p : null, fromProjects: true }; } catch { how = { sel: 'give' }; } }
+  if (!how) return false;
+  history.replaceState(null, '', location.pathname + location.search);
+  openTeam(how);
+  return true;
+}
+
+/** A manager who is not the owner: the team pages are all of this app for them. */
+async function startManager(user) {
+  root.replaceChildren(h('div', { class: 'loading' }, 'Loading…'));
+  try { teamView = await teamPages(user); } catch (e) { if (e.auth) { location.href = '../'; return; } root.replaceChildren(h('div', { class: 'loading' }, e.message)); return; }
+  space = 'team';
+  teamView.start({ sel: openTaskFromHash() });
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') teamView.act.reload(); });
+  document.addEventListener('paste', (e) => {
+    if (e.defaultPrevented || !e.clipboardData) return;
+    const inMessageBox = !!(e.target && e.target.tagName === 'TEXTAREA' && /^Reply or give/.test(e.target.placeholder || ''));
+    if (teamView.act.paste({ files: [...(e.clipboardData.files || [])], text: e.clipboardData.getData('text/plain') || '', inMessageBox })) e.preventDefault();
+  });
+}
+const openTaskFromHash = () => { const m = /^#(?:open|team-task)=(\d+)$/.exec(location.hash); if (!m) return null; history.replaceState(null, '', location.pathname + location.search); return 'task:' + m[1]; };
+
+/** A team member: the staff view, in the same layout and look as this app (the rules come from Work Task's logic.js). */
+async function startStaff(user, openTask = 0) {
+  // (staff see this app's own design: only its styles, never Work Task's on top)
+  root.replaceChildren(h('div', { class: 'loading' }, 'Loading…'));
+  const [{ createStaff, staffApi, shrinkPhoto, browserPush }, { idbOutbox }, rules] = await Promise.all([import('./ui/staff.js'), import('./ui/staffbox.js'), import('../logic.js')]);
+  let staff = null;
+  const api = staffApi(serverToken(), '../api/', { onNet: (on) => { if (staff) staff.setOffline(!on); } });
+  if (!user) {
+    try { user = (await api('me')).user; } // (offline: the saved copy)
+    catch (e) { if (e.auth) { location.href = '../'; return; } root.replaceChildren(h('div', { class: 'loading' }, e.message)); return; }
+  }
+  const { photo, viewer, signOut } = serverTools(api);
   // signed out (or their first password still to choose): Work Task's sign-in; what waits on the phone stays and is sent after
   const onAuth = () => { location.href = '../'; };
   staff = createStaff({ root, api, rules, user, toast, signOut, onAuth, photo, viewer, box: idbOutbox(), shrink: shrinkPhoto, push: browserPush(api, user.id) });
@@ -1718,7 +1788,7 @@ function personMenu(m) {
       : account ? [
         h('div', { class: 'row-menu-note muted small' }, `Work Task: @${account.username}${account.active ? '' : ' (switched off)'}`),
         item('🔑', 'New password…', () => newPasswordFor(person, account)),
-        item('👥', 'Their tasks (Team)', () => { location.href = '../?team'; }),
+        item('👥', 'Their tasks (Team)', () => openTeam()),
       ] : item('🔑', 'Give a Work Task sign-in', () => giveSignIn(person))) : null,
     item('✎', 'Rename…', () => {
       const n = prompt('Name:', person.name);
@@ -1874,11 +1944,11 @@ function teamLine() {
   const m = team.messages[0];
   const ofProject = m && m.projectRef && store.view.data.projects.some((p) => p.id === m.projectRef);
   return [
-    h('a', { class: 'team-line' + (bad ? ' late' : s.due && s.sent === s.due ? ' ok' : ''), href: '../?team', key: 'team-line', title: 'Open Team today' },
+    h('a', { class: 'team-line' + (bad ? ' late' : s.due && s.sent === s.due ? ' ok' : ''), href: '#team', key: 'team-line', title: 'Open Team today' },
       `👥 Team: ${bits.join(' · ')}${missing}`),
     // the newest message from the team, right here: tap = open the project (or the task in the team app) to read and answer
     m ? h('a', {
-      class: 'team-line msg', key: 'team-msg', href: ofProject ? '#' : `../?team#open=${m.taskId}`, title: 'Read and answer',
+      class: 'team-line msg', key: 'team-msg', href: ofProject ? '#' : `#team-task=${m.taskId}`, title: 'Read and answer',
       onClick: (e) => { if (!ofProject) return; e.preventDefault(); select(m.projectRef); },
     }, `💬 ${m.by}: “${m.text.length > 70 ? m.text.slice(0, 68) + '…' : m.text}”${team.messages.length > 1 ? ` (+${team.messages.length - 1} more)` : ''} — answer →`) : null,
   ];
@@ -2106,7 +2176,7 @@ function renderSettings() {
       h('p', null, isMock ? 'Test mode (no real GitHub).' : onServer ? 'Signed in to Work Task ✓ Your projects are private to you.' : 'Connected to your private data ✓'),
       h('div', { class: 'row' },
         isMock || onServer ? null : h('button', { class: 'btn', onClick: () => showKeyScreen('Paste your new GitHub access key.') }, 'Change key'),
-        onServer ? h('a', { class: 'btn', href: '../?team' }, '👥 Team') : null,
+        onServer ? h('a', { class: 'btn', href: '#team' }, '👥 Team') : null,
         onServer ? h('button', { class: 'btn', onClick: signOutServer }, 'Sign out') : null,
         h('button', {
           class: 'btn danger',
@@ -2332,6 +2402,7 @@ function setupSortable() {
 }
 
 function render() {
+  if (space === 'team') return; // the team pages draw themselves (ui/team.js)
   if (!store || !store.view) {
     root.replaceChildren(h('div', { class: 'loading' }, store && store.status === 'offline' ? 'No connection. Retrying…' : 'Loading…'));
     return;
@@ -2910,6 +2981,7 @@ function selectedProject() {
 }
 
 function onKey(e) {
+  if (space === 'team') return; // (the projects' keys are not for the team pages)
   if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) { e.preventDefault(); openJump(); return; }
   if (e.metaKey || e.ctrlKey || e.altKey) return; // leave browser shortcuts alone
   if (e.key === 'Escape') {
@@ -3022,7 +3094,7 @@ function teamButton() {
   const a = team.alerts;
   const n = a.stuck + a.unread + a.suggestions;
   const why = [a.stuck && `${a.stuck} stuck`, a.unread && `${a.unread} with new messages`, a.suggestions && `${a.suggestions} suggestion(s)`].filter(Boolean).join(', ');
-  return h('a', { class: 'icon team-btn', href: '../?team', title: n ? `Team needs you: ${why}` : 'Team: tasks you gave and their daily updates', 'aria-label': n ? `Team, ${n} need you` : 'Team' },
+  return h('a', { class: 'icon team-btn', href: '#team', title: n ? `Team needs you: ${why}` : 'Team: tasks you gave and their daily updates', 'aria-label': n ? `Team, ${n} need you` : 'Team' },
     '👥', n ? h('span', { class: 'team-count' }, String(n)) : null);
 }
 
@@ -3418,12 +3490,12 @@ function start() {
   if (onServer && !isMock) { // one app: who signed in picks the screens (the owner's start is not held up once known)
     const known = rememberedWho();
     if (known === 'staff') { startStaff(undefined, staffTask); return; }
-    if (known === 'manager') { location.href = '../'; return; }
+    if (known === 'manager') { startManager(); return; }
     if (!known) {
       root.replaceChildren(h('div', { class: 'loading' }, 'Loading…'));
       askWho().then(({ who, user }) => {
         if (who === 'staff') startStaff(user, staffTask);
-        else if (who === 'manager') location.href = '../';
+        else if (who === 'manager') startManager(user);
         else startOwner();
       });
       return;
@@ -3454,6 +3526,7 @@ function startOwner() {
     render(); // put ticked boxes and menus back to the real data
   });
   render();
+  if (onServer && !isMock) takeTeamFromHash(); // "#team…": the team pages of this app (from 👥, a team task chip, Give to team)
   store.init().then(() => { if (store.status === 'saved') dataFreshAt = Date.now(); render(); if (ui.capture) focusKey('capture-input'); voiceReady = true; runVoice(); loadTeam(true); if (onServer) loadApps(appsCtx, true); shareLocalKeys(); markShownOpened(); makeBrief(); recordPastScores(); });
   if (started) return;
   started = true;
@@ -3472,7 +3545,7 @@ function startOwner() {
     else { saveTypedText(); rememberScroll(); sendNow(); } // leaving the app: send waiting changes at once, not after the usual pause
   });
   window.addEventListener('focus', () => doRefresh(false));
-  window.addEventListener('hashchange', () => { takeClipFromHash(); takeVoiceFromHash(); if (takeOpenFromHash()) render(); }); // the Chrome button, when the app is already open // back to this window from another app
+  window.addEventListener('hashchange', () => { takeClipFromHash(); takeVoiceFromHash(); if (takeTeamFromHash()) return; if (space === 'team' && openIdFromHash(location.hash)) leaveTeam(); if (takeOpenFromHash()) render(); }); // the Chrome button, when the app is already open // back to this window from another app
   window.addEventListener('pagehide', () => { saveTypedText(); rememberScroll(); sendNow(); });
   // Closing the app while changes are still being sent: ask first, so nothing stays only on this computer.
   window.addEventListener('beforeunload', (e) => {
@@ -3486,6 +3559,12 @@ function startOwner() {
   document.addEventListener('keydown', onKey);
   // Ctrl+V anywhere on an open project: a screenshot or a copied file is added to it (the update box handles its own paste)
   document.addEventListener('paste', (e) => {
+    if (space === 'team' && teamView) { // the team pages: an instruction file, or a photo message
+      if (e.defaultPrevented || !e.clipboardData) return;
+      const inMessageBox = !!(e.target && e.target.tagName === 'TEXTAREA' && /^Reply or give/.test(e.target.placeholder || ''));
+      if (teamView.act.paste({ files: [...(e.clipboardData.files || [])], text: e.clipboardData.getData('text/plain') || '', inMessageBox })) e.preventDefault();
+      return;
+    }
     if (e.defaultPrevented || !store || !store.view) return;
     if (pasteInForm(e.target)) return; // naming a new task: its own box takes the paste, never the open task's update
     // the project page must be on screen (not the Diary, Dashboard, Settings, Time, People, the round, Quick capture, or a sheet on top)

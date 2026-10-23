@@ -6,24 +6,11 @@
 // item is refused) come from Work Task's logic.js, passed in as `rules`, so both apps follow the same rules.
 // Sending while offline: ui/staffbox.js (Work Task's own outbox on this site, shared by both apps).
 
-import { h, morph, fmtDay as dayOf } from './dom.js';
+import { h, morph } from './dom.js';
 import { createOutbox } from './staffbox.js';
+import { fmtDay, fmtTime, STATES, stateTag, newClientId, istDay, repeatLabel, block, chipsFor, makePics, photosRow, filesBlock, diaryBlock, messagesBlock } from './workparts.js';
 
-// the server's times are India time as "2026-10-22 10:30:00" (as Work Task shows them)
-const fmtDay = (d) => (d ? dayOf(String(d).slice(0, 10)) : '');
-const fmtTime = (dt) => {
-  const [hh, mm] = String(dt || '').slice(11, 16).split(':').map(Number);
-  return Number.isFinite(hh) && Number.isFinite(mm) ? `${((hh + 11) % 12) + 1}:${String(mm).padStart(2, '0')} ${hh < 12 ? 'am' : 'pm'}` : '';
-};
-const LONG_DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-export const STATES = [['progress', 'Working on it'], ['stuck', 'Stuck'], ['finished', 'Finished']];
-const stateName = (s) => (STATES.find((x) => x[0] === s) || STATES[0])[1];
-// (the owner's tags: Stuck as late, Finished as done, Working on it as waiting)
-const stateTag = (s) => h('span', { class: 'tag ' + (s === 'stuck' ? 'late' : s === 'finished' ? 'done-tag' : 'waiting') }, stateName(s));
-const newClientId = () => (crypto.randomUUID ? crypto.randomUUID() : Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join(''));
-const istDay = (d = new Date()) => new Date(d.getTime() + 5.5 * 3600e3).toISOString().slice(0, 10);
-const nowHm = () => new Date().toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' });
-const daysBetween = (a, b) => Math.round((Date.parse(b + 'T00:00:00Z') - Date.parse(a + 'T00:00:00Z')) / 86400000);
+export { STATES, repeatLabel }; // (the pieces of a task page are shared with the team pages: ui/workparts.js)
 const KEEP_FAIL = 'Could not keep this on the phone. Try again when online.';
 const OFFLINE_KEPT = '📴 Saved on this phone — it will be sent when you are online';
 
@@ -31,22 +18,24 @@ const OFFLINE_KEPT = '📴 Saved on this phone — it will be sent when you are 
 export const STAFF_CALLS = ['me', 'my.today', 'task.get', 'project.mine', 'update.save', 'photo.add', 'comment.add', 'comment.edit', 'comment.delete',
   'comment.photo', 'project.addStep', 'suggest', 'search', 'password', 'logout', 'push.key', 'push.subscribe', 'push.unsubscribe', 'push.test'];
 /** Lists kept on the phone (the last copy), so the app opens without internet — the same saved copies Work Task keeps. */
-const READS = new Set(['me', 'my.today', 'task.get', 'project.mine']);
+const READS = new Set(['me', 'my.today', 'task.get', 'project.mine', // (and the team pages' lists: ui/team.js)
+  'team.today', 'tasks.list', 'users.list', 'projects.overview', 'project.team', 'report.week', 'followup.list', 'people.morning']);
 export const cacheKey = (a, body) => 'wt.c.' + a + ':' + JSON.stringify(body || {});
 
 /**
  * Talks to the Work Task server with the person's own sign-in. Errors carry .offline (no internet, or a weak signal
  * that gives nothing back), .auth (signed out; .mustChange: their first password first), .retry (a server hiccup:
  * try again later), as Work Task's OfflineError / AuthError / RetryError. Offline, a list comes from the saved copy.
- * opts: { cache (localStorage), onNet(online) }.
+ * opts: { cache (localStorage), onNet(online), allow (the calls it may make; default the staff calls) }.
  */
 export function staffApi(token, base = '../api/', opts = {}) {
   const cache = opts.cache !== undefined ? opts.cache : (typeof localStorage !== 'undefined' ? localStorage : null);
   const onNet = opts.onNet || (() => {});
   const read = (a, body) => { try { return cache ? JSON.parse(cache.getItem(cacheKey(a, body)) || 'null') : null; } catch { return null; } };
   const write = (a, body, out) => { try { if (cache) cache.setItem(cacheKey(a, body), JSON.stringify(out)); } catch { /* phone storage full: still works online */ } };
+  const allow = opts.allow === undefined ? STAFF_CALLS : opts.allow; // (the team pages: null — the server decides what a manager may do)
   return async (a, body = {}, form = false) => {
-    if (!STAFF_CALLS.includes(a)) throw new Error('Not allowed here.');
+    if (allow && !allow.includes(a)) throw new Error('Not allowed here.');
     let res;
     // weak signal (connected, but nothing moves): give up after a while and treat it as offline
     const ac = typeof AbortController === 'function' ? new AbortController() : null;
@@ -147,18 +136,6 @@ export function browserPush(api, userId) {
     },
     test: () => api('push.test'),
   };
-}
-
-/** "Every day", "By Mon 3 Nov · 2 days late", "Current step — send an update each day" … */
-export function repeatLabel(t, today) {
-  const by = t.dueDate ? (today && t.status === 'open' && t.dueDate < today ? ` · ⏰ late, was by ${fmtDay(t.dueDate)}` : ` · by ${fmtDay(t.dueDate)}`) : '';
-  if (t.seq !== null && t.seq !== undefined && t.status === 'open') return (t.queued ? 'Coming next' : 'Current step — send an update each day') + by;
-  if (today && t.startDate && t.startDate > today && t.status === 'open') return `Starts ${fmtDay(t.startDate)}`;
-  if (t.repeat === 'daily') return t.skipSunday ? 'Every day (Mon–Sat)' : 'Every day';
-  if (t.repeat === 'weekly') return `Every ${LONG_DAYS[t.weekday ?? 1]}`;
-  if (!t.dueDate) return 'One time';
-  const late = today && t.status === 'open' ? daysBetween(t.dueDate, today) : 0;
-  return late > 0 ? `By ${fmtDay(t.dueDate)} · ${late} day${late > 1 ? 's' : ''} late` : `By ${fmtDay(t.dueDate)}`;
 }
 
 /** The projects given to me, each with its open steps in order (the current one first). */
@@ -700,48 +677,10 @@ export function createStaff(opts) {
     return h('div', { class: 'col-inner' }, head, top, body);
   }
 
-  /** A part of the page with its small grey title, as on the owner's project page. */
-  const block = (title, ...children) => h('section', { class: 'block' }, h('h3', null, title), ...children);
-
-  function chips(t, td) {
-    const c = (text, cls = '') => h('span', { class: 'info-chip static' + cls }, text);
-    const late = t.status === 'open' && t.dueDate && t.dueDate < td;
-    return h('div', { class: 'info-chips' },
-      t.project ? c(`📁 ${t.project}`) : null,
-      c(repeatLabel({ ...t, dueDate: null }, td)),
-      t.dueDate ? c(late ? `⏰ Late — was by ${fmtDay(t.dueDate)}` : `By ${fmtDay(t.dueDate)}`, late ? ' bad' : '') : null,
-      t.needsPhoto ? c('📷 Photo to finish') : null,
-      t.status === 'done' ? c('✓ Done', ' good') : t.status === 'cancelled' ? c('Cancelled', ' bad') : t.status === 'suggested' ? c('💡 Suggestion') : t.today ? c('✓ Sent today', ' good') : null);
-  }
-
-  /** A picture's address once fetched (with the sign-in), else null and it is fetched (then drawn again). It is drawn
-   *  as part of the page, so a redraw keeps it (a picture set on the element afterwards would be taken off again). */
-  const pics = new Map(); // kind:id -> address, '' (missing), or 'loading'
-  function pic(kind, id) {
-    const k = kind + ':' + id, v = pics.get(k);
-    if (v !== undefined) return v === 'loading' ? null : v;
-    pics.set(k, 'loading');
-    photo(kind, id).then((u) => { pics.set(k, u); render(); }, () => { pics.set(k, ''); render(); });
-    return null;
-  }
-
-  function photos(kind, list) {
-    if (!list || !list.length) return null;
-    return h('div', { class: 'row' }, list.map((id) => {
-      const src = pic(kind, id);
-      return h('img', { key: kind + id, alt: src === '' ? 'Photo missing' : 'Photo', class: 'diary-photo', src: src || undefined, onClick: () => { if (src) viewer(src, 'Photo', true); } });
-    }));
-  }
-
-  /** 📎 Instruction photos / PDFs from the manager. Tap to open. */
-  function files(t) {
-    if (!t.files || !t.files.length) return null;
-    return block('📎 Instructions', h('div', { class: 'row' }, t.files.map((f) => {
-      if (!f.image) return h('button', { class: 'chip', key: 'f' + f.id, title: f.name, onClick: () => openFile(f) }, '📄 ' + (f.name.length > 18 ? f.name.slice(0, 16) + '…' : f.name));
-      const src = pic('task.file', f.id);
-      return h('img', { key: 'f' + f.id, alt: src === '' ? f.name + ' (missing)' : f.name, title: f.name, class: 'diary-photo', src: src || undefined, onClick: () => openFile(f) });
-    })));
-  }
+  const pic = makePics(photo, () => render());
+  const photos = (kind, list) => photosRow(pic, viewer, kind, list);
+  const chips = (t, td) => chipsFor(t, td);
+  const files = (t) => filesBlock(t, { pic, openFile });
 
   function updateCard(t) {
     const waiting = waitingFor(t.id);
@@ -782,43 +721,18 @@ export function createStaff(opts) {
   }
 
   function messages(taskId, comments) {
-    const key = 'm' + taskId;
-    const err = h('p', { class: 'warn', key: 'merr-' + taskId, hidden: true });
-    const say = (m) => { if (m) { err.textContent = m; err.hidden = false; } };
-    const pick = h('input', { type: 'file', accept: 'image/*', class: 'visually-hidden', onChange: (e, el) => { const f = el.files[0]; el.value = ''; if (f) sendMessagePhoto(taskId, f).then(say); } });
-    const waiting = state.outbox.filter((x) => x.kind === 'comment' && x.taskId === taskId);
-    return block('💬 Messages', h('div', { class: 'banner team-msgs' },
-      comments.length ? comments.map((c) => h('div', { class: 'team-msg' + (c.mine ? ' mine' : ''), key: 'c-' + c.id },
-        h('div', { class: 'row small' }, h('strong', null, c.mine ? 'You' : c.by), h('span', { class: 'muted' }, `${fmtDay(c.at)} ${fmtTime(c.at)}${c.editedAt ? ' · edited' : ''}`),
-          c.mine && !String(c.text || '').startsWith('↔ Moved') ? h('span', { class: 'msg-acts' },
-            h('button', { class: 'link small', title: 'Change', 'aria-label': 'Change this message', onClick: () => editMessage(c) }, '✎'),
-            h('button', { class: 'link small', title: 'Delete', 'aria-label': 'Delete this message', onClick: () => deleteMessage(c) }, '✕')) : null),
-        c.photo ? photos('comment.photo', [c.id]) : null,
-        c.text ? h('div', { class: 'pre' }, c.text) : null)) : (waiting.length ? null : h('span', { class: 'muted small' }, 'No messages yet.')),
-      waiting.map((x) => h('div', { class: 'team-msg mine', key: 'wc-' + x.id },
-        h('div', { class: 'row small' }, h('strong', null, 'You'), h('span', { class: 'tag remind' }, '⏳ Waiting to send')), h('div', { class: 'pre' }, x.text))),
-      h('textarea', { key: 'msg-' + taskId, placeholder: 'Ask or reply to your manager…', value: state.msgDrafts[taskId] || '', onInput: (e, el) => { state.msgDrafts[taskId] = el.value; err.hidden = true; } }),
-      err,
-      h('div', { class: 'row' },
-        h('button', { class: 'btn primary small', disabled: state.sending[key] ? true : undefined, onClick: () => sendMessage(taskId).then(say) }, 'Send message'),
-        h('label', { class: 'btn small', title: 'Send a photo (with the words in the box)' }, '📷 Photo', pick))));
+    return messagesBlock({
+      taskId, comments, photos, placeholder: 'Ask or reply to your manager…',
+      waiting: state.outbox.filter((x) => x.kind === 'comment' && x.taskId === taskId),
+      draft: state.msgDrafts[taskId], sending: !!state.sending['m' + taskId],
+      onInput: (v) => { state.msgDrafts[taskId] = v; },
+      onSend: () => sendMessage(taskId), onPhoto: (f) => sendMessagePhoto(taskId, f), onEdit: editMessage, onDelete: deleteMessage,
+    });
   }
 
   function diary(t, updates, td) {
-    const n = state.diaryDays;
-    const { rows, more } = rules.diaryRows(t, updates, td, { staff: true, n, fillBy: (state.data && state.data.fillBy) || '18:00', nowHm: nowHm() });
-    return h('section', { class: 'block' },
-      h('div', { class: 'diary-head' }, h('h3', null, "📅 What's happening")),
-      rows.length ? h('ul', { class: 'diary-days' }, rows.map(({ day, kind, ups }) => h('li', { class: 'diary-day', key: 'd-' + day },
-        h('div', { class: 'diary-date' }, day === td ? 'Today' : LONG_DAYS[new Date(day + 'T00:00:00Z').getUTCDay()], h('div', { class: 'muted small' }, fmtDay(day))),
-        h('div', { class: 'diary-items' }, kind === 'ups' ? ups.map((u) => h('div', { class: 'diary-line' },
-          h('span', { class: 'diary-icon' }, u.state === 'stuck' ? '⚠️' : u.state === 'finished' ? '✅' : '📝'),
-          h('div', { class: 'diary-text' }, h('strong', null, (u.byId === state.user.id ? 'You' : u.by) + ' '), u.state !== 'progress' ? [stateTag(u.state), ' '] : null, u.note, photos('photo', u.photos)),
-          h('span', { class: 'muted small' }, fmtTime(u.at))))
-          : kind === 'off' ? h('span', { class: 'muted' }, 'Off')
-            : kind === 'wait' ? h('span', { class: 'diary-none wait' }, 'Waiting for today\'s update')
-              : h('span', { class: 'diary-none' }, 'No progress'))))) : h('p', { class: 'muted small' }, 'Nothing yet.'),
-      more ? h('button', { class: 'link small', onClick: () => { state.diaryDays = n + 14; render(); } }, 'Show older days') : null);
+    return diaryBlock({ rules, t, updates, td, staff: true, meId: state.user.id, n: state.diaryDays, fillBy: (state.data && state.data.fillBy) || '18:00', photos,
+      onMore: () => { state.diaryDays += 14; render(); } });
   }
 
   function taskPage() {

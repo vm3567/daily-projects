@@ -211,7 +211,10 @@ test('team: a finished send never redraws over a form opened and typed in meanwh
   // (one app: the update Send is in the staff view, where every box shows what this view keeps for it and each
   // keystroke is kept there, so the redraw after a send never wipes words typed meanwhile — in any box)
   assert.match(STAFF, /h\('textarea', \{ key: 'up-' \+ t\.id,[^\n]*value: d\.note, onInput: \(e, el\) => \{ d\.note = el\.value;/, 'the update box');
-  assert.match(STAFF, /h\('textarea', \{ key: 'msg-' \+ taskId,[^\n]*value: state\.msgDrafts\[taskId\] \|\| '', onInput: \(e, el\) => \{ state\.msgDrafts\[taskId\] = el\.value;/, 'the message box');
+  // (the message box is one shared piece now, ui/workparts.js; the staff view keeps its words in its own state)
+  const PARTS = readFileSync(new URL('../docs/ui/workparts.js', import.meta.url), 'utf8');
+  assert.match(PARTS, /h\('textarea', \{ key: 'msg-' \+ taskId, placeholder, value: draft \|\| '', onInput: \(e, el\) => \{ onInput\(el\.value\);/, 'the message box');
+  assert.match(STAFF, /draft: state\.msgDrafts\[taskId\],[^\n]*\n\s*onInput: \(v\) => \{ state\.msgDrafts\[taskId\] = v; \},/, 'the staff view keeps the message words');
   assert.match(STAFF, /value: state\.stepDrafts\[ref\] \|\| '', onInput: \(e, el\) => \{ state\.stepDrafts\[ref\] = el\.value;/, 'the Add a step box');
 });
 

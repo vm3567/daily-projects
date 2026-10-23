@@ -204,7 +204,7 @@ function teamChip(t, info) {
   else if (t.dueToday) { text = `👥 ${t.assignee.name} · not filled today`; if (info.late) cls += ' late'; }
   else text = `👥 ${t.assignee.name}${t.last ? ` · last ${fmtDay(t.last.day)}` : ''}`;
   const note = u ? u.note : t.last ? t.last.note : '';
-  return h('a', { class: cls, href: `../#task=${t.id}`, title: note ? `${note.slice(0, 300)}\n\nClick to see all updates and photos.` : 'Click to see the team task.' }, text);
+  return h('a', { class: cls, href: `#team-task=${t.id}`, title: note ? `${note.slice(0, 300)}\n\nClick to see all updates and photos.` : 'Click to see the team task.' }, text);
 }
 
 function stepRow(ctx, p, s, box = null) {
@@ -228,7 +228,7 @@ function stepRow(ctx, p, s, box = null) {
   const live = !!tt && tt.status === 'open'; // a finished or cancelled task: the step can be given again
   if (tt && (tt.status === 'open' || s.done)) tags.push(teamChip(tt, ctx.teamInfo())); // an old closed task on an open step: nothing to show
   if (!live && ctx.onServer && !s.done && p.state === 'active') { // you do it yourself: tap to give it to someone
-    tags.push(h('a', { class: 'tag me', href: '../?team#new=' + encodeURIComponent(JSON.stringify({ title: s.text, project: p.name, projectRef: p.id, stepRef: s.id })), title: 'You do this task. Tap to give it to someone.' }, 'Me'));
+    tags.push(h('a', { class: 'tag me', href: '#team-new=' + encodeURIComponent(JSON.stringify({ title: s.text, project: p.name, projectRef: p.id, stepRef: s.id })), title: 'You do this task. Tap to give it to someone.' }, 'Me'));
   }
   if (!s.done) tags.push(h('button', { class: 'link small days-link', type: 'button', title: 'Show only this task in the diary', onClick: () => { ui.diaryTask = { projectId: p.id, stepId: s.id }; ctx.render(); setTimeout(() => { const d = document.querySelector('.diary'); if (d) d.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 30); } }, 'its days →'));
   if (s.repeat && !s.done) tags.push(h('span', { class: 'tag repeat', title: 'Repeats' }, `↻ ${REPEAT_WORD[s.repeat]}`));
@@ -301,7 +301,7 @@ function stepRow(ctx, p, s, box = null) {
         (v) => store.dispatch('setStepField', { projectId: p.id, stepId: s.id, field: 'note', value: v })),
       ctx.onServer && !s.done ? h('a', {
         class: 'btn small',
-        href: live ? `../#task=${tt.id}` : '../#new=' + encodeURIComponent(JSON.stringify({ title: s.text, project: p.name, projectRef: p.id, stepRef: s.id })),
+        href: live ? `#team-task=${tt.id}` : '#team-new=' + encodeURIComponent(JSON.stringify({ title: s.text, project: p.name, projectRef: p.id, stepRef: s.id })),
         title: live ? 'See the daily updates for this step' : 'Give this step to a team member; their daily updates show here',
       }, live ? `👥 Team task: ${tt.assignee.name}` : '👥 Give to team') : null,
       s.done ? null : h('button', {
@@ -661,7 +661,7 @@ function teamBar(ctx, p) {
       h('input', { type: 'checkbox', checked: !!ui.givePhoto, onChange: (e, el) => ctx.setGivePhoto(el.checked) }), ' 📷 Photo needed to finish'),
     people === null ? h('span', { class: 'muted small' }, 'Loading…')
       : people.length ? people.map((u) => h('button', { class: 'chip', key: 'tp-' + u.id, disabled: busy ? true : undefined, onClick: () => ctx.giveProject(p, u) }, u.name))
-        : h('a', { class: 'small', href: '../?team' }, 'Add a person first (Team → People)'),
+        : h('a', { class: 'small', href: '#team' }, 'Add a person first (Team → People)'),
     p.team ? h('button', { class: 'btn small', onClick: () => { if (confirm(`Take "${p.name}" back from ${p.team.name}? Their open steps are removed from their list.`)) { ui.giveOpen = null; ctx.takeBackProject(p); } } }, 'Take back') : null,
     h('button', { class: 'link small', onClick: () => { ui.giveOpen = null; ui.givePhoto = false; ctx.render(); } }, 'Cancel'));
 }
