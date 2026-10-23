@@ -3017,3 +3017,23 @@ test('📂 createMainProject with a 📂 project as its child: the new project h
   applyOp(s, op('makeMisc', {}, '2026-10-02'));
   assert.equal(applyOp(s, op('createMainProject', { projectId: 'b2', name: 'Other', childId: 'misc' }, '2026-10-02')), false);
 });
+
+test('📂 Review round 2: an inner project\'s own late step turns the outer project red too (its dot rolls up every level)', async () => {
+  const { listColour } = await import('../docs/ui/mains.js');
+  const s = withMains();
+  applyOp(s, op('createMainProject', { projectId: 'big', name: 'Plant upgrade' }, '2026-10-01'));
+  applyOp(s, op('createMainProject', { projectId: 'in', name: 'Kilns inner' }, '2026-10-01'));
+  applyOp(s, op('addToProject', { projectId: 'in', parentId: 'big' }, '2026-10-01'));
+  applyOp(s, op('addStep', { projectId: 'in', stepId: 's1', text: 'Order bricks' }, '2026-10-01'));
+  const late = '2026-10-20';
+  // the outer one also holds a task worked on today (green), so only the inner project can make it red
+  applyOp(s, op('addToProject', { projectId: 'k1', parentId: 'big' }, '2026-10-01'));
+  applyOp(s, op('addStep', { projectId: 'k1', stepId: 'k1a', text: 'Check' }, late));
+  applyOp(s, op('addWorkNote', { projectId: 'k1', noteId: 'n1', text: 'Checked' }, late));
+  applyOp(s, op('addStep', { projectId: 'big', stepId: 'b1', text: 'Plan' }, late));
+  applyOp(s, op('addWorkNote', { projectId: 'big', noteId: 'n2', text: 'Planned' }, late));
+  assert.notEqual(listColour(s.data, P(s, 'k1'), late), 'red');
+  assert.equal(listColour(s.data, P(s, 'in'), late), 'red', 'the inner project is red (no work for long)');
+  assert.equal(listColour(s.data, P(s, 'big'), late), 'red', 'so the outer one is red too');
+});
+
