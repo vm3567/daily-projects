@@ -2282,7 +2282,7 @@ test('one app — staff view: the same layout as Daily Projects (menu, list, pag
   const tree = s.view();
   assert.match(tree.className, /\blayout\b/, 'the same layout classes as the owner\'s app');
   const text = tree.textContent;
-  for (const bit of ['Today', 'Coming next', 'My suggestions', '📁 Kiln trial', '💡 Suggest a task', '👤 Valar', 'Sign out', 'Check kiln temperature', 'Pack the samples', '1 of 3 sent', 'by 18:00', '✓ Sent 10:30 am']) assert.ok(text.includes(bit), bit);
+  for (const bit of ['Today', 'Coming next', 'My suggestions', '📂 Kiln trial', '💡 Suggest a task', '👤 Valar', 'Sign out', 'Check kiln temperature', 'Pack the samples', '1 of 3 sent', 'by 18:00', '✓ Sent 10:30 am']) assert.ok(text.includes(bit), bit);
   for (const gone of ['📥 Inbox', '✉ Replies', 'Settings', 'People', 'Groups', '🔌 From apps', 'Dashboard', 'Time report', '+ Give a task']) assert.ok(!text.includes(gone), 'no owner screen: ' + gone);
   // dots as on the owner's Today: green = sent today, red = not yet
   const kilnRow = rFind(tree, (n) => n.nodeName === 'LI' && n.textContent.includes('Check kiln temperature'));
@@ -2360,7 +2360,7 @@ test('one app — staff view: a task page shows chips, today\'s update box, mess
   s.open('project:p1');
   await new Promise((r) => setTimeout(r, 0));
   const proj = s.view().textContent;
-  for (const bit of ['📁 Kiln trial', '✓ 1 done', 'Buy clay', 'Step 2 · current', 'Order clay', 'Step 3 · next', 'Fire the second batch']) assert.ok(proj.includes(bit), bit);
+  for (const bit of ['📂 Kiln trial', '✓ 1 done', 'Buy clay', 'Step 2 · current', 'Order clay', 'Step 3 · next', 'Fire the second batch']) assert.ok(proj.includes(bit), bit);
   assert.ok(rFind(s.view(), (n) => n.nodeName === 'INPUT' && n.getAttribute('placeholder') === '+ Add the next step…'), 'the owner\'s add-step box');
 });
 
@@ -2655,7 +2655,7 @@ test('one app wiring (step 2): offline sending, the shared outbox, #open from a 
 test('one app — staff view: 🔍 Search (their own tasks, messages, updates; 2 letters or more) opens the task', async () => {
   const { s, calls } = fakeStaff2({ search: (b) => ({ ok: true, results: [{ taskId: 12, title: 'Pack the samples', who: 'Valar', kind: 'message', text: 'brown boxes', at: '2026-10-22 10:00:00' }] }) }, { searchWait: 0 });
   await s.load();
-  assert.ok(btn(s.view(), '🔍 Search'));
+  assert.ok(btn(s.view(), '🔍'), '🔍 at the top of the list (owner, 23 Oct: the staff view looks like the projects page — a search box in the menu, 🔍 on the list)');
   s.act.show('search');
   assert.match(s.view().textContent, /Type 2 or more letters/);
   s.act.search('b'); await tick(); await tick();
@@ -3353,4 +3353,17 @@ test('every page the same as the owner\'s (23 Oct): "What\'s happening" on the t
   assert.ok(all(el, (n) => cls(n, 'day-tag') && cls(n, 'miss')).length > 0 && all(el, (n) => cls(n, 'day-tag') && cls(n, 'off')).length > 0, 'No progress / Off tags');
   assert.match(TEAM, /h\('h2', null, title\), actions \? h\('div', \{ class: 'state-buttons' \}, actions\) : null\)/, 'team pages: the buttons under the title');
   assert.match(readFileSync(new URL('../docs/styles.css', import.meta.url), 'utf8'), /\.detail-top h2 ~ \.state-buttons \{ flex-basis: 100%; justify-content: flex-start; \}/);
+});
+
+test('staff view looks like the owner\'s projects page (owner, 23 Oct): search box on top of the menu, Today with its count and dots, 📂 projects, "💡 Suggest a task" at the top of the list, 🔍 on the list, a project\'s steps in a Steps box', async () => {
+  const { readFileSync } = await import('node:fs');
+  const S = readFileSync(new URL('../docs/ui/staff.js', import.meta.url), 'utf8');
+  assert.match(S, /h\('input', \{ class: 'search', type: 'search', placeholder: 'Search…', key: 'staff-menu-search'/);
+  assert.match(S, /item\('Today', !state\.sel && state\.section === 'today', \(\) => show\('today'\), d \? String\(d\.tasks\.length\) : null\)/);
+  assert.match(S, /h\('li', \{ class: 'menu-dots', key: 'dots'/);
+  assert.match(S, /h\('button', \{ class: 'btn primary new-project', onClick: \(\) => open\('suggest'\) \}, '💡 Suggest a task'\)/);
+  assert.doesNotMatch(S, /item\('💡 Suggest a task'/, 'no longer in the menu');
+  assert.match(S, /block\('Steps', h\('ul', \{ class: 'plist' \}/);
+  assert.match(S, /h\('form', \{ class: 'row add-step'/, 'the add-step box takes the line, as the owner\'s');
+  assert.doesNotMatch(S, /'📁 '|sec\('📁/, 'projects are 📂, as on the owner\'s page');
 });

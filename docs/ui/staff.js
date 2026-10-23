@@ -560,17 +560,23 @@ export function createStaff(opts) {
     const due = d ? d.tasks.filter((x) => !x.today).length : 0;
     const projs = myProjects(d);
     const ps = push ? push.state() : 'no';
+    // the same menu as the owner's projects page (owner, 23 Oct): the search box on top, Today with its count and the
+    // red / yellow / green count under it (the same dots as the list), the other lists, a line, the rest
+    const dots = { red: 0, yellow: 0, green: 0 };
+    if (d) for (const x of d.tasks) dots[x.today ? 'green' : waitingFor(x.id) ? 'yellow' : 'red']++;
     return h('nav', { class: 'menu-inner' },
       h('div', { class: 'brand' }, h('img', { src: 'icons/icon-192.png', alt: '', width: 28, height: 28 }), h('span', null, 'Work Task')),
+      h('input', { class: 'search', type: 'search', placeholder: 'Search…', key: 'staff-menu-search', 'aria-label': 'Search', value: state.searchQ || '',
+        onInput: (e, el) => { if (state.section !== 'search' || state.sel) show('search'); search(el.value); } }),
       h('ul', { class: 'menu-list' },
-        item('Today', !state.sel && state.section === 'today', () => show('today'), due || null),
-        item('Coming next', !state.sel && state.section === 'next', () => show('next'), d && d.other.length ? d.other.length : null),
-        item('My suggestions', !state.sel && state.section === 'sugg', () => show('sugg'), d && (d.suggestions || []).length ? d.suggestions.length : null),
-        item('🔍 Search', !state.sel && state.section === 'search', () => show('search')),
+        item('Today', !state.sel && state.section === 'today', () => show('today'), d ? String(d.tasks.length) : null),
+        d ? h('li', { class: 'menu-dots', key: 'dots', title: due ? `${due} still to send today` : 'All sent today' },
+          h('span', { class: 'dot red' }), String(dots.red), ' ', h('span', { class: 'dot yellow' }), String(dots.yellow), ' ', h('span', { class: 'dot green' }), String(dots.green)) : null,
+        item('📅 Coming next', !state.sel && state.section === 'next', () => show('next'), d ? String(d.other.length) : null),
+        item('💡 My suggestions', !state.sel && state.section === 'sugg', () => show('sugg'), d ? String((d.suggestions || []).length) : null),
         projs.length ? h('li', { class: 'menu-head' }, 'My projects') : null,
-        projs.map((pr) => item(`📁 ${pr.name}`, state.sel === 'project:' + pr.ref, () => open('project:' + pr.ref), pr.real.length || null)),
+        projs.map((pr) => item(`📂 ${pr.name}`, state.sel === 'project:' + pr.ref, () => open('project:' + pr.ref), pr.real.length || null)),
         h('li', { class: 'menu-sep' }),
-        item('💡 Suggest a task', state.sel === 'suggest', () => open('suggest')),
         ps === 'no' ? null : item('🔔 Notifications', state.sel === 'notify', () => open('notify'), ps === 'on' ? 'On' : 'Off'),
         item(`👤 ${state.user.name}`, state.sel === 'password', () => open('password')),
         item('Sign out', false, signOut)));
@@ -592,7 +598,7 @@ export function createStaff(opts) {
       h('span', { class: 'quick-tick-space', 'aria-hidden': 'true' }),
       h('button', { class: 'prow-btn', onClick: () => open('project:' + pr.ref) },
         h('span', { class: 'dot ' + (pr.current && pr.current.today ? 'green' : 'red') }),
-        h('span', { class: 'prow-text' }, h('span', { class: 'prow-name' }, '📁 ', pr.name), h('span', { class: 'prow-next' }, now))));
+        h('span', { class: 'prow-text' }, h('span', { class: 'prow-name' }, '📂 ', pr.name), h('span', { class: 'prow-next' }, now))));
   }
 
   const sec = (label, extra) => h('div', { class: 'list-sec' }, h('span', null, label), extra || null);
@@ -643,8 +649,10 @@ export function createStaff(opts) {
     const head = h('div', { class: 'list-head' },
       h('button', { class: 'icon menu-btn', 'aria-label': 'Menu', onClick: () => { state.menuOpen = true; render(); } }, '☰'),
       h('h2', null, title),
+      state.section === 'search' ? null : h('button', { class: 'icon', title: 'Search', 'aria-label': 'Search', onClick: () => show('search') }, '🔍'), // (as on the owner's list; on a phone the menu has no search box)
       h('button', { class: 'icon', title: 'Get latest', 'aria-label': 'Refresh', onClick: reload }, '↻'));
-    const top = [offlineBar(), notices(), newsBar(), pushBanner()];
+    // "💡 Suggest a task" at the top of the list, as the owner's "+ New task"
+    const top = [offlineBar(), notices(), newsBar(), pushBanner(), ['today', 'sugg'].includes(state.section) ? h('button', { class: 'btn primary new-project', onClick: () => open('suggest') }, '💡 Suggest a task') : null];
     if (!d) return h('div', { class: 'col-inner' }, head, top, h('p', { class: 'empty-list' }, state.loadFailed ? [state.loadFailed, ' ', h('button', { class: 'link', onClick: reload }, 'Try again')] : 'Loading…'));
     const td = d.today;
     let body;
@@ -674,7 +682,7 @@ export function createStaff(opts) {
       const projs = myProjects(d);
       body = [
         d.stale ? h('p', { class: 'empty-list' }, `📴 Saved copy from ${fmtDay(d.today)} — today's updates are not shown yet.`) : null,
-        projs.length ? [sec('📁 My projects'), h('ul', { class: 'plist' }, projs.map(projectRow))] : null,
+        projs.length ? [sec('📂 My projects'), h('ul', { class: 'plist' }, projs.map(projectRow))] : null,
         sec(`${fmtDay(td)} · ${sent} of ${d.tasks.length} sent`, h('span', { class: 'tag' }, `by ${d.fillBy}`)),
         h('ul', { class: 'plist' }, d.tasks.map((t) => {
           const waiting = !!waitingFor(t.id);
@@ -773,14 +781,14 @@ export function createStaff(opts) {
       !pr ? h('p', { class: 'muted' }, done.length ? 'All your steps are done ✓. Your manager decides what comes next.' : 'This project is not on your list any more.')
         : [h('p', { class: 'muted' }, pr.real.length ? 'Do the steps in order. Every day, open the current step and send what you did. Found more work? Add a step below.'
           : 'No steps yet. Add the steps you will do, in order. Until then, send your daily update on the whole project.'),
-        h('ul', { class: 'plist' }, (pr.real.length ? pr.real : pr.steps).map((t, i) => row(t,
+        block('Steps', h('ul', { class: 'plist' }, (pr.real.length ? pr.real : pr.steps).map((t, i) => row(t,
           !pr.real.length ? sentSub(t) : t === pr.current ? `Step ${k + i + 1} · current · ${sentSub(t)}` : `Step ${k + i + 1} · next${t.fromStaff ? ' · added by you' : ''}`,
           t === pr.current || !pr.real.length ? (t.today ? 'green' : 'red') : 'grey')),
           waiting.map((x) => h('li', { class: 'prow', key: 'wstep-' + x.id }, h('span', { class: 'quick-tick-space' }), h('div', { class: 'prow-btn' }, h('span', { class: 'dot grey' }),
             h('span', { class: 'prow-text' }, h('span', { class: 'prow-name' }, x.title), h('span', { class: 'prow-next' }, '⏳ Waiting to send')))))),
-        h('form', { class: 'add-step', onSubmit: (e) => { e.preventDefault(); addStep(ref).then((m) => { err.say(m); }); } },
+        h('form', { class: 'row add-step', onSubmit: (e) => { e.preventDefault(); addStep(ref).then((m) => { err.say(m); }); } }, // (the owner's "Steps" box)
           h('input', { key: 'step-' + ref, placeholder: '+ Add the next step…', 'aria-label': 'Add a step', maxlength: '300', enterkeyhint: 'enter', autocomplete: 'off', value: state.stepDrafts[ref] || '', onInput: (e, el) => { state.stepDrafts[ref] = el.value; err.clear(); } })),
-        err],
+        err)],
     ];
   }
 
@@ -847,7 +855,7 @@ export function createStaff(opts) {
       title = t.title; body = taskPage();
       dot = t.status !== 'open' ? 'grey' : t.today ? 'green' : waitingFor(t.id) ? 'yellow' : 'red';
     }
-    else { const pr = myProjects(state.data).find((x) => x.ref === sel.slice(8)); title = '📁 ' + (pr ? pr.name : 'Project'); body = projectPage(); }
+    else { const pr = myProjects(state.data).find((x) => x.ref === sel.slice(8)); title = '📂 ' + (pr ? pr.name : 'Project'); body = projectPage(); }
     return h('div', { class: 'detail-inner', key: 'detail-' + sel },
       h('div', { class: 'detail-top' }, h('button', { class: 'icon back', 'aria-label': 'Back', onClick: back }, '←'), dot ? h('span', { class: 'dot ' + dot, 'aria-label': dot }) : null, h('h2', null, title)),
       body);
