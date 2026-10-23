@@ -722,7 +722,7 @@ test('project page: a 💤 Snooze button sits next to Finish (not only in the �
   const { readFileSync } = await import('node:fs');
   const src = readFileSync(new URL('../docs/ui/detail.js', import.meta.url), 'utf8');
   const top = src.slice(src.indexOf('function stateButtons('), src.indexOf("if (p.state === 'paused')", src.indexOf('function stateButtons(')));
-  assert.match(top, /'💤 Snooze'\) : null,\s*h\('button', \{ class: 'btn', onClick: \(\) => ctx\.act\('finish'/, 'Snooze right before Finish');
+  assert.match(top, /'💤 Snooze'\) : null,\s*p\.misc \? null : h\('button', \{ class: 'btn', onClick: \(\) => ctx\.act\('finish'/, 'Snooze right before Finish (none on 📂 Misc: it is never finished)');
   assert.match(top, /ui\.snoozeOpen = p\.id; ctx\.render\(\);/, 'it opens the snooze box');
 });
 

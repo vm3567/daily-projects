@@ -2806,3 +2806,41 @@ test('review r4-3 (whole code): an email address is never read as an @mention, a
   assert.equal(st.text, 'Ask @Acton Ltd, copy ceramic.ops@acton-finishing.com');
   assert.equal(st.note, 'reply to ravi@Acton.com');
 });
+
+test('📂 Misc (owner, 23 Oct): every task in no other 📂 project is in Misc — worked out, so it leaves Misc when put in a project and comes back when taken out; Misc is made once and never deleted, finished, given or filled by hand', async () => {
+  const { childrenOf, parentsOf, mainProjects, isMainProject, MISC_ID, canPutUnder } = await import('../docs/rules.js');
+  const s = withProject();
+  applyOp(s, op('createProject', { projectId: 't2', name: 'Loose two' }, '2026-10-02'));
+  applyOp(s, op('createMainProject', { projectId: 'm1', name: 'Kilns' }, '2026-10-02'));
+  assert.equal(applyOp(s, op('makeMisc', {}, '2026-10-03')), true);
+  assert.equal(applyOp(s, op('makeMisc', {}, '2026-10-03', '10:01')), false, 'made once (the same id on every device)');
+  const d = s.data;
+  const misc = d.projects.find((p) => p.id === MISC_ID);
+  assert.ok(misc.isMain && misc.misc && isMainProject(d, misc));
+  const inMisc = () => childrenOf(d, MISC_ID).map((p) => p.id).sort();
+  assert.deepEqual(inMisc(), ['p1', 't2'], 'both loose tasks; never a 📂 project');
+  assert.deepEqual(parentsOf(d, d.projects.find((p) => p.id === 't2')).map((p) => p.name), ['Misc'], 'the task shows 📂 Misc');
+  applyOp(s, op('addToProject', { projectId: 't2', parentId: 'm1' }, '2026-10-04'));
+  assert.deepEqual(inMisc(), ['p1'], 'put in Kilns: it leaves Misc by itself');
+  assert.deepEqual(parentsOf(d, d.projects.find((p) => p.id === 't2')).map((p) => p.name), ['Kilns']);
+  applyOp(s, op('removeFromProject', { projectId: 't2', parentId: 'm1' }, '2026-10-05'));
+  assert.deepEqual(inMisc(), ['p1', 't2'], 'taken out of its last project: back in Misc');
+  assert.equal(mainProjects(d).at(-1).id, MISC_ID, 'Misc last in the 📂 Projects list');
+  assert.equal(canPutUnder(d, d.projects.find((p) => p.id === 't2'), misc), false, 'nothing is put in Misc by hand');
+  assert.equal(applyOp(s, op('addToProject', { projectId: 't2', parentId: MISC_ID }, '2026-10-05', '10:05')), false);
+  assert.equal(applyOp(s, op('deleteProject', { projectId: MISC_ID }, '2026-10-05', '10:06')), false, 'never deleted');
+  assert.equal(applyOp(s, op('finish', { projectId: MISC_ID }, '2026-10-05', '10:07')), false, 'never finished');
+  assert.equal(applyOp(s, op('setProjectTeam', { projectId: MISC_ID, userId: 3, name: 'Valar' }, '2026-10-05', '10:08')), false, 'never given (it would give every loose task)');
+  assert.ok(d.projects.some((p) => p.id === MISC_ID));
+  const { todayList } = await import('../docs/rules.js');
+  assert.ok(!todayList(d, '2026-10-05').some((p) => p.id === MISC_ID), 'not a row on Today (it has no steps of its own)');
+  // its page: no "✕ Remove" / "+ Add tasks" (they would do nothing), no Finish / Delete / Give; made once when the app opens
+  const { readFileSync } = await import('node:fs');
+  const MAINS = readFileSync(new URL('../docs/ui/mains.js', import.meta.url), 'utf8');
+  assert.match(MAINS, /h\('td', null, p\.misc \? null : h\('button', \{/);
+  assert.match(MAINS, /p\.misc \? null : h\('button', \{ class: 'btn small', type: 'button', onClick: \(\) => openAddTasks\(ctx, p\) \}, '\+ Add tasks'\)/);
+  const DET = readFileSync(new URL('../docs/ui/detail.js', import.meta.url), 'utf8');
+  assert.match(DET, /p\.misc \? null : deleteButton\(ctx, p\)/);
+  assert.match(DET, /p\.state === 'active' && ctx\.onServer && !p\.misc \? item\(p\.team \?/);
+  assert.match(readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8'), /if \(store\.canEdit\(\) && !store\.view\.data\.projects\.some\(\(p\) => p\.id === MISC_ID\)\) store\.dispatch\('makeMisc', \{\}\);/);
+});
