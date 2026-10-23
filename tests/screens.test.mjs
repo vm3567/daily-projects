@@ -3185,3 +3185,21 @@ test('giving a 📂 project (owner, 23 Oct): the give box lists its tasks — ti
   const t1 = renderDetail({ ...ctx, ui: { selected: 't1', update: {} } }).textContent;
   assert.ok(t1.includes('👥 Valar (with 📂 Kilns)'));
 });
+
+test('review r4-1 (whole code): typing the same phone number written another way (spaces, +91) is not called "not a phone number" and is left as it is; a wrong one still is', () => {
+  const s = sampleState();
+  applyOps(s, [makeOp('setPersonContact', { personId: 'r', phone: '919876543210' })]);
+  const toasts = [];
+  const ctx = { ...fakeCtx(s, { person: 'r' }), toast: (t) => toasts.push(t) };
+  ctx.store.dispatch = (type, args) => applyOps(s, [makeOp(type, args)]).length > 0;
+  const box = () => rFind(renderPerson(ctx), (n) => n.nodeName === 'INPUT' && n.getAttribute('type') === 'tel');
+  for (const typed of ['98765 43210', '+91 98765 43210', '0098 7654 3210'.replace('0098', '0091 98')]) {
+    const el = { value: typed };
+    box().__on.change({}, el);
+    assert.equal(el.value, '+919876543210', 'shown as it is saved: ' + typed);
+  }
+  assert.deepEqual(toasts, [], 'no "That does not look like a phone number"');
+  const bad = { value: '12' };
+  box().__on.change({}, bad);
+  assert.deepEqual(toasts, ['That does not look like a phone number']);
+});

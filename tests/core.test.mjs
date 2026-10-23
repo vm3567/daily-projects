@@ -2778,3 +2778,14 @@ test('review round 2 (whole code): a #ops= link (it can come from anyone) carrie
   assert.equal(r.dropped, bad.length);
   for (const t of OP_TYPES) assert.ok(CARRIED.has(t) !== NOT_CARRIED.has(t), `${t}: sorted into exactly one list (a new kind of change must be decided)`);
 });
+
+test('review r4-1 (whole code): a repeating step with a date long ago gets its next date after the tick day (it used to stop 400 steps on, still in the past, and show as overdue at once); the weekday stays', async () => {
+  const { nextRepeatDate } = await import('../docs/rules.js');
+  assert.equal(nextRepeatDate('daily', '2024-01-01', '2026-10-23'), '2026-10-24');
+  assert.equal(nextRepeatDate('weekly', '2015-01-05', '2026-10-23'), '2026-10-26', 'a Monday, as the old date');
+  assert.equal(new Date('2026-10-26T00:00:00Z').getUTCDay(), new Date('2015-01-05T00:00:00Z').getUTCDay());
+  assert.equal(nextRepeatDate('monthly', '1950-01-31', '2026-10-23'), '2026-10-31');
+  // as before: always at least one step on from the date it had
+  assert.equal(nextRepeatDate('daily', '2026-10-24', '2026-10-23'), '2026-10-25');
+  assert.equal(nextRepeatDate('weekly', '2026-10-19', '2026-10-23'), '2026-10-26');
+});

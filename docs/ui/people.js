@@ -4,7 +4,7 @@
 import { h, fmtDay, fmtTime } from './dom.js';
 import { mentionedPeople, initials, indiaDate, personSteps, personStatus, waitingDays, todayIndia, stepLinkedTo, stepTargets, addDays, givenProjectsOf, nextStep, canGiveStep, givableSteps } from '../rules.js';
 import { sentMarkOf, mailDate, teamOrder } from '../reports.js';
-import { newId } from '../ops.js';
+import { newId, cleanPhone } from '../ops.js';
 
 export function openCount(data, person) {
   const { waiting, discuss } = personSteps(data, person);
@@ -333,6 +333,7 @@ export function renderPerson(ctx) {
         key: 'pphone-' + person.id, type: 'tel', value: person.phone ? '+' + person.phone : '', placeholder: 'WhatsApp number', 'aria-label': 'WhatsApp number', autocomplete: 'off',
         onChange: (e, el) => {
           if (el.value.trim() === (person.phone ? '+' + person.phone : '')) return;
+          if (cleanPhone(el.value) === (person.phone || '')) { el.value = person.phone ? '+' + person.phone : ''; return; } // the same number, written another way: nothing to change
           if (!store.dispatch('setPersonContact', { personId: person.id, phone: el.value })) { ctx.toast('That does not look like a phone number'); el.value = person.phone ? '+' + person.phone : ''; }
           else ctx.toast(el.value.trim() ? `Saved — WhatsApp now goes straight to ${first}` : 'Number removed', 2000);
         },

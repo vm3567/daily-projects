@@ -245,7 +245,11 @@ export function nextRepeatDate(repeat, anchor, doneDay, dayOfMonth = null) {
     return `${ny}-${String(nm).padStart(2, '0')}-${String(Math.min(day, last)).padStart(2, '0')}`;
   };
   let d = step(anchor || doneDay); // always at least one step on, so an early tick never repeats the same date
-  for (let i = 0; i < 400 && d <= doneDay; i++) d = step(d);
+  if ((repeat === 'daily' || repeat === 'weekly') && d <= doneDay) { // a date long ago: straight past the tick day (same weekday)
+    const n = repeat === 'daily' ? 1 : 7;
+    d = addDays(d, (Math.floor(daysBetween(d, doneDay) / n) + 1) * n);
+  }
+  for (let i = 0; i < 1200 && d <= doneDay; i++) d = step(d); // (monthly: 100 years)
   return d;
 }
 

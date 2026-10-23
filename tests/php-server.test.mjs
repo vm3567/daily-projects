@@ -2801,6 +2801,22 @@ test('review round 3 (whole code): a switched-off account answers a right passwo
   assert.deepEqual([ghost.s, ghost.error], [404, 'That person is not there any more. Reload the page.']);
 });
 
+test('review r4-1 (whole code): an outside app pushing the same NEW item twice at the same moment gets the same item both times (no server error)', { skip }, async () => {
+  const port = WEB_PORT + 7;
+  const many = spawn('php', ['-S', `127.0.0.1:${port}`, '-t', join(ROOT, 'team', 'public_html')], { env: { ...env(), PHP_CLI_SERVER_WORKERS: '8' }, stdio: 'ignore' });
+  try {
+    const url = `http://127.0.0.1:${port}/api/?a=`;
+    await until(async () => (await fetch(url + 'ping', { method: 'POST', body: '{}' })).ok, 'PHP server with workers');
+    const push = (ext, kind) => fetch(url + 'connect.push', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + cn.purchase.key }, body: JSON.stringify({ external_id: ext, kind, title: 'Race ' + ext }) }).then(async (r) => ({ s: r.status, ...(await r.json()) }));
+    for (const [ext, kind] of [['RACE-A1', 'approval'], ['RACE-T1', 'task']]) {
+      const out = await Promise.all(Array.from({ length: 6 }, () => push(ext, kind)));
+      assert.ok(out.every((r) => r.ok), out.map((r) => r.s + ' ' + (r.error || '')).join(', '));
+      assert.equal(new Set(out.map((r) => r.id)).size, 1, kind + ': one item');
+      assert.equal(sqlOut(`SELECT COUNT(*) FROM wt.conn_items WHERE external_id = '${ext}'`).trim(), '1');
+    }
+  } finally { many.kill(); }
+});
+
 test('review round 1 (whole code): importing a data folder with more than 500 files works (it goes in parts of 500; data.json last), every file is there', { skip }, async () => {
   const src = join(dir, 'import-big'); mkdirSync(join(src, 'files', 'x1'), { recursive: true });
   const n = 520;

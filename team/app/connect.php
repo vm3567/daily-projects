@@ -176,9 +176,13 @@ function conn_push(array $c, array $in): array {
   $old = one('SELECT * FROM conn_items WHERE conn_id = ? AND external_id = ?', [$c['id'], $ext]);
   if ($old && $old['kind'] !== $kind) throw new ApiError("This external_id was sent as a {$old['kind']}; it cannot change.");
 
-  if (!$old) {
-    q("INSERT INTO conn_items (conn_id, external_id, kind, title, details, link, fields, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)",
-      [$c['id'], $ext, $kind, $title, $details, $link ?: null, $fjson, now(), now()]);
+  // (the same new item sent twice at the same moment: the second finds it made by the first, and is the same as sending it again)
+  if (!$old && !insert_once("INSERT INTO conn_items (conn_id, external_id, kind, title, details, link, fields, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)",
+      [$c['id'], $ext, $kind, $title, $details, $link ?: null, $fjson, now(), now()])) {
+    $old = one('SELECT * FROM conn_items WHERE conn_id = ? AND external_id = ?', [$c['id'], $ext]);
+    if (!$old) throw new ApiError('Something went wrong. Send the same again.', 503);
+    if ($old['kind'] !== $kind) throw new ApiError("This external_id was sent as a {$old['kind']}; it cannot change.");
+  } elseif (!$old) {
     $id = (int)db()->lastInsertId();
     $it = one('SELECT * FROM conn_items WHERE id = ?', [$id]);
     if ($kind === 'task') conn_make_task($it, $c);
