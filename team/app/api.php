@@ -251,7 +251,9 @@ function handle(string $a, array $in): array {
       // a closed task can only be changed by the person who finished it today (to fix or undo their own Finished);
       // never when the manager cancelled it, took it back, or marked it done (closed_by is set only by their own Finished)
       // (the newest update: a Finished written offline yesterday and sent today is still theirs to undo)
-      $wrote = is_string($in['writtenAt'] ?? null) && strtotime($in['writtenAt']) ? date('Y-m-d H:i:s', min(time(), (int)strtotime($in['writtenAt']))) : null;
+      // the phone's clock may be off: its time when it sent this (sentAt) puts writtenAt on the server's clock
+      $skew = is_string($in['sentAt'] ?? null) && strtotime($in['sentAt']) ? max(-86400, min(86400, time() - (int)strtotime($in['sentAt']))) : 0;
+      $wrote = is_string($in['writtenAt'] ?? null) && strtotime($in['writtenAt']) ? date('Y-m-d H:i:s', min(time(), (int)strtotime($in['writtenAt']) + $skew)) : null;
       if ($wrote && substr($wrote, 0, 10) !== $uday) $wrote = null; // the time it was written must be on the day it is for
       // (an undo written offline within 12 hours of their Finished counts too, even if it arrives later)
       $mine = $t && $t['status'] === 'done' && $t['done_at'] && (int)($t['closed_by'] ?? 0) === $me['id']
@@ -555,6 +557,8 @@ function handle(string $a, array $in): array {
         $out = locked_project_sync($me, $in, $ref, $day);
       } catch (Throwable $e) { // not done (busy, or the person is switched off): the owner's app keeps the old person, so the old marker is back
         if ($oldPsp === '') q('DELETE FROM settings WHERE k = ?', ['psp:' . md5($ref)]); else set_setting('psp:' . md5($ref), $oldPsp);
+        // and the old "last sent" time: a Work Task move made before this failed try is still followed when the app sends again
+        set_setting('psc:' . md5($ref), (string)$in['_psc']);
         throw $e;
       }
       set_setting('psc:' . md5($ref), (string)time()); // the server's own sync leaves this project alone for a few minutes
@@ -760,7 +764,9 @@ function handle(string $a, array $in): array {
         if ($old['seq'] !== null && $old['project_ref'] && (int)$old['assignee_id'] !== (int)$assignee['id'] && $old['status'] === 'open') {
           throw new ApiError('This step is part of a given project. Use "Move to…" to change the person.');
         }
-        if ((int)$old['assignee_id'] !== (int)$assignee['id'] && $old['status'] === 'open') move_tasks($me, [$old], (int)$assignee['id']);
+        // a closed task or a suggestion keeps its person (no move record: the report, the history and their list would be wrong)
+        if ((int)$old['assignee_id'] !== (int)$assignee['id'] && $old['status'] !== 'open') throw new ApiError('Only an open task can go to someone else. Open it again (or answer the suggestion) first.');
+        if ((int)$old['assignee_id'] !== (int)$assignee['id']) move_tasks($me, [$old], (int)$assignee['id']);
         q('UPDATE tasks SET title=?, details=?, assignee_id=?, repeat_kind=?, skip_sunday=?, weekday=?, due_date=?, project=?, project_ref=?, step_ref=?, updated_at=? WHERE id=?', [...$vals, $id]);
         q('UPDATE tasks SET needs_photo = ? WHERE id = ?', [empty($in['needsPhoto']) ? 0 : 1, $id]);
         if ($start = date_or_null($in['startDate'] ?? null)) q('UPDATE tasks SET start_date = ? WHERE id = ?', [$start, $id]);

@@ -2386,3 +2386,78 @@ test('📂 a task taken out of a project (or deleted, or moved by setParent) los
   applyOp(s, op('deleteProject', { projectId: 'k1' }, '2026-10-03'));
   assert.deepEqual(P(s, 'm').taskOrder, ['k2', 'x'], 'deleteProject');
 });
+
+test('review r15: Undo of Pause / Finish while the timer ran starts the timer again — the timed minutes are never lost', () => {
+  for (const kind of ['pause', 'finish']) {
+    const s = withProject('2026-10-01');
+    s.data.groups.find((g) => g.id === 'g2').timer = true;
+    const start = op('startTimer', { projectId: 'p1' }, '2026-10-05', '10:00:00');
+    applyOp(s, start);
+    const timerBefore = clone(s.data.timer);
+    const before = clone(s.data.projects[0]);
+    const act = op(kind, { projectId: 'p1' }, '2026-10-05', '12:00:00');
+    assert.ok(applyOp(s, act));
+    assert.equal(s.data.timer, null, kind + ' stops the timer');
+    applyOp(s, op('restoreProject', { project: before, index: 0, undoOpId: act.id, timer: timerBefore }, '2026-10-05', '12:01:00'));
+    assert.deepEqual(s.data.timer, { projectId: 'p1', start: start.at, id: start.id }, kind + ': running again from 10:00');
+    applyOp(s, op('stopTimer', { timerId: start.id }, '2026-10-05', '13:00:00'));
+    assert.deepEqual(s.data.projects[0].timeLogs.map((l) => l.minutes), [180], kind + ': all 3 hours logged');
+  }
+});
+
+test('review r15: Undo of Pause when another timer runs by now keeps the paused one\'s minutes logged', () => {
+  const s = withProject('2026-10-01');
+  s.data.groups.find((g) => g.id === 'g2').timer = true;
+  applyOp(s, op('createProject', { projectId: 'p2', name: 'Other', groupId: 'g2' }, '2026-10-01'));
+  applyOp(s, op('startTimer', { projectId: 'p1' }, '2026-10-05', '10:00:00'));
+  const timerBefore = clone(s.data.timer);
+  const before = clone(s.data.projects.find((x) => x.id === 'p1'));
+  const pause = op('pause', { projectId: 'p1' }, '2026-10-05', '12:00:00');
+  applyOp(s, pause);
+  applyOp(s, op('startTimer', { projectId: 'p2', running: null }, '2026-10-05', '12:05:00'));
+  applyOp(s, op('restoreProject', { project: before, index: 0, undoOpId: pause.id, timer: timerBefore }, '2026-10-05', '12:10:00'));
+  const p1 = s.data.projects.find((x) => x.id === 'p1');
+  assert.equal(p1.state, 'active');
+  assert.deepEqual((p1.timeLogs || []).map((l) => l.minutes), [120], 'the 2 hours stay');
+  assert.equal(s.data.timer.projectId, 'p2', 'the other timer keeps running');
+  const kinds = (s.history['2026-10'] || []).map((e) => e.kind);
+  assert.ok(kinds.includes('time_logged') && !kinds.includes('paused'), kinds.join());
+});
+
+test('review r15: a late Stop or Start from another device never stops a timer started since', () => {
+  const s = withProject('2026-10-01');
+  s.data.groups.find((g) => g.id === 'g2').timer = true;
+  applyOp(s, op('createProject', { projectId: 'p2', name: 'Other', groupId: 'g2' }, '2026-10-01'));
+  const a = op('startTimer', { projectId: 'p1', running: null }, '2026-10-05', '09:30:00');
+  applyOp(s, a);
+  applyOp(s, op('stopTimer', { timerId: a.id }, '2026-10-05', '10:30:00')); // the PC stops A
+  const b = op('startTimer', { projectId: 'p2', running: null }, '2026-10-05', '10:31:00');
+  applyOp(s, b);
+  // the phone's Stop, pressed offline at 10:20 for A, arrives now
+  assert.equal(applyOp(s, op('stopTimer', { timerId: a.id }, '2026-10-05', '10:20:00')), false);
+  assert.equal(s.data.timer && s.data.timer.id, b.id, 'B still runs');
+  // a late Start of A, pressed while A's old timer ran
+  assert.equal(applyOp(s, op('startTimer', { projectId: 'p1', running: a.id }, '2026-10-05', '10:25:00')), false);
+  assert.equal(s.data.timer && s.data.timer.id, b.id, 'B still runs');
+  // pressed now (for B): works
+  assert.ok(applyOp(s, op('stopTimer', { timerId: b.id }, '2026-10-05', '11:31:00')));
+  assert.deepEqual(s.data.projects.find((x) => x.id === 'p2').timeLogs.map((l) => l.minutes), [60]);
+});
+
+test('review r15: a monthly repeat follows a due date you moved (31st moved to the 5th → the 5th next month)', () => {
+  const s = withProject('2026-01-01');
+  applyOp(s, op('setStepField', { projectId: 'p1', stepId: 's1', field: 'repeat', value: 'monthly' }, '2026-01-01'));
+  applyOp(s, op('setStepField', { projectId: 'p1', stepId: 's1', field: 'dueDate', value: '2026-01-31' }, '2026-01-01'));
+  const t1 = op('tickStep', { projectId: 'p1', stepId: 's1' }, '2026-01-31');
+  applyOp(s, t1);
+  const c1 = s.data.projects[0].steps.find((x) => x.id === t1.id + 'r');
+  assert.equal(c1.dueDate, '2026-02-28');
+  applyOp(s, op('setStepField', { projectId: 'p1', stepId: c1.id, field: 'dueDate', value: '2026-03-05' }, '2026-02-10'));
+  const t2 = op('tickStep', { projectId: 'p1', stepId: c1.id }, '2026-03-05');
+  applyOp(s, t2);
+  const c2 = s.data.projects[0].steps.find((x) => x.id === t2.id + 'r');
+  assert.equal(c2.dueDate, '2026-04-05');
+  const t3 = op('tickStep', { projectId: 'p1', stepId: c2.id }, '2026-04-05');
+  applyOp(s, t3);
+  assert.equal(s.data.projects[0].steps.find((x) => x.id === t3.id + 'r').dueDate, '2026-05-05', 'stays on the 5th');
+});

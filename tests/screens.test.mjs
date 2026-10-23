@@ -1897,3 +1897,30 @@ test('🔌 the downloadable PHP connector: wt_decisions gives decisions, until a
   assert.match(tpl, /\} while \(\$answer\['more'\]\);/);
   assert.ok(!/keep the answer's newest decided_at/.test(tpl), 'not the newest decided_at');
 });
+
+test('review r15 wiring (app.js): Undo of Pause / Finish passes the stopped timer; Start / Stop name the timer they were pressed for', () => {
+  const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
+  const act = app.slice(app.indexOf('function act(type, args, message'), app.indexOf('/** Remember how far the list'));
+  assert.match(act, /const timerBefore = store\.view\.data\.timer && store\.view\.data\.timer\.projectId === snapId \? clone\(store\.view\.data\.timer\) : null;\s*const op = store\.dispatch\(type, args\);/, 'the timer is read before the change');
+  assert.match(act, /if \(timerStopped\) made\.timer = timerStopped;/);
+  assert.match(app, /store\.dispatch\('startTimer', \{ projectId: p\.id, running: running \? running\.id : null \}\)/);
+  assert.match(app, /store\.dispatch\('stopTimer', \{ timerId: t\.id \}\)/);
+});
+
+test('review r15: a box left focused (not typed in) takes another device\'s newer text, so leaving it never saves the old text back; typed text is never touched', async () => {
+  const { h, morph } = await import('../docs/ui/dom.js');
+  const box = h('textarea', { value: 'old notes' });
+  const was = document.activeElement;
+  document.activeElement = box;
+  try {
+    morph(box, h('textarea', { value: 'newer notes from the phone' }));
+    assert.equal(box.value, 'newer notes from the phone', 'untouched focused box is brought up to date');
+    box.value = 'newer notes from the phone + typing'; // the user types
+    morph(box, h('textarea', { value: 'yet another change' }));
+    assert.equal(box.value, 'newer notes from the phone + typing', 'what is being typed stays');
+    const input = h('input', { value: 'Kiln' });
+    document.activeElement = input;
+    morph(input, h('input', { value: 'Kiln trial' }));
+    assert.equal(input.value, 'Kiln trial');
+  } finally { document.activeElement = was; }
+});

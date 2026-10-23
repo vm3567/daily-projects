@@ -108,6 +108,13 @@ function conn_app(): array {
   return $c;
 }
 
+/** The app's id for an item: refused when too long (cut, two ids sharing their first 100 letters would be one item). */
+function conn_ext(array $in): string {
+  $ext = txt($in['external_id'] ?? '', 1000, true, 'external_id');
+  if (mb_strlen($ext) > 100) throw new ApiError('external_id is too long (at most 100 letters).');
+  return $ext;
+}
+
 /** connect.* (the app side). Returns null when `a` is not one of them. */
 function conn_app_handle(string $a, array $in): ?array {
   if (!str_starts_with($a, 'connect.')) return null;
@@ -116,7 +123,7 @@ function conn_app_handle(string $a, array $in): ?array {
     case 'connect.push':
       return conn_push($c, $in);
     case 'connect.withdraw': {
-      $ext = txt($in['external_id'] ?? '', 100, true, 'external_id');
+      $ext = conn_ext($in);
       $it = one('SELECT * FROM conn_items WHERE conn_id = ? AND external_id = ?', [$c['id'], $ext]);
       if (!$it) throw new ApiError('Nothing with that external_id.', 404);
       return conn_withdraw($c, $it);
@@ -151,7 +158,7 @@ function conn_app_handle(string $a, array $in): ?array {
 
 /** connect.push: a new item, or the same external_id again = an update (a decided item is not opened again). */
 function conn_push(array $c, array $in): array {
-  $ext = txt($in['external_id'] ?? '', 100, true, 'external_id');
+  $ext = conn_ext($in);
   $kind = (string)($in['kind'] ?? '');
   if (!in_array($kind, ['task', 'approval'], true)) throw new ApiError('kind must be "task" or "approval".');
   $title = txt($in['title'] ?? '', 200, true, 'title');
@@ -348,7 +355,10 @@ function conn_signature(string $secret, string $ts, string $body): string {
  */
 function conn_send(int $itemId): void {
   $it = one('SELECT * FROM conn_items WHERE id = ?', [$itemId]);
-  if (!$it || !in_array($it['status'], ['approved', 'rejected'], true) || $it['callback_ok_at'] || (int)$it['callback_failed']) return;
+  if (!$it || !in_array($it['status'], ['approved', 'rejected'], true) || $it['callback_ok_at'] || (int)$it['callback_failed']) {
+    if ($it) q('UPDATE conn_items SET callback_next_at = NULL WHERE id = ?', [$itemId]); // nothing to send: never picked by the job again
+    return;
+  }
   $c = one('SELECT * FROM connections WHERE id = ?', [$it['conn_id']]);
   if (!$c || ($c['callback_url'] ?? '') === '') { q('UPDATE conn_items SET callback_next_at = NULL WHERE id = ? AND callback_ok_at IS NULL', [$itemId]); return; }
   // claim it: only one sender at a time (the owner's ✓ and the 5-minute job, or two jobs, never both send it)
@@ -385,19 +395,21 @@ function conn_send(int $itemId): void {
     : ($code === 0 ? 'its decision address did not answer' : ($code >= 300 && $code < 400 ? "its decision address sent us somewhere else (error $code)" : "its decision address said error $code"));
   $short = ol_one_line((string)$it['title'], 60);
   if ($now - (int)strtotime((string)($it['callback_since'] ?: $it['decided_at'])) >= CONN_GIVE_UP) { // 24 hours from the decision, or from a new address
-    q('UPDATE conn_items SET callback_tries = ?, callback_next_at = NULL, callback_failed = 1 WHERE id = ?', [$tries, $itemId]);
+    // (only while not taken: the app may have asked for it while this send waited)
+    q('UPDATE conn_items SET callback_tries = ?, callback_next_at = NULL, callback_failed = 1 WHERE id = ? AND callback_ok_at IS NULL', [$tries, $itemId]);
     q('UPDATE connections SET last_error = ? WHERE id = ?', [mb_substr("Could not tell the app about “{$short}” for 24 hours: $why. Stopped trying — the app can still ask for its decisions.", 0, 300), $c['id']]);
     return;
   }
   $wait = min(300 * (2 ** min($tries - 1, 10)), 6 * 3600);
-  q('UPDATE conn_items SET callback_tries = ?, callback_next_at = ? WHERE id = ?', [$tries, date('Y-m-d H:i:s', $now + $wait), $itemId]);
+  $again = q('UPDATE conn_items SET callback_tries = ?, callback_next_at = ? WHERE id = ? AND callback_ok_at IS NULL', [$tries, date('Y-m-d H:i:s', $now + $wait), $itemId]);
+  if ($again->rowCount() !== 1) return; // the app asked for it while this send waited: it has it, no error to show
   q('UPDATE connections SET last_error = ? WHERE id = ?', [mb_substr("Could not tell the app about “{$short}”: $why. Trying again by itself.", 0, 300), $c['id']]);
 }
 
 /** The 5-minute job: decisions waiting to be sent again, and tasks not made yet (the projects were not ready). */
 function conn_jobs(): void {
   $due = date('Y-m-d H:i:s', jobs_now());
-  foreach (all("SELECT id FROM conn_items WHERE callback_next_at IS NOT NULL AND callback_next_at <= ? AND status IN ('approved', 'rejected') ORDER BY callback_next_at LIMIT 20", [$due]) as $r) {
+  foreach (all("SELECT id FROM conn_items WHERE callback_next_at IS NOT NULL AND callback_next_at <= ? AND callback_ok_at IS NULL AND callback_failed = 0 AND status IN ('approved', 'rejected') ORDER BY callback_next_at LIMIT 20", [$due]) as $r) {
     try { conn_send((int)$r['id']); } catch (Throwable $e) { error_log('connect send: ' . get_class($e)); }
   }
   foreach (all("SELECT i.*, c.name AS conn_name FROM conn_items i JOIN connections c ON c.id = i.conn_id WHERE i.kind = 'task' AND i.status = 'pending' AND i.dp_task_id IS NULL ORDER BY i.id LIMIT 20") as $r) {

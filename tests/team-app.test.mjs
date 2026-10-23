@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { addDay, weekdayOf, dueOn, itemKey, diaryRows, fieldChanged, lateValue, afterFlush, boxStillThere, updateSaveBody, redrawHow, projectRowState, giveBackShow, keptNotice, noticeHow, pasteWaits, msgBoxSent, redrawAfterSend, taskSaveBody, aboutShort, projectAboutOf, morningMail, morningOrder, morningSummary, sentTag, sentTime, escHtml, followupRule, followupRows, followupGroups, followupSummary, roundKey, roundSaved, roundPlan, roundMark, parseQuickTask, outlookLine } from '../team/public_html/logic.js';
+import { addDay, weekdayOf, dueOn, itemKey, diaryRows, fieldChanged, lateValue, afterFlush, boxStillThere, updateSaveBody, redrawHow, projectRowState, giveBackShow, keptNotice, noticeHow, pasteWaits, msgBoxSent, msgBoxLeft, redrawAfterSend, taskSaveBody, giveId, aboutShort, projectAboutOf, morningMail, morningOrder, morningSummary, sentTag, sentTime, escHtml, followupRule, followupRows, followupGroups, followupSummary, roundKey, roundSaved, roundPlan, roundMark, parseQuickTask, outlookLine } from '../team/public_html/logic.js';
 const APP = readFileSync(new URL('../team/public_html/app.js', import.meta.url), 'utf8');
 
 // Wed 21 Oct 2026 is "today" in these checks; 18 Oct is a Sunday.
@@ -237,10 +237,11 @@ test("team: 'Give task' carries one clientId per form (a second tap after a lost
   assert.deepEqual(taskSaveBody({ id: 7, title: 'x' }, 'abc'), { id: 7, title: 'x' }, 'a change to a task never does');
   assert.deepEqual(taskSaveBody({ id: 0, title: 'x' }, ''), { id: 0, title: 'x' });
   const form = APP.slice(APP.indexOf('function taskForm()'), APP.indexOf("'Give task');") + 400);
-  assert.match(form, /const formId = editing \? '' : newClientId\(\);/, 'made once when the form is drawn, kept for its retries');
+  // (review r15: the id is kept in state for the same words, so a redraw between two taps no longer makes a new one)
+  assert.ok(form.includes("'Give task'"));
+  assert.match(APP.slice(APP.indexOf('function taskForm()')), /const formId = editing \? '' : \(state\.giveCid = giveId\(state\.giveCid, fields, newClientId\)\)\.id;/, 'kept for its retries');
   const submit = APP.slice(APP.indexOf('function taskForm()'));
-  assert.match(submit, /api\('task\.save', taskSaveBody\(\{/);
-  assert.match(submit, /\}, formId\)\);/);
+  assert.match(submit, /api\('task\.save', taskSaveBody\(fields, formId\)\);\s*state\.giveCid = null;/);
 });
 
 test('team: typed passwords on Change password count as typing (a redraw never empties them)', () => {
@@ -891,4 +892,51 @@ test('r14 Outlook status: one failed outlook.status answer does not switch the n
   await new Promise((r) => setImmediate(r));
   assert.equal(ask(), true, 'connected: the no-paste way works');
   assert.equal(calls, 2, 'a good answer is kept');
+});
+
+test('review r15: a waiting update sent with sentAt (the server puts a wrong phone clock right); an "older" answer shows the words that were not saved', async () => {
+  const { olderShow } = await import('../team/public_html/logic.js');
+  const b = updateSaveBody({ taskId: 4, note: 'n', state: 'progress', clientId: 'a', day: 'd', writtenAt: 'w' });
+  assert.ok(Date.parse(b.sentAt) > Date.now() - 5000, 'sentAt is now');
+  assert.equal(updateSaveBody({ taskId: 4, note: 'n', state: 'progress', clientId: 'a' }).sentAt, undefined, 'only with writtenAt');
+  const show = olderShow({ note: 'my late words' }, { note: 'newer words' });
+  assert.match(show.body, /my late words/);
+  assert.equal(olderShow({ note: 'same' }, { note: 'same' }), null, 'nothing lost: no notice');
+  const send = APP.slice(APP.indexOf('async function sendItem('), APP.indexOf('/** The task as this screen last saw it'));
+  assert.match(send, /const kept = out\.history === 'older' \? olderShow\(it, out\.update\) : null;/);
+  assert.match(send, /if \(kept\) notice\('stuck', kept\.title, kept\.body, null, \{ stay: true, copy: true \}\);/);
+});
+
+test('review r15: work in one line — numbers in the work (sizes, quantities) are not dates; the date word typed is used', () => {
+  assert.deepEqual(qt('Valar: fix 3/4 inch valve by Friday'), { person: { id: 1, name: 'Valar' }, title: 'Fix 3/4 inch valve', dueDate: '2026-10-23', error: '' });
+  assert.deepEqual(qt('Valar: order 2-3 bags of glaze'), { person: { id: 1, name: 'Valar' }, title: 'Order 2-3 bags of glaze', dueDate: '', error: '' });
+  assert.equal(qt('Valar: buy 10/12 mm pipes').title, 'Buy 10/12 mm pipes');
+  assert.equal(qt('Valar: buy 10/12 mm pipes').dueDate, '');
+  assert.equal(qt('Valar: send 2 may photos').title, 'Send 2 may photos');
+  assert.deepEqual([qt('Valar: load 13/14 trolleys').error, qt('Valar: load 13/14 trolleys').title], ['', 'Load 13/14 trolleys'], 'not refused as a wrong date');
+  // a date in numbers still counts after by / on, or at the end
+  assert.equal(qt('Valar: fix 3/4 inch valve by 5/11').dueDate, '2026-11-05');
+  assert.equal(qt('Valar: fix 3/4 inch valve by 5/11').title, 'Fix 3/4 inch valve');
+  assert.equal(qt('Valar: order 2-3 bags 24/10.').dueDate, '2026-10-24');
+  assert.equal(qt('Valar: send 2 may photos on 3 Nov').dueDate, '2026-11-03');
+});
+
+test('review r15: Give a task keeps its clientId for the same words across redraws (a retap after a lost answer is one task); changed words get a new one', () => {
+  let n = 0; const make = () => 'id' + (++n);
+  const f = { id: 0, assigneeId: 3, title: 'Fire samples', stepRef: 'p1:s2' };
+  const first = giveId(null, f, make);
+  assert.equal(first.id, 'id1');
+  assert.equal(giveId(first, { ...f }, make).id, 'id1', 'the same task again (a new form drawn in between): the same id');
+  assert.equal(giveId(first, { ...f, title: 'Fire more samples' }, make).id, 'id2', 'changed: a new task');
+  assert.equal(giveId(null, f, make).id, 'id3', 'after a success (saved id cleared): a new id');
+});
+
+test('review r15: words typed in the message box while a message is sending stay in the box (only the sent words leave)', () => {
+  assert.equal(msgBoxLeft('crack near the base', 'crack near the base'), '', 'just what went: emptied');
+  assert.equal(msgBoxLeft('crack near the base\nAlso the lid', 'crack near the base'), 'Also the lid', 'the words typed after stay');
+  assert.equal(msgBoxLeft('something else', 'crack near the base'), 'something else', 'rewritten: all kept');
+  assert.equal(msgBoxLeft(undefined, 'x'), '');
+  const send = APP.slice(APP.indexOf('function messagesBlock('), APP.indexOf("'Send message');"));
+  assert.ok(!/delete state\.drafts\['m' \+ taskId\]/.test(send), 'the draft is never simply wiped after a send');
+  assert.equal((send.match(/keepTypedAfter\(taskId, text\);/g) || []).length, 2, 'online and offline');
 });

@@ -107,12 +107,16 @@ function act(type, args, message, ms = 4000) {
   const before = index >= 0 ? clone(list[index]) : null;
   // deleting a 📂 project: its tasks stay (no longer in it); Undo puts them back into it
   const parentIds = type === 'deleteProject' ? Object.fromEntries(list.filter((x) => parentIdsOf(x).includes(args.projectId)).map((x) => [x.id, args.projectId])) : null;
+  const timerBefore = store.view.data.timer && store.view.data.timer.projectId === snapId ? clone(store.view.data.timer) : null;
   const op = store.dispatch(type, args);
   if (!op) return null;
+  // Pause / Finish stopped its timer: Undo starts it again from its start (no timed minutes lost)
+  const timerStopped = timerBefore && !(store.view.data.timer && store.view.data.timer.id === timerBefore.id) ? timerBefore : null;
   const undo = before ? () => {
     // (Make it a task / new 📂 project: the new one goes too)
     const made = type === 'stepToProject' ? { removeProjectId: args.newProjectId } : {};
     Object.assign(made, type === 'createMainProject' ? { removeProjectId: args.projectId } : parentIds ? { parentIds } : {});
+    if (timerStopped) made.timer = timerStopped;
     if (store.dispatch('restoreProject', { project: before, index, undoOpId: op.id, undoMonth: opMonth(op), ...made })) toast('Undone', 1500);
   } : null;
   if (message) toast(message, ms, undo);
@@ -2526,7 +2530,7 @@ function clockText(startIso) {
 function startTimer(p) {
   const running = store.view.data.timer;
   const other = running && running.projectId !== p.id && store.view.data.projects.find((x) => x.id === running.projectId);
-  if (store.dispatch('startTimer', { projectId: p.id })) toast(other ? `⏱ Started ${p.name} (stopped ${other.name})` : `⏱ Started: ${p.name}`, 2500);
+  if (store.dispatch('startTimer', { projectId: p.id, running: running ? running.id : null })) toast(other ? `⏱ Started ${p.name} (stopped ${other.name})` : `⏱ Started: ${p.name}`, 2500);
 }
 
 function stopTimer() {
@@ -2534,7 +2538,7 @@ function stopTimer() {
   if (!t) return;
   const p = store.view.data.projects.find((x) => x.id === t.projectId);
   const mins = Math.round((Date.now() - Date.parse(t.start)) / 60000);
-  if (store.dispatch('stopTimer', {})) toast(mins >= 1 ? `⏸ ${p ? p.name : 'Timer'}: ${fmtMinutes(Math.min(mins, 600))} logged` : 'Timer stopped (under a minute, not logged)', 3000);
+  if (store.dispatch('stopTimer', { timerId: t.id })) toast(mins >= 1 ? `⏸ ${p ? p.name : 'Timer'}: ${fmtMinutes(Math.min(mins, 600))} logged` : 'Timer stopped (under a minute, not logged)', 3000);
 }
 
 /** The running timer, shown at the top of every screen so it is never forgotten. */

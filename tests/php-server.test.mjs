@@ -1613,6 +1613,7 @@ async function fakeApp() {
     req.on('data', (c) => { body += c; });
     req.on('end', () => {
       cb.reqs.push({ method: req.method, path: req.url, headers: req.headers, body });
+      if (cb.onReq) cb.onReq();
       if (cb.delay) return setTimeout(() => { res.writeHead(cb.code, { 'Content-Type': 'application/json' }); res.end('{}'); }, cb.delay);
       res.writeHead(cb.code, cb.code >= 300 && cb.code < 400 ? { Location: 'http://127.0.0.1:1/elsewhere' } : { 'Content-Type': 'application/json' });
       res.end('{}');
@@ -2189,4 +2190,89 @@ test('cloud review: an old waiting approval stays on From apps even after 300+ n
   const p = await call('conn.items', { status: 'pending' }, tok.boss);
   assert.ok(p.items.some((x) => x.title === 'Old waiting PO'));
   assert.ok((await call('conn.delete', { id: ol.connection.id }, tok.boss)).ok);
+});
+
+// ---------------------------------------------------------------- review round 15
+test('review r15: an external_id over 100 letters is refused, never cut (two long ids are never one item)', { skip }, async () => {
+  const base = 'https://erp.example.com/approvals/' + 'a'.repeat(70);
+  const r = await appCall('connect.push', { external_id: base + '-A', kind: 'approval', title: 'Approve A' }, cn.purchase.key);
+  assert.equal(r.s, 400, JSON.stringify(r));
+  assert.match(r.error, /external_id is too long/);
+  assert.equal(sqlOut(`SELECT COUNT(*) FROM wt.conn_items WHERE external_id LIKE 'https://erp.example.com/approvals/%'`).trim(), '0', 'nothing saved');
+  assert.equal((await appCall('connect.withdraw', { external_id: base + '-B' }, cn.purchase.key)).s, 400);
+  const ok = 'X'.repeat(100);
+  assert.ok((await appCall('connect.push', { external_id: ok, kind: 'approval', title: 'Approve 100' }, cn.purchase.key)).ok, '100 letters is fine');
+  assert.equal((await appCall('connect.withdraw', { external_id: ok }, cn.purchase.key)).status, 'withdrawn');
+});
+
+test('review r15: decisions the app already asked for never jam the 5-minute resend list (a real failed one is still tried)', { skip }, async () => {
+  await fakeApp();
+  cb.code = 200; cb.reqs = []; cb.delay = 0;
+  const jam = await call('conn.create', { name: 'Jam', callback_url: CB }, tok.boss);
+  const cid = jam.connection.id;
+  // 25 decisions the app took by asking, left with an old retry time (the send failed after the app asked)
+  sql(`INSERT INTO wt.conn_items (conn_id, external_id, kind, title, status, decided_at, callback_ok_at, callback_next_at, created_at, updated_at)
+    WITH RECURSIVE n (i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 25)
+    SELECT ${cid}, CONCAT('TAKEN-', i), 'approval', 'x', 'approved', NOW() - INTERVAL 2 HOUR, NOW() - INTERVAL 1 HOUR, NOW() - INTERVAL 1 HOUR, NOW(), NOW() FROM n`);
+  // one real decision waiting to be sent again, due later than all of them
+  sql(`INSERT INTO wt.conn_items (conn_id, external_id, kind, title, status, decided_at, callback_next_at, callback_tries, created_at, updated_at)
+    VALUES (${cid}, 'REAL-1', 'approval', 'Real one', 'approved', NOW() - INTERVAL 30 MINUTE, NOW() - INTERVAL 5 MINUTE, 1, NOW(), NOW())`);
+  await cronIn(1);
+  assert.deepEqual(cb.reqs.map((q) => JSON.parse(q.body).external_id), ['REAL-1'], 'the real one is sent; the taken ones are not sent again');
+  assert.equal(sqlOut(`SELECT CONCAT(IFNULL(callback_next_at, 'none'), ' ', callback_ok_at IS NOT NULL) FROM wt.conn_items WHERE id = ${itemId(cid, 'REAL-1')}`).trim(), 'none 1', 'sent');
+  // a send that fails after the app asked for it meanwhile: not queued again, no error shown
+  sql(`INSERT INTO wt.conn_items (conn_id, external_id, kind, title, status, decided_at, callback_next_at, created_at, updated_at)
+    VALUES (${cid}, 'RACE-1', 'approval', 'Race', 'approved', NOW(), NOW() - INTERVAL 1 MINUTE, NOW(), NOW())`);
+  const rid = itemId(cid, 'RACE-1');
+  cb.code = 500; cb.reqs = [];
+  cb.onReq = () => sql(`UPDATE wt.conn_items SET callback_ok_at = NOW(), callback_next_at = NULL WHERE id = ${rid}`); // the app asks while we wait
+  try { await phpRun(`conn_send(${rid});`); } finally { cb.onReq = null; cb.code = 200; }
+  assert.equal(cb.reqs.length, 1);
+  assert.equal(sqlOut(`SELECT IFNULL(callback_next_at, 'none') FROM wt.conn_items WHERE id = ${rid}`).trim(), 'none', 'not queued again');
+  assert.equal((await connList()).find((c) => c.name === 'Jam').lastError, '', 'no "could not tell the app" error');
+  assert.ok((await call('conn.delete', { id: cid }, tok.boss)).ok);
+});
+
+test('review r15: a phone whose clock is 5 minutes slow — its newer update written later is saved, not thrown away as "older"', { skip }, async () => {
+  const t = (await call('task.save', { assigneeId: id.suresh, title: 'Slow clock', repeat: 'once' }, tok.boss)).task;
+  assert.ok((await call('update.save', { taskId: t.id, note: 'first words', state: 'progress' }, tok.suresh)).ok); // saved online (server time)
+  await new Promise((r) => setTimeout(r, 1100));
+  const slow = 5 * 60000; // the phone's clock is 5 minutes behind
+  const phoneNow = () => new Date(Date.now() - slow).toISOString();
+  const writtenAt = phoneNow(); // edited after the first save, then queued
+  const r = await call('update.save', { taskId: t.id, note: 'newer words', state: 'progress', writtenAt, sentAt: phoneNow() }, tok.suresh);
+  assert.ok(r.ok, r.error);
+  assert.notEqual(r.history, 'older');
+  assert.equal((await call('task.get', { id: t.id }, tok.suresh)).updates[0].note, 'newer words', 'the newer words are saved');
+  // a really older one (written before the first save, by the phone's clock) is still kept out
+  const t2 = (await call('task.save', { assigneeId: id.suresh, title: 'Slow clock 2', repeat: 'once' }, tok.boss)).task;
+  const before = new Date(Date.now() - slow - 3000).toISOString();
+  await new Promise((r2) => setTimeout(r2, 1100));
+  assert.ok((await call('update.save', { taskId: t2.id, note: 'newest', state: 'progress' }, tok.suresh)).ok);
+  const late = await call('update.save', { taskId: t2.id, note: 'old words', state: 'progress', writtenAt: before, sentAt: phoneNow() }, tok.suresh);
+  assert.equal(late.history, 'older');
+});
+
+test('review r15: a project.sync that fails puts back the old "last sent" time, so a Work Task move made before it is still followed', { skip }, async () => {
+  const k = 'psc:' + md5('rg-r15');
+  sql(`USE wt; INSERT INTO wt.settings (k, v) VALUES ('${k}', '1000') ON DUPLICATE KEY UPDATE v = '1000'`);
+  const r = await call('project.sync', { projectRef: 'rg-r15', project: 'Fail again', assigneeId: 999999, steps: [{ stepRef: 'f1', title: 'F one' }] }, tok.boss);
+  assert.ok(!r.ok, 'refused (no such person)');
+  assert.equal(sqlOut(`SELECT v FROM wt.settings WHERE k = '${k}'`).trim(), '1000', 'the time of the last real send is kept');
+  sql(`DELETE FROM wt.settings WHERE k = '${k}'`);
+});
+
+test('review r15: the person of a finished, cancelled or suggested task cannot be changed in the edit form (no move record would be made)', { skip }, async () => {
+  const t = (await call('task.save', { assigneeId: id.suresh, title: 'Closed swap', repeat: 'once' }, tok.boss)).task;
+  assert.ok((await call('update.save', { taskId: t.id, note: 'done', state: 'finished' }, tok.suresh)).ok);
+  const r = await call('task.save', { id: t.id, assigneeId: id.anita, title: 'Closed swap', repeat: 'once' }, tok.boss);
+  assert.ok(!r.ok);
+  assert.match(r.error, /Only an open task can go to someone else/);
+  assert.equal(sqlOut(`SELECT assignee_id FROM wt.tasks WHERE id = ${t.id}`).trim(), String(id.suresh), 'still Suresh\'s');
+  assert.ok((await call('task.get', { id: t.id }, tok.suresh)).task, 'Suresh still sees it');
+  // the same person: the edit still works; an open task still moves (with its move record)
+  assert.ok((await call('task.save', { id: t.id, assigneeId: id.suresh, title: 'Closed swap (fixed name)', repeat: 'once' }, tok.boss)).ok);
+  const o = (await call('task.save', { assigneeId: id.suresh, title: 'Open swap', repeat: 'once' }, tok.boss)).task;
+  assert.ok((await call('task.save', { id: o.id, assigneeId: id.anita, title: 'Open swap', repeat: 'once' }, tok.boss)).ok);
+  assert.equal(sqlOut(`SELECT COUNT(*) FROM wt.task_moves WHERE task_id = ${o.id}`).trim(), '1');
 });

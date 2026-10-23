@@ -709,6 +709,15 @@ const handlers = {
         if (onlyServer) list.splice(k, 1); // nothing of yours in it: the two are one task again
       }
     }
+    // Undo of Pause / Finish while its timer ran: the timer runs again from its start, so no timed minutes are lost;
+    // another timer running by now: the minutes stay logged instead
+    const tm = a.timer && typeof a.timer === 'object' && a.timer.projectId === snap.id && typeof a.timer.start === 'string' && typeof a.timer.id === 'string' ? a.timer : null;
+    let keepLogged = false;
+    if (tm && back.state === 'active' && !state.data.timer) state.data.timer = { projectId: snap.id, start: tm.start, id: tm.id };
+    else if (tm && !(state.data.timer && state.data.timer.id === tm.id)) {
+      const logged = i >= 0 && (list[i].timeLogs || []).find((l) => l && l.id === tm.id);
+      if (logged && !(back.timeLogs || []).some((l) => l && l.id === tm.id)) { (back.timeLogs ||= []).push(clone(logged)); keepLogged = true; }
+    }
     if (i >= 0) list[i] = back;
     else list.splice(Math.min(Math.max(0, a.index ?? 0), list.length), 0, back);
     if (typeof a.removeProjectId === 'string' && a.removeProjectId !== snap.id) { // Undo of "Make it a project": the new one goes
@@ -730,7 +739,7 @@ const handlers = {
     }
     for (const pid of parentIdsOf(back)) { const m = list.find((x) => x.id === pid); if (m) m.isMain = true; }
     if (list.some((x) => x.id !== back.id && parentIdsOf(x).includes(back.id))) back.isMain = true;
-    const undone = [a.undoOpId, ...(Array.isArray(a.undoOpIds) ? a.undoOpIds : [])].filter(Boolean).flatMap((id) => [id, id + 't', id + 'm', id + 'u']);
+    const undone = [a.undoOpId, ...(Array.isArray(a.undoOpIds) ? a.undoOpIds : [])].filter(Boolean).flatMap((id) => [id, ...(keepLogged && id === a.undoOpId ? [] : [id + 't']), id + 'm', id + 'u']);
     for (const id of undone) {
       for (const events of Object.values(state.history)) {
         const k = events.findIndex((e) => e.id === id);
@@ -833,7 +842,11 @@ const handlers = {
     if (s.repeat) {
       // A repeating step comes back: a fresh copy, due on the next date (same id on every replay).
       const doneDay = indiaDate(op.at);
-      const repeatDay = s.repeat === 'monthly' ? (s.repeatDay || (s.dueDate ? Number(s.dueDate.slice(8, 10)) : Number(doneDay.slice(8, 10)))) : null;
+      // the day of the month: from its due date (a date you moved wins); the kept day only when the due date is that day
+      // or a short month cut it (31st → 30 Apr keeps 31)
+      const dueDay = s.dueDate ? Number(s.dueDate.slice(8, 10)) : 0;
+      const keptDay = s.repeatDay && dueDay && (dueDay === s.repeatDay || (dueDay < s.repeatDay && addDays(s.dueDate, 1).endsWith('-01'))) ? s.repeatDay : 0;
+      const repeatDay = s.repeat === 'monthly' ? (keptDay || dueDay || s.repeatDay || Number(doneDay.slice(8, 10))) : null;
       const due = nextRepeatDate(s.repeat, s.dueDate, doneDay, repeatDay);
       const copyId = op.id + 'r';
       s.spawnedCopy = copyId;
@@ -1420,14 +1433,18 @@ const handlers = {
     if (!groupHasTimer(grp)) return false; // the timer is only for groups that have it switched on
     const t = state.data.timer;
     if (t && t.projectId === p.id) return false; // already running here
+    // pressed while another timer (or none) ran: a timer started since on another device is never stopped by this late press
+    if ('running' in a && (t ? t.id : null) !== a.running) return false;
     if (t) closeTimer(state, op, op.at);
     state.data.timer = { projectId: p.id, start: op.at, id: op.id };
     touch(p, op);
     return true;
   },
 
-  stopTimer(state, op) {
+  stopTimer(state, op, a) {
     if (!state.data.timer) return false;
+    // a late Stop (pressed offline) stops only the timer it was pressed for, never one started since
+    if (a && a.timerId && a.timerId !== state.data.timer.id) return false;
     closeTimer(state, op, op.at);
     return true;
   },

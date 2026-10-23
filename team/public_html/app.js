@@ -1,7 +1,7 @@
 // Work Task: the team app. Staff see and fill their own tasks; the manager gives tasks and sees everything.
 // No outside libraries. All text from the server is put on screen as text (never as HTML).
 
-import { addDay, weekdayOf, dueOn, itemKey, diaryRows, fieldChanged, lateValue, afterFlush, boxStillThere, updateSaveBody, redrawHow, projectRowState, aboutShort, projectAboutOf, giveBackShow, keptNotice, noticeHow, pasteWaits, msgBoxSent, redrawAfterSend, taskSaveBody, morningMail, morningOrder, morningSummary, morningTitle, morningLast, mailDate, sentTag, sentTime, followupRows, followupGroups, followupSummary, roundKey, roundPlan, roundMark, parseQuickTask, outlookLine, emailPath, pasteReason } from './logic.js'; // the rules (checked in tests/team-app.test.mjs)
+import { addDay, weekdayOf, dueOn, itemKey, diaryRows, fieldChanged, lateValue, afterFlush, boxStillThere, updateSaveBody, redrawHow, projectRowState, aboutShort, projectAboutOf, giveBackShow, olderShow, keptNotice, noticeHow, pasteWaits, msgBoxSent, msgBoxLeft, redrawAfterSend, taskSaveBody, giveId, morningMail, morningOrder, morningSummary, morningTitle, morningLast, mailDate, sentTag, sentTime, followupRows, followupGroups, followupSummary, roundKey, roundPlan, roundMark, parseQuickTask, outlookLine, emailPath, pasteReason } from './logic.js'; // the rules (checked in tests/team-app.test.mjs)
 
 const TOKEN_KEY = 'wt.token';
 const state = {
@@ -171,6 +171,8 @@ async function sendItem(it, tok) {
     it.updateId = out.update.id; it.thenFinish = !!twoSteps && !out.history;
     if (twoSteps) it.note = out.update.note; // keep the earlier person's words (after a move) for the Finished save
     if (out.history === 'merged' || out.history === 'older') { // kept as words only (the task moved on, or a newer update of theirs stays)
+      const kept = out.history === 'older' ? olderShow(it, out.update) : null; // its words are not lost without a word
+      if (kept) notice('stuck', kept.title, kept.body, null, { stay: true, copy: true });
       if ((it.files || []).length) toast('The photos of a late update were not added: the task has a newer update now.', 7000);
       it.files = [];
     }
@@ -1404,6 +1406,12 @@ function messageLine(t) {
     el('span', { class: 'muted small' }, ` · ${fmtDay(m.at)} ${fmtTime(m.at)}${t.messages > 1 ? ` · ${t.messages} messages` : ''} · reply`));
 }
 
+/** A message went (or waits on this phone): its words leave the box; what was typed while it was sending stays. */
+function keepTypedAfter(taskId, text) {
+  const left = msgBoxLeft(state.drafts['m' + taskId], text);
+  if (left) state.drafts['m' + taskId] = left; else delete state.drafts['m' + taskId];
+}
+
 function messagesBlock(taskId, comments) {
   const err = el('p', { class: 'err small', hidden: true });
   const box = el('textarea', { placeholder: state.user.role === 'admin' ? 'Reply or give an instruction…' : 'Ask or reply to your manager…', value: state.drafts['m' + taskId] || '', onInput: (e) => { state.drafts['m' + taskId] = e.target.value; err.hidden = true; } });
@@ -1420,7 +1428,7 @@ function messagesBlock(taskId, comments) {
     try {
       const out = await api('comment.add', { taskId, text, clientId: cid });
       delete state.msgCid[key];
-      delete state.drafts['m' + taskId]; delete state.sending[key]; // before the redraw, so the new button is not greyed out
+      keepTypedAfter(taskId, text); delete state.sending[key]; // before the redraw, so the new button is not greyed out
       toast('Sent ✓');
       // only if this task is still open on screen (the user may have gone to another one)
       if (state.sel === 'task:' + taskId && state.detail && state.detail.task && state.detail.task.id === taskId) { state.detail.comments = out.comments; render(); }
@@ -1428,7 +1436,7 @@ function messagesBlock(taskId, comments) {
       if (ex instanceof OfflineError) {
         try { await queue({ kind: 'comment', taskId, text, clientId: cid }); delete state.msgCid[key]; }
         catch { delete state.sending[key]; render(); toast(KEEP_FAIL, 6000); return; } // the text stays in the box
-        delete state.drafts['m' + taskId]; delete state.sending[key]; // empty the box, so a second tap does not send it twice
+        keepTypedAfter(taskId, text); delete state.sending[key]; // the sent words leave the box, so a second tap does not send them twice
         toast('📴 Saved on this phone — it will be sent when you are online', 5000);
         render();
         return;
@@ -1998,17 +2006,20 @@ function taskForm() {
   how.addEventListener('change', sync);
   sync();
   const btn = el('button', { class: 'primary', type: 'submit' }, editing ? 'Save' : 'Give task');
-  const formId = editing ? '' : newClientId(); // one per form: a second tap after a lost answer gives the task once
   return [
     el('form', { class: 'card stack', onSubmit: async (e) => {
       e.preventDefault();
       err.hidden = true; btn.disabled = true;
       try {
-        const out = await api('task.save', taskSaveBody({
+        const fields = {
           id: t ? t.id : 0, assigneeId: Number(person.value), title: title.value, details: details.value, project: project.value,
           repeat: how.value === 'daily7' ? 'daily' : how.value, skipSunday: how.value === 'daily' || (how.value === 'once' && (!t || t.skipSunday)), weekday: Number(weekday.value), dueDate: due.value,
           projectRef: t ? t.projectRef : pre.projectRef, stepRef: t ? t.stepRef : pre.stepRef, needsPhoto: needsPhoto.checked, startDate: start.value || (t && t.startDate && t.startDate > todayIs ? todayIs : ''),
-        }, formId));
+        };
+        // kept in state, not in the form: a second tap after a lost answer gives the task once, even after a redraw
+        const formId = editing ? '' : (state.giveCid = giveId(state.giveCid, fields, newClientId)).id;
+        const out = await api('task.save', taskSaveBody(fields, formId));
+        state.giveCid = null; // given: the next task gets a new id
         if (files.files.length) await uploadTaskFiles(out.task.id, [...files.files].slice(0, 10));
         const fromProjects = !editing && pre.stepRef && state.user.owner;
         state.prefill = null;
