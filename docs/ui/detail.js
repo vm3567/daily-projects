@@ -698,7 +698,7 @@ function teamBar(ctx, p) {
 /** Take back: a 📂 project brings back the tasks that went with it (tasks given on their own stay). */
 export function takeBackQuestion(data, p) {
   if (!isMainProject(data, p)) return `Take "${p.name}" back from ${p.team.name}? Their open steps are removed from their list.`;
-  const n = childrenOf(data, p.id).filter((c) => c.team && c.team.viaProject === p.id).length;
+  const n = projectTasks(data, p.id).filter((c) => c.team && c.team.viaProject === p.id).length; // (its projects' tasks went with it too)
   return `Take "${p.name}" back from ${p.team.name}?${n ? ` The ${n} task${n > 1 ? 's' : ''} that went with it come${n > 1 ? '' : 's'} back too.` : ''} Tasks given to someone on their own stay with them.`;
 }
 

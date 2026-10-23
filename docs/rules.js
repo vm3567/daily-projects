@@ -465,7 +465,8 @@ export function descendantIds(data, id) {
 export function projectTasks(data, id) {
   if (id === MISC_ID && hasMisc(data)) return childrenOf(data, id);
   const ids = descendantIds(data, id);
-  return data.projects.filter((p) => ids.has(p.id) && !isMainProject(data, p));
+  const holders = new Set(data.projects.flatMap((p) => parentIdsOf(p))); // (isMainProject for each, in one pass)
+  return data.projects.filter((p) => ids.has(p.id) && !p.isMain && !holders.has(p.id));
 }
 
 /** The 📂 projects right inside the project `id` (one level down). */

@@ -1060,7 +1060,7 @@ test('📂 Projects page: a click on a project row selects it and stays on the p
   assert.match(mainsSrc, /ctx\.ui\.view === 'mains' && ctx\.showHere \? ctx\.showHere\(c\.id\)/, 'a task in the TASKS table while on the Projects page');
   const here = app.slice(app.indexOf('  showHere: (id) => {'), app.indexOf('  openProject: (id) => {'));
   assert.match(here, /select\(id\);/);
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-40'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-41'/, 'phones get the new copy');
 });
 
 test('📂 project page: "✕ Remove" on a task row takes it out of this project only — the task is kept (and stays in its other projects)', () => {
@@ -1089,7 +1089,8 @@ test('📋 Copy list buttons: on a project page (its tasks) and on the task list
   const { readFileSync } = await import('node:fs');
   const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
   const mainsSrc = readFileSync(new URL('../docs/ui/mains.js', import.meta.url), 'utf8');
-  assert.match(mainsSrc, /ctx\.copyList\(orderedTasks\(ctx\.store\.view\.data, p\)\.filter\(\(c\) => c\.state !== 'finished'\), \{ title: `📂 \$\{p\.name\}`, about: p\.about \|\| '' \}\) \}, '📋 Copy list'\)/, 'in the project\'s own order');
+  assert.match(mainsSrc, /const all = orderedTasks\(data, p, today\)\.filter\(\(c\) => !isMainProject\(data, c\)\);/, 'the table\'s list: the project\'s own order, tasks only');
+  assert.match(mainsSrc, /ctx\.copyList\(all\.filter\(\(c\) => c\.state !== 'finished'\), \{ title: `📂 \$\{p\.name\}`, about: p\.about \|\| '' \}\) \}, '📋 Copy list'\)/, 'in the project\'s own order');
   assert.match(app, /onClick: \(\) => copyList\(currentList\(\), \{ title: viewTitle\(\) \}\) \}, '📋 Copy list'\)/);
   assert.match(app, /!ui\.search && list\.length && ui\.view !== 'mains' \? h\('button', \{ class: 'btn small copy-list'/, 'not on the 📂 Projects list (each project page has its own)');
   assert.match(app, /new ClipboardItem\(\{ 'text\/html': new Blob\(\[html\]/, 'rich copy for email, plain for AI');
@@ -1286,7 +1287,7 @@ test('📂 project page: dragging a task by its grip moves it (one setTaskOrder 
   assert.equal(renders, 1, 'drawn once, on the drop');
   assert.deepEqual(rowIds(page), [before[1], before[2], before[0]], 'the first task is now last');
   const { readFileSync } = await import('node:fs');
-  assert.match(readFileSync(new URL('../docs/ui/mains.js', import.meta.url), 'utf8'), /ctx\.copyList\(orderedTasks\(ctx\.store\.view\.data, p\)/, 'Copy list uses the same order');
+  assert.match(readFileSync(new URL('../docs/ui/mains.js', import.meta.url), 'utf8'), /ctx\.copyList\(all\.filter\(/, 'Copy list uses the same order (the table\'s list: orderedTasks, tasks only)');
 });
 
 test('📂 project page: a drag dropped in the same place, a tiny wobble, Escape, or a cancelled touch saves nothing', () => {
@@ -1845,7 +1846,7 @@ test('🔌 app wiring (app.js): "🔌 From apps" after ✉ Replies with the wait
   assert.match(app, /function go\(view\) \{\n\s*if \(view !== 'settings'\) forgetOnce\(\);/);
   assert.match(app, /if \(onServer\) loadApps\(appsCtx, force \|\| ui\.view === 'apps'\);/);
   assert.match(app, /replies: '✉ Replies', apps: '🔌 From apps', mains: '📂 Projects' \}\[ui\.view\]/, 'its page title');
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-40'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-41'/, 'phones get the new copy');
 });
 
 test('🔌 the PHP connector (team/connector/worktask-connector.php): the same text the app downloads, placeholders only (no real key), valid PHP 7.4+ (php -l), with wt_push / wt_withdraw / wt_decisions / wt_receive_decision', async () => {
@@ -3817,7 +3818,7 @@ test('Right-click in the staff app (my tasks, a folder\'s table): open, write to
   const S = readFileSync(new URL('../docs/ui/staff.js', import.meta.url), 'utf8');
   assert.ok(S.includes("class: 'sub-row', onClick: () => open('task:' + x.t.id), onContextmenu: (e) => openMenuAt(state, render, { t: x.t }, e) },"), 'the folder table too');
   const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
-  assert.ok(app.includes("for (const v of [teamView, staffView]) if (v && v.state.rowMenu && !e.target.closest('.row-menu')) { v.state.rowMenu = null; v.render(); }"), 'a click elsewhere closes it');
+  assert.ok(app.includes("for (const v of [teamView, staffView]) if (v && v.state.rowMenu && !(e && e.target && e.target.closest && e.target.closest('.row-menu'))) { v.state.rowMenu = null; v.render(); }"), 'a click elsewhere closes it');
 });
 
 test('📂 A project\'s page lists the projects inside it (each opens; right-click: its menu) above its TASKS table; "+ 📂 Project inside" makes one; the TASKS table has only tasks', () => {
@@ -3850,4 +3851,34 @@ test('📂 A project\'s page lists the projects inside it (each opens; right-cli
   assert.ok(app.includes("movable ? item('🔀', task ? 'Move to another project…' : 'Move inside another project…'"));
   assert.ok(app.includes("!task && !p.misc && p.state !== 'finished' ? item('＋', 'New project inside…', () => newInnerProject(ctx, p)) : null,"));
   assert.ok(readFileSync(new URL('../docs/ui/detail.js', import.meta.url), 'utf8').includes("p.misc ? null : item(isMainProject(store.view.data, p) ? '📂 Put inside a project…' : '📂 Add to a project…'"));
+});
+
+test('Review fixes (23 Oct): staff / manager menus close on a click elsewhere; Move → a new project from a list row leaves its old projects; Copy list on a project copies its tasks only; take-back counts the tasks of its inner projects; one isTyping, one menu item builder', async () => {
+  const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
+  const keys = app.slice(app.indexOf('function listenKeys() {'), app.indexOf('function onKey(e) {'));
+  assert.ok(keys.includes("document.addEventListener('click', closeTheirs);"), 'set up for every sign-in (it was only in startOwner)');
+  assert.ok(keys.includes("window.addEventListener('scroll', () => closeTheirs(null), true);"));
+  assert.ok(!/^function isTyping/m.test(app), 'isTyping comes from ui/listkeys.js');
+  assert.equal((app.match(/class: 'row-menu-item'/g) || []).length, 1, 'one menu item builder (menuItem)');
+  // Move → new project from a list row (no "from"): only in the new one
+  const s = mainsState(); // c2 in 📂 Kilns
+  const ctx = liveCtx(s, {});
+  const c2 = () => s.data.projects.find((p) => p.id === 'c2');
+  mains.openMoveBox(ctx, c2(), null);
+  ctx.ui.moveBox.q = 'Dryers';
+  rFind(mains.moveBox(ctx), (n) => /main-box-item/.test(n.className || '') && /create/.test(n.className)).__on.click();
+  const dryers = s.data.projects.find((p) => p.name === 'Dryers');
+  assert.deepEqual(c2().parentIds, [dryers.id], 'out of Kilns too');
+  // Copy list: tasks only (not the projects inside)
+  applyOps(s, [makeOp('createMainProject', { projectId: 'big', name: 'Plant upgrade' }), makeOp('addToProject', { projectId: 'm', parentId: 'big' }), makeOp('addToProject', { projectId: 'o', parentId: 'big' })]);
+  let copied = null;
+  ctx.copyList = (list) => { copied = list.map((p) => p.id); };
+  rFind(mains.subProjectsBlock(ctx, s.data.projects.find((p) => p.id === 'big')), (n) => n.nodeName === 'BUTTON' && n.textContent === '📋 Copy list').__on.click();
+  assert.deepEqual(copied, ['o']);
+  // take back: the tasks inside its projects that went with it are counted
+  const { takeBackQuestion } = await import('../docs/ui/detail.js');
+  const big = s.data.projects.find((p) => p.id === 'big');
+  big.team = { userId: 7, name: 'Ravi' };
+  s.data.projects.find((p) => p.id === 'p1').team = { userId: 7, name: 'Ravi', viaProject: 'big' };
+  assert.match(takeBackQuestion(s.data, big), /The 1 task that went with it comes back too/);
 });

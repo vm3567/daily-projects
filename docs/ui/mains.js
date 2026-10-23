@@ -128,8 +128,13 @@ export function moveBoxItems(ctx, p) {
       kind: 'create', label: `+ Create '${create}' as a new project`,
       run: () => {
         // the new project with the task in it (Undo puts the task back), then out of the one it came from
-        if (ctx.act('createMainProject', { projectId: newId(), name: create, childId: p.id }, `${p.name} moved to the new project 📂 ${create}`, 6000)
-          && from && !from.misc) store.dispatch('removeFromProject', { projectId: p.id, parentId: from.id });
+        // (from a list row: out of every other one, as picking a project does — moveSteps' setParent)
+        const projectId = newId();
+        const was = parentsOf(store.view.data, p).filter((m) => !m.misc).map((m) => m.id);
+        if (ctx.act('createMainProject', { projectId, name: create, childId: p.id }, `${p.name} moved to the new project 📂 ${create}`, 6000)) {
+          if (from && !from.misc) store.dispatch('removeFromProject', { projectId: p.id, parentId: from.id });
+          else if (!box.from && was.length) store.dispatch('setParent', { projectId: p.id, parentId: projectId });
+        }
         done();
       },
     });
@@ -367,7 +372,7 @@ export function subProjectsBlock(ctx, p, today = todayIndia()) {
       p.misc ? null : h('button', { class: 'btn small', type: 'button', onClick: () => openAddTasks(ctx, p) }, '+ Add tasks'),
       h('button', { class: 'btn small', type: 'button', onClick: () => newProjectHere(ctx, p) }, '+ New task here'),
       p.misc ? null : h('button', { class: 'btn small', type: 'button', title: 'A project inside this one (it holds its own tasks)', onClick: () => newInnerProject(ctx, p) }, '+ 📂 Project inside'),
-      h('button', { class: 'btn small', type: 'button', title: 'Copy this project\'s tasks as a numbered list (for an AI chat or an email)', onClick: () => ctx.copyList && ctx.copyList(orderedTasks(ctx.store.view.data, p).filter((c) => c.state !== 'finished'), { title: `📂 ${p.name}`, about: p.about || '' }) }, '📋 Copy list')),
+      h('button', { class: 'btn small', type: 'button', title: 'Copy this project\'s tasks as a numbered list (for an AI chat or an email)', onClick: () => ctx.copyList && ctx.copyList(all.filter((c) => c.state !== 'finished'), { title: `📂 ${p.name}`, about: p.about || '' }) }, '📋 Copy list')),
     addTasksPicker(ctx, p),
     newHereBox(ctx, p));
 }

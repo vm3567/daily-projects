@@ -1,7 +1,7 @@
 // Daily Projects — main app: start-up, menu, project list, Today box, Diary, Settings, key screen.
 
 import { h, morph, installEvents, fmtDay, fmtLongDay, fmtTime, keyHint, withKey } from './ui/dom.js';
-import { pageKey } from './ui/listkeys.js';
+import { pageKey, isTyping } from './ui/listkeys.js';
 import { renderDetail, linkChip, isMailLink, pasteIntoProject, takeBackQuestion, updateState, makeItAProject } from './ui/detail.js';
 import { renderPeopleList, renderPerson, peopleByFollowUp } from './ui/people.js';
 import { installMentions } from './ui/mention.js';
@@ -1751,6 +1751,14 @@ function openRowMenu(what, e) {
   render();
 }
 
+/** One item of a right-click menu: closes the menu, then does its job. cls ' danger' = red. */
+function menuItem(icon, label, fn, cls = '') {
+  return h('button', {
+    class: 'row-menu-item' + cls, role: 'menuitem',
+    onClick: () => { ui.rowMenu = null; fn(); render(); },
+  }, h('span', { class: 'rm-icon', 'aria-hidden': 'true' }, icon), label);
+}
+
 /** Keep a menu on the screen (style object: allowed by the page's safety rules); a tall one scrolls inside. */
 function placeMenu(el, m) {
   el.style.left = Math.max(8, Math.min(m.x, window.innerWidth - 290)) + 'px';
@@ -1790,10 +1798,7 @@ function rowMenu() {
   const task = !isMainProject(store.view.data, p) && !p.misc;
   const movable = !p.misc; // a task, or a 📂 project (projects inside projects); never 📂 Misc
   const from = m.from ? store.view.data.projects.find((x) => x.id === m.from) : null; // right-clicked in this project's table
-  const item = (icon, label, fn, cls = '') => h('button', {
-    class: 'row-menu-item' + cls, role: 'menuitem',
-    onClick: () => { ui.rowMenu = null; fn(); render(); },
-  }, h('span', { class: 'rm-icon', 'aria-hidden': 'true' }, icon), label);
+  const item = menuItem;
   const el = h('div', { class: 'row-menu', role: 'menu', key: 'row-menu', 'aria-label': `Actions for ${p.name}` },
     h('div', { class: 'row-menu-title' }, p.name),
     task && p.state !== 'finished' ? stageButtons(p) : null,
@@ -1834,10 +1839,7 @@ function stepMenu(m) {
   const p = store.view.data.projects.find((x) => x.id === m.id);
   const s = p && p.steps.find((x) => x.id === m.stepId);
   if (!s) return null;
-  const item = (icon, label, fn, cls = '') => h('button', {
-    class: 'row-menu-item' + cls, role: 'menuitem',
-    onClick: () => { ui.rowMenu = null; fn(); render(); },
-  }, h('span', { class: 'rm-icon', 'aria-hidden': 'true' }, icon), label);
+  const item = menuItem;
   const tt = ctx.teamTask(s.id);
   const live = !!tt && tt.status === 'open';
   const open = p.state === 'active';
@@ -1863,10 +1865,7 @@ function stepMenu(m) {
 function inboxMenu(m) {
   const item0 = (store.view.data.inbox || []).find((x) => x.id === m.id);
   if (!item0) return null;
-  const item = (icon, label, fn, cls = '') => h('button', {
-    class: 'row-menu-item' + cls, role: 'menuitem',
-    onClick: () => { ui.rowMenu = null; fn(); render(); },
-  }, h('span', { class: 'rm-icon', 'aria-hidden': 'true' }, icon), label);
+  const item = menuItem;
   const newTask = () => { const projectId = newId(); return inboxAct('inboxToProject', { itemId: item0.id, projectId }, item0, `New task: ${item0.text}`) ? projectId : null; };
   const el = h('div', { class: 'row-menu', role: 'menu', key: 'inbox-menu', 'aria-label': `Actions for ${item0.text}` },
     h('div', { class: 'row-menu-title' }, item0.text),
@@ -1976,10 +1975,7 @@ async function newPasswordFor(person, account) {
 function personMenu(m) {
   const person = (store.view.data.people || []).find((x) => x.id === m.id);
   if (!person) return null;
-  const item = (icon, label, fn, cls = '') => h('button', {
-    class: 'row-menu-item' + cls, role: 'menuitem',
-    onClick: () => { ui.rowMenu = null; fn(); render(); },
-  }, h('span', { class: 'rm-icon', 'aria-hidden': 'true' }, icon), label);
+  const item = menuItem;
   const open = () => { ui.view = 'people'; ui.search = ''; rememberUi(); ctx.selectPerson(person.id); };
   const accounts = onServer ? teamAccounts() : null;
   const account = accounts && teamMemberFor(person, accounts.filter((u) => !u.owner));
@@ -3130,12 +3126,6 @@ function keysHelp() {
     h('table', null, KEYS.map(([k, what]) => h('tr', null, h('td', null, h('kbd', null, k)), h('td', null, what)))));
 }
 
-function isTyping(el) {
-  if (!el) return false;
-  if (el.isContentEditable) return true;
-  if (el.nodeName === 'TEXTAREA' || el.nodeName === 'SELECT') return true;
-  return el.nodeName === 'INPUT' && !['checkbox', 'radio', 'button', 'submit'].includes(el.type);
-}
 
 function currentList() {
   if (!store || !store.view || ['diary', 'settings', 'dashboard', 'time'].includes(ui.view)) return [];
@@ -3198,6 +3188,12 @@ function listenKeys() {
   if (keysOn) return;
   keysOn = true;
   document.addEventListener('keydown', onKey);
+  // the team / staff pages' right-click menu: a click elsewhere or a scroll closes it (for every kind of sign-in)
+  const closeTheirs = (e) => {
+    for (const v of [teamView, staffView]) if (v && v.state.rowMenu && !(e && e.target && e.target.closest && e.target.closest('.row-menu'))) { v.state.rowMenu = null; v.render(); }
+  };
+  document.addEventListener('click', closeTheirs);
+  window.addEventListener('scroll', () => closeTheirs(null), true);
 }
 
 function onKey(e) {
@@ -3859,12 +3855,10 @@ function startOwner() {
   // a click anywhere else closes the right-click menu
   document.addEventListener('click', (e) => {
     if (ui.rowMenu && !e.target.closest('.row-menu')) { ui.rowMenu = null; render(); }
-    for (const v of [teamView, staffView]) if (v && v.state.rowMenu && !e.target.closest('.row-menu')) { v.state.rowMenu = null; v.render(); } // the team / staff pages' menu
     if (ui.projMenu && !e.target.closest('.proj-menu') && !e.target.closest('[aria-label="More actions"]')) { ui.projMenu = null; render(); }
   });
   window.addEventListener('scroll', () => {
     if (ui.rowMenu) { ui.rowMenu = null; render(); }
-    for (const v of [teamView, staffView]) if (v && v.state.rowMenu) { v.state.rowMenu = null; v.render(); }
   }, true);
 }
 
