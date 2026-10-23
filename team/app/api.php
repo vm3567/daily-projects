@@ -79,10 +79,10 @@ function move_tasks(array $me, array $tasks, int $toId, bool $tell = true): int 
 }
 
 /** ref => the given project's short description (sent with project.sync), for the refs that have one. */
-function project_abouts(array $refs): array {
+function project_abouts(array $refs, string $prefix = 'pab:'): array {
   if (!$refs) return [];
   $keys = [];
-  foreach ($refs as $r) $keys['pab:' . md5((string)$r)] = (string)$r;
+  foreach ($refs as $r) $keys[$prefix . md5((string)$r)] = (string)$r;
   $out = [];
   foreach (all('SELECT k, v FROM settings WHERE k IN (' . implode(',', array_fill(0, count($keys), '?')) . ')', array_keys($keys)) as $r) $out[$keys[$r['k']]] = $r['v'];
   return $out;
@@ -125,6 +125,7 @@ function tasks_out(array $tasks, string $day): array {
   foreach (all("SELECT id, task_id, name, mime FROM task_files WHERE task_id IN ($in) ORDER BY id", $ids) as $f) $files[$f['task_id']][] = ['id' => (int)$f['id'], 'name' => $f['name'], 'image' => str_starts_with($f['mime'], 'image/')];
   $queued = fn($t) => $t['seq'] !== null && $t['status'] === 'open' && (int)$t['seq'] > ($firstSeq[$t['project_ref'] . '|' . $t['assignee_id']] ?? PHP_INT_MAX);
   $about = project_abouts($refs);
+  $folder = project_abouts($refs, 'pfo:'); // the owner's 📂 project the given task is in ('' = none): the team sees the same folders
   $turnSince = [];
   foreach ($tasks as $t) {
     if ($t['seq'] === null || !$t['project_ref']) continue;
@@ -137,6 +138,7 @@ function tasks_out(array $tasks, string $day): array {
     'repeat' => $t['repeat_kind'], 'skipSunday' => (bool)$t['skip_sunday'], 'weekday' => $t['weekday'] === null ? null : (int)$t['weekday'],
     'dueDate' => $t['due_date'], 'startDate' => $t['start_date'], 'project' => $t['project'] ?? '', 'projectRef' => $t['project_ref'], 'stepRef' => $t['step_ref'],
     'projectAbout' => $t['seq'] !== null && $t['project_ref'] ? ($about[$t['project_ref']] ?? '') : '',
+    'folder' => $t['seq'] !== null && $t['project_ref'] ? ($folder[$t['project_ref']] ?? '') : '',
     'status' => $t['status'], 'createdAt' => $t['created_at'], 'doneAt' => $t['done_at'],
     'dueToday' => $t['status'] === 'open' && due_on($t, $day) && !$queued($t),
     'today' => update_out($todays[$t['id']] ?? null, $photos), 'last' => update_out($lasts[$t['id']] ?? null, $photos),
@@ -170,8 +172,12 @@ function mark_read(array $taskIds, int $userId, int $upTo = 0): void {
 
 function comments_of(int $taskId): array {
   $meId = (int)($GLOBALS['me']['id'] ?? 0);
+  // ✓✓ seen (like WhatsApp): on my own messages, who else has read the task up to it (task_reads.last_id)
+  $reads = all('SELECT r.user_id, r.last_id, u.name FROM task_reads r JOIN users u ON u.id = r.user_id WHERE r.task_id = ? AND r.user_id <> ? ORDER BY r.at', [$taskId, $meId]);
+  $seenBy = fn(int $cid) => array_values(array_map(fn($r) => $r['name'], array_filter($reads, fn($r) => (int)$r['last_id'] >= $cid)));
   return array_map(fn($c) => ['id' => (int)$c['id'], 'by' => $c['name'], 'byId' => (int)$c['user_id'], 'text' => $c['text'], 'at' => $c['at'], 'mine' => (int)$c['user_id'] === $meId,
-    'photo' => !empty($c['photo']), 'editedAt' => $c['edited_at'] ?? null],
+    'photo' => !empty($c['photo']), 'editedAt' => $c['edited_at'] ?? null, 'kind' => $c['kind'] ?? null,
+    'seenBy' => (int)$c['user_id'] === $meId ? $seenBy((int)$c['id']) : null],
     all('SELECT c.*, u.name FROM comments c JOIN users u ON u.id = c.user_id WHERE c.task_id = ? ORDER BY c.id', [$taskId]));
 }
 
@@ -222,7 +228,7 @@ function handle(string $a, array $in): array {
     case 'me':
       return ['user' => public_user($me), 'today' => $day];
     case 'logout':
-      logout();
+      logout((string)($in['endpoint'] ?? ''));
       return [];
     case 'password':
       change_password($me, (string)($in['old'] ?? ''), (string)($in['new'] ?? ''));
@@ -378,6 +384,7 @@ function handle(string $a, array $in): array {
       $photos = photos_of(array_map(fn($u) => (int)$u['id'], $ups));
       $out = ['task' => tasks_out([$t], $day)[0], 'updates' => array_map(fn($u) => update_out($u, $photos), $ups), 'comments' => comments_of((int)$t['id'])];
       mark_read([(int)$t['id']], $me['id']);
+      notifs_read_task($me['id'], (int)$t['id']); // its 🔔 notifications are seen too
       return $out;
     }
     case 'comment.add': { // a message on a task: between the manager and the person doing it
@@ -439,12 +446,14 @@ function handle(string $a, array $in): array {
       $c = one('SELECT * FROM comments WHERE id = ?', [(int)($in['id'] ?? 0)]);
       if (!$c || (int)$c['user_id'] !== $me['id']) throw new ApiError('You can change only your own messages.', 403);
       own_task($me, (int)$c['task_id']);
+      // the server's own notes (a move, a chase) are the task's record: never changed or deleted (the chase limit and
+      // Follow-up's "chased" read them)
+      if (in_array($c['kind'] ?? '', ['move', 'chase'], true)) throw new ApiError('This note cannot be changed.');
       if ($a === 'comment.delete') {
         q('DELETE FROM comments WHERE id = ?', [$c['id']]);
         if ($c['photo']) @unlink(UPLOAD_DIR . '/' . $c['photo']);
       } else {
         $text = (string)preg_replace('/^[↔\s]+/u', '', txt($in['text'] ?? '', 2000, !$c['photo'], 'The message'));
-        if ($c['kind'] === 'move') throw new ApiError('This note cannot be changed.');
         if ($text === '' && !$c['photo']) throw new ApiError('The message is empty.');
         q('UPDATE comments SET text = ?, edited_at = ? WHERE id = ?', [$text, now(), $c['id']]);
       }
@@ -452,8 +461,9 @@ function handle(string $a, array $in): array {
     }
     case 'tasks.read': { // "seen": these tasks' messages count as read for me
       $ids = array_slice(array_map('intval', (array)($in['ids'] ?? [])), 0, 100);
-      foreach ($ids as $id) own_task($me, $id);
-      mark_read($ids, $me['id'], max(0, (int)($in['upTo'] ?? 0)));
+      // only the ones still mine (one moved away meanwhile must not stop the others being marked read)
+      $ids = array_values(array_filter($ids, function ($id) use ($me) { try { own_task($me, $id); return true; } catch (ApiError $e) { return false; } }));
+      if ($ids) mark_read($ids, $me['id'], max(0, (int)($in['upTo'] ?? 0)));
       return [];
     }
     case 'search': { // tasks, messages and updates with these words (staff: only their own tasks)
@@ -1049,6 +1059,11 @@ function project_sync(array $me, array $in, string $ref, string $day): array {
     $about = txt(preg_replace('/\s+/u', ' ', (string)$in['about']) ?? '', 1000); // (same limit as ABOUT_MAX in docs/ops.js)
     if ($about === '') q('DELETE FROM settings WHERE k = ?', ['pab:' . md5($ref)]); else set_setting('pab:' . md5($ref), $about);
   }
+  // the owner's 📂 project this task is in (its name; '' = in none): kept like the description, shown to the team as its folder
+  if (array_key_exists('folder', $in)) {
+    $folder = txt(preg_replace('/\s+/u', ' ', (string)$in['folder']) ?? '', 200);
+    if ($folder === '') q('DELETE FROM settings WHERE k = ?', ['pfo:' . md5($ref)]); else set_setting('pfo:' . md5($ref), $folder);
+  }
   $who = (int)($in['assigneeId'] ?? 0);
   // moved in Work Task (Move to…) after the owner's app last sent it, and the app still names the old person
   // (it did not see the move, say the new person finished every step first): the project stays with the new person
@@ -1280,8 +1295,16 @@ function add_task_file(array $me, array $t): int {
   if (!is_dir(UPLOAD_DIR . "/$dir")) mkdir(UPLOAD_DIR . "/$dir", 0750, true);
   $file = "$dir/" . bin2hex(random_bytes(12)) . ".$ext";
   file_put_contents(UPLOAD_DIR . "/$file", $bytes);
-  q('INSERT INTO task_files (task_id, user_id, file, name, mime, size, at) VALUES (?, ?, ?, ?, ?, ?, ?)', [$t['id'], $me['id'], $file, $name, $mime, strlen($bytes), now()]);
-  return (int)db()->lastInsertId();
+  // the limit, again under a lock on the task: files sent at the same moment are counted one after the other
+  return in_tx_with_alerts(function () use ($me, $t, $file, $name, $mime, $bytes) {
+    one('SELECT id FROM tasks WHERE id = ? FOR UPDATE', [$t['id']]);
+    if ((int)one('SELECT COUNT(*) AS n FROM task_files WHERE task_id = ?', [$t['id']])['n'] >= 10) {
+      @unlink(UPLOAD_DIR . '/' . $file);
+      throw new ApiError('Up to 10 files per task.');
+    }
+    q('INSERT INTO task_files (task_id, user_id, file, name, mime, size, at) VALUES (?, ?, ?, ?, ?, ?, ?)', [$t['id'], $me['id'], $file, $name, $mime, strlen($bytes), now()]);
+    return (int)db()->lastInsertId();
+  });
 }
 
 /** An instruction file: only to the manager or the person doing the task. */

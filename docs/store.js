@@ -19,6 +19,16 @@ function readPending() {
   try { return JSON.parse(localStorage.getItem(PENDING_KEY) || '[]'); } catch { return []; }
 }
 
+// The changes any tab on this device has saved (shared), so another tab that holds a copy never sends it again
+// (sent again later, an old "set this value" would undo a newer edit made on another device meanwhile).
+const SENT_KEY = 'dp.sentIds';
+function readSent() {
+  try { const l = JSON.parse(localStorage.getItem(SENT_KEY) || '[]'); return new Set(Array.isArray(l) ? l : []); } catch { return new Set(); }
+}
+function addSent(ids) {
+  try { localStorage.setItem(SENT_KEY, JSON.stringify([...readSent(), ...ids].slice(-2000))); } catch { /* storage full or blocked */ }
+}
+
 /** Months a ticked step's tick line can be in: from when it was done (a team tick is dated earlier) to its last change. */
 function tickMonthsOf(data, a) {
   const p = data.projects.find((x) => x.id === a.projectId);
@@ -53,22 +63,32 @@ export class Store extends EventTarget {
     this.saving = false;
     this.saveTimer = null;
     this.sentIds = new Set(); // ops this tab has saved (so they are never put back in the shared queue)
+    this.elsewhere = new Set(); // ops another tab has saved: still shown here until the newest data is loaded, never sent again
     // Another tab (or the home-screen app) changed the waiting list: take its version, so neither tab wipes the other's changes.
     if (typeof window !== 'undefined' && window.addEventListener) {
-      window.addEventListener('storage', (e) => {
-        if (e.key !== PENDING_KEY || !this.base) return;
-        // Take the other tab's waiting changes, but never drop our own: if the other tab already sent them,
-        // our copy is still shown until we load the newest data (sending them again changes nothing).
-        const stored = readPending().filter((o) => !this.sentIds.has(o.id));
-        const ids = new Set(stored.map((o) => o.id));
-        const mine = this.pending.filter((o) => !ids.has(o.id));
-        this.pending = [...stored, ...mine].sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
-        this.recompute();
-        this.emit('change', { reason: 'other-tab' });
-        if (this.pending.length && !this.saving) this.scheduleSave();
-      });
+      window.addEventListener('storage', (e) => { if ((e.key === PENDING_KEY || e.key === SENT_KEY) && this.base) this.takeOtherTab(); });
     }
   }
+
+  /**
+   * Take the other tab's waiting changes, but never drop our own: one the other tab already SAVED (the shared sent
+   * list) stays on screen until the newest data is loaded, and is never sent again from here.
+   */
+  takeOtherTab() {
+    const sent = readSent();
+    const stored = readPending().filter((o) => !this.sentIds.has(o.id) && !sent.has(o.id));
+    const ids = new Set(stored.map((o) => o.id));
+    const mine = this.pending.filter((o) => !ids.has(o.id));
+    for (const o of mine) if (sent.has(o.id) && !this.sentIds.has(o.id)) this.elsewhere.add(o.id);
+    if (this.elsewhere.size) this.load().catch(() => {}); // the newest data holds them: get it, so they stop waiting here
+    this.pending = [...stored, ...mine].sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
+    this.recompute();
+    this.emit('change', { reason: 'other-tab' });
+    if (this.toSend().length && !this.saving) this.scheduleSave();
+  }
+
+  /** The waiting changes this tab still has to send (not the ones another tab already saved). */
+  toSend() { return this.pending.filter((o) => !this.elsewhere.has(o.id)); }
 
   // ---------- events ----------
   emit(type, detail) { this.dispatchEvent(new CustomEvent(type, { detail })); }
@@ -89,8 +109,9 @@ export class Store extends EventTarget {
   persistPending() {
     try {
       const mine = new Set(this.pending.map((o) => o.id));
-      const others = readPending().filter((o) => !mine.has(o.id) && !this.sentIds.has(o.id));
-      const all = [...others, ...this.pending].sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
+      const sent = readSent();
+      const others = readPending().filter((o) => !mine.has(o.id) && !this.sentIds.has(o.id) && !sent.has(o.id));
+      const all = [...others, ...this.toSend()].sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
       localStorage.setItem(PENDING_KEY, JSON.stringify(all));
     } catch { /* storage full or blocked */ }
   }
@@ -128,9 +149,13 @@ export class Store extends EventTarget {
     await this.ensureMonths(base, keepMonths);
     if (this.baseSeq !== seq) return; // never put back older data over it (a just-saved change would vanish)
     this.base = base;
+    if (this.elsewhere.size) { // saved by another tab: the newest data holds them now
+      this.pending = this.pending.filter((o) => !this.elsewhere.has(o.id));
+      this.elsewhere.clear();
+    }
     this.recompute();
     this.saveSnapshot();
-    if (['loading', 'checking', 'offline', 'auth', 'error'].includes(this.status) && !this.saving) this.setStatus(this.pending.length ? 'saving' : 'saved');
+    if (['loading', 'checking', 'offline', 'auth', 'error'].includes(this.status) && !this.saving) this.setStatus(this.toSend().length ? 'saving' : 'saved');
     this.emit('change', { reason: 'load' });
   }
 
@@ -249,7 +274,7 @@ export class Store extends EventTarget {
     await this.save();
     // If a save was already running, wait for it, then save anything left.
     while (this.saving) await new Promise((r) => setTimeout(r, 200));
-    if (this.pending.length && this.status !== 'error') await this.save();
+    if (this.toSend().length && this.status !== 'error') await this.save();
   }
 
   diff(base, next) {
@@ -270,11 +295,11 @@ export class Store extends EventTarget {
   }
 
   async save() {
-    if (this.saving || !this.pending.length || !this.base) return;
+    if (this.saving || !this.toSend().length || !this.base) return;
     this.saving = true;
     this.setStatus('saving');
     // after a firewall refusal, changes go one at a time, so only the one holding the refused text is set aside
-    const ops = this.oneByOne ? this.pending.slice(0, 1) : this.pending.slice();
+    const ops = this.oneByOne ? this.toSend().slice(0, 1) : this.toSend();
     try {
       let done = false;
       for (let attempt = 0; attempt < 3 && !done; attempt++) {
@@ -308,11 +333,12 @@ export class Store extends EventTarget {
       }
       const sent = new Set(ops.map((o) => o.id));
       for (const id of sent) this.sentIds.add(id);
+      addSent(sent); // other tabs holding a copy never send these again
       this.pending = this.pending.filter((o) => !sent.has(o.id));
       this.persistPending();
       this.recompute();
-      if (!this.pending.length) this.oneByOne = false;
-      this.setStatus(this.pending.length ? 'saving' : 'saved');
+      if (!this.toSend().length) this.oneByOne = false;
+      this.setStatus(this.toSend().length ? 'saving' : 'saved');
       this.emit('change', { reason: 'saved' });
     } catch (e) {
       if (e && e.refused && ops.length > 1) {
@@ -327,7 +353,7 @@ export class Store extends EventTarget {
       else this.handleError(e);
     } finally {
       this.saving = false;
-      if (this.pending.length && this.status === 'saving') this.scheduleSave(300);
+      if (this.toSend().length && this.status === 'saving') this.scheduleSave(300);
     }
   }
 
@@ -359,11 +385,12 @@ export class Store extends EventTarget {
     } catch { /* storage full or blocked */ }
     const what = commitMessage([op], this.view ? this.view.data : this.base.data);
     this.sentIds.add(op.id); // never put back in the shared queue
+    addSent([op.id]);
     this.pending = this.pending.filter((o) => o.id !== op.id);
     this.persistPending();
-    if (!this.pending.length) this.oneByOne = false;
+    if (!this.toSend().length) this.oneByOne = false;
     this.recompute();
-    this.setStatus(this.pending.length ? 'saving' : 'saved');
+    this.setStatus(this.toSend().length ? 'saving' : 'saved');
     this.emit('refused', { op, what });
     this.emit('change', { reason: 'refused' });
   }
@@ -371,7 +398,7 @@ export class Store extends EventTarget {
   /** Get the latest data if another device saved. With changes waiting, send them first. */
   async refresh(force = false) {
     if (!this.base) return this.init();
-    if (this.pending.length) {
+    if (this.toSend().length) {
       // Waiting changes: send them now (a save that stalled or failed is tried again; saving also gets the other device's changes).
       if (!this.saving && this.status !== 'auth' && this.status !== 'checking') {
         if (this.status === 'offline' || this.status === 'error') this.setStatus('saving');
@@ -397,7 +424,7 @@ export class Store extends EventTarget {
     if (!this.base) this.openSnapshot(true);
     try {
       await this.load();
-      if (this.pending.length) this.scheduleSave(100);
+      if (this.toSend().length) this.scheduleSave(100);
     } catch (e) {
       // No internet at start: open with the copy kept on this device; it syncs when the internet is back.
       if (e instanceof NetworkError && !this.base && this.openSnapshot()) return;

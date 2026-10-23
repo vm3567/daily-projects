@@ -1960,7 +1960,7 @@ test('connections: Rotate key — the old key stops at once, the new key and a n
   const log = sqlOut("SELECT GROUP_CONCAT(action, ' ', detail SEPARATOR '\\n') FROM wt.audit WHERE action LIKE 'conn\\_%'");
   for (const a of ['conn_create #', 'conn_rotate #', 'conn_delete #', 'conn_update #', 'conn_decide #']) assert.ok(log.includes(a), a);
   assert.ok(!/wt[cs]_[0-9a-f]{20}/.test(log), 'no key or secret in the log');
-  assert.equal(sqlOut("SELECT v FROM wt.settings WHERE k = 'schema'").trim(), '35', 'the tables steps ran (v35: updates.written_at)');
+  assert.equal(sqlOut("SELECT v FROM wt.settings WHERE k = 'schema'").trim(), '37', 'the tables steps ran (v37: notifs — the 🔔 list in the app)');
 });
 
 // ---------------------------------------------------------------- review round 12 (connect.php / outlook.php)
@@ -2799,6 +2799,178 @@ test('review round 3 (whole code): a switched-off account answers a right passwo
   sql(`DELETE FROM wt.login_fails WHERE id > ${from}`);
   const ghost = await call('user.save', { id: 999999, name: 'Nobody' }, tok.boss);
   assert.deepEqual([ghost.s, ghost.error], [404, 'That person is not there any more. Reload the page.']);
+});
+
+test('review r4-1 (whole code): an outside app pushing the same NEW item twice at the same moment gets the same item both times (no server error)', { skip }, async () => {
+  const port = WEB_PORT + 7;
+  const many = spawn('php', ['-S', `127.0.0.1:${port}`, '-t', join(ROOT, 'team', 'public_html')], { env: { ...env(), PHP_CLI_SERVER_WORKERS: '8' }, stdio: 'ignore' });
+  try {
+    const url = `http://127.0.0.1:${port}/api/?a=`;
+    await until(async () => (await fetch(url + 'ping', { method: 'POST', body: '{}' })).ok, 'PHP server with workers');
+    const push = (ext, kind) => fetch(url + 'connect.push', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + cn.purchase.key }, body: JSON.stringify({ external_id: ext, kind, title: 'Race ' + ext }) }).then(async (r) => ({ s: r.status, ...(await r.json()) }));
+    for (const [ext, kind] of [['RACE-A1', 'approval'], ['RACE-T1', 'task']]) {
+      const out = await Promise.all(Array.from({ length: 6 }, () => push(ext, kind)));
+      assert.ok(out.every((r) => r.ok), out.map((r) => r.s + ' ' + (r.error || '')).join(', '));
+      assert.equal(new Set(out.map((r) => r.id)).size, 1, kind + ': one item');
+      assert.equal(sqlOut(`SELECT COUNT(*) FROM wt.conn_items WHERE external_id = '${ext}'`).trim(), '1');
+    }
+  } finally { many.kill(); }
+});
+
+test('review r4-2 (whole code): signing out on a phone stops that phone\'s notifications (never another phone\'s); an older link is found by the phone\'s address', { skip }, async () => {
+  const keys = { p256dh: Buffer.concat([Buffer.from([4]), randomBytes(64)]).toString('base64url'), auth: randomBytes(16).toString('base64url') };
+  assert.ok((await call('user.save', { name: 'Two Phones', username: 'twophones', password: 'first-pass-123' }, tok.boss)).ok);
+  const first = (await call('login', { username: 'twophones', password: 'first-pass-123' })).token;
+  assert.ok((await call('password', { old: 'first-pass-123', new: 'two-phones-own1' }, first)).ok);
+  const phoneA = (await call('login', { username: 'twophones', password: 'two-phones-own1' })).token;
+  const phoneB = (await call('login', { username: 'twophones', password: 'two-phones-own1' })).token;
+  assert.ok((await call('push.subscribe', { endpoint: 'https://fcm.googleapis.com/fcm/send/so-phone-a', keys }, phoneA)).ok);
+  assert.ok((await call('push.subscribe', { endpoint: 'https://fcm.googleapis.com/fcm/send/so-phone-b', keys }, phoneB)).ok);
+  const subs = () => sqlOut("SELECT endpoint FROM wt.push_subs WHERE endpoint LIKE '%/so-phone-%' ORDER BY endpoint").trim().split('\n').filter(Boolean).map((e) => e.split('/').pop());
+  assert.deepEqual(subs(), ['so-phone-a', 'so-phone-b']);
+  assert.ok((await call('logout', {}, phoneA)).ok);
+  assert.deepEqual(subs(), ['so-phone-b'], 'phone A signed out: no more notifications there; phone B keeps its own');
+  // an older link (no sign-in noted): the app sends this phone's address with the sign out
+  sql("UPDATE wt.push_subs SET token_id = NULL WHERE endpoint LIKE '%/so-phone-b'");
+  assert.ok((await call('logout', { endpoint: 'https://fcm.googleapis.com/fcm/send/so-phone-b' }, phoneB)).ok);
+  assert.deepEqual(subs(), []);
+});
+
+test('review r4-2 (whole code): a chase note cannot be deleted or changed (the once-an-hour limit and Follow-up read it); comments say their kind', { skip }, async () => {
+  const t = (await call('task.save', { assigneeId: id.suresh, title: 'Chase note kept', repeat: 'once' }, tok.boss)).task;
+  const c = await call('task.chase', { id: t.id }, tok.boss);
+  assert.ok(c.ok, c.error);
+  const note = c.comments.find((m) => m.kind === 'chase');
+  assert.ok(note, 'the chase note says it is a chase');
+  const del = await call('comment.delete', { id: note.id }, tok.boss);
+  assert.match(del.error || '', /cannot be changed/);
+  const ed = await call('comment.edit', { id: note.id, text: 'something else' }, tok.boss);
+  assert.match(ed.error || '', /cannot be changed/);
+  assert.match((await call('task.chase', { id: t.id }, tok.boss)).error || '', /Already chased/, 'still only once an hour');
+  const mine = (await call('comment.add', { taskId: t.id, text: 'my own note' }, tok.boss)).comments.at(-1);
+  assert.ok((await call('comment.delete', { id: mine.id }, tok.boss)).ok, 'a normal message can still be deleted');
+});
+
+test('review r4-2 (whole code): connect.decisions with more than 500 decisions in the same second gives them all at once and moves on (never the same page for ever)', { skip }, async () => {
+  const same = await call('conn.create', { name: 'Same second' }, tok.boss);
+  const cid = same.connection.id;
+  sql(`SET SESSION cte_max_recursion_depth = 2000; INSERT INTO wt.conn_items (conn_id, external_id, kind, title, status, decided_at, created_at, updated_at)
+    WITH RECURSIVE n (i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 501)
+    SELECT ${cid}, CONCAT('S-', i), 'approval', 'x', 'approved', '2026-01-05 10:00:00', NOW(), NOW() FROM n`);
+  const a = await appCall('connect.decisions', { since: '2026-01-05T10:00:00+05:30' }, same.key);
+  assert.ok(a.ok, a.error);
+  assert.equal(new Set(a.decisions.map((x) => x.external_id)).size, 501, 'all of that second at once');
+  const b = await appCall('connect.decisions', { since: a.until }, same.key);
+  assert.equal(b.decisions.length, 0, 'asking again from until does not repeat them');
+  assert.ok((await call('conn.delete', { id: cid }, tok.boss)).ok);
+});
+
+test('review r4-2 (whole code): the evening summary is worked out before the day is marked sent (a hiccup leaves it to the next run)', { skip }, () => {
+  const jobs = readFileSync(join(ROOT, 'team', 'app', 'jobs.php'), 'utf8');
+  const fn = jobs.slice(jobs.indexOf('function evening_summary()'));
+  assert.ok(fn.indexOf('day_summary($day)') < fn.indexOf("set_setting('sum_day'"), 'summary first, then marked sent');
+});
+
+test('review r4-2 (whole code): "Seen" with a task that moved away still marks the person\'s own tasks read', { skip }, async () => {
+  const own = (await call('task.save', { assigneeId: id.suresh, title: 'Seen own', repeat: 'once' }, tok.boss)).task;
+  const gone = (await call('task.save', { assigneeId: id.kavi, title: 'Seen gone', repeat: 'once' }, tok.boss)).task;
+  await call('comment.add', { taskId: own.id, text: 'please look' }, tok.boss);
+  const r = await call('tasks.read', { ids: [gone.id, own.id] }, tok.suresh);
+  assert.ok(r.ok, r.error);
+  assert.equal(sqlOut(`SELECT COUNT(*) FROM wt.task_reads WHERE task_id = ${own.id} AND user_id = ${id.suresh}`).trim(), '1', 'own task marked read');
+  assert.equal(sqlOut(`SELECT COUNT(*) FROM wt.task_reads WHERE task_id = ${gone.id} AND user_id = ${id.suresh}`).trim(), '0', 'never the other one');
+});
+
+test('review r4-4 (whole code): the Outlook draft cleaner also removes on...= handlers after a "/" or right after a quoted value (a browser runs those too)', { skip }, async () => {
+  const bad = ['<img src="x"/onerror="fetch(1)">', '<img src="x"onerror="fetch(1)">', "<img src='x'/onload=fetch(1)>", '<a/onclick="fetch(1)" href="https://worktask.in">x</a>', '<img src="x" onerror="fetch(1)">'];
+  const out = JSON.parse(await phpRun(`echo json_encode(array_map('ol_clean_html', json_decode(base64_decode('${Buffer.from(JSON.stringify(bad)).toString('base64')}'), true)));`));
+  for (const [i, o] of out.entries()) assert.doesNotMatch(o, /on(error|load|click)\s*=/i, `blocked: ${bad[i]} → ${o}`);
+  assert.equal(out[3], '<a/ href="https://worktask.in">x</a>', 'the rest of the tag stays');
+  const good = JSON.parse(await phpRun(`echo json_encode([ol_clean_html('<a href="https://worktask.in/x">a</a>'), ol_clean_html('<td class="one">Late</td>')]);`));
+  assert.deepEqual(good, ['<a href="https://worktask.in/x">a</a>', '<td class="one">Late</td>']);
+});
+
+test('review r4-5 (whole code): instruction files sent at the same moment never go past 10 on a task', { skip }, async () => {
+  const t = (await call('task.save', { assigneeId: id.suresh, title: 'File race', repeat: 'once' }, tok.boss)).task;
+  const port = WEB_PORT + 8;
+  const many = spawn('php', ['-S', `127.0.0.1:${port}`, '-t', join(ROOT, 'team', 'public_html')], { env: { ...env(), PHP_CLI_SERVER_WORKERS: '8' }, stdio: 'ignore' });
+  try {
+    const url = `http://127.0.0.1:${port}/api/?a=`;
+    await until(async () => (await fetch(url + 'ping', { method: 'POST', body: '{}' })).ok, 'PHP server with workers');
+    const send = () => { const fd = new FormData(); fd.append('taskId', String(t.id)); fd.append('file', new Blob([Buffer.from('%PDF-1.4\n%%EOF\n')], { type: 'application/pdf' }), 'm.pdf'); return fetch(url + 'task.file.add', { method: 'POST', headers: { Authorization: 'Bearer ' + tok.boss }, body: fd }).then(async (r) => ({ s: r.status, ...(await r.json()) })); };
+    for (let i = 0; i < 8; i++) assert.ok((await send()).ok);
+    const race = await Promise.all(Array.from({ length: 6 }, send));
+    assert.equal(race.filter((r) => r.ok).length, 2, race.map((r) => r.s + ' ' + (r.error || '')).join(', '));
+    assert.ok(race.filter((r) => !r.ok).every((r) => /Up to 10 files/.test(r.error)));
+  } finally { many.kill(); }
+  assert.equal(sqlOut(`SELECT COUNT(*) FROM wt.task_files WHERE task_id = ${t.id}`).trim(), '10');
+});
+
+test('🔔 in the app (23 Oct): every notification is also kept in the person\'s list — a message shows there (even with no phone linked), opening its task or tapping it marks it seen, only their own', { skip }, async () => {
+  const t = (await call('task.save', { assigneeId: id.suresh, title: 'Bell check', repeat: 'once' }, tok.boss)).task;
+  const list = async (who) => call('notifs.list', {}, tok[who]);
+  const before = (await list('boss')).unread;
+  assert.ok((await call('comment.add', { taskId: t.id, text: 'Is the clay here?' }, tok.suresh)).ok);
+  let b = await list('boss');
+  assert.equal(b.unread, before + 1, 'the manager has one more');
+  const n = b.notifs[0];
+  assert.deepEqual([n.title, n.body, n.url, n.read], ['💬 Suresh · Bell check', 'Is the clay here?', `/projects/#team-task=${t.id}`, false]);
+  assert.ok(!(await list('suresh')).notifs.some((x) => x.body === 'Is the clay here?'), 'never to the one who wrote it');
+  const s = await list('suresh');
+  assert.ok(s.notifs.some((x) => x.title === '📥 New task for you' && x.url === `/projects/#team-task=${t.id}`), 'the new task is in Suresh\'s list');
+  // someone else cannot mark mine as seen
+  assert.ok((await call('notifs.read', { ids: [n.id] }, tok.suresh)).ok);
+  assert.equal((await list('boss')).notifs[0].read, false);
+  // opening the task = seen
+  await call('task.get', { id: t.id }, tok.boss);
+  b = await list('boss');
+  assert.equal(b.notifs.find((x) => x.id === n.id).read, true);
+  assert.equal(b.unread, before);
+  // tapped in the list = seen; "Mark all as seen"
+  await call('comment.add', { taskId: t.id, text: 'second' }, tok.suresh);
+  await call('comment.add', { taskId: t.id, text: 'third' }, tok.suresh);
+  b = await list('boss');
+  assert.ok((await call('notifs.read', { ids: [b.notifs[0].id] }, tok.boss)).ok);
+  assert.equal((await list('boss')).unread, before + 1);
+  assert.ok((await call('notifs.read', { all: true }, tok.boss)).ok);
+  assert.equal((await list('boss')).unread, 0);
+  // a change that was rolled back leaves nothing in the list (the same as the phone)
+  const out = await phpRun(`$GLOBALS['me'] = ['id' => 0];
+    try { in_tx_with_alerts(function () { notify([${id.boss}], 'task', 'Never happened', 'x'); throw new RuntimeException('deadlock'); }); } catch (Throwable $e) { }
+    push_flush(); echo one("SELECT COUNT(*) AS n FROM notifs WHERE title = 'Never happened'")['n'];`);
+  assert.equal(out.trim(), '0');
+});
+
+test('✓✓ seen ticks (23 Oct): my message shows who has read it (like WhatsApp) — only on my own messages; read = they opened the task or pressed Seen', { skip }, async () => {
+  const t = (await call('task.save', { assigneeId: id.suresh, title: 'Ticks check', repeat: 'once' }, tok.boss)).task;
+  const mine = (await call('comment.add', { taskId: t.id, text: 'Did the clay come?' }, tok.boss)).comments.at(-1);
+  assert.deepEqual(mine.seenBy, [], '✓ sent, not seen yet');
+  let s = await call('task.get', { id: t.id }, tok.suresh); // Suresh opens it: read
+  assert.equal(s.comments.find((c) => c.id === mine.id).seenBy, null, 'not shown on someone else\'s message');
+  let b = await call('task.get', { id: t.id }, tok.boss);
+  assert.deepEqual(b.comments.find((c) => c.id === mine.id).seenBy, ['Suresh'], '✓✓ seen by Suresh');
+  // his answer: seen by the manager once the manager opens the task again
+  const his = (await call('comment.add', { taskId: t.id, text: 'Yes, today' }, tok.suresh)).comments.at(-1);
+  assert.deepEqual(his.seenBy, []);
+  const later = (await call('comment.add', { taskId: t.id, text: 'One more thing' }, tok.boss)).comments.at(-1);
+  s = await call('task.get', { id: t.id }, tok.suresh);
+  assert.deepEqual(s.comments.find((c) => c.id === his.id).seenBy, ['Boss'], 'the manager answered after it: read');
+  b = await call('task.get', { id: t.id }, tok.boss);
+  assert.deepEqual(b.comments.find((c) => c.id === later.id).seenBy, ['Suresh']);
+});
+
+test('staff 📂 Projects (23 Oct): project.sync keeps the owner\'s 📂 project name of a given task (folder) and the person\'s list shows it; "" takes it away; left out = unchanged', { skip }, async () => {
+  const sync = (x) => call('project.sync', { projectRef: 'fold1', project: 'Feldspar testing', assigneeId: id.suresh, steps: [{ stepRef: 'fold1:whole', title: 'Feldspar testing' }], ...x }, tok.boss);
+  const mine = async () => [...(await call('my.today', {}, tok.suresh)).tasks, ...(await call('my.today', {}, tok.suresh)).other].find((t) => t.projectRef === 'fold1');
+  assert.ok((await sync({ folder: 'Ceramic   Media Meeting' })).ok);
+  assert.equal((await mine()).folder, 'Ceramic Media Meeting', 'kept (one line)');
+  assert.ok((await sync({})).ok);
+  assert.equal((await mine()).folder, 'Ceramic Media Meeting', 'not sent: unchanged (the server\'s own sync sends none)');
+  assert.ok((await sync({ folder: '' })).ok);
+  assert.equal((await mine()).folder, '', 'in no 📂 any more');
+  const t = (await call('tasks.list', { status: 'open' }, tok.boss)).tasks.find((x) => x.projectRef === 'fold1');
+  assert.equal(t.folder, '');
+  assert.ok((await call('project.sync', { projectRef: 'fold1', project: 'Feldspar testing', assigneeId: 0, steps: [] }, tok.boss)).ok);
 });
 
 test('review round 1 (whole code): importing a data folder with more than 500 files works (it goes in parts of 500; data.json last), every file is there', { skip }, async () => {

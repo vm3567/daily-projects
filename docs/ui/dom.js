@@ -60,6 +60,7 @@ function sameKind(a, b) {
 /** Make `from` look like `to`, changing as little as possible. */
 export function morph(from, to) {
   if (!sameKind(from, to)) { from.replaceWith(to); return; }
+  to.__live = from; // the copy that stays on the page (errLine() writes into it)
   if (from.nodeType === 3 || from.nodeType === 8) {
     if (from.nodeValue !== to.nodeValue) from.nodeValue = to.nodeValue;
     return;
@@ -88,6 +89,23 @@ export function morph(from, to) {
   if (from.nodeName === 'TEXTAREA') return; // its text is its value
   if (from.getAttribute && from.getAttribute('contenteditable') === 'true') return; // a rich box: what is typed in it is its value
   morphChildren(from, to);
+}
+
+/**
+ * The error line under a form. A redraw builds a new copy of it, but morph() keeps the one already on the page, so a
+ * button's handler (from the newest redraw) must write into the one on the page: say() does. Its words stay through
+ * later redraws (kept by key) until clear(), or a say() with nothing (it worked).
+ */
+const shownErrors = new Map();
+export function errLine(key) {
+  const text = shownErrors.get(key);
+  const el = h('p', { class: 'warn', key, hidden: text ? undefined : true }, text || '');
+  el.say = (m) => {
+    const on = el.__live || el;
+    if (m) { shownErrors.set(key, String(m)); on.textContent = String(m); on.hidden = false; } else { shownErrors.delete(key); on.hidden = true; }
+  };
+  el.clear = () => el.say('');
+  return el;
 }
 
 function keyOf(n) {

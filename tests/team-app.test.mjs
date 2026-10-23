@@ -418,7 +418,7 @@ test('morning email: the plain-words version (for when a table cannot be copied)
 test('morning email: the Team today page has the button, copies the table (HTML + plain words) and opens the email', () => {
   // (one app: the team pages)
   const fn = TEAM.slice(TEAM.indexOf('async function morningEmail('), TEAM.indexOf('// People (another manager'));
-  assert.match(TEAM.slice(TEAM.indexOf('function teamList('), TEAM.indexOf('function followRow(')), /onClick: \(\) => morningEmail\(p\) \}, '📧 Morning email'/, 'a button under each person on the Team today list');
+  assert.match(TEAM.slice(TEAM.indexOf('function board('), TEAM.indexOf('function followRow(')), /morningEmail\(g\.person\); \} \}, '📧 Morning email'\)/, 'a button on each person\'s line of the Team today table (owner, 23 Oct: one table)');
   assert.match(fn, /api\('morning\.mail', \{ userId: p\.id \}\)/);
   assert.match(fn, /new ClipboardItem\(\{ 'text\/html': [^}]*'text\/plain'/, 'the table and the plain words');
   assert.match(fn, /navigator\.clipboard\.writeText\(mail\.text\)/, 'plain words when a table cannot be copied');
@@ -483,7 +483,7 @@ test('morning email on People: each staff card has the table (# | Work | Last up
 
 test('morning email on People: Team today shows a small ✓ time next to the 📧 Morning email button', () => {
   // (one app: the team pages' Team today)
-  assert.match(TEAM.slice(TEAM.indexOf('function teamList('), TEAM.indexOf('function followRow(')), /'📧 Morning email'\), sentMark\(p\)/, 'on the Team today list');
+  assert.match(TEAM.slice(TEAM.indexOf('function board('), TEAM.indexOf('function followRow(')), /'📧 Morning email'\), sentMark\(g\.person\)/, 'on the Team today table (owner, 23 Oct: one table)');
   assert.match(TEAM, /const sentMark = \(p\) => \{ const tm = rules\.sentTime\(sentAtOf\(p\.id, p\.morningSentAt\), istDay\(\)\);/);
   assert.match(TEAM, /' ✓ ' \+ tm/);
 });
@@ -1260,4 +1260,143 @@ test('one app: a tapped notification opens the one app — an old "/#open=<id>" 
   assert.deepEqual((await run('/projects/#open=rm1', ['/projects/'])).posted, [{ u: '/projects/', type: 'open', hash: '#open=rm1' }], 'a project reminder too');
   assert.deepEqual((await run('/#open=9', ['/'])).moved, [{ u: '/', to: 'https://worktask.in/projects/#team-task=9' }], 'an old Work Task window is moved to the one app');
   assert.deepEqual((await run('https://evil.example/x', [])).opened, ['https://worktask.in/projects/'], 'only ever our own pages');
+});
+
+test('review r4-5 (whole code): a message changed or deleted while another task was opened never puts its task\'s messages on the new task\'s page (team pages and staff view)', async () => {
+  const ask = { prompt: () => 'changed words', confirm: () => true };
+  const mine = [{ id: 1, text: 'on task 5', mine: true }];
+  const other = [{ id: 9, text: 'on task 9', mine: true }];
+  // team pages
+  let opened;
+  const { t } = await teamPages({ 'comment.delete': () => { t.state.detail = opened; return { comments: [] }; }, 'comment.edit': () => { t.state.detail = opened; return { comments: [{ id: 1, text: 'changed words' }] }; } }, { ask });
+  for (const a of ['deleteMessage', 'editMessage']) {
+    t.state.detail = { task: { id: 5 }, comments: mine.slice() };
+    opened = { task: { id: 9 }, comments: other.slice() };
+    await t.act[a](mine[0]);
+    assert.deepEqual(t.state.detail.comments, other, 'team pages, ' + a + ': task 9 keeps its own messages');
+  }
+  t.state.detail = { task: { id: 5 }, comments: mine.slice() };
+  opened = t.state.detail; // nothing else opened meanwhile
+  await t.act.deleteMessage(mine[0]);
+  assert.deepEqual(t.state.detail.comments, [], 'still on task 5: its list follows the answer');
+  // staff view
+  const { createStaff } = await import('../docs/ui/staff.js');
+  const { memOutbox } = await import('../docs/ui/staffbox.js');
+  const rules = await import('../team/public_html/logic.js');
+  let s;
+  const api = async (a) => {
+    if (a === 'comment.delete' || a === 'comment.edit') { s.state.detail = opened; return { comments: [] }; }
+    if (a === 'my.today') return { today: '2026-10-22', fillBy: '18:00', tasks: [], other: [], suggestions: [] };
+    return { ok: true };
+  };
+  s = createStaff({ root: null, api, rules, user: { id: 3, name: 'Valar', role: 'staff' }, box: memOutbox(), lock: null, toast: () => {}, ask });
+  await s.load();
+  for (const a of ['deleteMessage', 'editMessage']) {
+    s.state.detail = { task: { id: 5 }, comments: mine.slice() };
+    opened = { task: { id: 9 }, comments: other.slice() };
+    await s.act[a](mine[0]);
+    assert.deepEqual(s.state.detail.comments, other, 'staff view, ' + a + ': task 9 keeps its own messages');
+  }
+});
+
+test('review r4-5 (whole code): "Give task" tapped twice while it is being given gives it (and sends its files) once', async () => {
+  let release;
+  const { t, calls } = await teamPages({ 'task.save': () => new Promise((r) => { release = () => r({ task: { id: 41, assignee: { name: 'Valar' } } }); }) });
+  const f = { assigneeId: 3, title: 'Glaze the tiles', details: '', project: '', repeat: 'once', skipSunday: true };
+  const first = t.act.saveTask(f, []);
+  assert.equal(await t.act.saveTask(f, []), '', 'the second tap does nothing');
+  release(); await first;
+  assert.equal(calls.filter((c) => c.a === 'task.save').length, 1);
+  release = null;
+  const again = t.act.saveTask({ ...f, title: 'Next one' }, []);
+  await new Promise((r) => setTimeout(r, 0));
+  assert.ok(release, 'once done, the next one goes');
+  release(); await again;
+});
+
+test('✓✓ seen ticks (23 Oct): ✓ sent, blue ✓✓ seen (who read it in the tip); none on others\' messages or the server\'s notes; while mine wait to be seen the open task is looked at again', async () => {
+  const { msgTicks } = await import('../docs/ui/workparts.js');
+  assert.deepEqual(msgTicks({ mine: true, seenBy: [] }), { cls: 'ticks', text: '✓', title: 'Sent — not seen yet' });
+  assert.deepEqual(msgTicks({ mine: true, seenBy: ['Valar'] }), { cls: 'ticks seen', text: '✓✓', title: 'Seen by Valar' });
+  assert.equal(msgTicks({ mine: false, seenBy: null }), null);
+  assert.equal(msgTicks({ mine: true, kind: 'chase', seenBy: [] }), null);
+  assert.deepEqual(msgTicks({ mine: true }).text, '✓', 'an older saved copy: sent');
+  for (const [name, make] of [['team pages', async (answers) => (await teamPages(answers)).t], ['staff view', async (answers) => (await staffView(answers)).s]]) {
+    let gets = 0;
+    const v = await make({ 'task.get': () => { gets++; return { task: { id: 5, title: 'X' }, updates: [], comments: [{ id: 1, mine: true, seenBy: [] }] }; } });
+    v.state.sel = 'task:5'; v.state.detail = { task: { id: 5 }, comments: [{ id: 1, mine: true, seenBy: [] }] };
+    await v.act.liveCheck(); await new Promise((r) => setTimeout(r, 0));
+    assert.ok(gets >= 1, name + ': not seen yet → looked at again');
+    gets = 0; v.state.detail = { task: { id: 5 }, comments: [{ id: 1, mine: true, seenBy: ['Boss'] }] };
+    await v.act.liveCheck(); await new Promise((r) => setTimeout(r, 0));
+    assert.equal(gets, 0, name + ': all seen → no extra call');
+  }
+  assert.match(readFileSync(new URL('../docs/styles.css', import.meta.url), 'utf8'), /\.ticks\.seen \{ color: #0ea5e9; \}/, 'blue when seen');
+});
+
+test('staff ✅ Tasks and 📂 Projects (owner, 23 Oct): every open task once, red first; its 📂 = the owner\'s 📂 project, else a given project with 2+ steps, else 📂 Misc — one task given from the owner\'s project is never also a project', async () => {
+  const { staffFolders } = await import('../docs/ui/staff.js');
+  const T = (id, x = {}) => ({ id, title: 't' + id, status: 'open', seq: null, projectRef: null, project: '', folder: '', dueToday: true, today: null, ...x });
+  const d = {
+    tasks: [
+      T(1, { today: { at: '2026-10-23 10:00:00' } }), // sent: green
+      T(2, { projectRef: 'fs1', seq: 1, stepRef: 'fs1:whole', project: 'Feldspar', title: 'Feldspar', folder: 'Ceramic Media' }), // one task from the owner's 📂
+      T(3, { projectRef: 'gl1', seq: 1, stepRef: 'g1', project: 'Glaze photos', folder: 'Ceramic Media' }),
+      T(4, { projectRef: 'k1', seq: 1, stepRef: 'k1a', project: 'Kiln trial' }),
+      T(5, { projectRef: 'w1', seq: 1, stepRef: 'w1:whole', project: 'Paint door', title: 'Paint door' }), // one task, no 📂: just a task (Misc)
+    ],
+    other: [T(6, { projectRef: 'k1', seq: 2, stepRef: 'k1b', project: 'Kiln trial', dueToday: false, queued: true }), T(7, { dueToday: false }), T(3)], // (3 again: once)
+  };
+  const { tasks, folders } = staffFolders(d, (id) => id === 4);
+  assert.deepEqual(tasks.map((x) => x.t.id), [2, 3, 5, 4, 1, 6, 7], 'each once; red, then yellow (waiting to send), green, grey');
+  assert.deepEqual(tasks.map((x) => x.dot), ['red', 'red', 'red', 'yellow', 'green', 'grey', 'grey']);
+  const where = Object.fromEntries(tasks.map((x) => [x.t.id, x.folder.name]));
+  assert.deepEqual(where, { 1: 'Misc', 2: 'Ceramic Media', 3: 'Ceramic Media', 4: 'Kiln trial', 5: 'Misc', 6: 'Kiln trial', 7: 'Misc' });
+  assert.deepEqual(folders.map((f) => [f.name, f.tasks.length, f.dot, f.red]), [['Ceramic Media', 2, 'red', 2], ['Kiln trial', 2, 'yellow', 0], ['Misc', 3, 'red', 1]], 'worst first; 📂 Misc last');
+  assert.equal(folders.find((f) => f.name === 'Kiln trial').ref, 'k1', 'a given project with steps opens its own page (steps in order, add a step)');
+  assert.ok(!folders.some((f) => f.name === 'Feldspar' || f.name === 'Paint door'), 'one given task is never also a project');
+});
+
+test('Team today as one table (owner, 23 Oct): status of each task (sent / not yet / stuck / late), the counts, red first, a filter, By person or By 📂 project (📂 Misc last)', async () => {
+  const { teamBoard } = await import('../team/public_html/logic.js');
+  const V = { id: 3, name: 'Valar' }, R = { id: 4, name: 'Ravi' };
+  const T = (id, who, x = {}) => ({ id, title: 'T' + id, assignee: who, status: 'open', repeat: 'daily', today: null, stuck: false, unread: 0, project: '', folder: '', ...x });
+  const d = { today: '2026-10-23', late: false, tasks: [
+    T(1, V, { today: { at: '2026-10-23 10:00:00', note: 'done' } }),
+    T(2, V, { stuck: true, folder: 'Kilns' }),
+    T(3, R, { repeat: 'once', dueDate: '2026-10-20', project: 'Glaze photos' }),
+    T(4, R, { unread: 2, folder: 'Kilns' }),
+  ] };
+  let b = teamBoard(d);
+  assert.deepEqual(b.counts, { sent: 1, notyet: 1, stuck: 1, late: 1, msg: 1, sugg: 0 });
+  assert.deepEqual(b.groups.map((g) => [g.name, g.rows.map((r) => [r.t.id, r.status, r.colour]), g.sent]),
+    [['Ravi', [[3, 'late', 'red'], [4, 'notyet', 'yellow']], 0], ['Valar', [[2, 'stuck', 'red'], [1, 'sent', 'green']], 1]], 'by person, red first (both red: by name)');
+  assert.equal(b.groups[1].person.id, 3, 'a person\'s line has the person (📧 Morning email)');
+  b = teamBoard({ ...d, late: true }, { group: 'project' });
+  assert.deepEqual(b.groups.map((g) => [g.name, g.rows.map((r) => r.t.id)]), [['Glaze photos', [3]], ['Kilns', [2, 4]], ['Misc', [1]]], 'by 📂 project: the owner\'s 📂, else its work, else 📂 Misc (last)');
+  assert.equal(b.groups[1].rows[1].colour, 'red', 'after the fill-by time "not yet" is red');
+  assert.deepEqual(teamBoard(d, { filter: 'msg' }).groups.flatMap((g) => g.rows.map((r) => r.t.id)), [4], 'a count shows only those');
+  assert.deepEqual(teamBoard(d, { filter: 'sent' }).groups.flatMap((g) => g.rows.map((r) => r.t.id)), [1]);
+  assert.deepEqual(teamBoard(d, { person: 4 }).groups.map((g) => g.name), ['Ravi'], 'a person picked in the menu');
+  assert.equal(teamBoard(d, { filter: 'stuck' }).total, 4, 'the counts stay for all');
+});
+
+test('Team today table: 20 rows a page (a person\'s line comes again on the next page, its "x of y sent" for the whole group); suggestions are rows with their own count', async () => {
+  const { teamBoard, BOARD_PAGE } = await import('../team/public_html/logic.js');
+  assert.equal(BOARD_PAGE, 20);
+  const V = { id: 3, name: 'Valar' }, R = { id: 4, name: 'Ravi' };
+  const T = (id, who, x = {}) => ({ id, title: 'T' + id, assignee: who, status: 'open', repeat: 'daily', today: null, stuck: false, unread: 0, ...x });
+  const tasks = [...Array.from({ length: 15 }, (_, i) => T(i + 1, V)), ...Array.from({ length: 10 }, (_, i) => T(i + 101, R, { today: { at: 'x', note: 'ok' } }))];
+  const d = { today: '2026-10-23', late: false, tasks, suggestions: [T(900, V, { status: 'suggested' })] };
+  const p1 = teamBoard(d);
+  assert.deepEqual([p1.page, p1.pages, p1.shown, p1.total], [1, 2, 26, 26]);
+  assert.equal(p1.groups.reduce((n, g) => n + g.rows.length, 0), 20, '20 on page 1');
+  const p2 = teamBoard(d, { page: 2 });
+  assert.equal(p2.groups.reduce((n, g) => n + g.rows.length, 0), 6, 'the rest on page 2');
+  assert.deepEqual(p2.groups.map((g) => [g.name, g.rows.length, g.sent, g.all]), [['Ravi', 6, 10, 10]], 'Ravi\'s line again, counted for all of Ravi');
+  assert.equal(teamBoard(d, { page: 9 }).page, 2, 'past the end: the last page');
+  assert.equal(p1.counts.sugg, 1);
+  const s = teamBoard(d, { filter: 'sugg' });
+  assert.deepEqual(s.groups.flatMap((g) => g.rows.map((r) => [r.t.id, r.status, r.colour])), [[900, 'sugg', 'yellow']], 'a suggestion: yes or no');
+  assert.equal(s.groups[0].all, 0, 'a suggestion is not a task to send an update on');
 });

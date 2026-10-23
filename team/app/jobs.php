@@ -166,8 +166,8 @@ function stuck_second_alerts(): void {
 function evening_summary(): void {
   $day = today();
   if (date('H:i') < setting('fill_by', '18:00') || setting('sum_day') === $day) return;
+  $s = day_summary($day); // first: a hiccup here leaves the day not done, so the next run sends it
   set_setting('sum_day', $day);
-  $s = day_summary($day);
   if (!$s['due']) return;
   $body = [];
   if ($s['missing']) $body[] = 'No update: ' . implode(', ', $s['missing']);
