@@ -654,8 +654,8 @@ function remindOnceBar(ctx, p) {
 function giveTaskList(ctx, p) {
   const { ui } = ctx;
   const kids = childrenOf(ctx.store.view.data, p.id).filter((c) => c.state !== 'finished');
+  if (!ui.giveKeep || ui.giveKeepFor !== p.id) { ui.giveKeep = new Set(kids.filter((c) => c.teamOff).map((c) => c.id)); ui.giveKeepFor = p.id; } // (this project's, never another's)
   if (!kids.length) return h('p', { class: 'muted small' }, 'No tasks in it yet. Tasks you add later go to the same person.');
-  if (!ui.giveKeep || ui.giveKeepFor !== p.id) { ui.giveKeep = new Set(kids.filter((c) => c.teamOff).map((c) => c.id)); ui.giveKeepFor = p.id; }
   const keep = ui.giveKeep;
   return h('div', { class: 'give-tasks' },
     h('span', { class: 'muted small' }, 'Its tasks go too. Untick the ones you do yourself:'),
@@ -686,7 +686,7 @@ function teamBar(ctx, p) {
       : people.length ? people.map((u) => h('button', { class: 'chip', key: 'tp-' + u.id, disabled: busy ? true : undefined, onClick: () => ctx.giveProject(p, u) }, u.name))
         : h('a', { class: 'small', href: '#team' }, 'Add a person first (Team → People)'),
     p.team ? h('button', { class: 'btn small', onClick: () => { if (confirm(takeBackQuestion(ctx.store.view.data, p))) { ui.giveOpen = null; ctx.takeBackProject(p); } } }, 'Take back') : null,
-    h('button', { class: 'link small', onClick: () => { ui.giveOpen = null; ui.givePhoto = false; ctx.render(); } }, 'Cancel'));
+    h('button', { class: 'link small', onClick: () => { ui.giveOpen = null; ui.givePhoto = false; ui.giveKeep = null; ui.giveKeepFor = null; ctx.render(); } }, 'Cancel'));
 }
 
 /** Take back: a 📂 project brings back the tasks that went with it (tasks given on their own stay). */

@@ -36,7 +36,7 @@ test('new project with steps, then add, tick and note', () => {
   tracker('new-project', 'Electric kiln', '--priority', 'high', '--steps', 'Check heaters', 'Call service');
   let p = data().projects[0];
   assert.equal(p.name, 'Electric kiln');
-  assert.ok(!('groupId' in p) && data().groups === undefined, 'no groups (owner, 23 Oct)');
+  assert.ok(!('groupId' in p) && !(data().groups || []).length, 'no groups (owner, 23 Oct)');
   assert.equal(p.steps.length, 2);
   tracker('add-steps', 'kiln', 'Order new element');
   tracker('tick', 'kiln', 'heaters');

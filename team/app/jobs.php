@@ -46,6 +46,7 @@ function server_steps(array $p, string $today): array {
   }
   if ($open) return $open;
   if ($steps) return []; // steps all done or snoozed: nothing to do (the whole-project task is only for a project with no steps at all)
+  if (!empty($p['isMain'])) return []; // a 📂 project: its tasks go to the person themselves, never one task with its name
   return [['stepRef' => $p['id'] . ':whole', 'title' => (string)($p['name'] ?? 'Project'), 'details' => (string)($p['status'] ?? '')]];
 }
 

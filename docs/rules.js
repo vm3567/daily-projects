@@ -290,7 +290,7 @@ export function parentIdsOf(p) {
 export function dropGroups(data) {
   if (!data || typeof data !== 'object') return data;
   if (!Array.isArray(data.tags)) data.tags = [];
-  if (Array.isArray(data.groups)) {
+  if (Array.isArray(data.groups) && data.groups.length) {
     const map = new Map(); // old tag id -> the kept tag's id
     for (const g of data.groups) {
       for (const t of (g && Array.isArray(g.tags) ? g.tags : [])) {
@@ -305,8 +305,9 @@ export function dropGroups(data) {
       data.settings.timer = data.groups.some((g) => g && (typeof g.timer === 'boolean' ? g.timer : String(g.name || '').trim().toLowerCase() !== 'personal'));
     }
     for (const p of data.projects || []) if (p && map.has(p.tagId)) p.tagId = map.get(p.tagId);
-    delete data.groups;
   }
+  // always an empty list, never used: only so an older copy of the app still open on a phone does not break on it
+  data.groups = [];
   for (const p of data.projects || []) if (p && typeof p === 'object') { delete p.groupId; delete p.formerGroup; }
   return data;
 }
@@ -344,12 +345,13 @@ export function projectGiveChanges(data) {
   const out = [];
   for (const t of data.projects) {
     if (isMainProject(data, t)) continue;
+    if (t.state === 'finished') continue; // finished: never given, moved or taken back (it stays as it ended)
     if (t.team && !t.team.viaProject) continue; // given on its own: stays with its person
     const given = parentIdsOf(t).map((id) => byId.get(id)).filter((m) => m && m.team && m.state !== 'finished');
     const via = t.team && byId.get(t.team.viaProject);
     const m = (via && given.includes(via) ? via : given[0]) || null;
     if (!m) { if (t.team) out.push({ projectId: t.id, team: null }); continue; }
-    if (!t.team && (t.teamOff || t.state === 'finished')) continue;
+    if (!t.team && t.teamOff) continue;
     const want = { userId: m.team.userId, name: m.team.name, needsPhoto: !!m.team.needsPhoto, viaProject: m.id };
     if (!t.team || t.team.userId !== want.userId || t.team.name !== want.name || !!t.team.needsPhoto !== want.needsPhoto || t.team.viaProject !== m.id) out.push({ projectId: t.id, team: want });
   }

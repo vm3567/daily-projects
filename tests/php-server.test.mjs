@@ -2634,3 +2634,22 @@ test('outlook: 250+ emails within the 5 minutes looked back (a mail merge, a bul
     sql('UPDATE wt.settings SET v = 0 WHERE k = \'jobs_at\'');
   }
 });
+
+test('review (code-review 23 Oct): the server\'s own sync never sends a given 📂 project as one task with its name — its tasks go to the person themselves; a plain task with no steps still does', { skip }, async () => {
+  const out = JSON.parse(await phpRun(`echo json_encode([server_steps(['id' => 'm1', 'name' => 'Kilns', 'isMain' => true, 'steps' => [], 'team' => ['userId' => 7]], '2026-10-23'), server_steps(['id' => 't1', 'name' => 'Fix fan', 'steps' => []], '2026-10-23')]);`));
+  assert.deepEqual(out[0], [], 'a 📂 project: nothing of its own');
+  assert.deepEqual(out[1].map((s) => s.stepRef), ['t1:whole'], 'a task with no steps: one task with its name, as before');
+});
+
+test('review (code-review 23 Oct): a take-back sent with ifHead is not done ("stale") when the projects were saved since (another device may have given it again); with the current head it is done', { skip }, async () => {
+  await call('project.sync', { projectRef: 'ifh', project: 'Hold test', assigneeId: id.suresh, steps: [{ stepRef: 'ifh1', title: 'Weigh the bags' }] }, tok.boss);
+  const openOf = async () => (await call('tasks.list', { status: 'open' }, tok.boss)).tasks.filter((t) => t.title === 'Weigh the bags').map((t) => t.assignee.id);
+  assert.deepEqual(await openOf(), [id.suresh]);
+  const head = (await call('dp.head', {}, tok.boss)).head;
+  const stale = await call('project.sync', { projectRef: 'ifh', project: 'Hold test', assigneeId: 0, steps: [], reason: 'taken', ifHead: 'an-older-save' }, tok.boss);
+  assert.equal(stale.stale, true, 'saved since: not done');
+  assert.deepEqual(await openOf(), [id.suresh], 'still on their list');
+  const done = await call('project.sync', { projectRef: 'ifh', project: 'Hold test', assigneeId: 0, steps: [], reason: 'taken', ifHead: head || '' }, tok.boss);
+  assert.ok(done.ok && !done.stale);
+  assert.deepEqual(await openOf(), [], 'nothing saved since: taken back');
+});

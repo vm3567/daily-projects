@@ -2369,7 +2369,14 @@ test('one app wiring (app.js): who signed in picks the screens — staff get the
   assert.match(st, /if \(known === 'staff'\) \{ startStaff\(undefined, teamTask\); return; \}/);
   // (step 4: a manager who is not the owner gets the team pages of this app, no longer Work Task)
   assert.match(st, /if \(known === 'manager'\) \{ startManager\(undefined, teamTask\); return; \}/);
-  assert.match(st, /if \(user && user\.mustChange\) openFor\(user, teamTask\);[^\n]*\n\s*else if \(who === 'staff'\) startStaff\(user, teamTask\);\s*else if \(who === 'manager'\) startManager\(user, teamTask\);\s*else startOwner\(\);/, 'their first password first; not known (or no answer): the owner\'s app');
+  assert.match(st, /askWho\(\)\.then\(\(r\) => routeWho\(r, teamTask\)\);/);
+  // (code-review 23 Oct: no answer in time no longer means the owner's app for anyone — a team member on a slow first
+  // start got the owner's app. Only this phone's own owner copy opens it; else "Try again")
+  const route = app.slice(app.indexOf('function routeWho('), app.indexOf('/** Signed in: their first password'));
+  assert.match(route, /if \(user && user\.mustChange\) openFor\(user, teamTask\);[^\n]*\n\s*else if \(who === 'staff'\) startStaff\(user, teamTask\);\s*else if \(who === 'manager'\) startManager\(user, teamTask\);\s*else if \(who === 'owner' \|\| ownerCopyHere\(\)\) startOwner\(\);[^\n]*\n\s*else if \(answered\) signInAgain\(\);[^\n]*\n\s*else noAnswerYet\(teamTask\);/, 'their first password first; not known: the owner\'s own phone opens as before, a dead sign-in signs in again, else try again');
+  assert.match(route, /const ownerCopyHere = \(\) => \{ try \{ return !!localStorage\.getItem\('dp\.snapshot'\); \}/);
+  assert.match(route, /'Cannot reach worktask\.in right now\. Check the internet\.'\), h\('button', \{ class: 'btn primary', onClick: again \}, 'Try again'\)/);
+  assert.match(app, /if \(!user\.owner\) localStorage\.removeItem\('dp\.snapshot'\);/, 'someone else signing in on this phone: the owner\'s copy goes (so it never opens the owner\'s app for them)');
   // (step 4: signing in is inside this app now — the owner asked for one app)
   assert.ok(st.indexOf("if (onServer && !isMock && !serverToken()) { root.replaceChildren(); showSignIn((user) => openFor(user, teamTask)); return; }") >= 0, 'signed out: this app\'s sign-in');
   assert.ok(st.indexOf('showSignIn(') < st.indexOf('rememberedWho()'), 'signed out: to sign-in first');
@@ -2734,7 +2741,11 @@ test('one app wiring (step 3): Ctrl+V and the 20 s check are hooked up for staff
   const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
   const st = app.slice(app.indexOf('async function startStaff(user, openTask = 0) {'), app.indexOf('const saved = device.ui();'));
   assert.match(st, /setInterval\(\(\) => \{ if \(document\.visibilityState === 'visible'\) staff\.act\.liveCheck\(\); \}, 20000\);/);
-  assert.match(st, /if \(staff\.act\.paste\(\{ files, text: e\.clipboardData\.getData\('text\/plain'\) \|\| '', inMessageBox \}\)\) e\.preventDefault\(\);/);
+  // (code-review 23 Oct: one paste helper for the staff view and the team pages)
+  assert.match(st, /document\.addEventListener\('paste', \(e\) => pasteToView\(staff, e, STAFF_BOX\)\);/);
+  assert.match(app, /const TEAM_BOX = \/\^Reply or give\/, STAFF_BOX = \/\^Ask or reply\/;/);
+  assert.match(app, /if \(view\.act\.paste\(\{ files: \[\.\.\.\(e\.clipboardData\.files \|\| \[\]\)\], text: e\.clipboardData\.getData\('text\/plain'\) \|\| '', inMessageBox \}\)\) e\.preventDefault\(\);/);
+  assert.equal((app.match(/\.act\.paste\(/g) || []).length, 1, 'one copy');
   const src = readFileSync(new URL('../docs/ui/staff.js', import.meta.url), 'utf8');
   assert.match(src, /const n = \(state\.data\.tasks \|\| \[\]\)\.filter\(\(t\) => !t\.today\)\.length;/);
   assert.match(src, /\(n \? navigator\.setAppBadge\(n\) : navigator\.clearAppBadge\(\)\)/);
@@ -3028,7 +3039,9 @@ test('one app wiring (step 4 part 2): no sign-in → this app\'s sign-in card, t
   assert.match(fns, /if \(localStorage\.getItem\(LAST_USER_KEY\) !== String\(user\.id\)\) \{\n\s*for \(const k of Object\.keys\(localStorage\)\) if \(k\.startsWith\('wt\.c\.'\)\) localStorage\.removeItem\(k\);/, 'someone else on this phone: the last person\'s saved lists go');
   assert.match(fns, /if \(user && user\.mustChange\) \{ showFirstPassword\(user, \(u\) => openFor\(u, teamTask\)\); return; \}/, 'their own password first');
   assert.match(fns, /if \(who === 'staff'\) startStaff\(user, teamTask\);\n\s*else if \(who === 'manager'\) startManager\(user, teamTask\);\n\s*else startOwner\(\);/);
-  assert.match(fns, /if \(user && user\.mustChange\) \{ showFirstPassword\(user, \(\) => location\.reload\(\)\); return; \}\n\s*dropSignIn\(\);[^\n]*\n\s*showSignIn\(\(\) => location\.reload\(\), 'Please sign in again\.'\);/, 'stopped working: a new password if the manager reset it, else sign in again');
+  // (code-review 23 Oct: a sign-in that still works is never dropped — the right screens open again, once; never a reload loop)
+  assert.match(fns, /if \(user && user\.mustChange\) \{ showFirstPassword\(user, \(\) => location\.reload\(\)\); return; \}\n[^\n]*\n\s*if \(who && !reloadedJustNow\(\)\) \{ location\.reload\(\); return; \}\n\s*dropSignIn\(\);[^\n]*\n\s*showSignIn\(\(\) => location\.reload\(\), 'Please sign in again\.'\);/, 'stopped working: a new password if the manager reset it; still works: open again (once); else sign in again');
+  assert.match(fns, /if \(Date\.now\(\) - at < 60000\) return true;/, 'at most one reload a minute');
   assert.match(app, /function toSignIn\(\) \{ signInAgain\(\); \}/, 'the owner\'s projects (what waits to be saved stays on this device)');
   assert.match(app, /onAuth: \(\) => signInAgain\(\)/, 'the team pages');
   assert.match(app, /const onAuth = \(\) => signInAgain\(\);/, 'the staff view');
@@ -3132,18 +3145,37 @@ test('giving a 📂 project (owner, 23 Oct): the give box lists its tasks — ti
   assert.ok(tick('Fix fan') && tick('Fix fan').hasAttribute('checked'), 'a free task: ticked, it goes');
   assert.ok(!tick('Order bricks') && row('Order bricks').textContent.includes('stays with Ravi'), 'given to Ravi on its own: stays, no box');
   assert.ok(tick('Call the fitter') && !tick('Call the fitter').hasAttribute('checked') && row('Call the fitter').textContent.includes('stays with you'), 'kept before: unticked, stays with you');
+  const tick2 = (name) => { const b = rFind(renderDetail(ctx), (n) => /\bgive-tasks\b/.test(n.className || '')); rFind(rFind(b, (n) => n.nodeName === 'LABEL' && n.textContent.includes(name)), (n) => n.nodeName === 'INPUT').__on.change({}, { checked: false }); };
   tick('Fix fan').__on.change({}, { checked: false });
   assert.ok(ui.giveKeep.has('t1'), 'unticked: you keep it');
   assert.match(box.textContent, /Tasks you add to it later go to the same person/);
+  // (code-review 23 Oct) a box opened on another project (even an empty one) starts from that project's own ticks
+  applyOps(s, [makeOp('createMainProject', { projectId: 'm2', name: 'Empty one' })]);
+  ui.selected = 'm2'; ui.giveOpen = 'm2';
+  renderDetail(ctx);
+  assert.equal(ui.giveKeepFor, 'm2'); assert.equal(ui.giveKeep.size, 0, 'nothing carried over from Kilns');
+  ui.selected = 'm'; ui.giveOpen = 'm'; ui.giveKeep = null;
+  renderDetail(ctx); tick2('Fix fan');
   const { readFileSync } = await import('node:fs');
   const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
   const give = app.slice(app.indexOf('async function giveProject('), app.indexOf('/** "4 tasks go with it'));
   assert.match(give, /\.\.\.\(main && person \? \{ giveTasks: true \} : \{\}\)/, 'giving a 📂 project gives its tasks again');
-  assert.match(give, /if \(main && person && keep\) for \(const id of keep\) store\.dispatch\('setProjectTeam', \{ projectId: id, userId: null, keepOff: true \}\);/, 'the ones you keep');
+  // (code-review 23 Oct: only this project's own ticks, and only its own tasks — never ticks left from another project's box)
+  assert.match(give, /if \(main && person && keep\) for \(const id of keep\) if \(kids\.has\(id\)\) store\.dispatch\('setProjectTeam', \{ projectId: id, userId: null, keepOff: true \}\);/, 'the ones you keep');
+  assert.match(give, /keep = ui\.giveKeepFor === p\.id \? ui\.giveKeep : null\) \{/, 'the ticks of this project\'s box only');
   assert.match(give, /\.\.\.\(!main && !person \? \{ keepOff: true \} : \{\}\)/, 'a task taken back on its own stays off');
   assert.match(give, /if \(main\) syncGivenProjects\(\);/, 'its tasks reach the person now');
-  assert.match(app, /followProjects\(\); \/\/ a task added to \(or taken out of\) a given 📂 project follows it/, 'kept in step by the sync');
-  assert.match(app, /if \(still\) \{ \/\/ no longer given[^\n]*\n\s*try \{ await teamApi\('project\.sync', \{ projectRef: ref, project: still\.name, assigneeId: 0, steps: \[\], reason: 'taken' \}\)/, 'taken back: off the person\'s list');
+  // (taken back by you: the tasks that went with it leave the person's list at once, not a minute later at the next sync)
+  assert.match(give, /for \(const id of moved\.backIds\) \{[^]*await teamApi\('project\.sync', \{ projectRef: id, project: t \? t\.name : '', assigneeId: 0, steps: \[\], reason: 'taken'[^]*rememberSync\(id, null\);/);
+  assert.match(app, /if \(!c\.team\) out\.backIds\.push\(c\.projectId\);/);
+  assert.match(app, /followProjects\(\{ onlyFresh: true \}\); \/\/ a task added to \(or taken out of\) a given 📂 project follows it/, 'kept in step by the sync');
+  // (code-review 23 Oct: the background sync follows only on data just checked with the server — an old copy on a phone never re-gives)
+  assert.match(app, /if \(onlyFresh && \(store\.status !== 'saved' \|\| !dataFreshAt \|\| Date\.now\(\) - dataFreshAt > 2 \* 60000\)\) return out;/);
+  // (code-review 23 Oct: a task no longer given is taken off the person's list only once saved, after its Undo time, and
+  // only if no other device saved since — the server answers "stale" then)
+  assert.match(app, /if \(store\.pending\.length \|\| !saved \|\| saved\.team \|\| Date\.now\(\) - Date\.parse\(still\.updatedAt \|\| 0\) < UNDO_GRACE_MS\) continue;/);
+  assert.match(app, /reason: 'taken', ifHead: store\.base\.commit \}\);\n\s*if \(!out\.stale\) rememberSync\(ref, null\);/);
+  assert.match(app, /const out = await teamApi\('project\.sync', \{ projectRef: ref, project: still\.name, assigneeId: 0, steps: \[\], reason: 'taken', ifHead/, 'taken back: off the person\'s list');
   assert.match(app, /if \(isMainProject\(store\.view\.data, p\)\) return \[\]; \/\/ a 📂 project: its tasks go/, 'a 📂 project is never one task with its name');
   // the take back question
   const { takeBackQuestion } = await import('../docs/ui/detail.js');

@@ -150,12 +150,12 @@ test('move uses after/before ids', () => {
 
 test('groups are gone (owner, 23 Oct): a new data file has no groups, a task has no group, and an old change about groups (from a device not updated yet) does nothing', () => {
   const s = withProject();
-  assert.equal(s.data.groups, undefined); assert.deepEqual(s.data.tags, []); assert.equal(s.data.settings.timer, true);
+  assert.deepEqual(s.data.groups, [], 'an empty list only (for an older app copy still open on a phone)'); assert.deepEqual(s.data.tags, []); assert.equal(s.data.settings.timer, true);
   assert.ok(!('groupId' in s.data.projects[0]), 'a task has no group');
   for (const [type, args] of [['addGroup', { groupId: 'g9', name: 'New' }], ['deleteGroup', { groupId: 'g2' }], ['renameGroup', { groupId: 'g1', name: 'X' }], ['setGroupTimer', { groupId: 'g1', on: false }], ['setProjectField', { projectId: 'p1', field: 'groupId', value: 'g1' }]]) {
     assert.equal(applyOp(s, op(type, args, '2026-10-02')), false, type + ' does nothing');
   }
-  assert.ok(!('groupId' in s.data.projects[0]) && s.data.groups === undefined && s.data.settings.timer === true);
+  assert.ok(!('groupId' in s.data.projects[0]) && s.data.groups.length === 0 && s.data.settings.timer === true);
 });
 
 test('links: only http and https', () => {
@@ -2677,7 +2677,7 @@ test('groups are gone (owner, 23 Oct): an older data file is brought up to date 
     settings: { aiProvider: 'claude' },
   };
   const d = dropGroups(old);
-  assert.equal(d.groups, undefined, 'no groups');
+  assert.deepEqual(d.groups, [], 'no groups (an empty list only, so an older app copy still open on a phone does not break)');
   assert.ok(d.projects.every((p) => !('groupId' in p) && !('formerGroup' in p)), 'no task has a group');
   assert.deepEqual(d.tags, [{ id: 'ta', name: 'Kiln' }, { id: 'tg', name: 'Glaze' }], 'one tag list');
   assert.equal(d.projects[0].tagId, 'ta', 'the same name became one tag');
@@ -2744,4 +2744,27 @@ test('giving a 📂 project gives its tasks (owner, 23 Oct): free ones go (with 
   assert.ok(['b', 'c', 'f', 'mine'].every((id) => !P(id).team), 'all that went with it are back');
   assert.deepEqual([P('d').team.name, P('e').team.name], ['Ravi', 'Ravi']);
   assert.equal(applyOp(s, op('setProjectTeam', { projectId: 'm', userId: null, keepOff: true }, '2026-10-05')), false, 'a 📂 project itself is never "kept"');
+});
+
+test('review (code-review 23 Oct): a finished task that went with a 📂 project stays as it ended — a new person or a take back of the project never touches it', async () => {
+  const { projectGiveChanges } = await import('../docs/rules.js');
+  const s = fresh();
+  applyOp(s, op('createMainProject', { projectId: 'm', name: 'Kilns' }, '2026-10-01'));
+  applyOp(s, op('createProject', { projectId: 'a', name: 'Fix fan', parentId: 'm' }, '2026-10-01'));
+  applyOp(s, op('setProjectTeam', { projectId: 'm', userId: 7, name: 'Valar', giveTasks: true }, '2026-10-02'));
+  for (const c of projectGiveChanges(s.data)) applyOp(s, op('setProjectTeam', { projectId: c.projectId, ...c.team }, '2026-10-02'));
+  applyOp(s, op('finish', { projectId: 'a' }, '2026-10-03'));
+  applyOp(s, op('setProjectTeam', { projectId: 'm', userId: 8, name: 'Ravi' }, '2026-10-04'));
+  assert.deepEqual(projectGiveChanges(s.data), [], 'a new person: the finished one is not moved');
+  applyOp(s, op('setProjectTeam', { projectId: 'm', userId: null }, '2026-10-05'));
+  assert.deepEqual(projectGiveChanges(s.data), [], 'take back: not touched either');
+  assert.equal(s.data.projects.find((p) => p.id === 'a').team.name, 'Valar', 'it stays as it ended');
+});
+
+test('review (code-review 23 Oct): data without groups still has an empty groups list, so an older app copy still open on a phone (data.groups.map / find) does not break', async () => {
+  const { dropGroups } = await import('../docs/rules.js');
+  for (const d of [emptyData(), dropGroups({ projects: [{ id: 'p', name: 'x', groupId: 'g1' }], groups: [{ id: 'g1', name: 'Acton', tags: [{ id: 't', name: 'Kiln' }] }] }), dropGroups({ projects: [] })]) {
+    assert.deepEqual(d.groups, []);
+    assert.doesNotThrow(() => { d.groups.map((g) => g.name); d.groups.find((g) => g.id === 'g1'); d.groups.some(() => true); }, 'what the old app does with it');
+  }
 });

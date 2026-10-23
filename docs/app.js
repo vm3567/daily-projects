@@ -20,7 +20,7 @@ import { MockRepo } from './mockrepo.js';
 import { device } from './device.js';
 import { DATA_OWNER, DATA_REPO, DATA_BRANCH, MOVED_TO, REFRESH_MS, AI_DAILY_LIMIT, BRIEF_CLAIM_MINUTES, WAIT_RED_DAYS, NO_WORK_NOTE_DAYS } from './config.js';
 import { dotColour, greenByTeamOnly, isSnoozed, restUntil, restReason, onlyDaysLabel, openIdFromHash, awakeProjects, activeProjects, nextStep, todayIndia, isSundayIndia, colourCounts, isOverdue, indiaDate, waitingDays, daysWithoutWork, dayScore, greenStreak, addDays, monthOf, fmtMinutes, takeBackWaits, staffStepAction, pasteGoesToProject, singleStepClose, versionRequest, askDiaryAgain, pasteInForm, diaryLoadedAt, photoNeedsFetch, teamUndoKey, teamActionUndone, teamProgressOf, projectKeyIgnored, teamMovedTo, serverHolder, keepMovedStep, teamMemberFor, repliesOf, mailThreads, replyMailto, MAILTO_BODY_MAX, emailPath, pasteReason } from './rules.js';
-import { whoFromUser, signInTag, timerOn, projectGiveChanges } from './rules.js';
+import { whoFromUser, signInTag, timerOn, projectGiveChanges, UNDO_GRACE_MS } from './rules.js';
 import { signInCard, firstPasswordCard } from './ui/signin.js';
 import { parentIdsOf, isMainProject, mainProjects, activeTasks, todayWithoutEmptyMains, todayList, stepTargets, mainSummary, childrenOf, deleteQuestion, pickEnterTarget } from './rules.js';
 import { newId, clone, opMonth, cleanLink, carriedOps, orderPosOf } from './ops.js';
@@ -54,6 +54,7 @@ function keepSignIn(token, user) {
   try {
     if (localStorage.getItem(LAST_USER_KEY) !== String(user.id)) {
       for (const k of Object.keys(localStorage)) if (k.startsWith('wt.c.')) localStorage.removeItem(k);
+      if (!user.owner) localStorage.removeItem('dp.snapshot'); // the owner's copy of the projects never stays for someone else
       localStorage.setItem(LAST_USER_KEY, String(user.id));
     }
     localStorage.setItem(SERVER_TOKEN_KEY, token);
@@ -83,10 +84,36 @@ let signingIn = false;
 async function signInAgain() {
   if (signingIn) return;
   signingIn = true;
-  const { user } = serverToken() ? await askWho() : {};
+  const { user, who } = serverToken() ? await askWho() : {};
   if (user && user.mustChange) { showFirstPassword(user, () => location.reload()); return; }
+  // the sign-in still works (e.g. the wrong screens were open): open the right ones again — once, never in a loop
+  if (who && !reloadedJustNow()) { location.reload(); return; }
   dropSignIn(); // (what waits to be sent stays on this phone and goes after signing in)
   showSignIn(() => location.reload(), 'Please sign in again.');
+}
+/** True when signInAgain reloaded the page less than a minute ago (then it asks to sign in instead of reloading again). */
+function reloadedJustNow() {
+  try {
+    const at = Number(sessionStorage.getItem('dp.authReload') || 0);
+    if (Date.now() - at < 60000) return true;
+    sessionStorage.setItem('dp.authReload', String(Date.now()));
+  } catch { /* blocked: one reload at most anyway (signingIn) */ }
+  return false;
+}
+/** First start with this sign-in and no answer from the server: never guess who it is — this phone's owner copy says so, else try again. */
+function routeWho({ who, user, answered }, teamTask) {
+  if (user && user.mustChange) openFor(user, teamTask); // their own password first
+  else if (who === 'staff') startStaff(user, teamTask);
+  else if (who === 'manager') startManager(user, teamTask);
+  else if (who === 'owner' || ownerCopyHere()) startOwner(); // (offline: the owner's own phone opens as before)
+  else if (answered) signInAgain(); // the sign-in does not work any more
+  else noAnswerYet(teamTask);
+}
+const ownerCopyHere = () => { try { return !!localStorage.getItem('dp.snapshot'); } catch { return false; } };
+function noAnswerYet(teamTask) {
+  const again = () => { window.removeEventListener('online', again); root.replaceChildren(h('div', { class: 'loading' }, 'Loading…')); askWho().then((r) => routeWho(r, teamTask)); };
+  window.addEventListener('online', again);
+  root.replaceChildren(h('div', { class: 'loading' }, h('p', null, 'Cannot reach worktask.in right now. Check the internet.'), h('button', { class: 'btn primary', onClick: again }, 'Try again')));
 }
 /** Signed in: their first password if needed, then their own screens (team task: a task link that waited). */
 function openFor(user, teamTask = 0) {
@@ -116,8 +143,8 @@ async function askWho() {
     const out = await r.json();
     const who = out && out.ok ? whoFromUser(out.user) : '';
     if (who) rememberWho(who);
-    return { who, user: out && out.user };
-  } catch { return { who: '' }; } finally { clearTimeout(timer); }
+    return { who, user: out && out.user, answered: true }; // (answered without a user: the sign-in does not work any more)
+  } catch { return { who: '', answered: false }; } finally { clearTimeout(timer); }
 }
 
 /**
@@ -224,11 +251,14 @@ async function startManager(user, teamTask = 0) {
   teamView.start({ ...how, fromProjects: false }); // (they have no projects page to go back to)
   window.addEventListener('hashchange', () => { const h2 = teamHowFromHash(); if (h2) teamView.start({ ...h2, fromProjects: false }); }); // a notification tapped while open
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') teamView.act.reload(); });
-  document.addEventListener('paste', (e) => {
-    if (e.defaultPrevented || !e.clipboardData) return;
-    const inMessageBox = !!(e.target && e.target.tagName === 'TEXTAREA' && /^Reply or give/.test(e.target.placeholder || ''));
-    if (teamView.act.paste({ files: [...(e.clipboardData.files || [])], text: e.clipboardData.getData('text/plain') || '', inMessageBox })) e.preventDefault();
-  });
+  document.addEventListener('paste', (e) => pasteToView(teamView, e, TEAM_BOX));
+}
+/** Ctrl+V on the staff view or the team pages: to that view (in its message box: a photo message). One copy for all. */
+const TEAM_BOX = /^Reply or give/, STAFF_BOX = /^Ask or reply/; // (the message boxes' first words)
+function pasteToView(view, e, box) {
+  if (e.defaultPrevented || !e.clipboardData) return;
+  const inMessageBox = !!(e.target && e.target.tagName === 'TEXTAREA' && box.test(e.target.placeholder || ''));
+  if (view.act.paste({ files: [...(e.clipboardData.files || [])], text: e.clipboardData.getData('text/plain') || '', inMessageBox })) e.preventDefault();
 }
 /** A task number on the address for a team member or a manager (a phone notification): "#team-task=<id>", or the older "#open=<id>". */
 const teamTaskInHash = () => Number((/^#(?:open|team-task)=(\d+)$/.exec(location.hash) || [])[1] || 0);
@@ -264,12 +294,7 @@ async function startStaff(user, openTask = 0) {
   setInterval(() => { if (document.visibilityState === 'visible') staff.act.liveCheck(); }, 20000); // new work comes in by itself
   window.addEventListener('focus', () => staff.act.liveCheck());
   // Ctrl+V on an open task: a photo into today's update, or (in the message box) a photo message
-  document.addEventListener('paste', (e) => {
-    if (e.defaultPrevented || !e.clipboardData) return;
-    const files = [...(e.clipboardData.files || [])];
-    const inMessageBox = !!(e.target && e.target.tagName === 'TEXTAREA' && /^Ask or reply/.test(e.target.placeholder || ''));
-    if (staff.act.paste({ files, text: e.clipboardData.getData('text/plain') || '', inMessageBox })) e.preventDefault();
-  });
+  document.addEventListener('paste', (e) => pasteToView(staff, e, STAFF_BOX));
 }
 
 const saved = device.ui();
@@ -3270,7 +3295,7 @@ const SYNC_RETRY = 'retry'; // never matches: sent again next time, but a delete
  * Give the whole project to a person (or take it back with person = null). A 📂 project: its tasks go with it, except
  * those given to someone else on their own and those you keep (`keep`: the task ids you unticked in the give box).
  */
-async function giveProject(p, person, needsPhoto = !!ui.givePhoto, keep = ui.giveKeep || null) {
+async function giveProject(p, person, needsPhoto = !!ui.givePhoto, keep = ui.giveKeepFor === p.id ? ui.giveKeep : null) {
   if (team.busy.has(p.id)) return; // a double tap must not send it twice
   team.busy.add(p.id);
   render();
@@ -3282,11 +3307,19 @@ async function giveProject(p, person, needsPhoto = !!ui.givePhoto, keep = ui.giv
       const out = await teamApi('project.sync', { projectRef: p.id, project: p.name, about: p.about || '', assigneeId: person ? person.id : 0, steps, needsPhoto, reason: person ? '' : 'taken', baseCommit: store.base && store.base.commit, pending: true });
       team.gen++; // a list fetched before this change is old now: it must not move the project back
       store.dispatch('setProjectTeam', { projectId: p.id, userId: person ? person.id : null, name: person ? person.name : '', needsPhoto, ...(main && person ? { giveTasks: true } : {}), ...(!main && !person ? { keepOff: true } : {}) });
-      if (main && person && keep) for (const id of keep) store.dispatch('setProjectTeam', { projectId: id, userId: null, keepOff: true }); // the ones you keep
+      const kids = new Set(main ? childrenOf(store.view.data, p.id).map((c) => c.id) : []);
+      if (main && person && keep) for (const id of keep) if (kids.has(id)) store.dispatch('setProjectTeam', { projectId: id, userId: null, keepOff: true }); // the ones you keep (of this project only)
       ui.giveOpen = null;
       ui.givePhoto = false;
-      ui.giveKeep = null;
+      ui.giveKeep = null; ui.giveKeepFor = null;
       const moved = main ? followProjects() : null;
+      // taken back by you: the tasks that went with it leave the person's list now too (not only at the next sync)
+      if (moved) {
+        for (const id of moved.backIds) {
+          const t = store.view.data.projects.find((x) => x.id === id);
+          try { await teamApi('project.sync', { projectRef: id, project: t ? t.name : '', assigneeId: 0, steps: [], reason: 'taken', baseCommit: store.base && store.base.commit, pending: true }); rememberSync(id, null); } catch { /* the sync takes it back later */ }
+        }
+      }
       toast(!person ? `Taken back: ${p.name}${moved && moved.back ? ` (and ${moved.back} task${moved.back > 1 ? 's' : ''} that went with it)` : ''}`
         : main ? `👥 ${p.name} given to ${person.name} ✓ — ${giveSummary(p, person)}` : `👥 ${p.name} given to ${person.name} ✓`, main ? 8000 : 3000);
       // a step the server did not make yet (just finished): sent again later
@@ -3297,12 +3330,20 @@ async function giveProject(p, person, needsPhoto = !!ui.givePhoto, keep = ui.giv
   } catch (e) { toast(e.message, 5000); } finally { team.busy.delete(p.id); render(); }
 }
 
-/** The tasks of given 📂 projects follow them (rules.js projectGiveChanges). Returns { given, back } counts. */
-function followProjects() {
-  const out = { given: 0, back: 0 };
+/**
+ * The tasks of given 📂 projects follow them (rules.js projectGiveChanges). Returns { given, back } counts.
+ * onlyFresh (the background sync): only on data just checked with the server — an old copy on a phone must never
+ * give (or take back) tasks the owner changed elsewhere since.
+ */
+function followProjects({ onlyFresh = false } = {}) {
+  const out = { given: 0, back: 0, backIds: [] };
   if (!store || !store.view || !store.canEdit()) return out;
+  if (onlyFresh && (store.status !== 'saved' || !dataFreshAt || Date.now() - dataFreshAt > 2 * 60000)) return out;
   for (const c of projectGiveChanges(store.view.data)) {
-    if (store.dispatch('setProjectTeam', c.team ? { projectId: c.projectId, ...c.team } : { projectId: c.projectId, userId: null })) out[c.team ? 'given' : 'back']++;
+    if (store.dispatch('setProjectTeam', c.team ? { projectId: c.projectId, ...c.team } : { projectId: c.projectId, userId: null })) {
+      out[c.team ? 'given' : 'back']++;
+      if (!c.team) out.backIds.push(c.projectId);
+    }
   }
   return out;
 }
@@ -3346,7 +3387,7 @@ async function syncGivenNow(gen) {
   if (!store || !store.view) return;
   let m = {};
   try { m = JSON.parse(localStorage.getItem(SYNC_KEY) || '{}'); } catch { m = {}; }
-  followProjects(); // a task added to (or taken out of) a given 📂 project follows it
+  followProjects({ onlyFresh: true }); // a task added to (or taken out of) a given 📂 project follows it (fresh data only)
   // store.view is replaced after each save: read every project fresh after each wait, never an old copy
   const fresh = (id) => store.view.data.projects.find((x) => x.id === id);
   for (const id of store.view.data.projects.filter((x) => x.team).map((x) => x.id)) {
@@ -3387,8 +3428,14 @@ async function syncGivenNow(gen) {
   for (const ref of Object.keys(m)) {
     const still = fresh(ref);
     if (still && still.team) continue;
-    if (still) { // no longer given (it went with its 📂 project, which was taken back or it left): off the person's list
-      try { await teamApi('project.sync', { projectRef: ref, project: still.name, assigneeId: 0, steps: [], reason: 'taken' }); rememberSync(ref, null); } catch { /* try again next time */ }
+    if (still) { // no longer given (it went with its 📂 project, which was taken back or it left): off the person's list —
+      // once that is saved, its Undo time is over, and only if no other device saved since (ifHead: else "stale", look again later)
+      const saved = store.base && store.base.data.projects.find((x) => x.id === ref);
+      if (store.pending.length || !saved || saved.team || Date.now() - Date.parse(still.updatedAt || 0) < UNDO_GRACE_MS) continue;
+      try {
+        const out = await teamApi('project.sync', { projectRef: ref, project: still.name, assigneeId: 0, steps: [], reason: 'taken', ifHead: store.base.commit });
+        if (!out.stale) rememberSync(ref, null);
+      } catch { /* try again next time */ }
       continue;
     }
     if (takeBackWaits(ref, savedIds, store.view.history)) continue; // not saved yet, or Undo still on screen: next time
@@ -3569,12 +3616,7 @@ function start() {
     if (known === 'manager') { startManager(undefined, teamTask); return; }
     if (!known) {
       root.replaceChildren(h('div', { class: 'loading' }, 'Loading…'));
-      askWho().then(({ who, user }) => {
-        if (user && user.mustChange) openFor(user, teamTask); // their own password first
-        else if (who === 'staff') startStaff(user, teamTask);
-        else if (who === 'manager') startManager(user, teamTask);
-        else startOwner(); // (no answer in time, offline: the owner's app, as before)
-      });
+      askWho().then((r) => routeWho(r, teamTask)); // (no answer: only this phone's owner copy opens the owner's app)
       return;
     }
   }
@@ -3636,12 +3678,7 @@ function startOwner() {
   document.addEventListener('keydown', onKey);
   // Ctrl+V anywhere on an open project: a screenshot or a copied file is added to it (the update box handles its own paste)
   document.addEventListener('paste', (e) => {
-    if (space === 'team' && teamView) { // the team pages: an instruction file, or a photo message
-      if (e.defaultPrevented || !e.clipboardData) return;
-      const inMessageBox = !!(e.target && e.target.tagName === 'TEXTAREA' && /^Reply or give/.test(e.target.placeholder || ''));
-      if (teamView.act.paste({ files: [...(e.clipboardData.files || [])], text: e.clipboardData.getData('text/plain') || '', inMessageBox })) e.preventDefault();
-      return;
-    }
+    if (space === 'team' && teamView) { pasteToView(teamView, e, TEAM_BOX); return; } // the team pages: an instruction file, or a photo message
     if (e.defaultPrevented || !store || !store.view) return;
     if (pasteInForm(e.target)) return; // naming a new task: its own box takes the paste, never the open task's update
     // the project page must be on screen (not the Diary, Dashboard, Settings, Time, People, the round, Quick capture, or a sheet on top)

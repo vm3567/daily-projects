@@ -34,6 +34,7 @@ export function emptyData() {
   return {
     version: 1,
     tags: [], // one list of tags (groups are gone)
+    groups: [], // always empty, never used: only so an older copy of the app still open on a phone does not break
     projects: [],
     people: [],
     settings: { aiProvider: 'claude', timer: true },

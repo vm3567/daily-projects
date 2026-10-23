@@ -551,6 +551,9 @@ function handle(string $a, array $in): array {
       // One at a time per project (two taps, or two devices, would otherwise make every step twice).
       $ref = txt($in['projectRef'] ?? '', 80, true, 'The project');
       unset($in['_server']);
+      // a take-back sent because the sender's saved copy shows it no longer given: only if nothing was saved since
+      // (another device may have given it again meanwhile); "stale" = not done, the sender looks again later
+      if (!empty($in['ifHead']) && (int)($in['assigneeId'] ?? 0) === 0 && setting('dp_head', '') !== (string)$in['ifHead']) return ['stale' => true];
       $in['_psc'] = (int)setting('psc:' . md5($ref), '0'); // when the owner's app last sent it (a Work Task move after that is followed)
       set_setting('psc:' . md5($ref), (string)time()); // before the work too: a server sync waiting for the lock sees it
       // its unsaved changes: the saved projects are older than this for the project until they are saved
