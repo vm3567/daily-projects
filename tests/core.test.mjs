@@ -2789,3 +2789,20 @@ test('review r4-1 (whole code): a repeating step with a date long ago gets its n
   assert.equal(nextRepeatDate('daily', '2026-10-24', '2026-10-23'), '2026-10-25');
   assert.equal(nextRepeatDate('weekly', '2026-10-19', '2026-10-23'), '2026-10-26');
 });
+
+test('review r4-3 (whole code): an email address is never read as an @mention, and renaming a person leaves email addresses as they are', async () => {
+  const { mentionedPeople, replaceMentions } = await import('../docs/rules.js');
+  const people = [{ id: 'r', name: 'Ravi' }, { id: 'a', name: 'Acton' }];
+  assert.equal(mentionedPeople('send to accounts@ravi-traders.com', people).size, 0);
+  assert.equal(mentionedPeople('mail x.y+z@acton.in', people).size, 0);
+  assert.deepEqual([...mentionedPeople('(@Ravi) and,@Acton', people)].sort(), ['a', 'r'], 'real mentions still count');
+  assert.equal(replaceMentions('a@ravi-traders.com @Ravi', people, (p) => '#' + p.id), 'a@ravi-traders.com #r');
+  const s = withProject();
+  applyOp(s, op('addPerson', { personId: 'a', name: 'Acton' }, '2026-10-02'));
+  applyOp(s, op('setStepField', { projectId: 'p1', stepId: 's2', field: 'text', value: 'Ask @Acton, copy ceramic.ops@acton-finishing.com' }, '2026-10-02'));
+  applyOp(s, op('setStepField', { projectId: 'p1', stepId: 's2', field: 'note', value: 'reply to ravi@Acton.com' }, '2026-10-02'));
+  applyOp(s, op('renamePerson', { personId: 'a', name: 'Acton Ltd' }, '2026-10-03'));
+  const st = s.data.projects[0].steps.find((x) => x.id === 's2');
+  assert.equal(st.text, 'Ask @Acton Ltd, copy ceramic.ops@acton-finishing.com');
+  assert.equal(st.note, 'reply to ravi@Acton.com');
+});

@@ -484,6 +484,8 @@ export function stepTargets(data, today = todayIndia()) {
 // ---------- People (@mentions) ----------
 
 const WORD_CHAR = /[\p{L}\p{N}_]/u;
+// an "@" right after one of these is inside an email address (accounts@ravi-traders.com), never a mention
+const EMAIL_CHAR = /[\p{L}\p{N}_.+-]/u;
 
 /**
  * Ids of people mentioned as "@Name" in a text. At each "@", the LONGEST matching name wins,
@@ -501,6 +503,7 @@ export function mentionedPeople(text, people) {
   const sorted = c.sorted;
   const lower = text.toLowerCase();
   for (let i = lower.indexOf('@'); i >= 0; i = lower.indexOf('@', i + 1)) {
+    if (i > 0 && EMAIL_CHAR.test(text.charAt(i - 1))) continue;
     for (const p of sorted) {
       const n = p.name.toLowerCase();
       if (lower.startsWith(n, i + 1) && !WORD_CHAR.test(text.charAt(i + 1 + n.length))) { found.add(p.id); break; }
@@ -523,7 +526,7 @@ export function replaceMentions(text, people, replace) {
     const at = text.indexOf('@', i);
     if (at < 0) { out += text.slice(i); break; }
     out += text.slice(i, at);
-    const hit = sorted.find((p) => lower.startsWith(p.name.toLowerCase(), at + 1) && !WORD_CHAR.test(text.charAt(at + 1 + p.name.length)));
+    const hit = !(at > 0 && EMAIL_CHAR.test(text.charAt(at - 1))) && sorted.find((p) => lower.startsWith(p.name.toLowerCase(), at + 1) && !WORD_CHAR.test(text.charAt(at + 1 + p.name.length)));
     if (hit) { out += replace(hit, text.substr(at + 1, hit.name.length)); i = at + 1 + hit.name.length; } else { out += '@'; i = at + 1; }
   }
   return out;

@@ -1359,10 +1359,11 @@ const handlers = {
     if (people.some((x) => x.id !== person.id && x.name.toLowerCase() === name.toLowerCase())) return false;
     const old = person.name;
     // Change "@Old Name" to "@New Name" everywhere, so the links stay.
+    // Never inside an email address (x@acton-finishing.com).
     // Skip places where a LONGER name of someone else matches (e.g. "@Ravi Kumar" when renaming "Ravi").
     const longer = people.filter((x) => x.id !== person.id && x.name.length > old.length
       && x.name.toLowerCase().startsWith(old.toLowerCase())).map((x) => x.name.toLowerCase());
-    const re = new RegExp('@' + old.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(?![\\p{L}\\p{N}_])', 'giu');
+    const re = new RegExp('(?<![\\p{L}\\p{N}_.+-])@' + old.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(?![\\p{L}\\p{N}_])', 'giu');
     const wordChar = /[\p{L}\p{N}_]/u;
     const fix = (t, nm = name) => (typeof t !== 'string' ? t : t.replace(re, (match, offset) => {
       const rest = t.slice(offset + 1).toLowerCase();
