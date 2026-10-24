@@ -262,7 +262,7 @@ test('project description goes to the team: both project.sync calls send about, 
   const sends = APP.match(/teamApi\('project\.sync', \{ projectRef: p\.id, [^}]*\}/g) || [];
   assert.equal(sends.length, 2, 'giveProject and syncGivenNow');
   for (const s of sends) assert.match(s, /\babout\b/, s);
-  assert.match(APP, /function syncSig\(userId, p, steps, needsPhoto\) \{\n\s*return JSON\.stringify\(\[[^\]]*p\.about \|\| ''\]\);/, 'the description is in the change signature');
+  assert.match(APP, /function syncSig\(userId, p, steps, needsPhoto\) \{\n\s*return JSON\.stringify\(\[[^\]]*p\.about \|\| '', !!\(p\.team && p\.team\.record\)\]\);/, 'the description is in the change signature (and 📒 record, owner asked 24 Oct)');
   assert.ok(!/JSON\.stringify\(\[(p\.team\.userId|person\.id), p\.name/.test(APP), 'no signature made without it');
 });
 
@@ -1060,7 +1060,7 @@ test('📂 Projects page: a click on a project row selects it and stays on the p
   assert.match(mainsSrc, /ctx\.ui\.view === 'mains' && ctx\.showHere \? ctx\.showHere\(c\.id\)/, 'a task in the TASKS table while on the Projects page');
   const here = app.slice(app.indexOf('  showHere: (id) => {'), app.indexOf('  openProject: (id) => {'));
   assert.match(here, /select\(id\);/);
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-43'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-44'/, 'phones get the new copy');
 });
 
 test('📂 project page: "✕ Remove" on a task row takes it out of this project only — the task is kept (and stays in its other projects)', () => {
@@ -1846,7 +1846,7 @@ test('🔌 app wiring (app.js): "🔌 From apps" after ✉ Replies with the wait
   assert.match(app, /function go\(view\) \{\n\s*if \(view !== 'settings'\) forgetOnce\(\);/);
   assert.match(app, /if \(onServer\) loadApps\(appsCtx, force \|\| ui\.view === 'apps'\);/);
   assert.match(app, /replies: '✉ Replies', apps: '🔌 From apps', mains: '📂 Projects' \}\[ui\.view\]/, 'its page title');
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-43'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-44'/, 'phones get the new copy');
 });
 
 test('🔌 the PHP connector (team/connector/worktask-connector.php): the same text the app downloads, placeholders only (no real key), valid PHP 7.4+ (php -l), with wt_push / wt_withdraw / wt_decisions / wt_receive_decision', async () => {
@@ -2754,7 +2754,7 @@ test('one app wiring (step 3): Ctrl+V and the 20 s check are hooked up for staff
   assert.match(app, /if \(view\.act\.paste\(\{ files: \[\.\.\.\(e\.clipboardData\.files \|\| \[\]\)\], text: e\.clipboardData\.getData\('text\/plain'\) \|\| '', inMessageBox \}\)\) e\.preventDefault\(\);/);
   assert.equal((app.match(/\.act\.paste\(/g) || []).length, 1, 'one copy');
   const src = readFileSync(new URL('../docs/ui/staff.js', import.meta.url), 'utf8');
-  assert.match(src, /const n = \(state\.data\.tasks \|\| \[\]\)\.filter\(\(t\) => !t\.today\)\.length;/);
+  assert.match(src, /const n = \(state\.data\.tasks \|\| \[\]\)\.filter\(\(t\) => !t\.today && t\.kind !== 'log'\)\.length;/, 'tasks still to send today (a 📒 record never is: owner asked 24 Oct)');
   assert.match(src, /\(n \? navigator\.setAppBadge\(n\) : navigator\.clearAppBadge\(\)\)/);
 });
 
@@ -3400,7 +3400,7 @@ test('staff ✅ Tasks / 📂 Projects pages: the menu as the owner\'s, ✅ Tasks
   const { readFileSync } = await import('node:fs');
   const DP = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
   assert.equal((DP.match(/teamApi\('project\.sync', \{ projectRef: p\.id, [^}]*folder: folderOf\(p\)/g) || []).length, 2, 'both sends carry the 📂 name');
-  assert.match(DP, /JSON\.stringify\(\[userId, p\.name, steps, !!needsPhoto, folderOf\(p\), p\.about \|\| ''\]\)/, 'a new 📂 sends it again');
+  assert.match(DP, /JSON\.stringify\(\[userId, p\.name, steps, !!needsPhoto, folderOf\(p\), p\.about \|\| '', !!\(p\.team && p\.team\.record\)\]\)/, 'a new 📂 sends it again (the signature also has 📒 record, owner asked 24 Oct)');
   assert.match(DP, /\.find\(\(x\) => x && !x\.misc\)/, '📂 Misc is no folder for the team');
 });
 
@@ -3907,4 +3907,121 @@ test('🔁 Move every (owner asked 23 Oct): a chip on the task page ("🔁 every
   assert.ok(app.includes("store.dispatch('setMoveEvery', { projectId: p.id, days: n })"));
   assert.ok(app.includes("' on track (green)'") && app.includes('On track (${done.length})'), 'Today: "on track", not "done today"');
   assert.ok(!readFileSync(new URL('../docs/ui/detail.js', import.meta.url), 'utf8').includes('Not looked at today'), 'no old daily words');
+});
+
+// ---------------------------------------------------------------- 📒 record tasks + 📷 step photos (owner asked 24 Oct)
+test('📒 offline sender: an entry kept on the phone goes as entry.add (written time, clientId), then its photos one by one (entry.photo, clientId-p0…); more than 2 days old is given back with its words', async () => {
+  const box = staffBox.memOutbox();
+  const calls = [];
+  const api = async (a, body, form) => {
+    calls.push({ a, body: form ? Object.fromEntries([...body.entries()].map(([k, v]) => [k, typeof v === 'string' ? v : 'file'])) : body });
+    if (a === 'entry.add') return { ok: true, entry: { id: 77 } };
+    return { ok: true };
+  };
+  let at = new Date('2026-10-22T06:00:00Z');
+  const given = [];
+  const ob = staffBox.createOutbox({ box, api, rules: teamRules, userId: () => 7, signedIn: () => true, lock: null, now: () => at, giveBack: (it, why) => given.push([it.text, why]) });
+  await ob.queue({ kind: 'entry', taskId: 21, text: 'Dispatch Monday', files: [new Blob(['a']), new Blob(['b'])] });
+  const [it] = await ob.list();
+  assert.deepEqual(await ob.flush(), { sent: 1, gave: 0 });
+  assert.equal(calls[0].a, 'entry.add');
+  assert.deepEqual([calls[0].body.taskId, calls[0].body.text, calls[0].body.clientId, calls[0].body.writtenAt], [21, 'Dispatch Monday', it.clientId, at.toISOString()]);
+  assert.deepEqual(calls.slice(1).map((c) => [c.a, c.body.entryId, c.body.clientId]), [['entry.photo', '77', `${it.clientId}-p0`], ['entry.photo', '77', `${it.clientId}-p1`]]);
+  // too old: given back (the words are shown to copy)
+  await ob.queue({ kind: 'entry', taskId: 21, text: 'Old one', files: [] });
+  at = new Date('2026-10-26T06:00:00Z');
+  const r = await ob.flush();
+  assert.equal(r.gave, 1);
+  assert.match(given[0][1], /too long ago/);
+  const show = teamRules.giveBackShow({ kind: 'entry', text: 'Old one' }, 'too old', false);
+  assert.equal(show.sticky, true, 'the words stay to copy');
+  assert.match(show.body, /Old one/);
+});
+
+test('📒 staff app: a record is always on the list, never red and never counted as "to send"; its page has "Add an entry" and the logbook (newest first, your own recent ones can be removed); Add sends entry.add then its photos; offline it is kept on the phone', async () => {
+  const rec = { id: 21, title: 'Follow up clay order', kind: 'log', status: 'open', repeat: 'daily', entriesToday: 2, today: { id: 5, day: STAFF_DAY, note: 'x', state: 'progress', at: STAFF_DAY + ' 11:00:00', photos: [] } };
+  const quiet = { ...rec, id: 22, title: 'Glaze stock', entriesToday: 0, today: null };
+  const entries = [
+    { id: 3, taskId: 21, text: 'Dispatch Monday', at: STAFF_DAY + ' 11:00:00', day: STAFF_DAY, byId: 7, by: 'Valar', photos: [9] },
+    { id: 2, taskId: 21, text: 'PO sent', at: STAFF_DAY + ' 10:42:00', day: STAFF_DAY, byId: 1, by: 'Boss', photos: [] },
+  ];
+  const { s, calls } = fakeStaff2({
+    'my.today': () => ({ ...staffData(), tasks: [...staffData().tasks, rec, quiet] }),
+    'task.get': () => ({ task: rec, updates: [], comments: [], entries }),
+    'entry.add': () => ({ entry: { id: 4 } }),
+  });
+  s.start(); await tick(); await tick();
+  let v = s.view();
+  const rows = rAll(v, (n) => n.nodeName === 'LI' && /\bprow\b/.test(n.className || ''));
+  const r21 = rows.find((r) => r.textContent.includes('Follow up clay order'));
+  const r22 = rows.find((r) => r.textContent.includes('Glaze stock'));
+  assert.match(r21.textContent, /📒 2 entries today/);
+  assert.match(r22.textContent, /📒 Record · add entries when something happens/);
+  assert.ok(rFind(r22, (n) => /\bdot grey\b/.test(n.className || '')), 'never red');
+  assert.match(v.textContent, /1 of 3 sent/, 'records are not counted as "to send"');
+  s.open('task:21'); await tick(); await tick();
+  v = s.view();
+  assert.ok(rFind(v, (n) => n.nodeName === 'TEXTAREA' && n.dataset.key === 'up-21'), 'the entry box');
+  const book = rFind(v, (n) => n.className === 'logbook');
+  assert.deepEqual(rAll(book, (n) => /\blog-entry\b/.test(n.className || '')).map((e) => e.textContent.includes('Dispatch') ? 'Dispatch' : 'PO'), ['Dispatch', 'PO'], 'newest first');
+  assert.match(book.textContent, /PO sent · Boss/, 'who, when it is not you');
+  assert.equal(rAll(book, (n) => n.nodeName === 'BUTTON' && n.textContent === '✕').length, 1, 'only your own entry can be removed');
+  assert.ok(!rFind(v, (n) => n.nodeName === 'BUTTON' && n.textContent === 'Send'), 'no daily update box');
+  // add an entry with a photo
+  s.state.entryDrafts[21] = 'Truck left';
+  s.state.entryFiles[21] = [new Blob(['p'])];
+  assert.equal(await s.act.sendEntry(rec), '');
+  const add = calls.find((c) => c.a === 'entry.add');
+  assert.deepEqual([add.body.taskId, add.body.text], [21, 'Truck left']);
+  const ph = calls.find((c) => c.a === 'entry.photo');
+  assert.ok(ph, 'then its photo');
+  assert.equal(s.state.entryDrafts[21], undefined, 'the box is empty again');
+  assert.equal(await s.act.sendEntry(rec), 'Write the entry first.');
+});
+
+test('📒 team pages: "Give a task" has 📅 Daily update | 📒 Record (sends kind "log"); a record\'s page shows its logbook; the Tasks list says "📒 Record · 2 entries today"; 📷 counts on a project\'s steps', async () => {
+  const { t, calls } = fakeTeam({ 'task.save': (b) => ({ task: { id: 99, ...b } }) });
+  t.open('give'); await tick(); await tick();
+  let v = t.view();
+  const seg = rFind(v, (n) => n.nodeName === 'BUTTON' && n.textContent === '📒 Record (entries)');
+  assert.ok(seg);
+  seg.__on.click();
+  t.state.giveForm.assigneeId = 7; t.state.giveForm.title = 'Follow up clay';
+  v = t.view();
+  assert.match(v.textContent, /They add an entry/);
+  rFind(v, (n) => n.nodeName === 'BUTTON' && n.textContent === 'Give task').__on.click();
+  await tick(); await tick();
+  assert.equal(calls.find((c) => c.a === 'task.save').body.kind, 'log');
+  const TEAM = readFileSync(new URL('../docs/ui/team.js', import.meta.url), 'utf8');
+  assert.ok(TEAM.includes("t.kind === 'log' ? block('📒 Record', logbookBlock({ entries: state.detail.entries || [], photos, meId: state.user.id, td }))"), 'its page: the logbook');
+  assert.ok(TEAM.includes("t.kind === 'log' ? recordLine(t) : repeatLabel(t)"), 'the Tasks list line');
+  assert.ok(TEAM.includes("+ pics(t),"), 'the 📷 count on a project\'s steps');
+});
+
+test('📷 Daily Projects: a step given to the team shows the photos the person sent on it (small, a tap opens one); the give box has "📒 Record", sent with project.sync as kind "log" and kept on the task (p.team.record)', async () => {
+  const { stepPhotos } = await import('../docs/ui/detail.js');
+  const ctx = { teamPhoto: (id) => (id === 2 ? 'blob:x' : null) };
+  const el = stepPhotos(ctx, { id: 5, today: { photos: [1, 2] }, last: { photos: [2] } });
+  assert.equal(rAll(el, (n) => n.nodeName === 'IMG').length, 1, 'the one loaded');
+  assert.equal(el.childNodes.length, 2, 'each photo once (today and the one before)');
+  assert.equal(stepPhotos(ctx, { id: 6, today: null, last: null }), null);
+  const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
+  assert.ok(app.includes("kind: record ? 'log' : '', reason: person ? '' : 'taken'"), 'giving sends the kind');
+  assert.ok(app.includes("kind: p.team.record ? 'log' : '', reason: p.state,"), 'and every later sync');
+  assert.ok(readFileSync(new URL('../docs/ui/detail.js', import.meta.url), 'utf8').includes("' 📒 Record (entries, not a daily update)'"));
+  // the task keeps it
+  const s = mainsState();
+  applyOps(s, [makeOp('setProjectTeam', { projectId: 'o', userId: 7, name: 'Ravi', record: true })]);
+  assert.deepEqual(s.data.projects.find((p) => p.id === 'o').team.record, true);
+  assert.equal(applyOps(s, [makeOp('setProjectTeam', { projectId: 'o', userId: 7, name: 'Ravi', record: true })])[0], undefined, 'the same again: no change');
+  applyOps(s, [makeOp('setProjectTeam', { projectId: 'o', userId: 7, name: 'Ravi' })]);
+  assert.equal(s.data.projects.find((p) => p.id === 'o').team.record, undefined, 'back to a daily update');
+});
+
+test('📒 the chips on a record say "📒 Record" and "✓ 3 entries today" (not "Every day" / "Sent today")', async () => {
+  const wp = await import('../docs/ui/workparts.js');
+  const chips = (t) => rAll(wp.chipsFor(t, '2026-10-24'), (n) => String(n.className || '').split(' ').includes('info-chip')).map((n) => n.textContent);
+  assert.deepEqual(chips({ kind: 'log', repeat: 'daily', status: 'open', entriesToday: 3, today: { id: 1 } }), ['📒 Record', '✓ 3 entries today']);
+  assert.deepEqual(chips({ kind: 'log', repeat: 'daily', status: 'open', entriesToday: 0, today: null }), ['📒 Record']);
+  assert.ok(chips({ kind: 'task', repeat: 'daily', skipSunday: true, status: 'open', today: { id: 1 } }).includes('✓ Sent today'), 'a daily update as before');
 });

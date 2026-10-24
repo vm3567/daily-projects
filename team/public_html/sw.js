@@ -1,7 +1,7 @@
 // Work Task's start page (it sends everyone to the one app, worktask.in/projects/) and the phone notifications.
 // Keeps the start page on the phone so an installed app opens without internet. Data (api/) and the one app
 // (projects/, it has its own) are never kept here.
-const CACHE = 'worktask-v31';
+const CACHE = 'worktask-v32';
 const SHELL = ['./', 'index.html', 'app.js', 'logic.js', 'styles.css', 'projects/styles.css', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png'];
 
 self.addEventListener('install', (e) => {

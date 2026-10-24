@@ -9,7 +9,7 @@ import { h, morph, errLine } from './dom.js';
 import { createOutbox } from './staffbox.js';
 import { stageChip } from './stage.js';
 import { openMenuAt, menuBox, focusLater } from './rowmenu.js';
-import { fmtDay, fmtTime, LONG_DAYS, stateTag, newClientId, istDay, daysBetween, repeatLabel, block, sec, taskRow, chipsFor, makePics, photosRow, filesBlock, diaryBlock, messagesBlock, phoneBack } from './workparts.js';
+import { fmtDay, fmtTime, LONG_DAYS, stateTag, newClientId, istDay, daysBetween, repeatLabel, block, sec, taskRow, chipsFor, makePics, photosRow, filesBlock, diaryBlock, messagesBlock, phoneBack, logbookBlock } from './workparts.js';
 
 const KEEP_FAIL = 'Could not keep this on the phone. Try again when online.';
 const OFFLINE_KEPT = '📴 Saved on this phone — it will be sent when you are online';
@@ -538,6 +538,9 @@ export function createTeam(opts) {
         item('Sign out', false, signOut)));
   }
 
+  /** 📒 a record's line in a list: "📒 Record · 3 entries today" / "· last entry 22 Oct". */
+  const recordLine = (t) => `📒 Record · ${t.entriesToday ? `${t.entriesToday} entr${t.entriesToday === 1 ? 'y' : 'ies'} today` : t.last ? `last entry ${fmtDay(t.last.day)}` : 'no entries yet'}`;
+  const photoCount = (t) => ((t.today && t.today.photos) || []).length + ((t.last && t.last.photos) || []).length;
   const rowOf = (t, sub, dot, warn = false) => taskRow({
     key: 't-' + t.id, title: t.title, sub, dot: dotOf(dot), warn, current: state.sel === 'task:' + t.id, onOpen: () => open('task:' + t.id), onMenu: (e) => openMenuAt(state, render, { t }, e),
     tags: [state.newIds.has(t.id) ? h('span', { class: 'tag high' }, 'New') : null, t.unread ? h('span', { class: 'tag on-step', title: `${t.unread} new message(s)` }, '💬 New') : null],
@@ -769,8 +772,8 @@ export function createTeam(opts) {
       d.tasks.length ? null : h('p', { class: 'empty-list' }, state.closed ? 'Nothing closed yet.' : 'No open tasks. Give one with “+ Give a task”.'),
       [...groups].map(([name, tasks]) => [sec(name, h('span', { class: 'tag waiting' }, String(tasks.length))),
         h('ul', { class: 'plist' }, tasks.map((t) => rowOf(t,
-          [t.status !== 'open' ? (t.status === 'done' ? 'Done' : 'Cancelled') : null, t.project, repeatLabel(t), t.today ? 'sent today' : t.last ? `last ${fmtDay(t.last.day)}` : 'no update yet'].filter(Boolean).join(' · '),
-          t.status !== 'open' ? 'grey' : t.stuck ? 'red' : t.today ? 'green' : 'yellow')))]),
+          [t.status !== 'open' ? (t.status === 'done' ? 'Done' : 'Cancelled') : null, t.project, t.kind === 'log' ? recordLine(t) : repeatLabel(t), t.kind === 'log' ? null : t.today ? 'sent today' : t.last ? `last ${fmtDay(t.last.day)}` : 'no update yet'].filter(Boolean).join(' · '),
+          t.status !== 'open' ? 'grey' : t.stuck ? 'red' : t.today ? 'green' : t.kind === 'log' ? 'grey' : 'yellow')))]),
     ];
   }
 
@@ -796,6 +799,7 @@ export function createTeam(opts) {
     const days = all.map((t) => (t.today || t.last || {}).day).filter(Boolean).sort();
     const last = days[days.length - 1];
     const who = (t) => (t.createdBy === t.assignee.id ? ` · added by ${t.assignee.name}` : '');
+    const pics = (t) => { const n = photoCount(t); return n ? ` · 📷 ${n}` : ''; }; // the step's photos (e.g. each test step)
     const total = done.length + openSteps.filter((t) => !String(t.stepRef).endsWith(':whole')).length;
     const stuck = openSteps.some((t) => t.stuck);
     const bar = progressBar(total ? done.length / total : 0, 'pp');
@@ -805,9 +809,9 @@ export function createTeam(opts) {
           h('span', { class: 'tag ' + (stuck ? 'late' : 'waiting') }, stuck ? 'Stuck' : total ? `${done.length} of ${total} done` : 'No steps yet')),
         total ? bar : null,
         h('div', { class: 'progress-text' }, last ? (last === state.detail.today ? 'Last update: today' : `Last update: ${fmtDay(last)} (${daysBetween(last, state.detail.today)} days ago)`) : 'No update yet')),
-      done.length ? block(`✓ ${done.length} done`, h('ul', { class: 'plist' }, done.map((t, i) => rowOf(t, `Step ${i + 1} · done ${t.doneAt ? fmtDay(t.doneAt) : ''}${who(t)}`, 'green')))) : null,
+      done.length ? block(`✓ ${done.length} done`, h('ul', { class: 'plist' }, done.map((t, i) => rowOf(t, `Step ${i + 1} · done ${t.doneAt ? fmtDay(t.doneAt) : ''}${who(t)}${pics(t)}`, 'green')))) : null,
       openSteps.length ? block('To do', h('ul', { class: 'plist' }, openSteps.map((t, i) => rowOf(t,
-        (String(t.stepRef).endsWith(':whole') ? 'The whole project (no steps yet)' : `Step ${done.length + i + 1}`) + (t === cur ? ` · current · ${t.today ? '✓ sent today' : 'no update today'}` : ' · next') + who(t) + (t.dueDate ? ` · by ${fmtDay(t.dueDate)}` : ''),
+        (String(t.stepRef).endsWith(':whole') ? 'The whole project (no steps yet)' : `Step ${done.length + i + 1}`) + (t === cur ? ` · current · ${t.today ? '✓ sent today' : 'no update today'}` : ' · next') + who(t) + (t.dueDate ? ` · by ${fmtDay(t.dueDate)}` : '') + pics(t),
         t.stuck ? 'red' : t === cur ? (t.today ? 'green' : 'yellow') : 'grey', t.stuck)))) : h('p', { class: 'muted' }, 'Nothing open on this project.'),
       h('p', { class: 'muted small' }, owner ? 'Add, tick or change steps on your projects page; the person’s list follows by itself.' : 'Steps are added and changed on the owner’s projects page; the person’s list follows by itself.'),
     ];
@@ -1006,7 +1010,8 @@ export function createTeam(opts) {
         onInput: (v) => { state.msgDrafts[t.id] = v; },
         onSend: () => sendMessage(t.id), onPhoto: (f) => sendMessagePhoto(t.id, f), onEdit: editMessage, onDelete: deleteMessage,
       }),
-      t.status === 'suggested' || t.declined ? null : diaryBlock({ rules, t, updates, td, staff: false, meId: state.user.id, n: state.diaryDays,
+      t.kind === 'log' ? block('📒 Record', logbookBlock({ entries: state.detail.entries || [], photos, meId: state.user.id, td })) // its entries, newest first
+        : t.status === 'suggested' || t.declined ? null : diaryBlock({ rules, t, updates, td, staff: false, meId: state.user.id, n: state.diaryDays,
         fillBy: (state.data && state.data.fillBy) || state.fillBy || '18:00', photos, onMore: () => { state.diaryDays += 14; render(); } }),
     ];
   }
@@ -1026,6 +1031,7 @@ export function createTeam(opts) {
         how: t ? (t.repeat === 'daily' ? (t.skipSunday ? 'daily' : 'daily7') : t.repeat) : pre.repeat === 'once' ? 'once' : 'daily',
         weekday: t && t.weekday !== null && t.weekday !== undefined ? t.weekday : 1, dueDate: t ? t.dueDate || '' : pre.dueDate || '',
         startDate: t && t.startDate && t.startDate > today() ? t.startDate : '', needsPhoto: t ? !!t.needsPhoto : false, files: [],
+        record: t ? t.kind === 'log' : false, // 📒 a record (many entries a day) or a daily update
         projectRef: t ? t.projectRef : pre.projectRef, stepRef: t ? t.stepRef : pre.stepRef,
       };
     }
@@ -1041,6 +1047,10 @@ export function createTeam(opts) {
         h('label', null, 'Who', h('select', { key: 'g-who', value: String(f.assigneeId || ''), onChange: (e, el) => { f.assigneeId = Number(el.value); } },
           h('option', { value: '' }, 'Choose a person…'), people.map((p) => h('option', { value: String(p.id) }, p.name + (p.role === 'admin' ? ' (manager)' : ''))))),
         h('label', null, 'Task', h('input', { key: 'g-title', placeholder: 'Record kiln 3 temperature', value: f.title, onInput: set('title') })),
+        h('div', { class: 'segmented', role: 'group', 'aria-label': 'Kind of task' },
+          h('button', { class: 'seg' + (f.record ? '' : ' on'), type: 'button', key: 'g-kind-task', 'aria-pressed': String(!f.record), onClick: () => { f.record = false; render(); } }, '📅 Daily update'),
+          h('button', { class: 'seg' + (f.record ? ' on' : ''), type: 'button', key: 'g-kind-log', 'aria-pressed': String(!!f.record), onClick: () => { f.record = true; render(); } }, '📒 Record (entries)')),
+        f.record ? h('p', { class: 'muted small' }, 'They add an entry (a line + photos) whenever something happens — e.g. a material order follow-up. Never "not sent" or late.') : null,
         h('label', null, 'Details', h('textarea', { key: 'g-details', placeholder: 'Anything they need to know (optional)', value: f.details, onInput: set('details') })),
         h('label', null, 'Project', h('input', { key: 'g-project', placeholder: 'Kiln trial (optional)', value: f.project, onInput: set('project') })),
         h('label', null, 'How often', h('select', { key: 'g-how', value: f.how, onChange: set('how') },
@@ -1056,6 +1066,7 @@ export function createTeam(opts) {
             id: t ? t.id : 0, assigneeId: Number(f.assigneeId), title: f.title, details: f.details, project: f.project,
             repeat: f.how === 'daily7' ? 'daily' : f.how, skipSunday: f.how === 'daily' || (f.how === 'once' && (!t || t.skipSunday)), weekday: Number(f.weekday), dueDate: f.dueDate,
             projectRef: f.projectRef, stepRef: f.stepRef, needsPhoto: !!f.needsPhoto, startDate: f.startDate || (t && t.startDate && t.startDate > td ? td : ''),
+            kind: f.record ? 'log' : '',
           }, f.files).then((m) => { err.say(m); }) }, editing ? 'Save' : 'Give task'),
           h('button', { class: 'btn small', onClick: () => { state.prefill = null; state.giveForm = null; if (editing) open('task:' + t.id); else if (!(state.fromProjects && toProjects())) back(); } }, 'Cancel')))),
     ];

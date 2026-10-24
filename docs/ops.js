@@ -887,6 +887,7 @@ const handlers = {
     const userId = Number.isInteger(a.userId) && a.userId > 0 ? a.userId : null;
     const name = cleanText(a.name || '', 80).trim();
     const needsPhoto = !!a.needsPhoto;
+    const record = !!a.record; // 📒 the person adds entries (a record), not one update a day
     // given through a 📂 project (its tasks go with it): which one (rules.js projectGiveChanges)
     const via = userId && typeof a.viaProject === 'string' && findProject(state.data, a.viaProject) ? a.viaProject : null;
     const main = isMainProject(state.data, p);
@@ -895,10 +896,10 @@ const handlers = {
       p.teamOff = true; touch(p, op);
       return true;
     }
-    if (userId && p.team && p.team.userId === userId && p.team.name === name && !!p.team.needsPhoto === needsPhoto && (p.team.viaProject || null) === via && !(main && a.giveTasks)) return false;
+    if (userId && p.team && p.team.userId === userId && p.team.name === name && !!p.team.needsPhoto === needsPhoto && !!p.team.record === record && (p.team.viaProject || null) === via && !(main && a.giveTasks)) return false;
     const old = p.team;
     if (userId) {
-      p.team = { userId, name, since: old && old.userId === userId ? old.since : indiaDate(op.at), ...(needsPhoto ? { needsPhoto: true } : {}), ...(via ? { viaProject: via } : {}) };
+      p.team = { userId, name, since: old && old.userId === userId ? old.since : indiaDate(op.at), ...(needsPhoto ? { needsPhoto: true } : {}), ...(record ? { record: true } : {}), ...(via ? { viaProject: via } : {}) };
       delete p.teamOff;
       // giving a 📂 project gives all its tasks again, also one taken back on its own before
       if (main && a.giveTasks) for (const c of state.data.projects) if (parentIdsOf(c).includes(p.id)) delete c.teamOff;

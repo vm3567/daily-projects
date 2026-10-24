@@ -1231,6 +1231,18 @@ button.stage-chip.tap { cursor: pointer; font-size: 12.5px; padding: 3px 10px; }
 .stage-filter.on { background: var(--brand); border-color: var(--brand); color: #fff; }
 /* (no dark colours: the app's pages are light only, so the chips stay light too) */
 
+/* 📒 record tasks: the entry box and the logbook (staff app, team pages); 📷 photos under a staff step (owner's task page) */
+.entry-form textarea { min-height: 3.2em; }
+.logbook { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
+.log-day { display: flex; flex-direction: column; gap: 6px; }
+.log-day-head { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; border-bottom: 1px solid var(--line); padding-bottom: 2px; }
+.log-entry { display: flex; flex-direction: column; gap: 4px; padding: 6px 8px; border-radius: 8px; background: var(--brand-soft); }
+.log-entry.waiting { background: transparent; border: 1px dashed var(--line); }
+.log-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; }
+.log-time { min-width: 58px; }
+.step-photos { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 2px 34px; }
+.step-photos .diary-photo { width: 64px; height: 64px; object-fit: cover; }
+
 /* ---------------------------------------------------------------- the staff view (one app: ui/staff.js)
    Staff see this app's own design. Only the few pieces this app had no style for, and only inside the staff view
    (.layout.staff), so the owner's screens never change. */
@@ -1253,5 +1265,6 @@ button.stage-chip.tap { cursor: pointer; font-size: 12.5px; padding: 3px 10px; }
 .layout.staff .wt-table.morning .m-no { width: 2.2em; }
 .layout.staff .wt-table.morning .m-last { width: 38%; }
 .layout.staff .wt-table tr.wt-open { cursor: pointer; }
+
 
 

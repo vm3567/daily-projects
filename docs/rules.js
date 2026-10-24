@@ -393,8 +393,8 @@ export function projectGiveChanges(data) {
     const m = (via && given.includes(via) ? via : given[0]) || null;
     if (!m) { if (t.team) out.push({ projectId: t.id, team: null }); continue; }
     if (!t.team && t.teamOff) continue;
-    const want = { userId: m.team.userId, name: m.team.name, needsPhoto: !!m.team.needsPhoto, viaProject: m.id };
-    if (!t.team || t.team.userId !== want.userId || t.team.name !== want.name || !!t.team.needsPhoto !== want.needsPhoto || t.team.viaProject !== m.id) out.push({ projectId: t.id, team: want });
+    const want = { userId: m.team.userId, name: m.team.name, needsPhoto: !!m.team.needsPhoto, record: !!m.team.record, viaProject: m.id };
+    if (!t.team || t.team.userId !== want.userId || t.team.name !== want.name || !!t.team.needsPhoto !== want.needsPhoto || !!t.team.record !== want.record || t.team.viaProject !== m.id) out.push({ projectId: t.id, team: want });
   }
   return out;
 }

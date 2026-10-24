@@ -190,6 +190,17 @@ export function makeItAProject(ctx, p, s, tt) {
   setTimeout(() => { const f = document.querySelector('.title-input'); if (f) { f.focus(); f.select(); } }, 30);
 }
 
+/** The photos on a staff step (its newest updates: today's and the one before), small; a tap opens one. */
+export function stepPhotos(ctx, tt) {
+  if (!tt || !ctx.teamPhoto) return null;
+  const ids = [...new Set([...((tt.today && tt.today.photos) || []), ...((tt.last && tt.last.photos) || [])])];
+  if (!ids.length) return null;
+  return h('div', { class: 'step-photos', key: 'sp-' + tt.id }, ids.map((pid) => {
+    const src = ctx.teamPhoto(pid);
+    return src ? h('img', { class: 'diary-photo', src, alt: 'Photo', key: 'spp-' + pid, onClick: () => window.open(src, '_blank', 'noopener') }) : h('span', { class: 'muted small', key: 'spp-' + pid }, ' 📷');
+  }));
+}
+
 /** A step made into its own project: "→ moved to project: <name>", a link that opens it. */
 function movedLink(ctx, s) {
   const to = ctx.store.view.data.projects.find((x) => x.id === s.movedTo);
@@ -278,6 +289,7 @@ function stepRow(ctx, p, s, box = null) {
       }, open ? '▴' : '⋯')),
     stepNotes(p, s),
     live && !s.done && (tt.today || tt.last) ? h('div', { class: 'step-last muted small' }, `Last from ${tt.assignee.name} (${fmtDay((tt.today || tt.last).day)}): `, h('span', null, (tt.today || tt.last).note.slice(0, 160))) : null,
+    stepPhotos(ctx, tt), // 📷 the photos the person sent on this step (e.g. each test step), done steps too
     box,
     open ? h('div', { class: 'step-extra' },
       s.done ? null : remindRow(ctx, p, s, today),
@@ -687,11 +699,13 @@ function teamBar(ctx, p) {
     isMainProject(ctx.store.view.data, p) ? giveTaskList(ctx, p) : null,
     h('label', { class: 'check small', title: 'They must add a photo before tapping Finished on each step' },
       h('input', { type: 'checkbox', checked: !!ui.givePhoto, onChange: (e, el) => ctx.setGivePhoto(el.checked) }), ' 📷 Photo needed to finish'),
+    h('label', { class: 'check small', title: 'They add an entry (a line + photos) whenever something happens, e.g. a material order follow-up — no daily update, never late' },
+      h('input', { type: 'checkbox', checked: !!ui.giveRecord, onChange: (e, el) => ctx.setGiveRecord && ctx.setGiveRecord(el.checked) }), ' 📒 Record (entries, not a daily update)'),
     people === null ? h('span', { class: 'muted small' }, 'Loading…')
       : people.length ? people.map((u) => h('button', { class: 'chip', key: 'tp-' + u.id, disabled: busy ? true : undefined, onClick: () => ctx.giveProject(p, u) }, u.name))
         : h('a', { class: 'small', href: '#team' }, 'Add a person first (Team → People)'),
     p.team ? h('button', { class: 'btn small', onClick: () => { if (confirm(takeBackQuestion(ctx.store.view.data, p))) { ui.giveOpen = null; ctx.takeBackProject(p); } } }, 'Take back') : null,
-    h('button', { class: 'link small', onClick: () => { ui.giveOpen = null; ui.givePhoto = false; ui.giveKeep = null; ui.giveKeepFor = null; ctx.render(); } }, 'Cancel'));
+    h('button', { class: 'link small', onClick: () => { ui.giveOpen = null; ui.givePhoto = false; ui.giveRecord = false; ui.giveKeep = null; ui.giveKeepFor = null; ctx.render(); } }, 'Cancel'));
 }
 
 /** Take back: a 📂 project brings back the tasks that went with it (tasks given on their own stay). */
@@ -877,7 +891,7 @@ function projectMenu(ctx, p) {
   const item = (label, fn, cls = '') => h('button', { class: 'menu-row' + cls, onClick: go(fn) }, label);
   return h('div', { class: 'proj-menu', key: 'pm-' + p.id, role: 'menu' },
     p.state === 'active' && (!isSnoozed(p, today) || restReason(p, today) === 'onlyDays') ? item('💤 Snooze…', () => { ui.snoozeOpen = p.id; setTimeout(() => { const n = document.querySelector(`[data-key="snooze-${p.id}"]`); if (n) { n.focus(); n.select(); } }, 30); }) : null,
-    p.state === 'active' && ctx.onServer && !p.misc ? item(p.team ? `👥 Change person (now ${p.team.name})` : `👥 Give ${kindWord(ctx, p)} to…`, () => { ui.giveOpen = p.id; ui.givePhoto = p.team ? !!p.team.needsPhoto : false; }) : null,
+    p.state === 'active' && ctx.onServer && !p.misc ? item(p.team ? `👥 Change person (now ${p.team.name})` : `👥 Give ${kindWord(ctx, p)} to…`, () => { ui.giveOpen = p.id; ui.givePhoto = p.team ? !!p.team.needsPhoto : false; ui.giveRecord = p.team ? !!p.team.record : false; }) : null,
     p.state === 'active' && ctx.onServer && p.team ? item('↩ Take back from ' + p.team.name, () => { if (confirm(takeBackQuestion(ctx.store.view.data, p))) ctx.takeBackProject(p); }) : null,
     p.state === 'active' ? item('📅 Only on…', () => { ui.onlyDaysOpen = p.id; }) : null,
     p.state === 'active' ? item('🔔 Remind me once…', () => { ui.remindOnceOpen = p.id; }) : null,
@@ -924,7 +938,7 @@ function infoChips(ctx, p, today) {
   if (p.team) {
     const via = p.team.viaProject && store.view.data.projects.find((x) => x.id === p.team.viaProject);
     out.push(chip(`👥 ${p.team.name}${via ? ` (with 📂 ${via.name})` : ''}`, p.state === 'active' ? (via ? `Went with 📂 ${via.name} — tap to change person or take back` : 'Given to the team — tap to change person or take back') : 'Given to the team (off their list while not active)',
-      p.state === 'active' ? () => { ui.giveOpen = ui.giveOpen === p.id ? null : p.id; ui.givePhoto = !!p.team.needsPhoto; ctx.render(); } : null, ' team'));
+      p.state === 'active' ? () => { ui.giveOpen = ui.giveOpen === p.id ? null : p.id; ui.givePhoto = !!p.team.needsPhoto; ui.giveRecord = !!p.team.record; ctx.render(); } : null, ' team'));
     const tp = ctx.teamProgress ? ctx.teamProgress(p.id) : null;
     if (tp && (tp.lastUpdate || tp.stuck)) {
       const when = !tp.lastUpdate ? 'no update yet' : tp.lastUpdate === today ? 'updated today' : `last update ${fmtDay(tp.lastUpdate)}`;

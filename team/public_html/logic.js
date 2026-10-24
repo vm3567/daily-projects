@@ -175,7 +175,7 @@ export function giveBackShow(it, why, boxThere) {
   const reason = String(why).replace(/\.$/, '');
   const words = it.note || it.text || it.title || '';
   const full = it.kind === 'suggest' && it.details ? `${words}\n${it.details}` : words;
-  if ((['comment', 'step', 'suggest'].includes(it.kind) || (it.kind === 'update' && !it.updateId)) && full) {
+  if ((['comment', 'step', 'suggest'].includes(it.kind) || (it.kind === 'update' && !it.updateId) || (it.kind === 'entry' && !it.entryId)) && full) {
     const tail = boxThere ? (it.kind === 'step' ? 'It is also back in the Add a step box.' : 'They are also back in the box.') : 'Copy them if you need them.';
     return { sticky: true, title: `Could not send: ${reason}.`, body: `Your words:\n${full}\n\n${tail}` };
   }

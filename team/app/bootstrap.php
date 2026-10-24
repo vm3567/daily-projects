@@ -301,6 +301,23 @@ function migrate(PDO $pdo): void {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
     // v38: Stuck — "Waiting for what?" (Manager, Material, Another person, Other + a few words); NULL when not stuck
     "ALTER TABLE updates ADD COLUMN waiting_for VARCHAR(80) NULL",
+    // v39: the kind of task (owner asked 24 Oct): NULL = a daily update; 'log' = 📒 a record (many short entries a day)
+    "ALTER TABLE tasks ADD COLUMN kind VARCHAR(10) NULL",
+    // v40: 📒 a record's entries (a line each); the day's update is made from them (so the lists, colours and diary work as before)
+    "CREATE TABLE IF NOT EXISTS entries (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      task_id INT NOT NULL,
+      user_id INT NOT NULL,
+      update_id INT NOT NULL,
+      text TEXT NOT NULL,
+      at DATETIME NOT NULL,
+      client_id VARCHAR(60) NULL,
+      UNIQUE KEY entry_once (user_id, client_id),
+      INDEX (task_id, at),
+      INDEX (update_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+    // v41: a photo can belong to one entry of a record (it is also on that day's update, so every photo list shows it)
+    "ALTER TABLE photos ADD COLUMN entry_id INT NULL, ADD INDEX (entry_id)",
   ];
   $pdo->exec($steps[0]);
   $done = (int)($pdo->query("SELECT v FROM settings WHERE k = 'schema'")->fetchColumn() ?: 0);

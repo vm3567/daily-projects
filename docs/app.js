@@ -505,6 +505,7 @@ const ctx = {
   giveProject: (p, person) => giveProject(p, person),
   takeBackProject: (p) => giveProject(p, null),
   setGivePhoto: (on) => { ui.givePhoto = on; render(); },
+  setGiveRecord: (on) => { ui.giveRecord = on; render(); },
   teamInfo: () => team,
   afterTick: (id, where, undo) => afterTick(id, where, undo),
   openPersonMenu: (id, e) => openPersonMenu(id, e),
@@ -1827,7 +1828,7 @@ function rowMenu() {
       : p.state === 'paused' ? item('▶', `Unpause ${kindWord(p)}`, () => act('unpause', { projectId: p.id }, `Back on Today: ${p.name}`)) : null,
     onServer && p.state === 'active' ? (p.team
       ? item('👥', `Take back from ${p.team.name}`, () => { if (confirm(takeBackQuestion(store.view.data, p))) giveProject(p, null); })
-      : item('👥', `Give ${kindWord(p)} to…`, () => { select(p.id); ui.giveOpen = p.id; ui.givePhoto = false; })) : null,
+      : item('👥', `Give ${kindWord(p)} to…`, () => { select(p.id); ui.giveOpen = p.id; ui.givePhoto = false; ui.giveRecord = false; })) : null,
     item('↗', 'Open', () => select(p.id)),
     movable ? item('🔀', task ? 'Move to another project…' : 'Move inside another project…', () => openMoveBox(ctx, p, from ? from.id : null)) : null,
     movable ? item('📂', task ? 'Add to a project…' : 'Put inside a project…', () => { select(p.id); openMainBox(ctx, p, 'parent'); }) : null,
@@ -3464,6 +3465,7 @@ const SYNC_RETRY = 'retry'; // never matches: sent again next time, but a delete
  * those given to someone else on their own and those you keep (`keep`: the task ids you unticked in the give box).
  */
 async function giveProject(p, person, needsPhoto = !!ui.givePhoto, keep = ui.giveKeepFor === p.id ? ui.giveKeep : null) {
+  const record = !!ui.giveRecord; // 📒 the give box's "Record (entries)" (set from the project when the box opens)
   if (team.busy.has(p.id)) return; // a double tap must not send it twice
   team.busy.add(p.id);
   render();
@@ -3472,13 +3474,13 @@ async function giveProject(p, person, needsPhoto = !!ui.givePhoto, keep = ui.giv
     await withSyncLock(async () => {
       const steps = person ? projectSteps(p) : [];
       // (the change of person is saved right after this: the server must not act on the older saved copy meanwhile)
-      const out = await teamApi('project.sync', { projectRef: p.id, project: p.name, about: p.about || '', folder: folderOf(p), assigneeId: person ? person.id : 0, steps, needsPhoto, reason: person ? '' : 'taken', baseCommit: store.base && store.base.commit, pending: true });
+      const out = await teamApi('project.sync', { projectRef: p.id, project: p.name, about: p.about || '', folder: folderOf(p), assigneeId: person ? person.id : 0, steps, needsPhoto, kind: record ? 'log' : '', reason: person ? '' : 'taken', baseCommit: store.base && store.base.commit, pending: true });
       team.gen++; // a list fetched before this change is old now: it must not move the project back
-      store.dispatch('setProjectTeam', { projectId: p.id, userId: person ? person.id : null, name: person ? person.name : '', needsPhoto, ...(main && person ? { giveTasks: true } : {}), ...(!main && !person ? { keepOff: true } : {}) });
+      store.dispatch('setProjectTeam', { projectId: p.id, userId: person ? person.id : null, name: person ? person.name : '', needsPhoto, record, ...(main && person ? { giveTasks: true } : {}), ...(!main && !person ? { keepOff: true } : {}) });
       const kids = new Set(main ? projectTasks(store.view.data, p.id).map((c) => c.id) : []); // (its projects' tasks too)
       if (main && person && keep) for (const id of keep) if (kids.has(id)) store.dispatch('setProjectTeam', { projectId: id, userId: null, keepOff: true }); // the ones you keep (of this project only)
       ui.giveOpen = null;
-      ui.givePhoto = false;
+      ui.givePhoto = false; ui.giveRecord = false;
       ui.giveKeep = null; ui.giveKeepFor = null;
       const moved = main ? followProjects() : null;
       // taken back by you: the tasks that went with it leave the person's list now too (not only at the next sync)
@@ -3536,7 +3538,7 @@ function notSent(out, steps) {
 
 /** What was sent for a given project: a change in any part (the short description too) sends it again. */
 function syncSig(userId, p, steps, needsPhoto) {
-  return JSON.stringify([userId, p.name, steps, !!needsPhoto, folderOf(p), p.about || '']);
+  return JSON.stringify([userId, p.name, steps, !!needsPhoto, folderOf(p), p.about || '', !!(p.team && p.team.record)]); // (📒 record: a change sends it again)
 }
 /** The 📂 project a given task is in (its first one; '' = in none, 📂 Misc too): the team sees the same folders. */
 function folderOf(p) {
@@ -3570,7 +3572,7 @@ async function syncGivenNow(gen) {
     // (also when the new person has finished every step: the newest finish tells, rules.js)
     const moved = gen === team.gen && team.listAt >= dataFreshAt ? teamMovedTo(p, [...team.byStep.values()]) : null;
     if (moved) {
-      store.dispatch('setProjectTeam', { projectId: p.id, userId: moved.id, name: moved.name, needsPhoto: !!p.team.needsPhoto, byTeam: true });
+      store.dispatch('setProjectTeam', { projectId: p.id, userId: moved.id, name: moved.name, needsPhoto: !!p.team.needsPhoto, record: !!p.team.record, byTeam: true });
       p = fresh(id);
       if (!p || !p.team) continue;
     }
@@ -3579,14 +3581,14 @@ async function syncGivenNow(gen) {
     if (m[p.id] === sig) continue;
     const name = p.name, about = p.about || '', who = p.team.name;
     try {
-      const out = await teamApi('project.sync', { projectRef: p.id, project: name, about, folder: folderOf(p), assigneeId: p.state === 'active' ? p.team.userId : 0, steps, needsPhoto: !!p.team.needsPhoto, reason: p.state,
+      const out = await teamApi('project.sync', { projectRef: p.id, project: name, about, folder: folderOf(p), assigneeId: p.state === 'active' ? p.team.userId : 0, steps, needsPhoto: !!p.team.needsPhoto, kind: p.team.record ? 'log' : '', reason: p.state,
         baseCommit: store.base && store.base.commit, pending: store.pending.length > 0 });
       // a re-opened step that was just finished is not made yet: sent again next time
       rememberSync(id, notSent(out, steps).length ? SYNC_RETRY : sig);
       delete team.syncErr[id];
       // the server followed a Work Task move this app had not seen: record the new person (once; the next sync sends them)
       const now = serverHolder(out, p.state === 'active' ? p.team.userId : 0, [...(team.people || []), ...[...team.byStep.values()].map((t) => t.assignee)]);
-      if (now && fresh(id) && fresh(id).team) store.dispatch('setProjectTeam', { projectId: id, userId: now.id, name: now.name, needsPhoto: !!p.team.needsPhoto, byTeam: true });
+      if (now && fresh(id) && fresh(id).team) store.dispatch('setProjectTeam', { projectId: id, userId: now.id, name: now.name, needsPhoto: !!p.team.needsPhoto, record: !!p.team.record, byTeam: true });
     } catch (e) {
       // try again next time; say it once, so new steps do not quietly reach nobody
       if (e.message !== 'No connection' && team.syncErr[id] !== e.message) {

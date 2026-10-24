@@ -3097,3 +3097,16 @@ test('📂 Review round 3: projectParts finds the tasks and the projects inside,
   assert.ok(!src.includes('subProjectsDeep'), 'the colour uses projectParts');
 });
 
+
+test('📒 Giving a 📂 project as a record: its tasks go with it as records too (projectGiveChanges carries record)', async () => {
+  const { projectGiveChanges } = await import('../docs/rules.js');
+  const s = withMains();
+  applyOp(s, op('addToProject', { projectId: 'k1', parentId: 'm' }, '2026-10-01'));
+  applyOp(s, op('setProjectTeam', { projectId: 'm', userId: 7, name: 'Ravi', record: true, giveTasks: true }, '2026-10-02'));
+  const ch = projectGiveChanges(s.data).find((c) => c.projectId === 'k1');
+  assert.equal(ch.team.record, true);
+  applyOp(s, op('setProjectTeam', { projectId: 'k1', ...ch.team }, '2026-10-02'));
+  assert.equal(projectGiveChanges(s.data).some((c) => c.projectId === 'k1'), false, 'in step now');
+  applyOp(s, op('setProjectTeam', { projectId: 'm', userId: 7, name: 'Ravi', giveTasks: true }, '2026-10-03'));
+  assert.equal(projectGiveChanges(s.data).find((c) => c.projectId === 'k1').team.record, false, 'the project back to daily updates: its task follows');
+});

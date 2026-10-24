@@ -10,7 +10,7 @@ import { h, morph, errLine } from './dom.js';
 import { createOutbox } from './staffbox.js';
 import { stageChip, stageFilterBar } from './stage.js';
 import { openMenuAt, menuBox, focusLater } from './rowmenu.js';
-import { fmtDay, fmtTime, STATES, stateTag, newClientId, istDay, repeatLabel, block, chipsFor, makePics, photosRow, filesBlock, diaryBlock, messagesBlock } from './workparts.js';
+import { fmtDay, fmtTime, STATES, stateTag, newClientId, istDay, repeatLabel, block, chipsFor, makePics, photosRow, filesBlock, diaryBlock, messagesBlock, logbookBlock } from './workparts.js';
 
 export { STATES, repeatLabel }; // (the pieces of a task page are shared with the team pages: ui/workparts.js)
 const KEEP_FAIL = 'Could not keep this on the phone. Try again when online.';
@@ -18,7 +18,7 @@ const OFFLINE_KEPT = '📴 Saved on this phone — it will be sent when you are 
 
 /** The only server calls the staff view makes (a check in tests/screens.test.mjs holds it to this list). */
 export const STAFF_CALLS = ['me', 'my.today', 'task.get', 'project.mine', 'update.save', 'photo.add', 'comment.add', 'comment.edit', 'comment.delete',
-  'comment.photo', 'project.addStep', 'suggest', 'search', 'password', 'logout', 'push.key', 'push.subscribe', 'push.unsubscribe', 'push.test'];
+  'comment.photo', 'project.addStep', 'entry.add', 'entry.photo', 'entry.delete', 'suggest', 'search', 'password', 'logout', 'push.key', 'push.subscribe', 'push.unsubscribe', 'push.test'];
 /** Lists kept on the phone (the last copy), so the app opens without internet — the same saved copies Work Task keeps. */
 const READS = new Set(['me', 'my.today', 'task.get', 'project.mine', // (and the team pages' lists: ui/team.js)
   'team.today', 'tasks.list', 'users.list', 'projects.overview', 'project.team', 'report.week', 'followup.list', 'people.morning']);
@@ -215,7 +215,7 @@ export function createStaff(opts) {
   const copy = opts.copy || ((text) => (typeof navigator !== 'undefined' && navigator.clipboard ? navigator.clipboard.writeText(text) : Promise.reject(new Error('copy'))));
   const state = {
     user: opts.user, data: null, loadFailed: '', section: 'today', sel: null, detail: null, detailFailed: '',
-    menuOpen: false, mobile: 'list', drafts: {}, editing: {}, files: {}, sending: {}, msgDrafts: {}, stepDrafts: {}, diaryDays: 14,
+    menuOpen: false, mobile: 'list', drafts: {}, editing: {}, files: {}, sending: {}, msgDrafts: {}, stepDrafts: {}, diaryDays: 14, entryDrafts: {}, entryFiles: {},
     offline: false, outbox: [], notices: [], news: [], signedOut: false, pushLater: false,
     searchQ: '', searchResults: null, newIds: new Set(), knownIds: new Set(),
   };
@@ -384,6 +384,44 @@ export function createStaff(opts) {
     }
   }
 
+  /** 📒 A record task: one entry (a line + up to 5 photos). Offline: kept on the phone and sent later (the same clientIds). */
+  async function sendEntry(t) {
+    const text = (state.entryDrafts[t.id] || '').trim();
+    const files = state.entryFiles[t.id] || [];
+    if (!text) return 'Write the entry first.';
+    const key = 'e' + t.id;
+    if (state.sending[key]) return '';
+    state.sending[key] = true; render();
+    const cid = newClientId();
+    let entryId = 0, left = files;
+    const clear = () => { if ((state.entryDrafts[t.id] || '').trim() === text) delete state.entryDrafts[t.id]; delete state.entryFiles[t.id]; };
+    try {
+      entryId = (await api('entry.add', { taskId: t.id, text, clientId: cid })).entry.id;
+      for (let i = 0; i < files.length; i++) {
+        left = files.slice(i);
+        const fd = new FormData();
+        fd.append('entryId', String(entryId)); fd.append('file', await shrink(files[i]), 'photo.jpg'); fd.append('clientId', `${cid}-p${i}`);
+        try { await api('entry.photo', fd, true); } catch (e) { if (e.offline || e.retry) throw Object.assign(e, { offline: true, photoNo: i }); toast(`A photo was not sent: ${e.message}`, 6000); }
+      }
+      clear();
+      toast('📒 Added ✓');
+      return '';
+    } catch (e) {
+      if (e.offline) {
+        const blobs = [];
+        for (const f of entryId ? left : files) blobs.push(await shrink(f));
+        if (!(await keep({ kind: 'entry', taskId: t.id, text, files: blobs, clientId: cid, ...(entryId ? { entryId, photoNo: e.photoNo || 0 } : {}) }))) return KEEP_FAIL;
+        clear();
+        return '';
+      }
+      return fail(e); // the words stay in the box
+    } finally { delete state.sending[key]; reload(); }
+  }
+  async function deleteEntry(e) {
+    if (!ask.confirm('Remove this entry (and its photos)?')) return;
+    try { await api('entry.delete', { id: e.id }); toast('Removed'); reload(); } catch (ex) { const m = fail(ex); if (m) toast(m, 5000); }
+  }
+
   async function sendMessage(taskId) {
     const key = 'm' + taskId;
     const text = state.msgDrafts[taskId] || '';
@@ -457,8 +495,9 @@ export function createStaff(opts) {
       const out = await api('project.addStep', { projectRef: ref, title, clientId });
       if (out && out.task) state.knownIds.add(out.task.id); // my own step: never told to me as news
       delete ids.step[ref]; typedOn();
-      toast('➕ Step added. Your manager sees it in the project too.');
+      toast('➕ Step added — add its photos here. Your manager sees it in the project too.');
       reload();
+      if (out && out.task) open('task:' + out.task.id); // the new step opens: its photos (e.g. each test step) go on at once
       return '';
     } catch (e) {
       if (e.offline) {
@@ -599,7 +638,7 @@ export function createStaff(opts) {
     } catch { /* try again next time */ } finally { liveBusy = false; }
   }
 
-  const act = { sendUpdate, addPhotos, paste, search, liveCheck, sendMessage, sendMessagePhoto, editMessage, deleteMessage, addStep, suggest, changePassword, openFile, notifyOn, notifyOff, flush, open, show, back, reload };
+  const act = { sendUpdate, sendEntry, deleteEntry, addPhotos, paste, search, liveCheck, sendMessage, sendMessagePhoto, editMessage, deleteMessage, addStep, suggest, changePassword, openFile, notifyOn, notifyOff, flush, open, show, back, reload };
 
   // ---------------------------------------------------------------- screens
 
@@ -788,14 +827,19 @@ export function createStaff(opts) {
             h('span', { class: 'prow-text' }, h('span', { class: 'prow-name' }, x.title), h('span', { class: 'prow-next' }, '⏳ Waiting to send')))))),
         s.length || waiting.length ? null : h('p', { class: 'empty-list' }, 'No suggestions yet. Tap 💡 Suggest a task in the menu.')];
     } else {
-      const sent = d.tasks.filter((t) => t.today).length;
+      const due = d.tasks.filter((t) => t.kind !== 'log'); // (📒 records are never "to send": they are not counted)
+      const sent = due.filter((t) => t.today).length;
       body = [
         d.stale ? h('p', { class: 'empty-list' }, `📴 Saved copy from ${fmtDay(d.today)} — today's updates are not shown yet.`) : null,
-        sec(`${fmtDay(td)} · ${sent} of ${d.tasks.length} sent`, h('span', { class: 'tag' }, `by ${d.fillBy}`)),
+        sec(`${fmtDay(td)} · ${sent} of ${due.length} sent`, h('span', { class: 'tag' }, `by ${d.fillBy}`)),
         d.tasks.length ? stageCut(d.tasks).bar : null,
         h('ul', { class: 'plist' }, stageCut(d.tasks).list.map((t) => {
           const waiting = !!waitingFor(t.id);
           const late = t.repeat === 'once' && t.dueDate && t.dueDate < td;
+          if (t.kind === 'log') { // 📒 a record: how many entries today; never red
+            const n = t.entriesToday || 0, wait = state.outbox.filter((x) => x.kind === 'entry' && x.taskId === t.id).length;
+            return row(t, [t.project, wait ? `⏳ ${wait} waiting to send` : n ? `📒 ${n} entr${n === 1 ? 'y' : 'ies'} today` : '📒 Record · add entries when something happens'].filter(Boolean).join(' · '), n || wait ? 'green' : 'grey');
+          }
           const sub = waiting ? '⏳ Waiting to send' : t.today ? `✓ Sent ${fmtTime(t.today.at)}${t.today.state === 'stuck' ? ' · stuck' : t.today.state === 'finished' ? ' · finished' : ''}`
             : [t.project, repeatLabel(t, td)].filter(Boolean).join(' · ') || 'Send today\'s update';
           // the same dots as the owner's Today: green = sent today, yellow = written (waits to send), red = not yet
@@ -812,7 +856,24 @@ export function createStaff(opts) {
   const chips = (t, td) => chipsFor(t, td);
   const files = (t) => filesBlock(t, { pic, openFile });
 
+  /** 📒 A record: "Add an entry" — a line, up to 5 photos, Add (as many as needed in a day). */
+  function entryCard(t) {
+    if (t.status !== 'open') return null;
+    const picked = state.entryFiles[t.id] || [];
+    const err = errLine('err-e' + t.id);
+    const pick = h('input', { type: 'file', accept: 'image/*', multiple: true, class: 'visually-hidden', onChange: (e, el) => { state.entryFiles[t.id] = [...picked, ...el.files].slice(0, 5); el.value = ''; render(); } });
+    return todayBox(h('div', { class: 'update-form loose entry-form' },
+      h('span', { class: 'small muted' }, '📒 Add an entry whenever something happens (as many as you need).'),
+      h('textarea', { key: 'up-' + t.id, rows: 2, placeholder: 'What happened? e.g. PO sent · dispatch Monday · 200 kg received', value: state.entryDrafts[t.id] || '', onInput: (e, el) => { state.entryDrafts[t.id] = el.value; err.clear(); } }),
+      picked.length ? h('span', { class: 'small muted' }, `📷 ${picked.length} photo${picked.length === 1 ? '' : 's'} ready `, h('button', { class: 'link small', onClick: () => { delete state.entryFiles[t.id]; render(); } }, 'Remove')) : null,
+      err,
+      h('div', { class: 'row' },
+        h('button', { class: 'btn primary small', disabled: state.sending['e' + t.id] ? true : undefined, onClick: () => sendEntry(t).then((m) => err.say(m)) }, state.sending['e' + t.id] ? 'Adding…' : '+ Add entry'),
+        picked.length < 5 ? h('label', { class: 'btn small' }, '📷 Add photo', pick) : null)));
+  }
+
   function updateCard(t) {
+    if (t.kind === 'log') return entryCard(t); // 📒 a record: entries, not one update a day
     const waiting = waitingFor(t.id);
     if (waiting && !state.editing[t.id]) { // (the owner's box with the orange "being changed" border)
       return todayBox(h('div', { class: 'update-form loose editing' },
@@ -891,9 +952,13 @@ export function createStaff(opts) {
       t.details ? h('p', { class: 'pre muted' }, t.details) : null,
       files(t),
       messages(t.id, comments),
-      t.status === 'suggested' || (t.status !== 'open' && !updates.length) ? updateCard(t) : diary(t, updates, td, updateCard(t)),
+      t.kind === 'log' ? [entryCard(t), logbookBlock({ entries: state.detail.entries || [], waiting: state.outbox.filter((x) => x.kind === 'entry' && x.taskId === t.id), photos, meId: state.user.id, td, onDelete: deleteEntry })] // 📒 the logbook
+        : t.status === 'suggested' || (t.status !== 'open' && !updates.length) ? updateCard(t) : diary(t, updates, td, updateCard(t)),
     ];
   }
+
+  /** " · 📷 3": the photos on a step (its newest updates), e.g. each step of a test. */
+  const pics = (t) => { const n = ((t.today && t.today.photos) || []).length + ((t.last && t.last.photos) || []).length; return n ? ` · 📷 ${n}` : ''; };
 
   function projectPage() {
     const pr = myProjects(state.data).find((x) => x.ref === state.sel.slice(8));
@@ -904,12 +969,12 @@ export function createStaff(opts) {
     const ref = state.sel.slice(8);
     const waiting = state.outbox.filter((x) => x.kind === 'step' && x.projectRef === ref);
     return [
-      done.length ? [sec(`✓ ${done.length} done`), h('ul', { class: 'plist' }, done.map((t, i) => row(t, `Step ${i + 1} · done ${t.doneAt ? fmtDay(t.doneAt) : ''}`, 'green')))] : null,
+      done.length ? [sec(`✓ ${done.length} done`), h('ul', { class: 'plist' }, done.map((t, i) => row(t, `Step ${i + 1} · done ${t.doneAt ? fmtDay(t.doneAt) : ''}${pics(t)}`, 'green')))] : null,
       !pr ? h('p', { class: 'muted' }, done.length ? 'All your steps are done ✓. Your manager decides what comes next.' : 'This project is not on your list any more.')
         : [h('p', { class: 'muted' }, pr.real.length ? 'Do the steps in order. Every day, open the current step and send what you did. Found more work? Add a step below.'
           : 'No steps yet. Add the steps you will do, in order. Until then, send your daily update on the whole project.'),
         block('Steps', h('ul', { class: 'plist' }, (pr.real.length ? pr.real : pr.steps).map((t, i) => row(t,
-          !pr.real.length ? sentSub(t) : t === pr.current ? `Step ${k + i + 1} · current · ${sentSub(t)}` : `Step ${k + i + 1} · next${t.fromStaff ? ' · added by you' : ''}`,
+          (!pr.real.length ? sentSub(t) : t === pr.current ? `Step ${k + i + 1} · current · ${sentSub(t)}` : `Step ${k + i + 1} · next${t.fromStaff ? ' · added by you' : ''}`) + pics(t),
           t === pr.current || !pr.real.length ? (t.today ? 'green' : 'red') : 'grey')),
           waiting.map((x) => h('li', { class: 'prow', key: 'wstep-' + x.id }, h('span', { class: 'quick-tick-space' }), h('div', { class: 'prow-btn' }, h('span', { class: 'dot grey' }),
             h('span', { class: 'prow-text' }, h('span', { class: 'prow-name' }, x.title), h('span', { class: 'prow-next' }, '⏳ Waiting to send')))))),
@@ -977,11 +1042,11 @@ export function createStaff(opts) {
     else if (sel === 'password') { title = 'Change password'; body = passwordPage(); }
     else if (sel === 'notify') { title = '🔔 Notifications'; body = notifyPage(); }
     else if (sel.startsWith('folder:')) { const f = folders().folders.find((x) => x.key === sel.slice(7)); title = '📂 ' + (f ? f.name : 'Project'); body = folderPage(f); }
-    else if (!state.detail) body = h('p', { class: 'muted' }, state.detailFailed ? [state.detailFailed, ' ', h('button', { class: 'link', onClick: loadDetail }, 'Try again')] : 'Loading…');
+    else if (!state.detail || (sel.startsWith('task:') && !state.detail.task)) body = h('p', { class: 'muted' }, state.detailFailed ? [state.detailFailed, ' ', h('button', { class: 'link', onClick: loadDetail }, 'Try again')] : 'Loading…');
     else if (sel.startsWith('task:')) {
       const t = state.detail.task;
       title = t.title; body = taskPage();
-      dot = t.status !== 'open' ? 'grey' : t.today ? 'green' : waitingFor(t.id) ? 'yellow' : 'red';
+      dot = t.status !== 'open' ? 'grey' : t.today ? 'green' : waitingFor(t.id) ? 'yellow' : t.kind === 'log' ? 'grey' : 'red'; // (📒 a record is never red)
       const ids = navIds(), i = ids.indexOf(t.id); // ‹ › one by one, as on the owner's task page
       const go = (k) => (k >= 0 && k < ids.length ? () => open('task:' + ids[k]) : undefined);
       actions = i < 0 ? null : [
@@ -1002,7 +1067,7 @@ export function createStaff(opts) {
     const go2 = (key) => () => { open('task:' + t.id); if (key) focusLater(key); };
     return menuBox(state, render, t.title, [
       ['↗', 'Open', go2()],
-      t.status === 'suggested' ? null : ['📝', t.today ? 'Add to today\'s update' : 'Write today\'s update', go2('up-' + t.id)],
+      t.status === 'suggested' ? null : ['📝', t.kind === 'log' ? 'Add an entry' : t.today ? 'Add to today\'s update' : 'Write today\'s update', go2('up-' + t.id)],
       ['💬', 'Send a message', go2('msg-' + t.id)],
     ]);
   }
@@ -1019,7 +1084,7 @@ export function createStaff(opts) {
   /** The number on the app icon (installed app): tasks still to send today. */
   function setBadge() {
     if (!state.data || typeof navigator === 'undefined' || !navigator.setAppBadge) return;
-    const n = (state.data.tasks || []).filter((t) => !t.today).length;
+    const n = (state.data.tasks || []).filter((t) => !t.today && t.kind !== 'log').length; // (📒 a record is never "to send")
     if (n === badge) return;
     badge = n;
     (n ? navigator.setAppBadge(n) : navigator.clearAppBadge()).catch(() => {});

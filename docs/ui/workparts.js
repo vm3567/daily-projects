@@ -56,10 +56,10 @@ export function chipsFor(t, td, { who = false } = {}) {
   return h('div', { class: 'info-chips' },
     who && t.assignee ? c(`👤 ${t.assignee.name}`, ' team') : null,
     t.project && t.project !== t.title ? c(`📁 ${t.project}`) : null, // (not when it only says the task's own name again)
-    c(repeatLabel({ ...t, dueDate: null }, td)),
+    t.kind === 'log' ? c('📒 Record') : c(repeatLabel({ ...t, dueDate: null }, td)), // (a record has no "every day": entries come when something happens)
     t.dueDate ? c(late ? `⏰ Late — was by ${fmtDay(t.dueDate)}` : `By ${fmtDay(t.dueDate)}`, late ? ' bad' : '') : null,
     t.needsPhoto ? c('📷 Photo to finish') : null,
-    t.status === 'done' ? c('✓ Done', ' good') : t.status === 'cancelled' ? c('Cancelled', ' bad') : t.status === 'suggested' ? c('💡 Suggestion') : t.today ? c('✓ Sent today', ' good') : null);
+    t.status === 'done' ? c('✓ Done', ' good') : t.status === 'cancelled' ? c('Cancelled', ' bad') : t.status === 'suggested' ? c('💡 Suggestion') : t.kind === 'log' ? (t.entriesToday ? c(`✓ ${t.entriesToday} entr${t.entriesToday === 1 ? 'y' : 'ies'} today`, ' good') : null) : t.today ? c('✓ Sent today', ' good') : null);
 }
 
 /**
@@ -186,3 +186,26 @@ export function phoneBack(win, isOpen, close) {
     else if (!isOpen() && marked()) { skip++; win.history.back(); }
   };
 }
+
+/**
+ * 📒 A record's logbook: its entries by day, newest first — the time, the line, who (when it is not you), its photos.
+ * waiting = entries kept on the phone (no internet yet). onDelete(entry) on your own entries of the last 2 days.
+ */
+export function logbookBlock({ entries = [], waiting = [], photos, meId = 0, td = '', onDelete = null }) {
+  const days = [];
+  for (const e of entries) { const d = e.day || String(e.at).slice(0, 10); if (!days.length || days[days.length - 1].day !== d) days.push({ day: d, list: [] }); days[days.length - 1].list.push(e); }
+  const recent = (e) => !td || (e.day || String(e.at).slice(0, 10)) >= addDaysIso(td, -2);
+  return h('div', { class: 'logbook', key: 'logbook' },
+    waiting.map((w) => h('div', { class: 'log-entry waiting', key: 'lw-' + w.id }, h('span', { class: 'tag remind' }, '⏳ Waiting to send'), ' ', w.text, (w.files || []).length ? h('span', { class: 'muted small' }, ` 📷 ${w.files.length}`) : null)),
+    !entries.length && !waiting.length ? h('p', { class: 'muted small' }, 'No entries yet.') : null,
+    days.map((d) => h('div', { class: 'log-day', key: 'ld-' + d.day },
+      h('div', { class: 'log-day-head' }, d.day === td ? 'Today' : fmtDay(d.day)),
+      d.list.map((e) => h('div', { class: 'log-entry', key: 'le-' + e.id },
+        h('div', { class: 'log-line' },
+          h('span', { class: 'muted small log-time' }, fmtTime(e.at)),
+          h('span', { class: 'pre' }, e.text),
+          e.byId !== meId && e.by ? h('span', { class: 'muted small' }, ` · ${e.by}`) : null,
+          onDelete && e.byId === meId && recent(e) ? h('button', { class: 'link small danger', type: 'button', title: 'Remove this entry', onClick: () => onDelete(e) }, '✕') : null),
+        photos ? photos('photo', e.photos) : null)))));
+}
+const addDaysIso = (day, n) => new Date(Date.parse(day + 'T00:00:00Z') + n * 86400e3).toISOString().slice(0, 10);
