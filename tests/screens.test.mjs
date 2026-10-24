@@ -1060,7 +1060,7 @@ test('📂 Projects page: a click on a project row selects it and stays on the p
   assert.match(mainsSrc, /ctx\.ui\.view === 'mains' && ctx\.showHere \? ctx\.showHere\(c\.id\)/, 'a task in the TASKS table while on the Projects page');
   const here = app.slice(app.indexOf('  showHere: (id) => {'), app.indexOf('  openProject: (id) => {'));
   assert.match(here, /select\(id\);/);
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-49'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-50'/, 'phones get the new copy');
 });
 
 test('📂 project page: "✕ Remove" on a task row takes it out of this project only — the task is kept (and stays in its other projects)', () => {
@@ -1846,7 +1846,7 @@ test('🔌 app wiring (app.js): "🔌 From apps" after ✉ Replies with the wait
   assert.match(app, /function go\(view\) \{\n\s*if \(view !== 'settings'\) forgetOnce\(\);/);
   assert.match(app, /if \(onServer\) loadApps\(appsCtx, force \|\| ui\.view === 'apps'\);/);
   assert.match(app, /replies: '✉ Replies', apps: '🔌 From apps', mains: '📂 Projects' \}\[ui\.view\]/, 'its page title');
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-49'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-50'/, 'phones get the new copy');
 });
 
 test('🔌 the PHP connector (team/connector/worktask-connector.php): the same text the app downloads, placeholders only (no real key), valid PHP 7.4+ (php -l), with wt_push / wt_withdraw / wt_decisions / wt_receive_decision', async () => {
@@ -4501,10 +4501,14 @@ test('Review3 10 (owner, 24 Oct): the menu shows the right key letters: A for �
   assert.match(APP, /const MENU_KEYS = \{ today: 'T', all: 'A', dashboard: 'B', people: 'P', diary: 'D', inbox: 'I', replies: 'E', mains: 'M' \}/);
 });
 
-test('Review3 11 (owner, 24 Oct): the stage filter buttons stay on one line (scroll sideways if needed)', async () => {
+test('Review3 11 + Review5 1 (owner, 24 Oct): the stage filter buttons stay on one line on a phone (scroll sideways); on a computer they wrap, so "Done 0" can be clicked', async () => {
   const { readFileSync } = await import('node:fs');
   const css = readFileSync(new URL('../docs/styles.css', import.meta.url), 'utf8');
-  assert.match(css, /\.stage-filters \{ display: flex; flex-wrap: nowrap;[^}]*overflow-x: auto;/);
+  // (owner asked 24 Oct, round 5: one line only on a phone; on a computer it hid "Done 0" with no way to scroll by mouse)
+  assert.match(css, /\.stage-filters \{ display: flex; flex-wrap: wrap;[^}]*\}/);
+  assert.ok(!/\.stage-filters \{ display: flex; flex-wrap: wrap;[^}]*overflow-x/.test(css), 'no hidden overflow on a computer');
+  assert.match(css, /@media \(max-width: 760px\) \{ \.stage-filters \{ flex-wrap: nowrap; overflow-x: auto;/);
+  assert.match(css, /\.stage-filter \{ font-size: 12px; padding: 3px 6px;/, 'small enough that all five fit the list on a computer');
   assert.match(css, /\.stage-filters > \* \{ flex: none; white-space: nowrap; \}/);
 });
 
@@ -4675,4 +4679,94 @@ test('Review4 9 (owner, 24 Oct): the Inbox 🗑 sits in the item\'s top-right co
   const css = readFileSync(new URL('../docs/styles.css', import.meta.url), 'utf8');
   assert.match(css, /\.inbox-actions \.inbox-del \{ position: absolute; top: 6px; right: 6px; \}/);
   assert.match(readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8'), /class: 'icon inbox-del', title: 'Delete'/);
+});
+
+test('Review5 3 + 5 (owner, 24 Oct): staff "My suggestions" points at the button above (not the menu); "Coming next" says nothing twice', async () => {
+  const { s } = fakeStaff2({ 'my.today': () => ({ ...staffData(), other: [], suggestions: [] }) });
+  s.start(); await tick(); await tick();
+  s.act.show('sugg');
+  let text = s.view().textContent;
+  assert.match(text, /No suggestions yet\. Tap 💡 Suggest a task above\./);
+  assert.ok(!text.includes('in the menu'));
+  assert.ok(!/0 suggestions/i.test(text), 'said once');
+  s.act.show('next');
+  text = s.view().textContent;
+  assert.match(text, /Nothing coming next\./);
+  assert.ok(!/0 coming next/i.test(text), text.slice(0, 300));
+});
+
+test('Review5 7 (owner, 24 Oct): changing a password asks for the new one twice, on the staff app and the team pages; two different ones are not sent', async () => {
+  const { s, calls } = fakeStaff2();
+  s.start(); await tick(); await tick();
+  s.act.open('password'); await tick();
+  const v = s.view();
+  const box = (k) => rFind(v, (n) => n.nodeName === 'INPUT' && n.dataset && n.dataset.key === k);
+  assert.ok(box('pw-again'), 'the "again" box');
+  box('pw-old').__on.input({}, { value: 'old-pass-1' });
+  box('pw-new').__on.input({}, { value: 'new-pass-123' });
+  box('pw-again').__on.input({}, { value: 'new-pass-124' });
+  rFind(v, (n) => n.nodeName === 'BUTTON' && n.textContent === 'Change password').__on.click(); await tick(); await tick();
+  assert.ok(!calls.some((c) => c.a === 'password'), 'not sent');
+  assert.match(s.view().textContent, /The two new passwords are not the same/);
+  const { readFileSync } = await import('node:fs');
+  assert.ok(readFileSync(new URL('../docs/ui/team.js', import.meta.url), 'utf8').includes("key: 'pw-again'"), 'team pages too');
+});
+
+test('Review5 4 (owner, 24 Oct): notification words fit the device: "this computer" and address-bar steps on a computer, the app-icon steps on a phone (staff app and team pages)', async () => {
+  const wp = await import('../docs/ui/workparts.js');
+  assert.match(wp.blockedSteps(true).join(' '), /address bar/);
+  assert.ok(!wp.blockedSteps(true).join(' ').includes('press and hold'));
+  assert.match(wp.blockedSteps(false).join(' '), /press and hold the Task List icon/);
+  assert.equal(wp.HERE, 'this phone', 'no mouse here (tests): a phone');
+  const { readFileSync } = await import('node:fs');
+  for (const f of ['staff.js', 'team.js']) {
+    const src = readFileSync(new URL('../docs/ui/' + f, import.meta.url), 'utf8');
+    assert.ok(!/'[^'\n]*this phone[^'\n]*'/.test(src.replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '')), f + ': no fixed "this phone" words');
+    assert.match(src, /blockedSteps\(\)\.map/, f + ': blocked steps for this device');
+  }
+});
+
+test('Review5 6 + 9 (owner, 24 Oct): Give a task — the one-line example uses a real team member; files are picked with the app\'s own button', async () => {
+  const wp = await import('../docs/ui/workparts.js');
+  assert.equal(wp.quickExample([{ name: 'Ruturaj Patil', active: true }]), 'Ruturaj: send kiln photos by Friday');
+  assert.equal(wp.quickExample([{ name: 'Old One', active: false }, { name: 'Mira', active: true }]), 'Mira: send kiln photos by Friday');
+  assert.equal(wp.quickExample([]), 'Name: send kiln photos by Friday');
+  assert.equal(wp.quickExample([{ id: 1, name: 'Venkat', role: 'admin' }, { id: 2, name: 'Asha', role: 'admin' }, { id: 3, name: 'Ruturaj', role: 'staff' }], 1), 'Ruturaj: send kiln photos by Friday', 'a staff member, never the writer');
+  const { t } = fakeTeam();
+  await t.start({ sel: 'give' }); await tick(); await tick();
+  const v = t.view();
+  const file = rFind(v, (n) => n.nodeName === 'INPUT' && n.getAttribute && n.getAttribute('type') === 'file' && n.dataset.key === 'g-files');
+  assert.ok(file && /visually-hidden/.test(file.className), 'the browser button is hidden');
+  assert.match(file.parentNode.className, /\bbtn\b/, 'inside the app\'s button');
+  assert.match(file.parentNode.textContent, /📎 Add files/);
+  assert.ok(v.textContent.includes('None chosen'));
+  const quick = rFind(v, (n) => n.nodeName === 'INPUT' && n.dataset && n.dataset.key === 'quick-in');
+  assert.match(quick.getAttribute('placeholder'), /^\S+: send kiln photos by Friday$/, 'a name from the team list');
+  const { readFileSync } = await import('node:fs');
+  assert.match(readFileSync(new URL('../docs/ui/team.js', import.meta.url), 'utf8'), /placeholder: quickExample\(people, state\.user\.id\)/, 'not a fixed "Valar"');
+});
+
+test('Review5 8 + 10 (owner, 24 Oct): the person page keeps "Remove" apart from "Send pending list" (small, with space), no gap under the account box; Team Settings has no line above its first block', async () => {
+  const s = sampleState();
+  const el = renderPerson(fakeCtx(s, { person: 'r' }));
+  const rm = rFind(el, (n) => n.nodeName === 'BUTTON' && n.textContent === 'Remove');
+  assert.match(rm.className, /\bperson-remove\b/);
+  assert.ok(rFind(el, (n) => /\blinked-note\b/.test(n.className || '')));
+  const { readFileSync } = await import('node:fs');
+  const css = readFileSync(new URL('../docs/styles.css', import.meta.url), 'utf8');
+  const cut = css.indexOf('the staff view (one app');
+  for (const rule of [/\.state-buttons \.person-remove \{ margin-left: 28px;/, /\.report > \.block:first-child \{ border-top: 0;/, /\.meta-line\.linked-note \{ padding: 0 0 8px; \}/, /\.team-account\.block \{ padding-bottom: 4px; \}/]) {
+    const m = rule.exec(css);
+    assert.ok(m && m.index < cut, String(rule));
+  }
+});
+
+test('Review5 11 (owner, 24 Oct): each sign-in box is tied to its words for screen readers (id, for, aria-label)', async () => {
+  const card = signMod.signInCard({ post: async () => ({}), onSignedIn: () => {} });
+  for (const [name, label] of [['username', 'Username'], ['password', 'Password']]) {
+    const inp = rFind(card, (n) => n.nodeName === 'INPUT' && n.getAttribute('name') === name);
+    assert.equal(inp.getAttribute('aria-label'), label);
+    assert.equal(inp.parentNode.getAttribute('for'), inp.id);
+    assert.equal(inp.id, 'sign-' + name);
+  }
 });

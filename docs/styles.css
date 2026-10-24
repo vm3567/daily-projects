@@ -1251,10 +1251,11 @@ button.stage-chip.tap { cursor: pointer; font-size: 12.5px; padding: 3px 10px; }
 .stage-wait input { flex: 1; min-width: 0; }
 .stage-picks { display: flex; flex-wrap: wrap; gap: 6px; }
 .stage-picks .chip.on { background: var(--brand-soft); border-color: var(--brand); }
-.stage-filters { display: flex; flex-wrap: nowrap; gap: 5px; margin: 6px 0; overflow-x: auto; scrollbar-width: none; } /* (one line: "Done 0" never alone on a second line, owner 24 Oct) */
+.stage-filters { display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 0; } /* (a computer: they wrap, so "Done 0" can be clicked with a mouse: owner, 24 Oct) */
+@media (max-width: 760px) { .stage-filters { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; } } /* (a phone: one line, swiped sideways) */
 .stage-filters::-webkit-scrollbar { display: none; }
 .stage-filters > * { flex: none; white-space: nowrap; }
-.stage-filter { font-size: 12.5px; padding: 3px 8px; border-radius: 99px; border: 1px solid var(--line); background: var(--bg); color: var(--text); cursor: pointer; }
+.stage-filter { font-size: 12px; padding: 3px 6px; border-radius: 99px; border: 1px solid var(--line); background: var(--bg); color: var(--text); cursor: pointer; }
 .stage-filter.on { background: var(--brand); border-color: var(--brand); color: #fff; }
 /* (no dark colours: the app's pages are light only, so the chips stay light too) */
 
@@ -1307,6 +1308,15 @@ button.stage-chip.tap { cursor: pointer; font-size: 12.5px; padding: 3px 10px; }
   .layout.staff .board-counts { flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; margin: 8px 0; padding: 0 14px 4px; }
   .layout.staff .board-counts .chip { flex: none; white-space: nowrap; padding: 4px 10px; min-height: 34px; }
 }
+/* Review 5 (owner, 24 Oct): no line above a page's first block (Team Settings); the person page's account box closer to
+   the note under it; "Remove" kept apart from "Send pending list"; the Give-a-task file picker as the app's own button */
+.report > .block:first-child { border-top: 0; padding-top: 4px; }
+.team-account.block { padding-bottom: 4px; }
+.meta-line.linked-note { padding: 0 0 8px; }
+.state-buttons .person-remove { margin-left: 28px; background: none; }
+.file-pick { gap: 6px; }
+.file-pick .btn { cursor: pointer; }
+
 /* ---------------------------------------------------------------- the staff view (one app: ui/staff.js)
    Staff see this app's own design. Only the few pieces this app had no style for, and only inside the staff view
    (.layout.staff), so the owner's screens never change. */

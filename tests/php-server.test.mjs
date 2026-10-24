@@ -3191,3 +3191,16 @@ test('Review3 15 (owner, 24 Oct): Follow-up shows a 📒 record\'s newest line a
   assert.match(row.lastUpdate.note, /Truck left \(\+2 more\)$/, row.lastUpdate.note);
   assert.ok(!row.lastUpdate.note.includes('PO sent'));
 });
+
+test('Review5 2 (owner, 24 Oct): a 📒 record is on the person\'s People list and in their morning email (it is never "due", but it is their work)', { skip }, async () => {
+  const t = (await call('task.save', { assigneeId: id.suresh, title: 'Kiln log record', repeat: 'once', kind: 'log' }, tok.boss)).task;
+  const p = (await call('people.morning', {}, tok.boss)).people.find((x) => x.id === id.suresh);
+  const item = p.items.find((x) => x.taskId === t.id);
+  assert.ok(item, 'on the People list');
+  assert.equal(item.repeat, '📒 Record');
+  assert.equal(item.lateSince, null, 'never late');
+  const mail = await call('morning.mail', { userId: id.suresh }, tok.boss);
+  assert.ok(mail.items.some((x) => x.taskId === t.id), 'in the morning email too');
+  await call('task.status', { id: t.id, status: 'cancelled' }, tok.boss);
+  assert.ok(!(await call('people.morning', {}, tok.boss)).people.find((x) => x.id === id.suresh).items.some((x) => x.taskId === t.id), 'a cancelled record is not');
+});

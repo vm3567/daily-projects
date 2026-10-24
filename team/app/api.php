@@ -945,11 +945,11 @@ function morning_items(int $who, string $day): array {
   $projects = []; $plain = [];
   foreach ($tasks as $t) {
     if ($t['seq'] !== null && $t['projectRef']) $projects[$t['projectRef']][] = $t;
-    elseif ($t['dueToday'] || $late($t) || $t['stuck']) $plain[] = $t;
+    elseif ($t['dueToday'] || $late($t) || $t['stuck'] || $t['kind'] === 'log') $plain[] = $t; // (a 📒 record is never "due", but it is still their work: owner, 24 Oct)
   }
   $ups = last_updates(array_map(fn($t) => $t['id'], $plain), array_keys($projects));
   $last = fn(string $key): ?array => $ups[$key] ?? null;
-  $repeat = fn($t) => $t['repeat'] === 'daily' ? 'Daily' : ($t['repeat'] === 'weekly' ? 'Weekly (' . substr(WEEKDAYS[$t['weekday'] ?? 1], 0, 3) . ')' : '');
+  $repeat = fn($t) => $t['kind'] === 'log' ? '📒 Record' : ($t['repeat'] === 'daily' ? 'Daily' : ($t['repeat'] === 'weekly' ? 'Weekly (' . substr(WEEKDAYS[$t['weekday'] ?? 1], 0, 3) . ')' : ''));
   $out = [];
   foreach ($projects as $ref => $list) {
     $cur = null;

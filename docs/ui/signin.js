@@ -6,7 +6,8 @@ import { h } from './dom.js';
 
 const card = (onSubmit, ...kids) => h('form', { class: 'key-card sign-card', onSubmit },
   h('img', { src: 'icons/icon-192.png', alt: '', width: 64, height: 64 }), ...kids);
-const field = (label, input) => h('label', { class: 'sign-field' }, h('span', null, label), input);
+// (each box carries its own name too, so screen readers say "Username", "Password": owner, 24 Oct)
+const field = (label, input) => { input.id = input.id || 'sign-' + input.getAttribute('name'); input.setAttribute('aria-label', label); return h('label', { class: 'sign-field', for: input.id }, h('span', null, label), input); };
 
 /**
  * Username and password. onSignedIn({ token, user }) once the server says yes.

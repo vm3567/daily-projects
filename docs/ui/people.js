@@ -339,8 +339,8 @@ export function renderPerson(ctx) {
         ctx.canGoBack() ? h('button', { class: 'btn small', title: 'Back (Backspace)', onClick: () => ctx.goBack() }, '← Back') : null,
         (() => { const pv = ctx.neighbourPerson(-1); return h('button', { class: 'btn small', disabled: pv ? undefined : true, title: pv ? `Previous: ${pv.name} (←)` : '', onClick: () => pv && ctx.selectPerson(pv.id) }, '‹'); })(),
         (() => { const nx = ctx.neighbourPerson(1); return h('button', { class: 'btn small', disabled: nx ? undefined : true, title: nx ? `Next person with open work: ${nx.name} (→)` : 'No more people with open work', onClick: () => nx && ctx.selectPerson(nx.id) }, nx ? `${nx.name.split(' ')[0]} ›` : '›'); })(),
-        h('button', {
-          class: 'btn danger',
+        h('button', { // (kept apart from "Send pending list", so it is not hit by mistake: owner, 24 Oct)
+          class: 'btn small danger person-remove', title: `Remove ${person.name} from People`,
           onClick: () => {
             if (!confirm(`Remove ${person.name} from People?\n\nSteps keep the text "@${person.name}", but are no longer linked.`)) return;
             store.dispatch('deletePerson', { personId: person.id });
@@ -366,7 +366,7 @@ export function renderPerson(ctx) {
         },
       }))),
     teamAccountBox(ctx, person, link),
-    h('p', { class: 'meta-line static' }, 'Linked by @name in steps, or by "Waiting on".'),
+    h('p', { class: 'meta-line static linked-note' }, 'Linked by @name in steps, or by "Waiting on".'),
     teamSection(ctx, person, link),
     taskBox(ctx, person, giveTo(ctx, person, link)),
     list(`Waiting on ${first}`, waiting, ctx, `Nothing waiting on ${first}. Tick "Waiting" on a step and pick ${first}.`, giveTo(ctx, person, link)),

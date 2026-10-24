@@ -9,10 +9,10 @@ import { h, morph, errLine } from './dom.js';
 import { createOutbox } from './staffbox.js';
 import { stageChip } from './stage.js';
 import { openMenuAt, menuBox, focusLater } from './rowmenu.js';
-import { fmtDay, fmtTime, LONG_DAYS, stateTag, newClientId, istDay, daysBetween, repeatLabel, block, sec, taskRow, chipsFor, makePics, photosRow, filesBlock, diaryBlock, messagesBlock, phoneBack, logbookBlock, bottomBar, hitLines } from './workparts.js';
+import { fmtDay, fmtTime, LONG_DAYS, stateTag, newClientId, istDay, daysBetween, repeatLabel, block, sec, taskRow, chipsFor, makePics, photosRow, filesBlock, diaryBlock, messagesBlock, phoneBack, logbookBlock, bottomBar, hitLines, HERE, blockedSteps, quickExample } from './workparts.js';
 
 const KEEP_FAIL = 'Could not keep this on the phone. Try again when online.';
-const OFFLINE_KEPT = '📴 Saved on this phone — it will be sent when you are online';
+const OFFLINE_KEPT = `📴 Saved on ${HERE} — it will be sent when you are online`;
 const WIDE = ['report', 'people', 'settings']; // pages that fill the screen (no page on the right)
 /** Work Task's colours as the owner's dots (red, yellow, green, grey). */
 const dotOf = (c) => (c === 'orange' ? 'yellow' : c);
@@ -485,7 +485,7 @@ export function createTeam(opts) {
 
   async function notifyOn() {
     if (!push) return;
-    try { if ((await push.turnOn()) === 'on') news('🔔 Notifications are on', 'Your team\'s updates, Stuck, Finished, messages and suggestions come to this phone.', null); render(); }
+    try { if ((await push.turnOn()) === 'on') news('🔔 Notifications are on', `Your team's updates, Stuck, Finished, messages and suggestions come to ${HERE}.`, null); render(); }
     catch (e) { toast('Could not turn on notifications: ' + e.message, 6000); }
   }
 
@@ -556,7 +556,7 @@ export function createTeam(opts) {
     if ((s !== 'default' && s !== 'granted') || state.pushLater) return null;
     try { if (Number(localStorage.getItem('wt.pushLater') || 0) > Date.now() || localStorage.getItem('wt.pushOff.' + state.user.id)) return null; } catch { /* blocked */ }
     return h('div', { class: 'banner stack', key: 'push-banner' },
-      h('span', null, '🔔 Get a message on this phone when your team sends an update or a message — like email.'),
+      h('span', null, `🔔 Get a message on ${HERE} when your team sends an update or a message — like email.`),
       h('div', { class: 'row' },
         h('button', { class: 'btn primary small', onClick: notifyOn }, 'Turn on'),
         h('button', { class: 'link', onClick: () => { try { localStorage.setItem('wt.pushLater', String(Date.now() + 3 * 86400000)); } catch { /* blocked */ } state.pushLater = true; render(); } }, 'Later')));
@@ -568,7 +568,7 @@ export function createTeam(opts) {
     return [
       pushBanner(),
       state.offline || n ? h('div', { class: 'offline-bar', key: 'offline' },
-        state.offline ? '📴 Offline — showing the last saved copy. What you send is kept on this phone and goes out when you are online.' : '',
+        state.offline ? `📴 Offline — showing the last saved copy. What you send is kept on ${HERE} and goes out when you are online.` : '',
         n ? h('strong', null, ` ⏳ ${n} waiting to send`) : null,
         n && !state.offline ? [' ', h('button', { class: 'link', onClick: () => flush() }, 'Send now')] : null) : null,
       state.notices.map((x, i) => h('div', { class: 'banner stack', key: 'n-' + i },
@@ -711,7 +711,7 @@ export function createTeam(opts) {
     if (r && !r.error) { const sig = JSON.stringify([r.person.id, r.title, r.dueDate]); if (q.sig !== sig) { q.sig = sig; q.cid = newClientId(); } } // one id per preview: a second tap gives it once
     return h('div', { class: 'stack staff-pad', key: 'quick' },
       h('div', { class: 'row quick-line' },
-        h('input', { key: 'quick-in', class: 'search', placeholder: 'Valar: send kiln photos by Friday', 'aria-label': 'Hand out work in one line', enterkeyhint: 'done', value: q.text, onInput: (e, el) => { q.text = el.value; render(); } }),
+        h('input', { key: 'quick-in', class: 'search', placeholder: quickExample(people, state.user.id), 'aria-label': 'Hand out work in one line', enterkeyhint: 'done', value: q.text, onInput: (e, el) => { q.text = el.value; render(); } }),
         listen() ? h('button', { class: 'chip' + (state.listening ? ' on' : ''), title: 'Say it', 'aria-label': 'Say it', onClick: sayIt }, '🎤') : null),
       !r ? null : r.error ? h('p', { class: 'warn', key: 'qerr2' }, r.error) : h('div', { class: 'banner stack', key: 'qcard' },
         h('div', null, h('span', { class: 'muted small' }, 'Task: '), h('strong', null, r.title)),
@@ -1084,7 +1084,11 @@ export function createTeam(opts) {
         f.how === 'once' ? h('label', null, 'By (date, optional)', h('input', { key: 'g-due', type: 'date', value: f.dueDate, onInput: set('dueDate') })) : null,
         h('label', null, 'Start on (optional — empty = today)', h('input', { key: 'g-start', type: 'date', min: td, value: f.startDate, onInput: set('startDate') })),
         h('label', { class: 'row' }, h('input', { key: 'g-photo', type: 'checkbox', checked: f.needsPhoto ? true : undefined, onChange: set('needsPhoto') }), ' 📷 Photo needed to finish'),
-        h('label', null, '📎 Instruction photos / PDF (optional)', h('input', { key: 'g-files', type: 'file', accept: 'image/*,application/pdf', multiple: true, onChange: (e, el) => { f.files = [...el.files]; } })),
+        h('div', { class: 'stack file-pick' }, h('span', null, '📎 Instruction photos / PDF (optional)'),
+          h('div', { class: 'row' }, // (the app's own button, not the browser's grey "Choose files": owner, 24 Oct)
+            h('label', { class: 'btn small' }, (f.files || []).length ? '📎 Change files' : '📎 Add files',
+              h('input', { key: 'g-files', type: 'file', accept: 'image/*,application/pdf', multiple: true, class: 'visually-hidden', onChange: (e, el) => { f.files = [...el.files]; render(); } })),
+            h('span', { class: 'muted small' }, (f.files || []).length ? (f.files || []).map((x) => x.name).join(', ') : 'None chosen'))),
         err,
         h('div', { class: 'row' },
           h('button', { class: 'btn primary small', onClick: () => saveTask({
@@ -1110,16 +1114,16 @@ export function createTeam(opts) {
 
   function notifyPage() {
     const s = push ? push.state() : 'no';
-    const parts = [h('p', null, 'You get a message on this phone, like new email, for:'),
+    const parts = [h('p', null, `You get a message on ${HERE}, like new email, for:`),
       h('ul', null, ['An update from your team (and when someone is Stuck or Finished)', 'A message or a suggestion from your team'].map((w) => h('li', null, w)))];
     if (s === 'on') {
-      parts.push(h('p', { class: 'ok' }, '✓ On for this phone.'), h('div', { class: 'row' },
+      parts.push(h('p', { class: 'ok' }, `✓ On for ${HERE}.`), h('div', { class: 'row' },
         h('button', { class: 'btn small', onClick: () => push.test().then(() => toast('🔔 Test sent. It comes in a few seconds.'), (e) => toast(e.message, 5000)) }, 'Send me a test'),
-        h('button', { class: 'btn small', onClick: async () => { await push.turnOff(); toast('Notifications are off for this phone.'); render(); } }, 'Turn off')));
+        h('button', { class: 'btn small', onClick: async () => { await push.turnOff(); toast(`Notifications are off for ${HERE}.`); render(); } }, 'Turn off')));
     } else if (s === 'default' || s === 'granted') parts.push(h('button', { class: 'btn primary small', onClick: notifyOn }, '🔔 Turn on notifications'));
     else if (s === 'denied') {
-      parts.push(h('p', { class: 'warn' }, 'Notifications are blocked for Task List on this phone. To allow them:'),
-        h('ol', null, h('li', null, 'Installed app: press and hold the app icon → App info → Notifications → turn on.'), h('li', null, 'In Chrome: tap ⋮ → Settings → Site settings → Notifications → worktask.in → Allow.'), h('li', null, 'Come back here and open this page again.')));
+      parts.push(h('p', { class: 'warn' }, `Notifications are blocked for Task List on ${HERE}. To allow them:`),
+        h('ol', null, blockedSteps().map((w) => h('li', null, w))));
     } else if (s === 'ios') {
       parts.push(h('p', { class: 'warn' }, 'On iPhone, notifications work only from the Home Screen app:'),
         h('ol', null, h('li', null, 'Open worktask.in in Safari.'), h('li', null, 'Tap Share → Add to Home Screen.'), h('li', null, 'Open it from the Home Screen and turn notifications on here.')));
@@ -1137,7 +1141,7 @@ export function createTeam(opts) {
       h('h2', null, title),
       state.view === 'search' ? null : h('button', { class: 'icon head-icon', title: 'Search', 'aria-label': 'Search', onClick: () => { go('search'); focusLater('team-search'); } }, '🔍', h('span', { class: 'icon-cap', 'aria-hidden': 'true' }, 'Find')), // (as on the owner's list; on a phone the menu has no search box)
       state.view === 'settings' ? null : h('button', { class: 'icon head-icon', title: 'Get latest', 'aria-label': 'Refresh', onClick: reload }, '↻', h('span', { class: 'icon-cap', 'aria-hidden': 'true' }, 'Refresh')));
-    if (!state.data) return h('div', { class: 'col-inner' }, head, bars(), h('p', { class: 'empty-list' }, state.loadFailed ? [state.loadFailed === 'You are offline. Try again when the internet is back.' ? 'No saved copy on this phone yet.' : state.loadFailed, ' ', h('button', { class: 'link', onClick: reload }, 'Try again')] : 'Loading…'));
+    if (!state.data) return h('div', { class: 'col-inner' }, head, bars(), h('p', { class: 'empty-list' }, state.loadFailed ? [state.loadFailed === 'You are offline. Try again when the internet is back.' ? `No saved copy on ${HERE} yet.` : state.loadFailed, ' ', h('button', { class: 'link', onClick: reload }, 'Try again')] : 'Loading…'));
     const body = state.view === 'followup' ? followupList() : state.view === 'tasks' ? tasksList() : state.view === 'projects' ? projectsList()
       : state.view === 'search' ? searchList() : state.view === 'report' ? reportPage() : state.view === 'people' ? peoplePage() : state.view === 'settings' ? settingsPage() : teamList();
     // "+ Give a task" at the top of the list, as the owner's "+ New task"

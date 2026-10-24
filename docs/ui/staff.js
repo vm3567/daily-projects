@@ -11,11 +11,11 @@ import { IN_NO_PROJECT } from './workparts.js';
 import { createOutbox } from './staffbox.js';
 import { stageChip, stageFilterBar } from './stage.js';
 import { openMenuAt, menuBox, focusLater } from './rowmenu.js';
-import { fmtDay, fmtTime, STATES, stateTag, newClientId, istDay, repeatLabel, block, chipsFor, makePics, photosRow, filesBlock, diaryBlock, messagesBlock, logbookBlock, bottomBar, hitLines, staffDot, nowHm } from './workparts.js';
+import { fmtDay, fmtTime, STATES, stateTag, newClientId, istDay, repeatLabel, block, chipsFor, makePics, photosRow, filesBlock, diaryBlock, messagesBlock, logbookBlock, bottomBar, hitLines, staffDot, nowHm, HERE, blockedSteps } from './workparts.js';
 
 export { STATES, repeatLabel }; // (the pieces of a task page are shared with the team pages: ui/workparts.js)
 const KEEP_FAIL = 'Could not keep this on the phone. Try again when online.';
-const OFFLINE_KEPT = '📴 Saved on this phone — it will be sent when you are online';
+const OFFLINE_KEPT = `📴 Saved on ${HERE} — it will be sent when you are online`;
 
 /** The only server calls the staff view makes (a check in tests/screens.test.mjs holds it to this list). */
 export const STAFF_CALLS = ['me', 'my.today', 'task.get', 'project.mine', 'update.save', 'photo.add', 'comment.add', 'comment.edit', 'comment.delete',
@@ -285,7 +285,7 @@ export function createStaff(opts) {
       // a saved copy from an earlier day: today's updates are not in it yet
       state.data = d.fromCache && d.today !== istDay() ? { ...d, stale: true } : d;
       state.loadFailed = '';
-    } catch (e) { const m = fail(e); if (!m) return; state.loadFailed = e.offline ? 'No saved copy on this phone yet.' : m; }
+    } catch (e) { const m = fail(e); if (!m) return; state.loadFailed = e.offline ? `No saved copy on ${HERE} yet.` : m; }
     render();
   }
   async function loadDetail() {
@@ -527,7 +527,8 @@ export function createStaff(opts) {
     }
   }
 
-  async function changePassword(oldPw, newPw) {
+  async function changePassword(oldPw, newPw, again) {
+    if (newPw !== again) return 'The two new passwords are not the same.'; // (a typo in a hidden box would lock them out: owner, 24 Oct)
     try { await api('password', { old: oldPw, new: newPw }); toast('Password changed ✓'); back(); return ''; } catch (e) { return e.message; }
   }
 
@@ -540,12 +541,12 @@ export function createStaff(opts) {
     if (!push) return '';
     try {
       const s = await push.turnOn();
-      if (s === 'on') notice('🔔 Notifications are on', 'New tasks, new project steps and messages will come to this phone, like email.');
+      if (s === 'on') notice('🔔 Notifications are on', `New tasks, new project steps and messages will come to ${HERE}, like email.`);
       render();
       return '';
     } catch (e) { toast('Could not turn on notifications: ' + e.message, 6000); return e.message; }
   }
-  async function notifyOff() { if (push) { await push.turnOff(); toast('Notifications are off for this phone.'); render(); } }
+  async function notifyOff() { if (push) { await push.turnOff(); toast(`Notifications are off for ${HERE}.`); render(); } }
 
   /** 📷 more photos on today's update that was already sent (up to 5 in all). Kept on the phone when offline. */
   async function addPhotos(t, list) {
@@ -746,7 +747,7 @@ export function createStaff(opts) {
     const n = state.outbox.length;
     if (!state.offline && !n) return null;
     return h('div', { class: 'offline-bar', key: 'offline' },
-      state.offline ? '📴 Offline — showing the last saved copy. What you send is kept on this phone and goes out when you are online.' : '',
+      state.offline ? `📴 Offline — showing the last saved copy. What you send is kept on ${HERE} and goes out when you are online.` : '',
       n ? h('strong', null, ` ⏳ ${n} waiting to send`) : null,
       n && !state.offline ? [' ', h('button', { class: 'link', onClick: () => flush() }, 'Send now')] : null);
   }
@@ -775,7 +776,7 @@ export function createStaff(opts) {
     if ((s !== 'default' && s !== 'granted') || state.pushLater) return null;
     try { if (Number(localStorage.getItem('wt.pushLater') || 0) > Date.now() || localStorage.getItem('wt.pushOff.' + state.user.id)) return null; } catch { /* blocked */ }
     return h('div', { class: 'banner stack', key: 'push-banner' },
-      h('span', null, '🔔 Get a message on this phone when a new task or update comes — like email.'),
+      h('span', null, `🔔 Get a message on ${HERE} when a new task or update comes — like email.`),
       h('div', { class: 'row' },
         h('button', { class: 'btn primary small', onClick: notifyOn }, 'Turn on'),
         h('button', { class: 'link', onClick: () => { try { localStorage.setItem('wt.pushLater', String(Date.now() + 3 * 86400000)); } catch { /* blocked */ } state.pushLater = true; render(); } }, 'Later')));
@@ -823,16 +824,16 @@ export function createStaff(opts) {
               h('span', { class: 'prow-next' }, `${f.tasks.length} task${f.tasks.length === 1 ? '' : 's'}${f.red ? ` · ${f.red} red` : ''}`)))))),
         fs.length ? null : h('p', { class: 'empty-list' }, 'No projects yet.')];
     } else if (state.section === 'next') {
-      body = [sec(`${d.other.length} coming next`), h('ul', { class: 'plist' }, d.other.map((t) => row(t, [t.project, repeatLabel(t, td)].filter(Boolean).join(' · '), 'grey'))),
+      body = [sec(d.other.length ? `${d.other.length} coming next` : 'Coming next'), // (not "0 coming next" and then "Nothing coming next": owner, 24 Oct) h('ul', { class: 'plist' }, d.other.map((t) => row(t, [t.project, repeatLabel(t, td)].filter(Boolean).join(' · '), 'grey'))),
         d.other.length ? null : h('p', { class: 'empty-list' }, 'Nothing coming next.')];
     } else if (state.section === 'sugg') {
       const s = d.suggestions || [];
       const waiting = state.outbox.filter((x) => x.kind === 'suggest');
-      body = [sec(`${s.length + waiting.length} suggestion${s.length + waiting.length === 1 ? '' : 's'}`),
+      body = [sec(s.length + waiting.length ? `${s.length + waiting.length} suggestion${s.length + waiting.length === 1 ? '' : 's'}` : 'Suggestions'), // (not "0 suggestions" and then "No suggestions yet")
         h('ul', { class: 'plist' }, s.map((t) => row(t, t.status === 'suggested' ? 'Waiting for a yes' : 'Not now' + (t.lastMessage ? ` — ${t.lastMessage.text}` : ''), t.status === 'suggested' ? 'yellow' : 'grey')),
           waiting.map((x) => h('li', { class: 'prow', key: 'ws-' + x.id }, h('span', { class: 'quick-tick-space' }), h('div', { class: 'prow-btn' }, h('span', { class: 'dot grey' }),
             h('span', { class: 'prow-text' }, h('span', { class: 'prow-name' }, x.title), h('span', { class: 'prow-next' }, '⏳ Waiting to send')))))),
-        s.length || waiting.length ? null : h('p', { class: 'empty-list' }, 'No suggestions yet. Tap 💡 Suggest a task in the menu.')];
+        s.length || waiting.length ? null : h('p', { class: 'empty-list' }, 'No suggestions yet. Tap 💡 Suggest a task above.')];
     } else {
       // the same count as Team today (owner, 24 Oct): a 📒 record counts once it has entries today (as sent), never as "to send"
       const due = d.tasks.filter((t) => t.kind !== 'log' || t.today);
@@ -884,7 +885,7 @@ export function createStaff(opts) {
       return todayBox(h('div', { class: 'update-form loose editing' },
         h('div', { class: 'row' }, stateTag(waiting.state), h('span', { class: 'tag remind' }, '⏳ Waiting to send'), (waiting.files || []).length ? h('span', { class: 'muted small' }, `📷 ${waiting.files.length}`) : null),
         h('div', { class: 'pre' }, waiting.note),
-        h('span', { class: 'muted small' }, 'Kept on this phone. It is sent by itself when the internet is back.')));
+        h('span', { class: 'muted small' }, `Kept on ${HERE}. It is sent by itself when the internet is back.`)));
     }
     if (t.status !== 'open' && !t.today) return null;
     const done = t.today && !state.editing[t.id];
@@ -1017,31 +1018,29 @@ export function createStaff(opts) {
   }
 
   function passwordPage() {
-    const f = (state.pwForm ||= { old: '', nw: '' });
+    const f = (state.pwForm ||= { old: '', nw: '', again: '' });
     const err = errLine('pwerr');
     return h('div', { class: 'block stack' },
       h('label', null, 'Current password', h('input', { key: 'pw-old', type: 'password', autocomplete: 'current-password', value: f.old, onInput: (e, el) => { f.old = el.value; } })),
       h('label', null, 'New password (8 letters or more)', h('input', { key: 'pw-new', type: 'password', autocomplete: 'new-password', value: f.nw, onInput: (e, el) => { f.nw = el.value; } })),
+      h('label', null, 'New password again', h('input', { key: 'pw-again', type: 'password', autocomplete: 'new-password', value: f.again, onInput: (e, el) => { f.again = el.value; } })),
       err,
-      h('button', { class: 'btn primary small', onClick: () => changePassword(f.old, f.nw).then((m) => { err.say(m); if (!m) state.pwForm = null; }) }, 'Change password'));
+      h('button', { class: 'btn primary small', onClick: () => changePassword(f.old, f.nw, f.again).then((m) => { err.say(m); if (!m) state.pwForm = null; }) }, 'Change password'));
   }
 
   function notifyPage() {
     const s = push ? push.state() : 'no';
-    const parts = [h('p', null, 'You get a message on this phone, like new email, for:'),
+    const parts = [h('p', null, `You get a message on ${HERE}, like new email, for:`),
       h('ul', null, ['A new task, or a whole project given to you', 'A new step added to your project', 'A message from your manager'].map((w) => h('li', null, w)))];
     if (s === 'on') {
-      parts.push(h('p', { class: 'ok' }, '✓ On for this phone.'), h('div', { class: 'row' },
+      parts.push(h('p', { class: 'ok' }, `✓ On for ${HERE}.`), h('div', { class: 'row' },
         h('button', { class: 'btn small', onClick: () => push.test().then(() => toast('🔔 Test sent. It comes in a few seconds.'), (e) => toast(e.message, 5000)) }, 'Send me a test'),
         h('button', { class: 'btn small', onClick: notifyOff }, 'Turn off')));
     } else if (s === 'default' || s === 'granted') {
       parts.push(h('button', { class: 'btn primary small', onClick: notifyOn }, '🔔 Turn on notifications'));
     } else if (s === 'denied') {
-      parts.push(h('p', { class: 'warn' }, 'Notifications are blocked for Task List on this phone. To allow them:'),
-        h('ol', null,
-          h('li', null, 'Installed app: press and hold the Task List icon → App info → Notifications → turn on.'),
-          h('li', null, 'In Chrome: tap ⋮ → Settings → Site settings → Notifications → worktask.in → Allow.'),
-          h('li', null, 'Come back here and open this page again.')));
+      parts.push(h('p', { class: 'warn' }, `Notifications are blocked for Task List on ${HERE}. To allow them:`),
+        h('ol', null, blockedSteps().map((w) => h('li', null, w))));
     } else if (s === 'ios') {
       parts.push(h('p', { class: 'warn' }, 'On iPhone, notifications work only from the Home Screen app:'),
         h('ol', null, h('li', null, 'Open worktask.in in Safari.'), h('li', null, 'Tap Share → Add to Home Screen.'), h('li', null, 'Open Task List from the Home Screen and turn notifications on here.')));

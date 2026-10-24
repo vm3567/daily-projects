@@ -2,10 +2,25 @@
 // (ui/team.js): one task page, one message box, one day-by-day history — so a change here reaches everyone.
 // The rules behind them (the history rows, what is late) come from Work Task's logic.js, passed in as `rules`.
 
-import { h, fmtDay as dayOf, errLine } from './dom.js';
+import { h, fmtDay as dayOf, errLine, HAS_KEYBOARD } from './dom.js';
 
 /** 📂 Misc's name on every screen (owner, 24 Oct: it was "Misc", "Other tasks" and "in no project"). */
 export const IN_NO_PROJECT = 'In no project';
+
+/** The device in the words on screen: "this computer" with a mouse, else "this phone" (owner, 24 Oct: a computer was told "this phone"). */
+export const HERE = HAS_KEYBOARD ? 'this computer' : 'this phone';
+
+/** The "Work in one line" example, with a real person from the team (owner, 24 Oct: "Valar" is not on the team). */
+export function quickExample(people, meId = 0) {
+  const ok = (people || []).filter((x) => x && x.name && x.active !== false && x.id !== meId); // (not the person writing it)
+  const p = ok.find((x) => x.role !== 'admin') || ok[0];
+  return `${p ? p.name.trim().split(/\s+/)[0] : 'Name'}: send kiln photos by Friday`;
+}
+
+/** How to allow notifications again once they are blocked, for this device (a computer has no app icon to press and hold). */
+export const blockedSteps = (computer = HAS_KEYBOARD) => (computer
+  ? ['In the address bar, click the 🔒 (or ⓘ) next to worktask.in.', 'Set Notifications to Allow.', 'Reload this page and open it again.']
+  : ['Installed app: press and hold the Task List icon → App info → Notifications → turn on.', 'In Chrome: tap ⋮ → Settings → Site settings → Notifications → worktask.in → Allow.', 'Come back here and open this page again.']);
 
 // the server's times are India time as "2026-10-22 10:30:00"
 export const fmtDay = (d) => (d ? dayOf(String(d).slice(0, 10)) : '');
