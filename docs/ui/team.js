@@ -6,8 +6,9 @@
 // The owner opens it from "👥 Team" in Daily Projects (and goes back with "📋 My projects"); another manager gets only this.
 
 import { h, morph, errLine } from './dom.js';
+import { isPhoto } from './heic.js';
 import { createOutbox } from './staffbox.js';
-import { stageChip } from './stage.js';
+import { stageChip, stageFilterBar } from './stage.js';
 import { openMenuAt, menuBox, focusLater } from './rowmenu.js';
 import { fmtDay, fmtTime, LONG_DAYS, stateTag, newClientId, istDay, daysBetween, repeatLabel, block, sec, taskRow, chipsFor, makePics, photosRow, filesBlock, diaryBlock, messagesBlock, phoneBack, logbookBlock, bottomBar, hitLines, HERE, blockedSteps, quickExample } from './workparts.js';
 
@@ -213,7 +214,7 @@ export function createTeam(opts) {
   async function addFiles(taskId, files) {
     for (const f of files) {
       const fd = new FormData();
-      const img = String(f.type || '').startsWith('image/');
+      const img = isPhoto(f);
       fd.append('taskId', String(taskId)); fd.append('file', img ? await shrink(f) : f, img ? 'photo.jpg' : f.name);
       try { await api('task.file.add', fd, true); } catch (e) { toast(`${f.name}: ${e.message}`, 5000); }
     }
@@ -472,7 +473,7 @@ export function createTeam(opts) {
   function paste({ files = [], text = '', inMessageBox = false }) {
     if (!state.sel || !state.sel.startsWith('task:') || !state.detail || !state.detail.task || !files.length || String(text).trim()) return false;
     const t = state.detail.task;
-    const images = files.filter((f) => String(f.type || '').startsWith('image/'));
+    const images = files.filter(isPhoto);
     if (inMessageBox) {
       if (!images.length) { toast('Only photos can go in a message.', 5000); return true; }
       sendMessagePhoto(t.id, images[0]).then((m) => { if (m) toast(m, 5000); });
@@ -644,6 +645,7 @@ export function createTeam(opts) {
         cell('', h('span', { class: 'dot ' + dotOf(r.colour) })),
         cell('board-task', h('button', { class: 'link sub-name', type: 'button' }, t.title), ' ', state.boardGroup === 'project' || r.project === 'Misc' ? null : h('span', { class: 'tag main-tag' }, '📂 ' + r.project), // (by 📂 project: its line says it; in no project: no "📂 Misc", owner 24 Oct)
           state.newIds.has(t.id) ? h('span', { class: 'tag high' }, 'New') : null,
+          t.kind === 'log' ? [' ', h('span', { class: 'tag record-tag' }, '📒 Record')] : null, // (marked as on ✅ Tasks and the staff app: owner, 24 Oct)
           r.stage && t.kind !== 'log' ? [' ', stageChip(r.stage, { you: r.you })] : null, // its Stage; stuck waiting for "Manager": "Waiting: you"
           // on a phone the Today column is hidden: today's words under the name instead (newest line of a record; owner, 24 Oct)
           u ? h('span', { class: 'board-today-inline muted small' }, `“${hitLines(String(u.note || '').split('\n').pop(), '')}”`) : null),
@@ -762,6 +764,7 @@ export function createTeam(opts) {
     if (state.round) return roundScreen(d);
     const rows = rules.followupRows(d.rows, d.today);
     return [
+      h('div', { class: 'quick-head muted small', key: 'qh' }, '✍ Give work in one line'), // (the box said nothing about what it is for: owner, 24 Oct)
       quickBox(d.people || []),
       h('div', { class: 'progress' }, h('div', { class: 'progress-row' },
         h('div', { class: 'progress-text' }, rules.followupSummary(rows, d.today)),
@@ -774,10 +777,17 @@ export function createTeam(opts) {
   function tasksList() {
     const d = state.data;
     const groups = new Map();
-    for (const t of d.tasks) { if (!groups.has(t.assignee.name)) groups.set(t.assignee.name, []); groups.get(t.assignee.name).push(t); }
+    // the Stage buttons, as on the owner's ✅ Tasks and the staff app (owner, 24 Oct); open tasks only
+    const stageOf = (t) => rules.teamStage(t).stage;
+    const counts = { all: d.tasks.length, notstarted: 0, inprogress: 0, waiting: 0, done: 0 };
+    if (!state.closed) for (const t of d.tasks) counts[stageOf(t)]++;
+    const sf = state.closed ? 'all' : state.teamStage || 'all';
+    const shownTasks = sf === 'all' ? d.tasks : d.tasks.filter((t) => stageOf(t) === sf);
+    for (const t of shownTasks) { if (!groups.has(t.assignee.name)) groups.set(t.assignee.name, []); groups.get(t.assignee.name).push(t); }
     const seg = (on, label, closed) => h('button', { class: 'seg' + (on ? ' on' : ''), 'aria-pressed': String(on), onClick: () => { state.closed = closed; go('tasks'); } }, label);
     return [
       h('div', { class: 'list-tools' }, h('div', { class: 'segmented', role: 'group', 'aria-label': 'Which tasks' }, seg(!state.closed, 'Open', false), seg(state.closed, 'Done / cancelled', true))),
+      state.closed || !d.tasks.length ? null : stageFilterBar(counts, sf, (k) => { state.teamStage = k === 'all' ? '' : k; render(); }),
       d.tasks.length ? null : h('p', { class: 'empty-list' }, state.closed ? 'Nothing closed yet.' : 'No open tasks. Give one with “+ Give a task”.'),
       // Done / cancelled: newest closed first, each with the day it was closed (owner, 24 Oct)
       state.closed ? h('ul', { class: 'plist' }, [...d.tasks].sort((a, b) => String(b.doneAt || '').localeCompare(String(a.doneAt || ''))).map((t) => rowOf(t,

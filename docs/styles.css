@@ -1324,6 +1324,11 @@ button.stage-chip.tap { cursor: pointer; font-size: 12.5px; padding: 3px 10px; }
 .step.writing-about .step-text { flex-basis: 120px; } /* (room for the tag: the row stays one line) */
 .tag.writing-tag { background: var(--brand-soft); color: var(--brand); border-color: var(--brand); }
 
+/* Review 6 (owner, 24 Oct): Follow-up's one-line box has a heading; a 📒 record is marked on Team today; "+N more" photos */
+.quick-head { padding: 8px 16px 0; font-weight: 600; }
+.tag.record-tag { background: #fef9c3; border-color: #fde68a; color: #854d0e; }
+.step-photos .more-photos { align-self: center; white-space: nowrap; }
+
 /* ---------------------------------------------------------------- the staff view (one app: ui/staff.js)
    Staff see this app's own design. Only the few pieces this app had no style for, and only inside the staff view
    (.layout.staff), so the owner's screens never change. */

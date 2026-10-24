@@ -9,6 +9,7 @@
 import { h, morph, errLine } from './dom.js';
 import { IN_NO_PROJECT } from './workparts.js';
 import { createOutbox } from './staffbox.js';
+import { isHeic, heicToJpeg, isPhoto } from './heic.js';
 import { stageChip, stageFilterBar } from './stage.js';
 import { openMenuAt, menuBox, focusLater } from './rowmenu.js';
 import { fmtDay, fmtTime, STATES, stateTag, newClientId, istDay, repeatLabel, block, chipsFor, makePics, photosRow, filesBlock, diaryBlock, messagesBlock, logbookBlock, bottomBar, hitLines, staffDot, nowHm, HERE, blockedSteps } from './workparts.js';
@@ -66,6 +67,7 @@ export function staffApi(token, base = '../api/', opts = {}) {
 
 /** A phone photo made smaller before it goes (saves mobile data); see-through parts become white, not black. */
 export async function shrinkPhoto(file) {
+  if (isHeic(file.name, file.type)) { try { return await heicToJpeg(file, 1600); } catch { return file; } } // an iPhone photo: a JPEG every browser shows
   try {
     const bmp = await createImageBitmap(file);
     const s = Math.min(1, 1600 / Math.max(bmp.width, bmp.height));
@@ -580,7 +582,7 @@ export function createStaff(opts) {
     if (!state.sel || !state.sel.startsWith('task:') || !state.detail || !state.detail.task || !files.length) return false;
     if (String(text).trim()) return false; // text with a picture of it (cells from Excel, Word): the text
     const t = state.detail.task;
-    const images = files.filter((f) => String(f.type || '').startsWith('image/'));
+    const images = files.filter(isPhoto);
     if (inMessageBox) {
       if (!images.length) { toast('Only photos can go in a message. Ask your manager to add other files to the task.', 5000); return true; }
       sendMessagePhoto(t.id, images[0]).then((m) => { if (m) toast(m, 5000); });
@@ -904,7 +906,8 @@ export function createStaff(opts) {
     const pick = h('input', { type: 'file', accept: 'image/*', multiple: true, class: 'visually-hidden', onChange: (e, el) => { state.files[t.id] = [...picked, ...el.files].slice(0, 5); el.value = ''; render(); } });
     return todayBox(h('div', { class: 'update-form loose' + (state.editing[t.id] ? ' editing' : '') },
       t.last ? h('span', { class: 'small muted' }, `Last time (${fmtDay(t.last.day)}): `, h('span', { class: 'pre' }, t.last.note)) : null,
-      h('textarea', { key: 'up-' + t.id, placeholder: 'What happened today? (you can tap 🎤 on the keyboard to speak)', value: d.note, onInput: (e, el) => { d.note = el.value; err.clear(); } }),
+      // (the 🎤 hint only on a phone: a computer has no 🎤 key, owner 24 Oct)
+      h('textarea', { key: 'up-' + t.id, placeholder: HERE === 'this phone' ? 'What happened today? (you can tap 🎤 on the keyboard to speak)' : 'What happened today?', value: d.note, onInput: (e, el) => { d.note = el.value; err.clear(); } }),
       h('div', { class: 'segmented', role: 'group', 'aria-label': 'How is it going' }, STATES.map(([k, label]) =>
         h('button', { class: 'seg' + (d.state === k ? ' on' : ''), type: 'button', 'aria-pressed': String(d.state === k), onClick: () => { d.state = k; render(); } }, label))),
       d.state === 'stuck' ? waitForBox(t, d) : null,

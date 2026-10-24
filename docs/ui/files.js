@@ -4,6 +4,7 @@ import { h, fmtSize } from './dom.js';
 import { bytesToBase64 } from '../github.js';
 import { newId } from '../ops.js';
 import { MAX_FILE_BYTES, IMAGE_MAX_WIDTH } from '../config.js';
+import { isHeic, heicToJpeg, jpegName } from './heic.js';
 
 const VIEW_TYPES = {
   png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', pdf: 'application/pdf',
@@ -16,6 +17,9 @@ export function viewableType(name) {
 }
 
 async function shrinkImage(file) {
+  if (isHeic(file.name, file.type)) { // an iPhone photo: always a JPEG, so every browser shows it (owner, 24 Oct)
+    try { return new File([await heicToJpeg(file, IMAGE_MAX_WIDTH)], jpegName(file.name), { type: 'image/jpeg' }); } catch { return file; }
+  }
   if (!/^image\/(jpeg|png|heic|heif|webp)$/.test(file.type)) return file;
   try {
     const bmp = await createImageBitmap(file);
@@ -113,7 +117,8 @@ export async function openFile(ctx, file) {
     currentUrl = URL.createObjectURL(blob);
     const download = h('a', { class: 'btn', href: currentUrl, download: file.name }, 'Download');
     let body;
-    if (type && type.startsWith('image/')) body = h('img', { src: currentUrl, alt: file.name });
+    if (isHeic(file.name)) body = h('img', { src: URL.createObjectURL(await heicToJpeg(bytes)), alt: file.name }); // an iPhone photo saved before: shown as a picture
+    else if (type && type.startsWith('image/')) body = h('img', { src: currentUrl, alt: file.name });
     else if (type === 'application/pdf') body = h('iframe', { src: currentUrl, title: file.name });
     else {
       body = h('div', { class: 'viewer-download' },
@@ -141,10 +146,11 @@ export function photoThumb(ctx, file) {
     return h('img', { class: 'rich-photo', src: url, alt: file.name, title: `${file.name} — click to open`, key: 'rp-' + file.id, 'data-file': file.id, onClick: open });
   }
   const repo = ctx.store && ctx.store.repo;
-  if (!url && repo && typeof repo.blobBytes === 'function' && (viewableType(file.name) || '').startsWith('image/') && typeof URL.createObjectURL === 'function') {
+  const heic = isHeic(file.name);
+  if (!url && repo && typeof repo.blobBytes === 'function' && (heic || (viewableType(file.name) || '').startsWith('image/')) && typeof URL.createObjectURL === 'function') {
     thumbs.set(file.sha, 'loading');
     repo.blobBytes(file.sha)
-      .then((bytes) => { thumbs.set(file.sha, URL.createObjectURL(new Blob([bytes], { type: viewableType(file.name) }))); ctx.render(); })
+      .then(async (bytes) => { thumbs.set(file.sha, URL.createObjectURL(heic ? await heicToJpeg(bytes, 800) : new Blob([bytes], { type: viewableType(file.name) }))); ctx.render(); }) // (an iPhone photo: turned into a picture here)
       .catch(() => thumbs.set(file.sha, 'failed'));
   }
   return h('button', { class: 'tag photo rich-photo-btn', type: 'button', key: 'rp-' + file.id, 'data-file': file.id, title: 'Open photo', onClick: open }, `📷 ${file.name}`);

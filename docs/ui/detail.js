@@ -1,6 +1,7 @@
 // The right column: everything about one task (or 📂 project), all editable in place.
 
 import { h, fmtDay, fmtTime, fmtSize, HAS_KEYBOARD } from './dom.js';
+import { isPhoto } from './heic.js';
 
 const MOD = /Mac|iPhone|iPad/.test(globalThis.navigator ? navigator.platform || navigator.userAgent || '' : '') ? '⌘' : 'Ctrl';
 import { dotColour, isSnoozed, restUntil, restReason, onlyDaysOf, onlyDaysLabel, onlyDaysChip, remindOnceChip, indiaDateTime, WEEKDAYS, weekdayOf, stepWaitsForReminder, daysBetween, addDays, todayIndia, isOverdue, indiaDate, waitingDays, lastWorkDate, nextStep, stepLinkedTo, personStatus, minutesBetween, fmtMinutes, weekStart, seenUpTo, deleteQuestion, parseDuration } from '../rules.js';
@@ -60,8 +61,8 @@ function addUpdatePhotos(ctx, p, files, opts = {}) {
 
 /** Ctrl+V on a project: screenshots become photos inside today's update (write a line and Save); other files go to its files. */
 export function pasteIntoProject(ctx, p, files) {
-  const images = files.filter((f) => f.type.startsWith('image/'));
-  const others = files.filter((f) => !f.type.startsWith('image/'));
+  const images = files.filter(isPhoto);
+  const others = files.filter((f) => !isPhoto(f));
   if (images.length && p.state === 'active') {
     addUpdatePhotos(ctx, p, namePasted(images), { inline: true });
     ctx.toast('📷 Pasted — write a line in "What happened today?" and Save', 4000);
@@ -177,10 +178,12 @@ function stepNotes(ctx, p, s) {
   const isImage = (f) => /\.(png|jpe?g|gif|webp|heic|heif)$/i.test(f.name || '');
   const pics = (n) => {
     const ids = new Set(n.html ? richFileIds(n.html) : []); // a photo put inside the words, and one added under them
-    return (p.files || []).filter((f) => (f.noteId === n.id || ids.has(f.id)) && isImage(f)).slice(0, 5);
+    return (p.files || []).filter((f) => (f.noteId === n.id || ids.has(f.id)) && isImage(f));
   };
+  // up to 5 small photos, then "+N more" (it opens this step's days, where all of them are: owner, 24 Oct — a 6th was hidden)
+  const more = (n) => h('button', { class: 'link small more-photos', type: 'button', title: 'See all the photos in What\'s happening', onClick: () => { ctx.ui.diaryTask = { projectId: p.id, stepId: s.id }; ctx.render(); } }, `+${pics(n).length - 5} more`);
   return h('div', { class: 'step-notes' }, notes.map((n) => h('div', { key: 'sn-' + n.id }, `📝 ${fmtDay(indiaDate(n.createdAt))}: ${n.text}`,
-    pics(n).length ? h('div', { class: 'step-photos' }, pics(n).map((f) => photoThumb(ctx, f))) : null)));
+    pics(n).length ? h('div', { class: 'step-photos' }, pics(n).slice(0, 5).map((f) => photoThumb(ctx, f)), pics(n).length > 5 ? more(n) : null) : null)));
 }
 
 /**
@@ -1096,7 +1099,7 @@ export function todayGlance(ctx) {
   return h('div', { class: 'empty today-glance', key: 'glance' },
     list.length ? [
       h('h3', { key: 'gh' }, '☀︎ Today at a glance'),
-      h('p', { class: 'glance-counts', key: 'gc' }, h('span', { class: 'dot green' }), ` ${green.length} on track  `, h('span', { class: 'dot yellow' }), ` ${yellow.length}  `, h('span', { class: 'dot red' }), ` ${red.length}`),
+      h('p', { class: 'glance-counts', key: 'gc' }, h('span', { class: 'dot red' }), ` ${red.length}  `, h('span', { class: 'dot yellow' }), ` ${yellow.length}  `, h('span', { class: 'dot green' }), ` ${green.length} on track`), // (the menu's order: red first, owner 24 Oct)
       need.length ? h('ul', { class: 'glance-list', key: 'gl' }, need.map((x) => h('li', { key: 'g-' + x.id },
         h('button', { class: 'link', type: 'button', onClick: () => (ctx.openProject ? ctx.openProject(x.id) : null) }, x.name), ' ',
         h('span', { class: 'tag ' + (dotColour(x, today) === 'red' ? 'late' : 'stale') }, colourShort(x, today))))) : h('p', { class: 'muted', key: 'ok' }, 'Everything is on track 🎉'),
@@ -1140,7 +1143,7 @@ export function renderDetail(ctx) {
       ui.dropOver = false;
       const files = [...e.dataTransfer.files];
       // the update box is only there on an active task: on a paused / finished one photos go to Files (as a paste does)
-      const photos = p.state === 'active' ? files.filter((f) => f.type.startsWith('image/')) : [];
+      const photos = p.state === 'active' ? files.filter(isPhoto) : []; // (an iPhone photo too)
       const others = files.filter((f) => !photos.includes(f));
       ctx.render();
       if (photos.length) {

@@ -1124,7 +1124,7 @@ function renderMenu() {
         h('span', { class: 'dot green' }), String(counts.green)),
       // order the owner chose (22 Oct): Today, Tasks, Projects, Replies, Inbox, Paused, Finished, People, Settings, More (no groups, 23 Oct)
       item('all', '✅ Tasks', activeTasks(data).length),
-      item('mains', '📂 Projects', mainProjects(data).length),
+      item('mains', '📂 Projects', mainProjects(data).filter((m) => m.state !== 'finished' && !m.misc).length), // (the page's own count: "In no project" is not a project, owner 24 Oct)
       item('replies', '✉ Replies', readyCount(data, today)), // replies ready to send
       onServer ? item('apps', '🔌 From apps', appsPending()) : null, // approvals your apps sent, waiting for ✓ / ✕
       item('inbox', '📥 Inbox', (data.inbox || []).length),
@@ -2470,7 +2470,7 @@ function renderSettings() {
       h('button', { class: 'btn', onClick: downloadBackup }, 'Download backup')),
     // Outlook, the morning email and the team's times are on the team's Settings page: one tap there (owner, 24 Oct)
     onServer ? h('section', { class: 'block', key: 'team-settings' }, h('h3', null, '📧 Outlook and the team'),
-      h('p', { class: 'muted small' }, 'Connect Outlook, the morning email and the time updates are due are in the team\'s Settings.'),
+      h('p', { class: 'muted small' }, 'Connect Outlook, and set the time the team\'s updates are due, in the team\'s Settings. The morning email is on each person\'s page (People).'),
       h('a', { class: 'btn', href: '#team-settings' }, 'Open the team\'s Settings ›')) : null,
     h('section', { class: 'block' }, h('h3', null, 'Phone'),
       h('p', null, h('strong', null, 'iPhone: '), onServer ? 'Open worktask.in in Safari and sign in. Share → "Add to Home Screen" puts it on your phone like an app.'

@@ -996,7 +996,7 @@ test('📂 app wiring (app.js): ✅ Tasks and 📂 Projects menu items (keys; li
   const APP = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
   assert.match(APP, /item\('all', '✅ Tasks', activeTasks\(data\)\.length\)/);
   assert.doesNotMatch(APP, /'All projects'|Main projects/, 'the old words are gone');
-  assert.match(APP, /item\('mains', '📂 Projects', mainProjects\(data\)\.length\)/);
+  assert.match(APP, /item\('mains', '📂 Projects', mainProjects\(data\)\.filter\(\(m\) => m\.state !== 'finished' && !m\.misc\)\.length\)/ /* (owner asked 24 Oct: the same count as the page, without "In no project") */);
   assert.match(APP, /mains: 'M'/);
   assert.match(APP, /else if \(k === 'm'\) go\('mains'\)/);
   assert.match(APP, /\['m', 'Go to 📂 Projects'\]/);
@@ -1060,7 +1060,7 @@ test('📂 Projects page: a click on a project row selects it and stays on the p
   assert.match(mainsSrc, /ctx\.ui\.view === 'mains' && ctx\.showHere \? ctx\.showHere\(c\.id\)/, 'a task in the TASKS table while on the Projects page');
   const here = app.slice(app.indexOf('  showHere: (id) => {'), app.indexOf('  openProject: (id) => {'));
   assert.match(here, /select\(id\);/);
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-51'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-52'/, 'phones get the new copy');
 });
 
 test('📂 project page: "✕ Remove" on a task row takes it out of this project only — the task is kept (and stays in its other projects)', () => {
@@ -1846,7 +1846,7 @@ test('🔌 app wiring (app.js): "🔌 From apps" after ✉ Replies with the wait
   assert.match(app, /function go\(view\) \{\n\s*if \(view !== 'settings'\) forgetOnce\(\);/);
   assert.match(app, /if \(onServer\) loadApps\(appsCtx, force \|\| ui\.view === 'apps'\);/);
   assert.match(app, /replies: '✉ Replies', apps: '🔌 From apps', mains: '📂 Projects' \}\[ui\.view\]/, 'its page title');
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-51'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-52'/, 'phones get the new copy');
 });
 
 test('🔌 the PHP connector (team/connector/worktask-connector.php): the same text the app downloads, placeholders only (no real key), valid PHP 7.4+ (php -l), with wt_push / wt_withdraw / wt_decisions / wt_receive_decision', async () => {
@@ -4807,4 +4807,88 @@ test('Which step an update is about (owner, 24 Oct): ✎ on a saved update can m
   assert.equal(s.data.projects[0].workNotes.find((n) => n.id === 'n1').stepId, null, 'to the whole task');
   applyOps(s, [makeOp('setNoteStep', { projectId: 'p1', noteId: 'n1', stepId: 's1' })]);
   assert.ok(renderDetail(liveCtx(s, { selected: 'p1', update: {} })).textContent.includes(' · step: Call @Ravi'), 'the history line names the step');
+});
+
+test('Review6 1 (owner, 24 Oct): iPhone photos (.heic) become JPEG pictures — at upload (owner app, staff, team) and when an old one is shown; the decoder is our own copy, loaded only when needed, with no eval', async () => {
+  const { readFileSync } = await import('node:fs');
+  const heic = await import('../docs/ui/heic.js');
+  assert.ok(heic.isHeic('IMG_0878.HEIC') && heic.isHeic('a.heif') && heic.isHeic('x', 'image/heic'));
+  assert.ok(!heic.isHeic('a.jpg', 'image/jpeg'));
+  assert.ok(heic.isPhoto({ name: 'IMG_1.HEIC', type: '' }), 'no type from the browser: still a photo');
+  assert.ok(heic.isPhoto({ name: 'a.png', type: 'image/png' }) && !heic.isPhoto({ name: 'a.pdf', type: 'application/pdf' }));
+  assert.equal(heic.jpegName('IMG_0878.HEIC'), 'IMG_0878.jpg');
+  // the decoder really reads an iPhone photo (made with macOS "sips"), and the page's rules allow it (no eval / new Function)
+  const vendor = new URL('../docs/vendor/libheif.js', import.meta.url);
+  assert.ok(!/new Function|\beval\(/.test(readFileSync(vendor, 'utf8')));
+  const vm = await import('node:vm'); // run as the browser does: a plain <script> that makes a global "libheif"
+  const sandbox = vm.createContext({ console, WebAssembly, setTimeout, clearTimeout, TextDecoder, Uint8Array, Promise });
+  const lib = vm.runInContext(readFileSync(vendor, 'utf8') + '\n;libheif', sandbox);
+  const L = await Promise.resolve(lib());
+  const im = new L.HeifDecoder().decode(readFileSync(new URL('./fixtures/tiny.heic', import.meta.url)))[0];
+  const w = im.get_width(), hh = im.get_height();
+  const px = await new Promise((r) => im.display({ data: new Uint8ClampedArray(w * hh * 4), width: w, height: hh }, r));
+  assert.ok(px && w > 0 && hh > 0, 'decoded');
+  const files = readFileSync(new URL('../docs/ui/files.js', import.meta.url), 'utf8');
+  assert.match(files, /if \(isHeic\(file\.name, file\.type\)\) \{[^}]*heicToJpeg\(file, IMAGE_MAX_WIDTH\)/, 'owner upload: JPEG, even a small one');
+  assert.match(files, /heic \? await heicToJpeg\(bytes, 800\)/, 'an old one shown as a picture');
+  assert.match(files, /if \(isHeic\(file\.name\)\) body = h\('img'/, 'and in the viewer');
+  assert.match(readFileSync(new URL('../docs/ui/staff.js', import.meta.url), 'utf8'), /if \(isHeic\(file\.name, file\.type\)\) \{ try \{ return await heicToJpeg\(file, 1600\)/, 'staff and team uploads');
+  for (const f of ['team.js', 'detail.js', 'richedit.js', 'staff.js']) assert.ok(!/files\.filter\(\(f\) => [^)]*startsWith\('image\/'\)\)/.test(readFileSync(new URL('../docs/ui/' + f, import.meta.url), 'utf8')), f + ': iPhone photos count as photos');
+  assert.ok(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8').includes("'ui/heic.js'"));
+});
+
+test('Review6 2 (owner, 24 Oct): a step shows 5 photos and "+N more" (it opens that step\'s days), never hides one silently', () => {
+  const s = sampleState();
+  const files = Array.from({ length: 6 }, (_, i) => makeOp('addFile', { projectId: 'p1', fileId: 'f' + i, name: `IMG_087${i}.HEIC`, sha: 'sha' + i, size: 10, type: '', noteId: 'n1' }));
+  applyOps(s, files);
+  const ctx = liveCtx(s, { selected: 'p1', update: {}, showDone: true });
+  const el = renderDetail(ctx);
+  const notes = rFind(el, (n) => n.className === 'step-photos');
+  assert.ok(notes, 'photos under the step');
+  assert.equal(rAll(notes, (n) => /rich-photo/.test(n.className || '')).length, 5);
+  const more = rFind(notes, (n) => n.nodeName === 'BUTTON' && n.textContent === '+1 more');
+  assert.ok(more, '+1 more');
+  more.__on.click();
+  assert.deepEqual(ctx.ui.diaryTask, { projectId: 'p1', stepId: 's1' }, 'opens that step\'s days');
+});
+
+test('Review6 5 (owner, 24 Oct): "Today at a glance" shows red, yellow, then green (the menu\'s order)', () => {
+  const s = sampleState();
+  const el = renderDetail(liveCtx(s, { selected: null }));
+  const counts = rFind(el, (n) => /glance-counts/.test(n.className || ''));
+  assert.deepEqual(rAll(counts, (n) => /\bdot\b/.test(n.className || '')).map((n) => n.className.replace('dot ', '')), ['red', 'yellow', 'green']);
+  assert.match(counts.textContent, /on track$/);
+});
+
+test('Review6 3 + 8 (owner, 24 Oct): the menu\'s 📂 Projects count leaves out "In no project"; Settings says where Outlook, the due time and the morning email are', async () => {
+  const { readFileSync } = await import('node:fs');
+  const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
+  assert.match(app, /item\('mains', '📂 Projects', mainProjects\(data\)\.filter\(\(m\) => m\.state !== 'finished' && !m\.misc\)\.length\)/);
+  assert.ok(app.includes("The morning email is on each person\\'s page (People)."));
+  assert.ok(!app.includes('the time updates are due are in'), 'the muddled sentence is gone');
+});
+
+test('Review6 4 + 6 + 9 (owner, 24 Oct): Team today marks a 📒 record; team ✅ Tasks has the Stage buttons (they filter); Follow-up\'s one-line box has a heading', async () => {
+  const base = teamToday();
+  const rec = { ...base.tasks[0], id: 99, title: 'Clay order record', kind: 'log', repeat: 'daily', entriesToday: 1 };
+  const { t } = fakeTeam({ 'team.today': () => ({ ...base, tasks: [...base.tasks, rec] }), 'tasks.list': () => ({ tasks: [...base.tasks, rec] }) });
+  t.go('today'); await tick(); await tick();
+  const row = rAll(t.view(), (n) => n.nodeName === 'TR' && /board-row/.test(n.className || '')).find((r) => r.textContent.includes('Clay order record'));
+  assert.ok(row && rFind(row, (n) => /record-tag/.test(n.className || '') && n.textContent === '📒 Record'), 'marked');
+  t.go('tasks'); await tick(); await tick();
+  const bar = rFind(t.view(), (n) => /\bstage-filters\b/.test(n.className || ''));
+  assert.ok(bar, 'Stage buttons on team ✅ Tasks');
+  const all = rAll(t.view(), (n) => n.nodeName === 'LI' && /\bprow\b/.test(n.className || '')).length;
+  const pick = rAll(bar, (n) => n.nodeName === 'BUTTON').find((b) => /^Not started [1-9]/.test(b.textContent)) || rAll(bar, (n) => n.nodeName === 'BUTTON').find((b) => / [1-9]\d*$/.test(b.textContent) && !b.textContent.startsWith('All'));
+  const want = Number(pick.textContent.match(/(\d+)$/)[1]);
+  pick.__on.click(); await tick();
+  assert.equal(rAll(t.view(), (n) => n.nodeName === 'LI' && /\bprow\b/.test(n.className || '')).length, want, 'the list is cut to that stage');
+  assert.ok(want < all || all === want);
+  t.go('followup'); await tick(); await tick();
+  assert.ok(t.view().textContent.includes('✍ Give work in one line'));
+});
+
+test('Review6 7 (owner, 24 Oct): the staff update box offers "tap 🎤 on the keyboard" only on a phone', async () => {
+  const { readFileSync } = await import('node:fs');
+  assert.match(readFileSync(new URL('../docs/ui/staff.js', import.meta.url), 'utf8'), /placeholder: HERE === 'this phone' \? 'What happened today\? \(you can tap 🎤 on the keyboard to speak\)' : 'What happened today\?'/);
 });
