@@ -75,7 +75,7 @@ test('project page draws (steps, update box, people, time, links)', () => {
   const s = sampleState();
   const el = renderDetail(fakeCtx(s, { selected: 'p1', openParts: { history: true }, update: {}, showMore: true }));
   const text = el.textContent;
-  for (const bit of ['Kiln', 'Fire samples', 'Save + done', 'Work notes', 'Status', 'Finish', 'Ravi', 'Today', 'Spec']) assert.ok(text.includes(bit), bit);
+  for (const bit of ['Kiln', 'Fire samples', 'Save + tick “Fire samples”', 'Work notes', 'Status', 'Finish', 'Ravi', 'Today', 'Spec']) assert.ok(text.includes(bit), bit);
   assert.ok(text.includes('💤 Snooze'), 'Snooze is on the page next to Finish (the owner asked for it back, 22 Oct)');
   const menu = renderDetail(fakeCtx(s, { selected: 'p1', update: {}, projMenu: 'p1' })).textContent;
   for (const bit of ['Snooze', 'Pause', 'Delete task']) assert.ok(menu.includes(bit), 'menu: ' + bit);
@@ -142,7 +142,7 @@ test('project page: "Save + done" button, and the next project offer when green'
   ctx.nextOpenProject = () => s.data.projects.find((p) => p.id === 'p2');
   ctx.openNextOpen = () => {};
   const text = renderDetail(ctx).textContent;
-  assert.ok(text.includes('Save + done'), 'save + done button');
+  assert.ok(text.includes('✓ Save + tick “Fire samples”'), 'save + done button, naming the step it ticks (owner asked 24 Oct)');
   assert.ok(text.includes('Next task: Glaze trial'), 'next task offered (at the bottom)');
   assert.ok(!text.includes('This step is done'), 'old tick box gone');
 });
@@ -155,7 +155,7 @@ test('project page: one update box in the diary (about the next task), week stri
   assert.ok(diary, 'the diary is on the page');
   const box = find(diary, (n) => (n.className || '').includes('update-form'));
   assert.ok(box, 'the one update box sits at the top of the diary');
-  assert.ok(box.textContent.includes('About:') && box.textContent.includes('Save + done'));
+  assert.ok(box.textContent.includes('📝 Writing about:') && box.textContent.includes('Save + tick “Fire samples”'), 'owner asked 24 Oct: "Writing about:" and the step on the button');
   assert.ok(find(box, (n) => (n.className || '').includes('chip on') && n.textContent === 'Fire samples'), 'about the next task');
   assert.ok(find(diary, (n) => (n.className || '').includes('week')), 'week strip');
   assert.ok(diary.textContent.includes('Today'), 'days listed');
@@ -1060,7 +1060,7 @@ test('📂 Projects page: a click on a project row selects it and stays on the p
   assert.match(mainsSrc, /ctx\.ui\.view === 'mains' && ctx\.showHere \? ctx\.showHere\(c\.id\)/, 'a task in the TASKS table while on the Projects page');
   const here = app.slice(app.indexOf('  showHere: (id) => {'), app.indexOf('  openProject: (id) => {'));
   assert.match(here, /select\(id\);/);
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-50'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-51'/, 'phones get the new copy');
 });
 
 test('📂 project page: "✕ Remove" on a task row takes it out of this project only — the task is kept (and stays in its other projects)', () => {
@@ -1846,7 +1846,7 @@ test('🔌 app wiring (app.js): "🔌 From apps" after ✉ Replies with the wait
   assert.match(app, /function go\(view\) \{\n\s*if \(view !== 'settings'\) forgetOnce\(\);/);
   assert.match(app, /if \(onServer\) loadApps\(appsCtx, force \|\| ui\.view === 'apps'\);/);
   assert.match(app, /replies: '✉ Replies', apps: '🔌 From apps', mains: '📂 Projects' \}\[ui\.view\]/, 'its page title');
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-50'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-51'/, 'phones get the new copy');
 });
 
 test('🔌 the PHP connector (team/connector/worktask-connector.php): the same text the app downloads, placeholders only (no real key), valid PHP 7.4+ (php -l), with wt_push / wt_withdraw / wt_decisions / wt_receive_decision', async () => {
@@ -4769,4 +4769,42 @@ test('Review5 11 (owner, 24 Oct): each sign-in box is tied to its words for scre
     assert.equal(inp.parentNode.getAttribute('for'), inp.id);
     assert.equal(inp.id, 'sign-' + name);
   }
+});
+
+test('Which step an update is about (owner, 24 Oct): "📝 Writing about:", the box asks about that step, the button names the step it ticks, and the step is marked in the list', async () => {
+  const s = sampleState();
+  applyOps(s, [makeOp('addStep', { projectId: 'p1', stepId: 's3', text: 'Residue photos' })]);
+  let el = renderDetail(liveCtx(s, { selected: 'p1', update: {} }));
+  const marked = () => rAll(el, (n) => /\bwriting-about\b/.test(n.className || '')).map((n) => n.getAttribute('data-id'));
+  assert.deepEqual(marked(), ['s2'], 'the next step is the one written about');
+  assert.ok(el.textContent.includes('📝 writing'));
+  assert.ok(el.textContent.includes('✓ Save + tick “Fire samples”'));
+  assert.ok(rFind(el, (n) => n.getAttribute && /What happened on “Fire samples”\?/.test(n.getAttribute('data-placeholder') || n.getAttribute('placeholder') || '')), 'the box asks about that step');
+  el = renderDetail(liveCtx(s, { selected: 'p1', update: { p1: { note: '', next: '', about: 's3' } } }));
+  assert.deepEqual(marked(), ['s3'], 'choosing "Residue photos" moves the mark');
+  assert.ok(el.textContent.includes('✓ Save + tick “Residue photos”'));
+  el = renderDetail(liveCtx(s, { selected: 'p1', update: { p1: { note: '', next: '', about: 'project' } } }));
+  assert.deepEqual(marked(), [], 'the whole task: no step marked');
+  assert.ok(!el.textContent.includes('Save + tick'), 'and nothing to tick');
+  const { readFileSync } = await import('node:fs');
+  const css = readFileSync(new URL('../docs/styles.css', import.meta.url), 'utf8');
+  for (const rule of [/\.about-row \.chip\.on \{ background: var\(--brand-soft\); border-color: var\(--brand\);/, /\.step\.writing-about \{ background: var\(--brand-soft\);/]) {
+    const m = rule.exec(css); assert.ok(m && m.index < css.indexOf('the staff view (one app'), String(rule));
+  }
+});
+
+test('Which step an update is about (owner, 24 Oct): ✎ on a saved update can move it to another step (a done one too) or the whole task; the history says "step:"', () => {
+  const s = sampleState();
+  const ctx = liveCtx(s, { selected: 'p1', update: { p1: { note: '', next: '', editing: 'n1' } }, openParts: { history: true } });
+  const el = renderDetail(ctx);
+  const row = rFind(el, (n) => /\babout-row\b/.test(n.className || '') && n.textContent.includes('This update is about:'));
+  assert.ok(row, 'the move row while changing an update');
+  const chip = (t) => rFind(row, (n) => n.nodeName === 'BUTTON' && n.textContent === t);
+  assert.match(chip('✓ Call @Ravi').className, /\bon\b/, 'its step now (done)');
+  chip('Fire samples').__on.click();
+  assert.equal(s.data.projects[0].workNotes.find((n) => n.id === 'n1').stepId, 's2', 'moved');
+  chip('Whole task').__on.click();
+  assert.equal(s.data.projects[0].workNotes.find((n) => n.id === 'n1').stepId, null, 'to the whole task');
+  applyOps(s, [makeOp('setNoteStep', { projectId: 'p1', noteId: 'n1', stepId: 's1' })]);
+  assert.ok(renderDetail(liveCtx(s, { selected: 'p1', update: {} })).textContent.includes(' · step: Call @Ravi'), 'the history line names the step');
 });

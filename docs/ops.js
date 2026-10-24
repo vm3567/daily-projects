@@ -1086,6 +1086,18 @@ const handlers = {
     return true;
   },
 
+  /** ✎ an update saved under the wrong step: move it to another step of the same task, or to the whole task (stepId null). */
+  setNoteStep(state, op, a) {
+    const p = findProject(state.data, a.projectId);
+    const n = p && p.workNotes.find((x) => x.id === a.noteId);
+    const stepId = a.stepId && p && p.steps.some((x) => x.id === a.stepId) ? a.stepId : null;
+    if (!n || (a.stepId && !stepId) || (n.stepId || null) === stepId) return false;
+    n.stepId = stepId;
+    n.updatedAt = op.at;
+    touch(p, op);
+    return true;
+  },
+
   deleteWorkNote(state, op, a) {
     const p = findProject(state.data, a.projectId);
     const i = p ? p.workNotes.findIndex((x) => x.id === a.noteId) : -1;
@@ -1679,7 +1691,7 @@ export const CARRIED = new Set(['createProject', 'createMainProject', 'addToProj
   'setReply', 'replyLater', 'inboxToStep', 'stepToProject', 'inboxToProject', 'addPerson', 'renamePerson', 'setPersonContact', 'markPersonSent',
   'startTimer', 'stopTimer', 'addTime', 'setStage', 'setMoveEvery']);
 export const NOT_CARRIED = new Set(['deleteProject', 'restoreProject', 'deleteStep', 'setProjectTeam', 'addFile', 'setAiKey', 'setAiProvider',
-  'removeFromProject', 'setParent', 'removeLink', 'editLink', 'finish', 'teamWorked', 'deleteWorkNote', 'editWorkNote', 'setProjectField', 'setStepField',
+  'removeFromProject', 'setParent', 'removeLink', 'editLink', 'finish', 'teamWorked', 'deleteWorkNote', 'editWorkNote', 'setNoteStep', 'setProjectField', 'setStepField',
   'removeFile', 'setTimer', 'setEveryDefault', 'deleteTag', 'clearReply', 'markReplySent', 'undoReplySent', 'mailReplied', 'removeInbox', 'inboxUndo', 'deletePerson',
   'recordScores', 'removeTime', 'incrementAiUsage', 'claimBrief', 'setBriefReady', 'addEvent', 'makeMisc']);
 

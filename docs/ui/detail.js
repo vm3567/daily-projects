@@ -229,7 +229,7 @@ function teamChip(t, info) {
   return h('a', { class: cls, href: `#team-task=${t.id}`, title: note ? `${note.slice(0, 300)}\n\nClick to see all updates and photos.` : 'Click to see the team task.' }, text);
 }
 
-function stepRow(ctx, p, s, box = null) {
+function stepRow(ctx, p, s, box = null, writing = false) {
   const { store, ui } = ctx;
   const open = ui.openStep === s.id;
   const today = todayIndia();
@@ -258,7 +258,8 @@ function stepRow(ctx, p, s, box = null) {
   else if (s.snoozedUntil && s.snoozedUntil > today && !s.done) tags.push(h('span', { class: 'tag' }, `from ${fmtDay(s.snoozedUntil)}`));
   else if (!s.done && s.remindUntil && s.remindUntil <= today) tags.push(h('span', { class: 'tag remind due', title: 'Your reminder for this step' }, '⏰ Reminder'));
   const aboutThis = () => { const u = updateState(ui, p); if (u.about !== s.id) { u.about = s.id; ctx.render(); } };
-  return h('li', { class: 'step' + (box ? ' has-update' : '') + (s.done ? ' done' : '') + (s.snoozedUntil && s.snoozedUntil > today && !s.done ? ' later' : ''), key: 's-' + s.id, 'data-id': s.id,
+  if (writing) tags.unshift(h('span', { class: 'tag writing-tag', title: 'What you write in What\'s happening goes on this step' }, '📝 writing'));
+  return h('li', { class: 'step' + (writing ? ' writing-about' : '') + (box ? ' has-update' : '') + (s.done ? ' done' : '') + (s.snoozedUntil && s.snoozedUntil > today && !s.done ? ' later' : ''), key: 's-' + s.id, 'data-id': s.id,
     onContextmenu: (e) => ctx.openStepMenu && ctx.openStepMenu(p.id, s.id, e) }, // right-click: tick, waiting, give, delete…
     h('div', { class: 'step-main' },
       s.done ? null : h('span', { class: 'grip', title: 'Drag to reorder', 'aria-hidden': 'true' }, '⋮⋮'),
@@ -502,14 +503,20 @@ function updateBox(ctx, p) {
   },
   editing ? h('div', { class: 'edit-banner' }, h('span', null, `✎ Changing your update of ${fmtDay(indiaDate(editing.createdAt))} ${fmtTime(editing.createdAt)}`),
     h('button', { class: 'link small', type: 'button', onClick: cancelEdit }, '✕ Cancel')) : null,
-  !editing && openSteps.length && !isMainProject(ctx.store.view.data, p) ? h('div', { class: 'about-row' }, h('span', { class: 'muted small' }, 'About:'), // (a 📂 project has no steps of its own)
+  editing && p.steps.length && !isMainProject(ctx.store.view.data, p) ? h('div', { class: 'about-row' }, h('span', { class: 'about-label' }, '📝 This update is about:'), // ✎ saved under the wrong step: move it (owner, 24 Oct)
+    p.steps.filter((st) => !st.done || st.id === editing.stepId || st.doneAt).slice(0, 10).map((st) => h('button', {
+      class: 'chip' + (editing.stepId === st.id ? ' on' : ''), type: 'button', key: 'mv-' + st.id, title: st.text,
+      onClick: () => { if (ctx.act('setNoteStep', { projectId: p.id, noteId: editing.id, stepId: st.id }, `Update moved to “${st.text}”`)) ctx.render(); },
+    }, (st.done ? '✓ ' : '') + (st.text.length > 28 ? st.text.slice(0, 26) + '…' : st.text))),
+    h('button', { class: 'chip' + (editing.stepId ? '' : ' on'), type: 'button', onClick: () => { if (ctx.act('setNoteStep', { projectId: p.id, noteId: editing.id, stepId: null }, 'Update moved to the whole task')) ctx.render(); } }, `Whole ${kindWord(ctx, p)}`)) : null,
+  !editing && openSteps.length && !isMainProject(ctx.store.view.data, p) ? h('div', { class: 'about-row' }, h('span', { class: 'about-label' }, '📝 Writing about:'), // (a 📂 project has no steps of its own; owner 24 Oct: "About:" was easy to miss)
     openSteps.slice(0, 8).map((st) => h('button', {
       class: 'chip' + (due && due.id === st.id ? ' on' : ''), type: 'button', key: 'ab-' + st.id, title: st.text,
       onClick: () => { u.about = st.id; ctx.render(); focusUpdate(p); },
     }, st.text.length > 28 ? st.text.slice(0, 26) + '…' : st.text)),
     h('button', { class: 'chip' + (due ? '' : ' on'), type: 'button', onClick: () => { u.about = 'project'; ctx.render(); focusUpdate(p); } }, `Whole ${kindWord(ctx, p)}`)) : null,
   ...richArea(ctx, u, {
-    key, placeholder: 'What happened today?', title: HAS_KEYBOARD ? 'Key: W' : null, files: p.files,
+    key, placeholder: editing ? 'What happened?' : due ? `What happened on “${due.text.length > 40 ? due.text.slice(0, 38) + '…' : due.text}”?` : 'What happened today?', title: HAS_KEYBOARD ? 'Key: W' : null, files: p.files,
     otherFiles: (others) => uploadFiles(ctx, p.id, others), // a copied file (not a photo) goes to the task's files
     onKey: (e, el) => {
       if (e.key === 'Escape' && editing) { e.preventDefault(); cancelEdit(); return; }
@@ -521,7 +528,7 @@ function updateBox(ctx, p) {
   }),
   h('div', { class: 'row' },
     h('button', { class: 'btn small', type: 'submit' }, editing ? 'Save change' : 'Save'),
-    due ? h('button', { class: 'btn primary small', type: 'button', title: `Save the note and tick "${due.text}" (${MOD}+Enter)`, onClick: () => save(findEditor(key), true) }, '✓ Save + done') : null,
+    due ? h('button', { class: 'btn primary small', type: 'button', title: `Save the note and tick "${due.text}" (${MOD}+Enter)`, onClick: () => save(findEditor(key), true) }, `✓ Save + tick “${due.text.length > 24 ? due.text.slice(0, 22) + '…' : due.text}”`) : null, // (says which step it ticks: owner, 24 Oct)
     editing ? h('button', { class: 'btn small', type: 'button', onClick: cancelEdit }, 'Cancel') : null,
     h('span', { class: 'muted small key-tip' }, hint)));
   return { stepId: due ? due.id : null, box };
@@ -1175,7 +1182,7 @@ export function renderDetail(ctx) {
 
     isMainProject(store.view.data, p) ? oldStepsBlock(ctx, p, openSteps) : section(stepsTitle(),
       h('ul', { class: 'steps sortable-steps', key: 'steps-' + p.id, 'data-project': p.id },
-        openSteps.map((s) => stepRow(ctx, p, s))),
+        openSteps.map((s) => stepRow(ctx, p, s, null, !!upd.box && upd.stepId === s.id))),
       p.state === 'finished' ? null : h('form', { // finished: no next step to add (owner, 24 Oct; Reopen first)
         class: 'row add-step',
         onSubmit: (e) => {
@@ -1237,7 +1244,7 @@ function projectDiary(ctx, p, upd) {
   const stepText = new Map(p.steps.map((x) => [x.id, x.text]));
   const taskStep = new Map((td ? td.tasks : []).map((x) => [x.id, x.stepRef]));
   const iso = (v) => (v.includes('T') ? v : v.replace(' ', 'T') + '+05:30'); // server times are India time
-  const about = (stepId) => (stepId && stepText.has(stepId) ? h('span', { class: 'muted small' }, ` · ${stepText.get(stepId)}`) : null);
+  const about = (stepId) => (stepId && stepText.has(stepId) ? h('span', { class: 'muted small' }, ` · step: ${stepText.get(stepId)}`) : null); // (owner, 24 Oct: say it is the step it was about)
   const entries = [];
   for (const n of p.workNotes) {
     const files = notePhotos(p, n);

@@ -1317,6 +1317,13 @@ button.stage-chip.tap { cursor: pointer; font-size: 12.5px; padding: 3px 10px; }
 .file-pick { gap: 6px; }
 .file-pick .btn { cursor: pointer; }
 
+/* Which step an update is about (owner, 24 Oct: "I do not clearly know for what step I am writing") */
+.about-row .about-label { font-size: 13px; font-weight: 600; color: var(--text); }
+.about-row .chip.on { background: var(--brand-soft); border-color: var(--brand); color: var(--brand); font-weight: 600; } /* (the chosen step stands out, not only while clicked) */
+.step.writing-about { background: var(--brand-soft); box-shadow: inset 3px 0 0 var(--brand); }
+.step.writing-about .step-text { flex-basis: 120px; } /* (room for the tag: the row stays one line) */
+.tag.writing-tag { background: var(--brand-soft); color: var(--brand); border-color: var(--brand); }
+
 /* ---------------------------------------------------------------- the staff view (one app: ui/staff.js)
    Staff see this app's own design. Only the few pieces this app had no style for, and only inside the staff view
    (.layout.staff), so the owner's screens never change. */

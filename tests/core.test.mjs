@@ -3189,3 +3189,22 @@ test('Review2 22 (owner, 24 Oct): Settings sets how often a task with no choice 
     assert.equal(moveEveryOf(pr('a')), 3, 'back to 3');
   } finally { useEveryDefault(null); }
 });
+
+test('setNoteStep (owner, 24 Oct): an update saved under the wrong step moves to another step of the same task, or to the whole task; a step from elsewhere, a missing update or no change is refused; never carried in by a link', async () => {
+  const { applyOps, emptyData, makeOp, CARRIED, NOT_CARRIED } = await import('../docs/ops.js');
+  const s = { data: emptyData(), history: {} };
+  applyOps(s, [makeOp('createProject', { projectId: 'w', name: 'Water absorption' }), makeOp('createProject', { projectId: 'x', name: 'Other' }),
+    makeOp('addStep', { projectId: 'w', stepId: 'a', text: 'Water absorption data' }), makeOp('addStep', { projectId: 'w', stepId: 'b', text: 'Residue photos' }),
+    makeOp('addStep', { projectId: 'x', stepId: 'z', text: 'Elsewhere' }),
+    makeOp('addWorkNote', { projectId: 'w', noteId: 'n', text: 'All photos of the residue', stepId: 'a' }), makeOp('tickStep', { projectId: 'w', stepId: 'a' })]);
+  const note = () => s.data.projects.find((p) => p.id === 'w').workNotes[0];
+  const go = (args) => applyOps(s, [makeOp('setNoteStep', { projectId: 'w', noteId: 'n', ...args })]).length;
+  assert.equal(go({ stepId: 'b' }), 1); assert.equal(note().stepId, 'b');
+  assert.equal(go({ stepId: 'b' }), 0, 'no change');
+  assert.equal(go({ stepId: 'z' }), 0, 'a step of another task'); assert.equal(note().stepId, 'b');
+  assert.equal(go({ stepId: 'a' }), 1, 'a done step is fine'); assert.equal(note().stepId, 'a');
+  assert.equal(go({ stepId: null }), 1); assert.equal(note().stepId, null, 'the whole task');
+  assert.equal(applyOps(s, [makeOp('setNoteStep', { projectId: 'w', noteId: 'gone', stepId: 'b' })]).length, 0, 'no such update');
+  assert.equal(note().text, 'All photos of the residue', 'the words stay');
+  assert.ok(NOT_CARRIED.has('setNoteStep') && !CARRIED.has('setNoteStep'));
+});
