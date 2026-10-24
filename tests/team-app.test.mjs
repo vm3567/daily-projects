@@ -332,7 +332,7 @@ test('project description: taken from the project\'s tasks (the first one that h
   // (one app: the team pages)
   assert.match(TEAM, /p\.projectAbout \? rules\.aboutShort\(p\.projectAbout\) \+ ' · ' : ''/, 'the Projects list row');
   assert.match(TEAM, /const about = state\.detail && sel\.startsWith\('task:'\) \? rules\.projectAboutOf\(\[state\.detail\.task\]\) : state\.detail && sel\.startsWith\('project:'\) \? rules\.projectAboutOf\(/, 'under the title of the project and task pages');
-  assert.match(readFileSync(new URL('../team/public_html/sw.js', import.meta.url), 'utf8'), /const CACHE = 'worktask-v33'/, 'new files reach the phones');
+  assert.match(readFileSync(new URL('../team/public_html/sw.js', import.meta.url), 'utf8'), /const CACHE = 'worktask-v34'/, 'new files reach the phones');
 });
 
 // ---------------------------------------------------------------- 📧 morning email (one person's pending work as a table to fill in)
@@ -704,7 +704,7 @@ test('outlook: the Settings section (owner only) — three fields, the Redirect 
 
 test('one People page: Work Task\'s menu opens the People page on the projects page, which opens on People', async () => {
   // (one app: the owner's team pages open the projects' People page; another manager has the team pages' own)
-  assert.match(TEAM, /item\('People', listOn\('people'\), \(\) => \(opts\.openPeople \? opts\.openPeople\(\) : go\('people'\)\)\)/);
+  assert.match(TEAM, /item\(opts\.openPeople \? 'People ↗ \(in My projects\)' : 'People', listOn\('people'\), \(\) => \(opts\.openPeople \? opts\.openPeople\(\) : go\('people'\)\)\)/, 'the owner\'s item says where it goes (owner asked 24 Oct)');
   assert.match(DP, /openPeople: \(\) => \{ leaveTeam\(\); go\('people'\); \}/, 'the owner: the projects\' People page');
   assert.match(DP, /if \(location\.hash === '#people'\) \{ ui\.view = 'people';/, 'the projects page opens on People');
 });
@@ -1351,8 +1351,8 @@ test('staff ✅ Tasks and 📂 Projects (owner, 23 Oct): every open task once, r
   assert.deepEqual(tasks.map((x) => x.t.id), [2, 3, 5, 4, 1, 6, 7], 'each once; red, then yellow (waiting to send), green, grey');
   assert.deepEqual(tasks.map((x) => x.dot), ['red', 'red', 'red', 'yellow', 'green', 'grey', 'grey']);
   const where = Object.fromEntries(tasks.map((x) => [x.t.id, x.folder.name]));
-  assert.deepEqual(where, { 1: 'Misc', 2: 'Ceramic Media', 3: 'Ceramic Media', 4: 'Kiln trial', 5: 'Misc', 6: 'Kiln trial', 7: 'Misc' });
-  assert.deepEqual(folders.map((f) => [f.name, f.tasks.length, f.dot, f.red]), [['Ceramic Media', 2, 'red', 2], ['Kiln trial', 2, 'yellow', 0], ['Misc', 3, 'red', 1]], 'worst first; 📂 Misc last');
+  assert.deepEqual(where, { 1: 'Other tasks', 2: 'Ceramic Media', 3: 'Ceramic Media', 4: 'Kiln trial', 5: 'Other tasks', 6: 'Kiln trial', 7: 'Other tasks' }, '📂 Misc is "Other tasks" for staff (owner asked 24 Oct)');
+  assert.deepEqual(folders.map((f) => [f.name, f.tasks.length, f.dot, f.red]), [['Ceramic Media', 2, 'red', 2], ['Kiln trial', 2, 'yellow', 0], ['Other tasks', 3, 'red', 1]], 'worst first; 📂 Misc last (called "Other tasks" for staff, owner asked 24 Oct)');
   assert.equal(folders.find((f) => f.name === 'Kiln trial').ref, 'k1', 'a given project with steps opens its own page (steps in order, add a step)');
   assert.ok(!folders.some((f) => f.name === 'Feldspar' || f.name === 'Paint door'), 'one given task is never also a project');
 });

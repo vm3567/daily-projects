@@ -521,7 +521,7 @@ export function createTeam(opts) {
         h('li', { class: 'menu-sep' }),
         item('Done / cancelled', listOn('tasks') && state.closed, () => { state.closed = true; go('tasks'); }),
         item('📊 Weekly report', listOn('report'), () => go('report')),
-        item('People', listOn('people'), () => (opts.openPeople ? opts.openPeople() : go('people'))),
+        item(opts.openPeople ? 'People ↗ (in My projects)' : 'People', listOn('people'), () => (opts.openPeople ? opts.openPeople() : go('people'))), // (the owner: one People page, in My projects — said, so the jump is expected)
         item('Settings', listOn('settings'), () => go('settings')),
         t && t.people && t.people.length ? [h('li', { class: 'menu-head' }, 'Team'), t.people.map((p) => {
           const tasks = t.tasks.filter((x) => x.assignee.id === p.id);
@@ -1053,9 +1053,9 @@ export function createTeam(opts) {
         f.record ? h('p', { class: 'muted small' }, 'They add an entry (a line + photos) whenever something happens — e.g. a material order follow-up. Never "not sent" or late.') : null,
         h('label', null, 'Details', h('textarea', { key: 'g-details', placeholder: 'Anything they need to know (optional)', value: f.details, onInput: set('details') })),
         h('label', null, 'Project', h('input', { key: 'g-project', placeholder: 'Kiln trial (optional)', value: f.project, onInput: set('project') })),
-        h('label', null, 'How often', h('select', { key: 'g-how', value: f.how, onChange: set('how') },
+        f.record ? null : h('label', null, 'How often', h('select', { key: 'g-how', value: f.how, onChange: set('how') }, // (a 📒 record has no "how often": entries come when something happens)
           h('option', { value: 'daily' }, 'Every day (Mon–Sat)'), h('option', { value: 'daily7' }, 'Every day, Sunday too'), h('option', { value: 'weekly' }, 'Once a week'), h('option', { value: 'once' }, 'One time'))),
-        f.how === 'weekly' ? h('label', null, 'On', h('select', { key: 'g-wd', value: String(f.weekday), onChange: (e, el) => { f.weekday = Number(el.value); } }, LONG_DAYS.map((n, i) => h('option', { value: String(i) }, n)))) : null,
+        !f.record && f.how === 'weekly' ? h('label', null, 'On', h('select', { key: 'g-wd', value: String(f.weekday), onChange: (e, el) => { f.weekday = Number(el.value); } }, LONG_DAYS.map((n, i) => h('option', { value: String(i) }, n)))) : null,
         f.how === 'once' ? h('label', null, 'By (date, optional)', h('input', { key: 'g-due', type: 'date', value: f.dueDate, onInput: set('dueDate') })) : null,
         h('label', null, 'Start on (optional — empty = today)', h('input', { key: 'g-start', type: 'date', min: td, value: f.startDate, onInput: set('startDate') })),
         h('label', { class: 'row' }, h('input', { key: 'g-photo', type: 'checkbox', checked: f.needsPhoto ? true : undefined, onChange: set('needsPhoto') }), ' 📷 Photo needed to finish'),
@@ -1109,8 +1109,8 @@ export function createTeam(opts) {
     const head = h('div', { class: 'list-head' },
       h('button', { class: 'icon menu-btn', 'aria-label': 'Menu', onClick: () => { state.menuOpen = true; render(); } }, '☰'),
       h('h2', null, title),
-      state.view === 'search' ? null : h('button', { class: 'icon', title: 'Search', 'aria-label': 'Search', onClick: () => go('search') }, '🔍'), // (as on the owner's list; on a phone the menu has no search box)
-      state.view === 'settings' ? null : h('button', { class: 'icon', title: 'Get latest', 'aria-label': 'Refresh', onClick: reload }, '↻'));
+      state.view === 'search' ? null : h('button', { class: 'icon head-icon', title: 'Search', 'aria-label': 'Search', onClick: () => go('search') }, '🔍', h('span', { class: 'icon-cap', 'aria-hidden': 'true' }, 'Find')), // (as on the owner's list; on a phone the menu has no search box)
+      state.view === 'settings' ? null : h('button', { class: 'icon head-icon', title: 'Get latest', 'aria-label': 'Refresh', onClick: reload }, '↻', h('span', { class: 'icon-cap', 'aria-hidden': 'true' }, 'Refresh')));
     if (!state.data) return h('div', { class: 'col-inner' }, head, bars(), h('p', { class: 'empty-list' }, state.loadFailed ? [state.loadFailed === 'You are offline. Try again when the internet is back.' ? 'No saved copy on this phone yet.' : state.loadFailed, ' ', h('button', { class: 'link', onClick: reload }, 'Try again')] : 'Loading…'));
     const body = state.view === 'followup' ? followupList() : state.view === 'tasks' ? tasksList() : state.view === 'projects' ? projectsList()
       : state.view === 'search' ? searchList() : state.view === 'report' ? reportPage() : state.view === 'people' ? peoplePage() : state.view === 'settings' ? settingsPage() : teamList();

@@ -276,7 +276,7 @@ try {
       const active = data.projects.filter((p) => p.state === 'active');
       const awake = awakeProjects(data, today);
       const snoozed = active.length - awake.length;
-      console.log(`Today ${today}: ${awake.length} active tasks — ${c.red} red (not looked at), ${c.yellow} yellow (opened), ${c.green} green (done for today).${snoozed ? ` ${snoozed} snoozed.` : ''}`);
+      console.log(`Today ${today}: ${awake.length} active tasks — ${c.red} red (stuck: no update for twice its "move every" days, or a date passed), ${c.yellow} yellow (slipping), ${c.green} green (on track).${snoozed ? ` ${snoozed} snoozed.` : ''}`);
       console.log(`Paused: ${data.projects.filter((p) => p.state === 'paused').length}. Finished: ${data.projects.filter((p) => p.state === 'finished').length}.`);
       if ((data.inbox || []).length) console.log(`Inbox: ${data.inbox.length} item(s) to sort — ${data.inbox.map((x) => x.text).join(' · ')}`);
       for (const p of sorted(active, today)) console.log('  ' + line(p, today, data));

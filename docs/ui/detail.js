@@ -243,9 +243,9 @@ function stepRow(ctx, p, s, box = null) {
   const live = !!tt && tt.status === 'open'; // a finished or cancelled task: the step can be given again
   if (tt && (tt.status === 'open' || s.done)) tags.push(teamChip(tt, ctx.teamInfo())); // an old closed task on an open step: nothing to show
   if (!live && ctx.onServer && !s.done && p.state === 'active') { // you do it yourself: tap to give it to someone
-    tags.push(h('a', { class: 'tag me', href: '#team-new=' + encodeURIComponent(JSON.stringify({ title: s.text, project: p.name, projectRef: p.id, stepRef: s.id })), title: 'You do this task. Tap to give it to someone.' }, 'Me'));
+    tags.push(h('a', { class: 'tag me', href: '#team-new=' + encodeURIComponent(JSON.stringify({ title: s.text, project: p.name, projectRef: p.id, stepRef: s.id })), title: 'You do this step now. Tap to give it to someone in your team.' }, '👥 Give'));
   }
-  if (!s.done) tags.push(h('button', { class: 'link small days-link', type: 'button', title: 'Show only this task in the diary', onClick: () => { ui.diaryTask = { projectId: p.id, stepId: s.id }; ctx.render(); setTimeout(() => { const d = document.querySelector('.diary'); if (d) d.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 30); } }, 'its days →'));
+  if (!s.done) tags.push(h('button', { class: 'link small days-link', type: 'button', title: 'Show only this step\'s days in What\'s happening', onClick: () => { ui.diaryTask = { projectId: p.id, stepId: s.id }; ctx.render(); setTimeout(() => { const d = document.querySelector('.diary'); if (d) d.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 30); } }, '📅 History'));
   if (s.repeat && !s.done) tags.push(h('span', { class: 'tag repeat', title: 'Repeats' }, `↻ ${REPEAT_WORD[s.repeat]}`));
   if (stepWaitsForReminder(s, today)) tags.push(h('span', { class: 'tag remind', title: 'Comes back on this day' }, `⏰ ${fmtDay(s.snoozedUntil)}`));
   else if (s.snoozedUntil && s.snoozedUntil > today && !s.done) tags.push(h('span', { class: 'tag' }, `from ${fmtDay(s.snoozedUntil)}`));
@@ -284,7 +284,7 @@ function stepRow(ctx, p, s, box = null) {
         onClick: () => { ui.openStep = open ? null : s.id; ctx.render(); },
       }, '⏰'),
       h('button', {
-        class: 'icon', title: 'More', 'aria-label': 'More about this step',
+        class: 'icon step-more', title: 'More', 'aria-label': 'More about this step',
         onClick: () => { ui.openStep = open ? null : s.id; ctx.render(); },
       }, open ? '▴' : '⋯')),
     stepNotes(p, s),
@@ -1125,6 +1125,7 @@ export function renderDetail(ctx) {
       }, '✎'),
       h('div', { class: 'state-buttons' }, stateButtons(ctx, p))),
     aboutLine(ctx, p),
+    colour === 'red' || colour === 'yellow' ? h('div', { class: 'why-line ' + colour, key: 'why-' + p.id }, `${colour === 'red' ? '🔴' : '🟡'} ${colourWhy(p, today)}`) : null, // why it is not green, in words (owner, 24 Oct)
     stageLine(ctx, p), // the Stage chip near the top: ⚪ Not started · 🔵 In progress · 🟠 Waiting: … · ✅ Done (tap to change)
     projectMenu(ctx, p),
     mainBox(ctx, p, 'parent'),
@@ -1271,6 +1272,7 @@ function projectDiary(ctx, p, upd) {
   }
   const days = [];
   for (let day = today; day >= start; day = addDays(day, -1)) days.push(day);
+  const holder = isMainProject(ctx.store.view.data, p) && !p.steps.some((s) => !s.done); // its tasks have the updates
   return h('section', { class: 'block diary', key: 'diary-' + p.id },
     h('div', { class: 'diary-head' }, h('h3', null, "📅 What's happening"), h('div', { class: 'week', title: 'Last 7 days' }, week)),
     upd.box,
@@ -1280,7 +1282,8 @@ function projectDiary(ctx, p, upd) {
       const list = (byDay.get(day) || []).filter((e) => !filter || e.stepId === filter).sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
       let empty = null;
       if (!list.some((e) => e.work)) { // nothing that counts as work (maybe a Stuck or a message): the day's tag too
-        if ((p.teamDays || []).includes(day)) empty = h('span', { class: 'day-tag team' }, '👥 Team worked');
+        if (holder) empty = list.length ? null : h('span', { class: 'muted small' }, '—'); // a 📂 project with no step of its own: no update of its own is asked for
+        else if ((p.teamDays || []).includes(day)) empty = h('span', { class: 'day-tag team' }, '👥 Team worked');
         else if (weekday(day) === 0) empty = h('span', { class: 'day-tag off' }, 'Off');
         else if (day === today && nowHm < fillBy) empty = h('span', { class: 'day-tag wait' }, 'Waiting for today\'s update');
         else if (p.team && !(td && td.from && day >= td.from)) empty = h('span', { class: 'muted small' }, t && t.days >= 120 && !t.loading ? '—' : '…'); // still loading (— older than the team history kept)

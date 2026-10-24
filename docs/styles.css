@@ -212,6 +212,7 @@ label.late { color: var(--red); }
 
 /* ---------- diary & settings ---------- */
 .diary, .settings { padding: 6px 22px 40px; max-width: 820px; }
+.layout.wide .diary { max-width: none; } /* the Diary uses the whole page (owner, 24 Oct) */
 .diary-day { padding: 12px 0; border-bottom: 1px solid var(--line); }
 .diary-day h3 { font-size: 15px; margin-bottom: 6px; }
 .diary-day li { padding: 3px 0; }
@@ -1243,6 +1244,34 @@ button.stage-chip.tap { cursor: pointer; font-size: 12.5px; padding: 3px 10px; }
 .step-photos { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 2px 34px; }
 .step-photos .diary-photo { width: 64px; height: 64px; object-fit: cover; }
 
+.stage-chip.stage-cancelled { background: #f1f5f9; color: var(--muted); border-color: var(--line); text-decoration: line-through; }
+.team-join { margin: 14px 4px; display: flex; flex-direction: column; gap: 6px; }
+.team-email { display: flex; align-items: center; gap: 6px; }
+.wide-input { width: min(340px, 100%); }
+/* the top icons: a small word under each on a computer; on a phone the title gets the room (owner, 24 Oct) */
+.head-icon { display: inline-flex; flex-direction: column; align-items: center; line-height: 1.1; }
+.icon-cap { font-size: 9.5px; color: var(--muted); font-weight: 500; margin-top: 2px; letter-spacing: .01em; }
+.list-head h2 { min-width: 64px; }
+@media (min-width: 761px) { /* a computer: the page name on its own line, the labelled icons under it — nothing cut */
+  .list-head.owner-head { flex-wrap: wrap; row-gap: 4px; }
+  .list-head.owner-head h2 { flex: 1 1 calc(100% - 48px); } /* (beside ☰ when the menu is folded) */
+}
+@media (max-width: 760px) {
+  .icon-cap { display: none; }
+  .list-head .status.sync.ok, .list-head .capture-btn { display: none; }
+}
+/* a task on a phone: the step's name and its 📝 ⏰ ⋯ on one line (Give and History are in ⋯ / the right-click menu);
+   the title never under the 🔔 (owner, 24 Oct) */
+@media (max-width: 760px) {
+  .step-main .tag.me, .step-main .days-link { display: none; }
+  .step-main > .icon:not(.step-more), .step-main > .grip { display: none; } /* 📝 ⏰: tap the step, or ⋯ (the name gets the room) */
+  .step-main .step-text { flex: 1 1 120px; min-width: 0; }
+  body.has-bell .detail-top { padding-right: 56px; }
+  .detail-top .title-input { min-width: 0; flex: 1 1 auto; }
+}
+.why-line { margin: 2px 0 6px; padding: 5px 10px; border-radius: 8px; font-size: 13px; }
+.why-line.red { background: #fdecec; color: #b42318; }
+.why-line.yellow { background: #fff4e0; color: #8a5a00; }
 /* ---------------------------------------------------------------- the staff view (one app: ui/staff.js)
    Staff see this app's own design. Only the few pieces this app had no style for, and only inside the staff view
    (.layout.staff), so the owner's screens never change. */
@@ -1251,6 +1280,13 @@ button.stage-chip.tap { cursor: pointer; font-size: 12.5px; padding: 3px 10px; }
 .layout.staff .pre { white-space: pre-wrap; word-break: break-word; }
 .layout.staff .stack { display: flex; flex-direction: column; gap: 10px; }
 .layout.staff .banner.stack { gap: 6px; margin: 10px 14px 0; color: var(--text); }
+/* forms (Give a task, Suggest a task, team Settings, Outlook): the words above the box, the box full width, buttons their own size (owner, 24 Oct) */
+.layout.staff .stack > label:not(.row):not(.check) { display: flex; flex-direction: column; gap: 4px; }
+.layout.staff .stack > label:not(.row):not(.check) > input:not([type="checkbox"]):not([type="radio"]):not([type="time"]):not([type="date"]):not([type="file"]),
+.layout.staff .stack > label:not(.row):not(.check) > select, .layout.staff .stack > label:not(.row):not(.check) > textarea { width: 100%; max-width: 100%; box-sizing: border-box; }
+.layout.staff .stack > label:not(.row):not(.check) > input[type="time"], .layout.staff .stack > label:not(.row):not(.check) > input[type="date"] { align-self: flex-start; }
+.layout.staff .stack > .btn { align-self: flex-start; }
+.layout.staff .stack > label > code { display: block; padding: 2px 0; overflow-wrap: anywhere; }
 .layout.staff .team-msg.mine { background: var(--brand-soft); border-color: #c7d7fb; }
 .layout.staff .msg-acts { margin-left: auto; display: inline-flex; gap: 6px; }
 .layout.staff .search-box { margin: 12px 14px 4px; }

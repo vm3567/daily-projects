@@ -190,6 +190,12 @@ function comments_of(int $taskId): array {
 }
 
 /** What needs the manager: stuck, new messages from staff, suggestions waiting for a yes. */
+/** Team today's rows: open tasks due today, and any task with an update today (closed today too); never a replaced whole-project task. */
+function team_today_rows(string $day): array {
+  $tasks = all(TASK_SELECT . " WHERE (t.status = 'open' OR t.done_at >= ?) ORDER BY t.id", [$day . ' 00:00:00']);
+  return array_values(array_filter(tasks_out($tasks, $day), fn($t) => ($t['dueToday'] || $t['today'] !== null) && !($t['status'] === 'cancelled' && str_ends_with((string)$t['stepRef'], ':whole'))));
+}
+
 function team_attention(): array {
   $open = tasks_out(all(TASK_SELECT . " WHERE t.status = 'open' ORDER BY t.id"), today());
   return [
@@ -539,8 +545,7 @@ function handle(string $a, array $in): array {
   switch ($a) {
     case 'team.today': {
       $people = all("SELECT * FROM users WHERE active = 1 AND role = 'staff' ORDER BY name");
-      $tasks = all(TASK_SELECT . " WHERE (t.status = 'open' OR t.done_at >= ?) ORDER BY t.id", [$day . ' 00:00:00']);
-      $out = array_values(array_filter(tasks_out($tasks, $day), fn($t) => ($t['dueToday'] || $t['today'] !== null) && !($t['status'] === 'cancelled' && str_ends_with((string)$t['stepRef'], ':whole'))));
+      $out = team_today_rows($day);
       $fillBy = setting('fill_by', '18:00');
       $att = team_attention();
       unset($att['open']);
@@ -781,10 +786,10 @@ function handle(string $a, array $in): array {
              LEFT JOIN task_reads r ON r.task_id = c.task_id AND r.user_id = ? WHERE c.user_id <> ? AND c.id > COALESCE(r.last_id, 0) AND c.kind IS NULL ORDER BY c.id DESC LIMIT 10", [$me['id'], $me['id']]));
       return ['today' => $day, 'fillBy' => $fillBy, 'late' => date('H:i') >= $fillBy, 'tasks' => tasks_out($tasks, $day), 'teamDays' => (object)$teamDays, 'messages' => $msgs,
         'alerts' => ['stuck' => count($att['stuck']), 'unread' => count($att['unread']), 'suggestions' => count($att['suggestions'])],
-        'summary' => (function () use ($att) { // one line for the manager's Today page
-          $due = array_values(array_filter($att['open'], fn($t) => $t['dueToday']));
-          $missing = array_values(array_unique(array_map(fn($t) => $t['assignee']['name'], array_filter($due, fn($t) => !$t['today']))));
-          return ['due' => count($due), 'sent' => count(array_filter($due, fn($t) => (bool)$t['today'])), 'notFilled' => $missing];
+        'summary' => (function () use ($day) { // one line for the manager's Today page: the same rows and count as Team today
+          $rows = team_today_rows($day);
+          $missing = array_values(array_unique(array_map(fn($t) => $t['assignee']['name'], array_filter($rows, fn($t) => !$t['today']))));
+          return ['due' => count($rows), 'sent' => count(array_filter($rows, fn($t) => (bool)$t['today'])), 'notFilled' => $missing];
         })()];
     }
     case 'tasks.adopted': { // Daily Projects added these steps (written by the person) to the project: from now on they are normal steps
@@ -1271,7 +1276,7 @@ function entry_note(int $updateId): void {
     return;
   }
   $many = count(array_unique(array_map(fn($r) => (int)$r['user_id'], $rows))) > 1;
-  $lines = array_map(fn($r) => substr($r['at'], 11, 5) . ' ' . ($many ? $r['name'] . ': ' : '') . $r['text'], $rows);
+  $lines = array_map(fn($r) => date('g:i a', strtotime($r['at'])) . ' ' . ($many ? $r['name'] . ': ' : '') . $r['text'], $rows); // "8:53 am", as every time on screen
   q('UPDATE updates SET note = ?, updated_at = ? WHERE id = ?', [mb_substr(implode("\n", $lines), 0, 60000), now(), $updateId]);
 }
 

@@ -178,7 +178,7 @@ export function staffFolders(d, waiting = () => false) {
     if (t.folder) return { key: 'f:' + t.folder, name: t.folder };
     const pr = t.projectRef && t.seq !== null && t.seq !== undefined ? projs.get(t.projectRef) : null;
     if (pr && pr.real.length >= 2) return { key: 'p:' + pr.ref, name: pr.name, ref: pr.ref };
-    return { key: 'misc', name: 'Misc' };
+    return { key: 'misc', name: 'Other tasks' }; // (the owner's 📂 Misc: a name that means something to the person)
   };
   const RANK = { red: 0, yellow: 1, green: 2, grey: 3 };
   const dotOf = (t) => (t.today ? 'green' : waiting(t.id) ? 'yellow' : t.dueToday ? 'red' : 'grey');
@@ -697,7 +697,8 @@ export function createStaff(opts) {
   function chipRow(x) {
     const t = x.t, waiting = !!waitingFor(t.id), td = state.data.today;
     const work = t.project && t.project !== x.folder.name && t.project !== t.title ? t.project : ''; // the work it is a step of (not said twice)
-    const sub = waiting ? '⏳ Waiting to send' : t.today ? `✓ Sent ${fmtTime(t.today.at)}` : t.dueToday ? (work ? `${work} · ` : '') + 'Send today\'s update'
+    const sub = t.kind === 'log' ? [work, recordSub(t)].filter(Boolean).join(' · ') // 📒 a record: its entries, not "sent"
+      : waiting ? '⏳ Waiting to send' : t.today ? `✓ Sent ${fmtTime(t.today.at)}` : t.dueToday ? (work ? `${work} · ` : '') + 'Send today\'s update'
       : [work, repeatLabel(t, td)].filter(Boolean).join(' · ') || 'Not today';
     return h('li', { key: 't-' + t.id, class: 'prow' + (state.sel === 'task:' + t.id ? ' current' : ''), onContextmenu: (e) => openMenuAt(state, render, { t }, e) },
       h('span', { class: 'quick-tick-space', 'aria-hidden': 'true' }),
@@ -782,8 +783,8 @@ export function createStaff(opts) {
     const head = h('div', { class: 'list-head' },
       h('button', { class: 'icon menu-btn', 'aria-label': 'Menu', onClick: () => { state.menuOpen = true; render(); } }, '☰'),
       h('h2', null, title),
-      state.section === 'search' ? null : h('button', { class: 'icon', title: 'Search', 'aria-label': 'Search', onClick: () => show('search') }, '🔍'), // (as on the owner's list; on a phone the menu has no search box)
-      h('button', { class: 'icon', title: 'Get latest', 'aria-label': 'Refresh', onClick: reload }, '↻'));
+      state.section === 'search' ? null : h('button', { class: 'icon head-icon', title: 'Search', 'aria-label': 'Search', onClick: () => show('search') }, '🔍', h('span', { class: 'icon-cap', 'aria-hidden': 'true' }, 'Find')), // (as on the owner's list; on a phone the menu has no search box)
+      h('button', { class: 'icon head-icon', title: 'Get latest', 'aria-label': 'Refresh', onClick: reload }, '↻', h('span', { class: 'icon-cap', 'aria-hidden': 'true' }, 'Refresh')));
     // "💡 Suggest a task" at the top of the list, as the owner's "+ New task"
     const top = [offlineBar(), notices(), newsBar(), pushBanner(), ['today', 'sugg'].includes(state.section) ? h('button', { class: 'btn primary new-project', onClick: () => open('suggest') }, '💡 Suggest a task') : null];
     if (!d) return h('div', { class: 'col-inner' }, head, top, h('p', { class: 'empty-list' }, state.loadFailed ? [state.loadFailed, ' ', h('button', { class: 'link', onClick: reload }, 'Try again')] : 'Loading…'));
@@ -836,10 +837,7 @@ export function createStaff(opts) {
         h('ul', { class: 'plist' }, stageCut(d.tasks).list.map((t) => {
           const waiting = !!waitingFor(t.id);
           const late = t.repeat === 'once' && t.dueDate && t.dueDate < td;
-          if (t.kind === 'log') { // 📒 a record: how many entries today; never red
-            const n = t.entriesToday || 0, wait = state.outbox.filter((x) => x.kind === 'entry' && x.taskId === t.id).length;
-            return row(t, [t.project, wait ? `⏳ ${wait} waiting to send` : n ? `📒 ${n} entr${n === 1 ? 'y' : 'ies'} today` : '📒 Record · add entries when something happens'].filter(Boolean).join(' · '), n || wait ? 'green' : 'grey');
-          }
+          if (t.kind === 'log') return row(t, [t.project, recordSub(t)].filter(Boolean).join(' · '), (t.entriesToday || 0) || entriesWaiting(t) ? 'green' : 'grey'); // 📒 a record: never red
           const sub = waiting ? '⏳ Waiting to send' : t.today ? `✓ Sent ${fmtTime(t.today.at)}${t.today.state === 'stuck' ? ' · stuck' : t.today.state === 'finished' ? ' · finished' : ''}`
             : [t.project, repeatLabel(t, td)].filter(Boolean).join(' · ') || 'Send today\'s update';
           // the same dots as the owner's Today: green = sent today, yellow = written (waits to send), red = not yet
@@ -955,6 +953,13 @@ export function createStaff(opts) {
       t.kind === 'log' ? [entryCard(t), logbookBlock({ entries: state.detail.entries || [], waiting: state.outbox.filter((x) => x.kind === 'entry' && x.taskId === t.id), photos, meId: state.user.id, td, onDelete: deleteEntry })] // 📒 the logbook
         : t.status === 'suggested' || (t.status !== 'open' && !updates.length) ? updateCard(t) : diary(t, updates, td, updateCard(t)),
     ];
+  }
+
+  /** 📒 a record's line in a list: "📒 3 entries today" / "⏳ 1 waiting to send" / "📒 Record · add entries when something happens". */
+  const entriesWaiting = (t) => state.outbox.filter((x) => x.kind === 'entry' && x.taskId === t.id).length;
+  function recordSub(t) {
+    const n = t.entriesToday || 0, wait = entriesWaiting(t);
+    return wait ? `⏳ ${wait} waiting to send` : n ? `📒 ${n} entr${n === 1 ? 'y' : 'ies'} today` : '📒 Record · add entries when something happens';
   }
 
   /** " · 📷 3": the photos on a step (its newest updates), e.g. each step of a test. */

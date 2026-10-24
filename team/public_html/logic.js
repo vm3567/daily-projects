@@ -112,7 +112,8 @@ export const waitsForManager = (wf) => /^manager\b/i.test(String(wf || '').trim(
 export function teamStage(t) {
   if (!t) return { stage: 'notstarted', waitingFor: '', since: null, you: false };
   const u = t.today || t.last || null;
-  if (t.status === 'done' || t.status === 'cancelled') return { stage: 'done', waitingFor: '', since: null, you: false };
+  if (t.status === 'cancelled') return { stage: 'done', cancelled: true, waitingFor: '', since: null, you: false }; // (counted with Done; it says Cancelled)
+  if (t.status === 'done') return { stage: 'done', waitingFor: '', since: null, you: false };
   if (!u) return { stage: 'notstarted', waitingFor: '', since: null, you: false };
   if (u.state === 'finished') return { stage: 'done', waitingFor: '', since: u.day || null, you: false };
   if (u.state === 'stuck') { const wf = u.waitingFor || t.waitingFor || ''; return { stage: 'waiting', waitingFor: wf, since: u.day || null, you: waitsForManager(wf) }; }

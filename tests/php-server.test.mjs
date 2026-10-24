@@ -18,8 +18,8 @@ const has = (cmd) => { try { execFileSync('which', [cmd], { stdio: 'ignore' }); 
 const READY = has('php') && has('mysqld') && has('mysql') && has('mysqladmin');
 const skip = READY ? false : 'php / mysqld not installed on this computer';
 
-const DB_PORT = 20000 + (process.pid % 5000);
-const WEB_PORT = DB_PORT + 5000;
+const DB_PORT = await freePort(20000 + (process.pid % 5000));
+const WEB_PORT = await freePort(DB_PORT + 5000);
 const SOCK = `/tmp/wtt-${process.pid}.sock`; // short: MySQL refuses long socket paths
 const B = `http://127.0.0.1:${WEB_PORT}/api/?a=`;
 let dir; let mysqld; let web;
@@ -33,7 +33,16 @@ async function until(fn, what, ms = 30000) {
 }
 const sql = (q) => execFileSync('mysql', ['-u', 'root', `--socket=${SOCK}`, '-e', q], { stdio: 'pipe' });
 // the fake servers sit below 32768: ports above it are handed out at random for outgoing connections and can be taken
-const MS_PORT = 10000 + (process.pid % 5000); // a fake Microsoft (sign-in and Graph) for the Outlook checks
+/** A port nobody uses now, from `start` up (another program on the Mac, e.g. Adobe on 15393, once held a fixed one: 24 Oct). */
+async function freePort(start) {
+  const { createServer } = await import('node:net');
+  for (let p = start; p < start + 300; p++) {
+    const free = await new Promise((r) => { const sv = createServer(); sv.once('error', () => r(false)); sv.listen(p, '127.0.0.1', () => sv.close(() => r(true))); });
+    if (free) return p;
+  }
+  return start;
+}
+const MS_PORT = await freePort(10000 + (process.pid % 5000)); // a fake Microsoft (sign-in and Graph) for the Outlook checks
 const MS = `http://127.0.0.1:${MS_PORT}`;
 const env = () => ({ ...process.env, WT_TEST_DIR: dir, WT_DB_HOST: `127.0.0.1;port=${DB_PORT}`, WT_PUSH_LOG: join(dir, 'push.log'), WT_MS_BASE: MS });
 
@@ -1673,7 +1682,7 @@ test('cron.php: runs the jobs from the command line, skips while another run hol
 });
 
 // ---------------------------------------------------------------- 🔌 Connections: outside apps send tasks and approvals (connect.php)
-const CB_PORT = 15000 + (process.pid % 5000); // a tiny fake app that receives the decisions (below 32768, as MS_PORT)
+const CB_PORT = await freePort(15000 + (process.pid % 5000)); // a tiny fake app that receives the decisions (below 32768, as MS_PORT)
 const CB = `http://127.0.0.1:${CB_PORT}/hook`;
 const cb = { reqs: [], code: 200, delay: 0, server: null };
 async function fakeApp() {
@@ -3087,7 +3096,7 @@ test('📒 Record task: kind "log" is never due or late, always on the person\'s
   const got = await call('task.get', { id: t.id }, tok.boss);
   assert.deepEqual(got.entries.map((e) => e.text), ['Supplier says dispatch Monday', 'PO sent to the supplier'], 'newest first');
   assert.equal(got.task.entriesToday, 2);
-  assert.match(got.task.today.note, /^\d\d:\d\d PO sent to the supplier\n\d\d:\d\d Supplier says dispatch Monday$/, 'the day\'s update: a line each, with the time');
+  assert.match(got.task.today.note, /^\d{1,2}:\d\d [ap]m PO sent to the supplier\n\d{1,2}:\d\d [ap]m Supplier says dispatch Monday$/, 'the day\'s update: a line each, with the time as on screen ("8:53 am", owner asked 24 Oct)');
   assert.equal(got.task.today.state, 'progress');
   assert.ok((await call('team.today', {}, tok.boss)).tasks.some((x) => x.id === t.id && x.today), 'Team today: sent');
   // photos on an entry
@@ -3124,7 +3133,7 @@ test('📒 Record entries: written offline yesterday count for yesterday (more t
   assert.ok((await call('entry.delete', { id: a.id }, tok.suresh)).ok !== false);
   assert.equal(sqlOut(`SELECT COUNT(*) FROM wt.photos WHERE id = ${ph}`).trim(), '0', 'its photo went with it');
   let got = await call('task.get', { id: t.id }, tok.boss);
-  assert.match(got.task.today.note, /^\d\d:\d\d Used 1 more$/, 'the day\'s lines made again');
+  assert.match(got.task.today.note, /^\d{1,2}:\d\d [ap]m Used 1 more$/, 'the day\'s lines made again');
   await call('entry.delete', { id: b.id }, tok.suresh);
   got = await call('task.get', { id: t.id }, tok.boss);
   assert.equal(got.task.today, null, 'no entries left today: no update today');
@@ -3143,4 +3152,13 @@ test('📒 Record for a given project: project.sync kind "log" makes every open 
   assert.deepEqual(out.tasks.map((x) => x.kind), ['task', 'task', 'task'], 'back to daily updates');
   out = await call('project.sync', { projectRef: 'rec1', project: 'Materials', assigneeId: id.suresh, steps }, tok.boss);
   assert.deepEqual(out.tasks.map((x) => x.kind), ['task', 'task', 'task'], 'no kind sent: unchanged');
+});
+
+test('Review 6 (owner, 24 Oct): the Today page\'s team line counts the same rows as Team today (a task sent today counts, a record with entries too)', { skip }, async () => {
+  const tt = await call('team.today', {}, tok.boss);
+  const linked = await call('tasks.linked', {}, tok.boss);
+  assert.ok(linked.summary, 'the summary is there');
+  const due = tt.tasks.length;
+  const sent = tt.tasks.filter((t) => t.today).length;
+  assert.deepEqual([linked.summary.due, linked.summary.sent], [due, sent], 'the same counts as Team today');
 });

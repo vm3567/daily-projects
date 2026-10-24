@@ -26,7 +26,7 @@ import { stageChip, stageFilterBar } from './ui/stage.js';
 import { whoFromUser, signInTag, timerOn, projectGiveChanges, UNDO_GRACE_MS, MISC_ID } from './rules.js';
 import { signInCard, firstPasswordCard } from './ui/signin.js';
 import { createBell } from './ui/bell.js';
-import { parentIdsOf, isMainProject, mainProjects, activeTasks, todayWithoutEmptyMains, todayList, stepTargets, mainSummary, childrenOf, deleteQuestion, pickEnterTarget, projectLine, projectTasks } from './rules.js';
+import { parentIdsOf, isMainProject, mainProjects, activeTasks, todayWithoutEmptyMains, todayList, stepTargets, mainSummary, childrenOf, deleteQuestion, pickEnterTarget, projectLine, projectTasks, inboxMatches } from './rules.js';
 import { newId, clone, opMonth, cleanLink, carriedOps, orderPosOf } from './ops.js';
 import * as ai from './ai.js';
 import { parseVoice } from './voice.js';
@@ -1125,6 +1125,7 @@ function renderMenu() {
       item('replies', '✉ Replies', readyCount(data, today)), // replies ready to send
       onServer ? item('apps', '🔌 From apps', appsPending()) : null, // approvals your apps sent, waiting for ✓ / ✕
       item('inbox', '📥 Inbox', (data.inbox || []).length),
+      onServer ? h('li', { key: 'team-menu' }, h('a', { class: 'menu-item', href: '#team', title: 'Tasks you gave and their daily updates' }, h('span', null, '👥 Team'))) : null, // (also on the 👥 icon; on a phone the menu is where it is found)
       h('li', { class: 'menu-sep', key: 'sep' }),
       item('paused', 'Paused', count((p) => p.state === 'paused')),
       item('finished', 'Finished', count((p) => p.state === 'finished')),
@@ -1608,15 +1609,7 @@ function captureBox() {
 
 /** Projects whose name shares a word with the item (for one-tap sorting). */
 function inboxSuggestions(text) {
-  const words = new Set(text.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((w) => w.length >= 4));
-  const people = (store.view.data.people || []).filter((x) => text.toLowerCase().includes(x.name.toLowerCase()));
-  return stepTargets(store.view.data, todayIndia())
-    .map((p) => {
-      let score = p.name.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((w) => words.has(w)).length * 2;
-      if (people.some((x) => p.steps.some((s) => !s.done && s.text.includes('@' + x.name)))) score += 1;
-      return { p, score };
-    })
-    .filter((x) => x.score > 0).sort((a, b) => b.score - a.score).slice(0, 3).map((x) => x.p);
+  return inboxMatches(store.view.data, text, todayIndia());
 }
 
 /** An Inbox change (send to a project, or delete) with an Undo that puts the item back. */
@@ -1710,6 +1703,7 @@ function renderInbox() {
         item.note ? h('div', { class: 'inbox-note muted small', key: 'ibn-' + item.id }, item.note) : null, // from an email: when, and how it starts
         item.mail ? inboxReply(item) : null, // ✉ the reply to this email (a draft; you press Send in Outlook)
         h('div', { class: 'inbox-actions' },
+          h('button', { class: 'chip new-from-inbox', key: 'nt-' + item.id, title: 'Make it a new task', onClick: () => { if (inboxAct('inboxToProject', { itemId: item.id, projectId: newId() }, item, `New task: ${item.text}`)) render(); } }, '+ New task'),
           sugg.map((p) => h('button', { class: 'chip sugg', key: 'sg-' + p.id, title: `Add as a step in ${p.name}`, onClick: () => toStep(item, p) }, `→ ${p.name}`)),
           h('select', {
             class: 'inbox-pick', 'aria-label': 'Send to task', key: 'pick-' + item.id, value: '',
@@ -2084,8 +2078,8 @@ function celebration() {
   if (!sc.total || sc.green < sc.total) return null;
   const n = greenStreak(store.view.data.dayScores || {}, sc);
   return h('div', { class: 'celebrate', key: 'celebrate' },
-    h('div', { class: 'celebrate-big' }, `🎉 All ${sc.total} tasks green!`),
-    h('div', null, n > 1 ? `${n} days in a row. Keep it going!` : 'Every task got your attention today.'),
+    h('div', { class: 'celebrate-big' }, `🎉 All ${sc.total} tasks on track!`),
+    h('div', null, n > 1 ? `${n} days in a row. Keep it going!` : 'Every task is moving as often as you set.'),
     h('button', { class: 'link small', onClick: () => go('dashboard') }, 'See your dashboard →'));
 }
 
@@ -2126,7 +2120,7 @@ function progressLine(today) {
   return h('div', { class: 'progress', key: 'progress' },
     h('div', { class: 'progress-row' },
       h('div', { class: 'progress-text' },
-        h('strong', null, `${done} of ${active.length}`), done === active.length ? ' on track — all green! 🎉' : ' on track (green)',
+        h('strong', null, `${done} of ${active.length}`), done === active.length ? ' on track — all green! 🎉' : ' on track',
         streakBadge()),
       h('div', { class: 'progress-btns' },
         h('button', { class: 'btn small', title: "Everything you did today, ready to send", onClick: openSummary }, '📋 Summary'),
@@ -2194,10 +2188,13 @@ function newProjectForm() {
   });
 }
 
+/** The small word under a top icon (shown on a computer only; the icons alone were not clear). */
+const iconCap = (word) => h('span', { class: 'icon-cap', 'aria-hidden': 'true' }, word);
+
 function statusText() {
   const s = store ? store.status : 'loading';
   // A steady cloud sign: ✓ when everything is saved. "Saving" only shows if it takes more than a second.
-  if (s === 'saved') return h('span', { class: 'status sync ok', title: 'All your changes are saved', 'aria-label': 'Saved' }, '☁︎✓');
+  if (s === 'saved') return h('span', { class: 'status sync ok head-icon', title: 'All your changes are saved', 'aria-label': 'Saved' }, '☁︎✓', iconCap('Saved'));
   if (s === 'saving' || s === 'checking') {
     return h('span', { class: 'status sync busy', title: s === 'checking' ? 'Getting the newest data…' : 'Saving…', 'aria-label': 'Saving' },
       '☁︎', h('span', { class: 'sync-dots' }, '…'));
@@ -2213,14 +2210,15 @@ function statusText() {
 
 function renderListColumn() {
   const today = todayIndia();
-  const head = h('div', { class: 'list-head' },
+  const head = h('div', { class: 'list-head owner-head' }, // (five icons: on a computer the page name has its own line)
     h('button', { class: 'icon menu-btn', 'aria-label': 'Menu', onClick: () => { ui.menuOpen = true; render(); } }, '☰'),
     h('h2', null, viewTitle()),
     statusText(),
-    h('button', { class: 'icon', title: 'Quick capture: write down an idea or task (key: q)', 'aria-label': 'Quick capture', onClick: openCapture }, '📥'),
-    h('button', { class: 'icon', title: 'Jump to a task, project, person or page (Ctrl+K)', 'aria-label': 'Jump', onClick: openJump }, '🔍'),
+    // each icon has a small word under it on a computer (owner, 24 Oct); on a phone 📥 is in the bottom bar (Inbox)
+    h('button', { class: 'icon head-icon capture-btn', title: 'Quick capture: write down an idea or task (key: q)', 'aria-label': 'Quick capture', onClick: openCapture }, '📥', iconCap('Capture')),
+    h('button', { class: 'icon head-icon', title: 'Jump to a task, project, person or page (Ctrl+K)', 'aria-label': 'Jump', onClick: openJump }, '🔍', iconCap('Find')),
     onServer ? teamButton() : null,
-    h('button', { class: 'icon', title: 'Get latest', 'aria-label': 'Refresh', onClick: () => doRefresh(true) }, '↻'));
+    h('button', { class: 'icon head-icon', title: 'Get latest', 'aria-label': 'Refresh', onClick: () => doRefresh(true) }, '↻', iconCap('Refresh')));
   const mobileSearch = h('input', {
     class: 'search mobile-only', type: 'search', placeholder: withKey('Search…', '/'), value: ui.search, key: 'search-mobile', 'aria-label': 'Search',
     onInput: (e, el) => { ui.search = el.value; clearTimeout(searchTimer); searchTimer = setTimeout(render, 120); },
@@ -2283,11 +2281,13 @@ function listParts(list, today) {
   }
   if (!done.length) return parts;
   if (!open.length) parts.push(h('p', { class: 'all-green', key: 'all-green' }, 'Everything is on track 🎉'));
+  // nothing needs you: the On track list is open by itself, so Today is never an empty page (owner, 24 Oct)
+  const showDone = ui.showDoneToday === undefined || ui.showDoneToday === null ? !open.length : !!ui.showDoneToday;
   parts.push(h('button', {
-    class: 'done-toggle', key: 'done-toggle', 'aria-expanded': String(!!ui.showDoneToday),
-    onClick: () => { ui.showDoneToday = !ui.showDoneToday; render(); },
-  }, `${ui.showDoneToday ? '▾' : '▸'} On track (${done.length})`));
-  if (ui.showDoneToday) parts.push(h('ul', { class: 'plist-done', key: 'plist-done' }, done.map((p) => projectRow(p, today))));
+    class: 'done-toggle', key: 'done-toggle', 'aria-expanded': String(showDone),
+    onClick: () => { ui.showDoneToday = !showDone; render(); },
+  }, `${showDone ? '▾' : '▸'} On track (${done.length})`));
+  if (showDone) parts.push(h('ul', { class: 'plist-done', key: 'plist-done' }, done.map((p) => projectRow(p, today))));
   return parts;
 }
 
@@ -2302,7 +2302,7 @@ function diaryRich(l) {
 
 function renderDiary() {
   const { history } = store.view;
-  const byDay = diaryEntries(store.view.data, history);
+  const byDay = diaryEntries(store.view.data, history, [...team.byStep.values()]); // (your team's newest updates too)
   const days = [...byDay.keys()].sort().reverse();
   const shown = days.slice(0, Number(ui.diaryDays) || 14);
   const loaded = new Set(Object.keys(history));
@@ -2692,9 +2692,11 @@ function tabBar() {
     onClick: () => go(view),
   }, h('span', { class: 'tab-icon', 'aria-hidden': 'true' }, icon), h('span', { class: 'tab-label' }, label), extra);
   return h('nav', { class: 'tabbar', key: 'tabbar', 'aria-label': 'Main pages' },
+    // the pages used most (owner, 24 Oct): People is in More (☰)
     tab('today', '☀︎', 'Today'),
+    tab('all', '✅', 'Tasks'),
+    tab('mains', '📂', 'Projects'),
     tab('inbox', '📥', 'Inbox', n ? h('span', { class: 'tab-count' }, String(n)) : null),
-    tab('people', '👥', 'People'),
     h('button', { class: 'tab' + (ui.menuOpen ? ' current' : ''), key: 'tab-more', 'aria-label': 'More pages', onClick: () => { ui.menuOpen = true; render(); } },
       h('span', { class: 'tab-icon', 'aria-hidden': 'true' }, '☰'), h('span', { class: 'tab-label' }, 'More')));
 }
@@ -2853,7 +2855,7 @@ function renderRound() {
     return h('div', { class: 'detail-inner round', key: 'round-done' }, top,
       h('div', { class: 'round-card round-finish', key: 'round-card', tabindex: '-1' },
         h('div', { class: 'round-big' }, left ? 'Round finished' : 'All green for today 🎉'),
-        h('p', { class: 'muted' }, left ? `${left} task${left > 1 ? 's' : ''} still not green (you skipped them).` : 'Every task got your attention today.'),
+        h('p', { class: 'muted' }, left ? `${left} task${left > 1 ? 's' : ''} still not on track (you skipped them).` : 'Every task is on track.'),
         h('div', { class: 'row' },
           left ? h('button', { class: 'btn', onClick: () => { ui.round = null; startRound(); } }, 'Go through skipped ones') : null,
           h('button', { class: 'btn primary', onClick: endRound }, 'Done'))));
@@ -3145,7 +3147,8 @@ function currentList() {
   if (!store || !store.view || ['diary', 'settings', 'dashboard', 'time'].includes(ui.view)) return [];
   const today = todayIndia();
   const { open, done } = splitToday(sortForView(visibleProjects(), today), today);
-  return ui.showDoneToday || ui.view !== 'today' ? shownOrder([...open, ...done]) : open;
+  const showDone = ui.showDoneToday === undefined || ui.showDoneToday === null ? !open.length : !!ui.showDoneToday; // (as listParts: ↓ ↑ go through what is on screen)
+  return showDone || ui.view !== 'today' ? shownOrder([...open, ...done]) : open;
 }
 
 /**
@@ -3327,8 +3330,8 @@ function teamButton() {
   const a = team.alerts;
   const n = a.stuck + a.unread + a.suggestions;
   const why = [a.stuck && `${a.stuck} stuck`, a.unread && `${a.unread} with new messages`, a.suggestions && `${a.suggestions} suggestion(s)`].filter(Boolean).join(', ');
-  return h('a', { class: 'icon team-btn', href: '#team', title: n ? `Team needs you: ${why}` : 'Team: tasks you gave and their daily updates', 'aria-label': n ? `Team, ${n} need you` : 'Team' },
-    '👥', n ? h('span', { class: 'team-count' }, String(n)) : null);
+  return h('a', { class: 'icon team-btn head-icon', href: '#team', title: n ? `Team needs you: ${why}` : 'Team: tasks you gave and their daily updates', 'aria-label': n ? `Team, ${n} need you` : 'Team' },
+    '👥', n ? h('span', { class: 'team-count' }, String(n)) : null, iconCap('Team'));
 }
 
 function teamApi(a, body = {}) {

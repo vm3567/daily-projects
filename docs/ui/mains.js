@@ -233,7 +233,7 @@ export function mainChip(ctx, p) {
 
 /** Small chips under a task's row in a list: "📂 Kilns" "📂 Supplier approval" (the projects it is in). */
 export function projectChips(data, p) {
-  const mains = parentsOf(data, p);
+  const mains = parentsOf(data, p).filter((m) => !m.misc); // (📂 Misc = in no project: no chip, the row stays short — owner, 24 Oct)
   if (!mains.length) return null;
   return h('span', { class: 'prow-chips' }, mains.map((m) => h('span', { class: 'tag main-tag', key: 'pc-' + m.id, title: `In the project ${m.name}` }, `📂 ${m.name}`)));
 }
@@ -370,7 +370,10 @@ export function subProjectsBlock(ctx, p, today = todayIndia()) {
             class: 'link small sub-remove', type: 'button', title: `Take ${c.name} out of this project (the task is kept)`,
             onClick: (e) => { if (e && e.stopPropagation) e.stopPropagation(); ctx.act('removeFromProject', { projectId: c.id, parentId: p.id }, `${c.name} taken out of 📂 ${p.name} (the task is kept)`); },
           }, '✕ Remove')));
-      }))) : h('p', { class: 'muted small' }, 'No tasks in it yet.'),
+      }))) : h('p', { class: 'muted small' }, (() => { // a project that only holds projects: say where its tasks are
+        const n = projectParts(data, p.id).tasks.filter((c) => c.state !== 'finished').length;
+        return n ? `No tasks right in it — the projects above hold ${n} task${n === 1 ? '' : 's'}.` : 'No tasks in it yet.';
+      })()),
     h('div', { class: 'sub-buttons' },
       p.misc ? null : h('button', { class: 'btn small', type: 'button', onClick: () => openAddTasks(ctx, p) }, '+ Add tasks'),
       h('button', { class: 'btn small', type: 'button', onClick: () => newProjectHere(ctx, p) }, '+ New task here'),

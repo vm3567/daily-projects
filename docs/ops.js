@@ -9,12 +9,12 @@
 // applyOp(state, op) changes the state in place and returns true, or returns false
 // when the operation must be skipped (for example, its item no longer exists).
 
-import { WORK, indiaDate, monthOf, laterDate, addDays, REPEATS, nextRepeatDate, waitingAgain, WEEKDAYS, indiaDateTime, validRemindOnce, remindOnceText, canPutUnder, parentIdsOf, normalizeParents, isMainProject, descendantIds, MOVE_EVERY_DEFAULT, THREAD_MAX, timerOn, MISC_ID, STAGES, STAGE_LABELS, cleanWaitingFor } from './rules.js';
+import { WORK, indiaDate, monthOf, laterDate, addDays, REPEATS, nextRepeatDate, waitingAgain, WEEKDAYS, indiaDateTime, validRemindOnce, remindOnceText, canPutUnder, parentIdsOf, normalizeParents, isMainProject, descendantIds, MOVE_EVERY_DEFAULT, DEFAULT_TARGET_DAYS, THREAD_MAX, timerOn, MISC_ID, STAGES, STAGE_LABELS, cleanWaitingFor } from './rules.js';
 import { AI_DAILY_LIMIT, BRIEF_CLAIM_MINUTES } from './config.js';
 import { sanitizeRich, htmlToText, isRich, RICH_MAX } from './rich.js';
 
 export const PRIORITIES = ['high', 'medium', 'low'];
-export const DEFAULT_TARGET_DAYS = 30; // new projects get a target date 30 days ahead
+export { DEFAULT_TARGET_DAYS } from './rules.js'; // new projects get a target date 30 days ahead (marked autoTarget: it does not colour the dot)
 const PROJECT_FIELDS = ['name', 'priority', 'deadline', 'notes', 'tagId', 'status', 'about'];
 export const ABOUT_MAX = 1000; // the project's description (owner asked for 1000 letters, 22 Oct)
 export const MAX_SNOOZE_DAYS = 365;
@@ -365,6 +365,7 @@ const handlers = {
       name: cleanText(a.name, 200) || 'New project',
       priority: PRIORITIES.includes(a.priority) ? a.priority : 'medium',
       deadline: a.deadline === undefined ? addDays(indiaDate(op.at), DEFAULT_TARGET_DAYS) : cleanDate(a.deadline),
+      ...(a.deadline === undefined ? { autoTarget: true } : {}),
       notes: '',
       links: [],
       state: 'active',
@@ -513,7 +514,12 @@ const handlers = {
       p.statusAt = op.at;
     }
     if (a.field === 'priority' && !PRIORITIES.includes(value)) return false;
-    if (a.field === 'deadline') value = cleanDate(value);
+    if (a.field === 'deadline') { // chosen by you now (even the same date as the automatic one): it counts for the colour
+      value = cleanDate(value);
+      const chosen = !!p.targetSet;
+      delete p.autoTarget; p.targetSet = true;
+      if (p.deadline === value) return !chosen;
+    }
     if (a.field === 'tagId') {
       if (!value) value = null;
       if ((p.tagId || null) === value) return false;

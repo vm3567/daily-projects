@@ -2,7 +2,7 @@
 // A step is linked to a person when its text or note has "@Name", or "Waiting on" is that person.
 
 import { h, fmtDay, fmtTime } from './dom.js';
-import { mentionedPeople, initials, indiaDate, personSteps, personStatus, waitingDays, todayIndia, stepLinkedTo, stepTargets, addDays, givenProjectsOf, nextStep, canGiveStep, givableSteps } from '../rules.js';
+import { mentionedPeople, initials, indiaDate, personSteps, personStatus, waitingDays, todayIndia, stepLinkedTo, stepTargets, addDays, givenProjectsOf, nextStep, canGiveStep, givableSteps, teamMemberFor } from '../rules.js';
 import { sentMarkOf, mailDate, teamOrder } from '../reports.js';
 import { newId, cleanPhone } from '../ops.js';
 
@@ -74,7 +74,7 @@ export function renderPeopleList(ctx) {
       h('input', { type: 'checkbox', name: 'signin', checked: !!ui.addSignIn, onChange: (e, el) => { ui.addSignIn = el.checked; ctx.render(); } }),
       ' Also give them a Task List sign-in') : null,
     ctx.onServer && ui.addSignIn ? h('input', { name: 'email', type: 'email', key: 'new-person-email', placeholder: 'Email (optional, for the morning email)', autocomplete: 'off' }) : null),
-    people.length ? null : h('p', { class: 'empty-list' }, 'No people yet. Add a name above, or type @ and a name in any step.'),
+    people.length || teamNotInPeople(ctx).length ? null : h('p', { class: 'empty-list' }, 'No people yet. Add a name above, or type @ and a name in any step.'),
     h('ul', { class: 'plist people-list', key: 'people-list' }, peopleByFollowUp(data).map(({ person, st }) => { const sent = markOf(ctx, person).time; return (
       h('li', { key: 'pp-' + person.id, 'data-id': person.id, class: 'prow' + (ui.person === person.id ? ' current' : ''), onContextmenu: (e) => ctx.openPersonMenu(person.id, e) },
         h('button', { class: 'prow-btn', onClick: () => ctx.selectPerson(person.id) },
@@ -84,7 +84,26 @@ export function renderPeopleList(ctx) {
             h('span', { class: 'prow-name' }, person.name, st.open ? h('span', { class: 'count-pill' }, String(st.open)) : null,
               sent ? h('span', { class: 'sent-mark small', title: `Pending list sent today at ${sent}` }, `✓ ${sent}`) : null),
             h('span', { class: 'prow-next' + (st.colour === 'red' ? ' warn' : '') }, statusWords(st, teamCounts(data, person, linkOf(ctx, person))))))));
-    })));
+    })),
+    teamJoinBlock(ctx));
+}
+
+/** Your team members (a Task List sign-in) who are not in People yet: the list shows them, one tap adds them (owner, 24 Oct). */
+export function teamNotInPeople(ctx) {
+  const accounts = ctx.onServer && ctx.teamAccounts ? ctx.teamAccounts() : null;
+  if (!accounts) return [];
+  const people = ctx.store.view.data.people || [];
+  return accounts.filter((u) => u && !u.owner && u.active !== false && !people.some((p) => teamMemberFor(p, [u])));
+}
+function teamJoinBlock(ctx) {
+  const list = teamNotInPeople(ctx);
+  if (!list.length) return null;
+  return h('div', { class: 'team-join', key: 'team-join' },
+    h('p', { class: 'muted small' }, 'In your team (they have a Task List sign-in), not in People yet:'),
+    h('div', { class: 'row' }, list.map((u) => h('button', {
+      class: 'chip', type: 'button', key: 'tj-' + u.id, title: `Add ${u.name} to People`,
+      onClick: () => { const personId = newId(); if (ctx.store.dispatch('addPerson', { personId, name: u.name })) { ctx.toast(`${u.name} added to People`); ctx.selectPerson(personId); } },
+    }, `+ ${u.name}`))));
 }
 
 /** The person's Work Task account, when this person is linked to one: { user, first, person }; else null. */
@@ -266,9 +285,9 @@ function teamAccountBox(ctx, person, link) {
   const others = (ctx.teamAccounts ? ctx.teamAccounts() || [] : []).filter((x) => x.active && x.id !== u.id && !x.owner);
   return h('div', { class: 'block team-account', key: 'ta-' + person.id },
     h('div', { class: 'small' }, h('strong', null, 'Team account'), ` · @${u.username}`, u.active ? '' : ' · switched off',
-      h('span', { class: 'muted' }, u.lastLogin ? ` · last signed in ${String(u.lastLogin).slice(0, 10)}` : ' · not signed in yet')),
-    h('label', { class: 'small' }, '✉ ', h('input', {
-      key: 'ta-email-' + u.id, type: 'email', value: u.email || '', placeholder: 'Email (for the pending list)', 'aria-label': 'Task List email', autocomplete: 'off',
+      h('span', { class: 'muted' }, u.lastLogin ? ` · last signed in ${fmtDay(String(u.lastLogin).slice(0, 10))}` : ' · not signed in yet')),
+    h('label', { class: 'small team-email' }, '✉ ', h('input', {
+      key: 'ta-email-' + u.id, type: 'email', class: 'wide-input', value: u.email || '', placeholder: 'Email (for the pending list)', 'aria-label': 'Task List email', autocomplete: 'off',
       onChange: (e, el) => { if (el.value.trim() !== (u.email || '')) ctx.setTeamEmail(u, el.value); },
     })),
     h('div', { class: 'row' },

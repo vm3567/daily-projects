@@ -3110,3 +3110,43 @@ test('📒 Giving a 📂 project as a record: its tasks go with it as records to
   applyOp(s, op('setProjectTeam', { projectId: 'm', userId: 7, name: 'Ravi', giveTasks: true }, '2026-10-03'));
   assert.equal(projectGiveChanges(s.data).find((c) => c.projectId === 'k1').team.record, false, 'the project back to daily updates: its task follows');
 });
+
+// ---------------------------------------------------------------- screen review fixes (owner, 24 Oct)
+test('Review 1: 📂 Misc\'s dot is the worst of its loose tasks (it was green with a red task in it)', async () => {
+  const { listColour } = await import('../docs/ui/mains.js');
+  const s = fresh();
+  applyOp(s, op('makeMisc', {}, '2026-10-01'));
+  applyOp(s, op('createProject', { projectId: 'a', name: 'A', deadline: null }, '2026-10-01'));
+  applyOp(s, op('setProjectField', { projectId: 'a', field: 'deadline', value: '2026-10-05' }, '2026-10-01'));
+  assert.equal(listColour(s.data, s.data.projects.find((p) => p.id === 'misc'), '2026-10-06'), 'red');
+});
+
+test('Review 2: the automatic 30-day target date of a new task never makes it yellow / red or "Overdue"; a date you set does', async () => {
+  const { dotColour, isOverdue, ownTarget } = await import('../docs/rules.js');
+  const s = fresh();
+  applyOp(s, op('createProject', { projectId: 'a', name: 'A' }, '2026-10-01'));
+  const p = s.data.projects.find((x) => x.id === 'a');
+  assert.equal(p.deadline, '2026-10-31', 'still gets one (shown, can be changed)');
+  assert.equal(ownTarget(p), false);
+  applyOp(s, op('addWorkNote', { projectId: 'a', noteId: 'n', text: 'x' }, '2026-11-01'));
+  assert.equal(dotColour(p, '2026-11-01'), 'green', 'past the automatic date, but worked on: green');
+  assert.equal(isOverdue(p, '2026-11-01'), false);
+  applyOp(s, op('setProjectField', { projectId: 'a', field: 'deadline', value: '2026-10-31' }, '2026-11-01'));
+  assert.equal(ownTarget(p), true, 'chosen by you now (even the same date)');
+  assert.equal(dotColour(p, '2026-11-01'), 'red');
+  // older tasks (no mark): exactly 30 days after they were made counts as automatic
+  assert.equal(ownTarget({ deadline: '2026-10-31', createdAt: '2026-10-01T05:00:00.000Z' }), false);
+  assert.equal(ownTarget({ deadline: '2026-10-20', createdAt: '2026-10-01T05:00:00.000Z' }), true);
+});
+
+test('The server checks pick free ports for their throwaway servers (a fixed port taken by another program broke 23 checks, 24 Oct)', async () => {
+  const { readFileSync } = await import('node:fs');
+  const src = readFileSync(new URL('./php-server.test.mjs', import.meta.url), 'utf8');
+  for (const name of ['DB_PORT', 'WEB_PORT', 'MS_PORT', 'CB_PORT']) assert.match(src, new RegExp(`const ${name} = await freePort\\(`), name);
+});
+
+test('Review 15: the reason line shows the date as "21 Oct", not "2026-10-21"', async () => {
+  const { colourWhy, shortDay } = await import('../docs/rules.js');
+  assert.equal(shortDay('2026-10-21'), '21 Oct');
+  assert.equal(colourWhy({ state: 'active', steps: [], deadline: '2026-10-21', targetSet: true }, '2026-10-24'), 'Target date passed (21 Oct)');
+});

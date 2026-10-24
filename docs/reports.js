@@ -19,7 +19,7 @@ const DIARY_WORDS = {
  * Diary lines grouped by India day: Map(day -> [{ at, projectId, name, text, exists }]), newest first.
  * Work notes come from the projects (so edits and deletes show), and from history only for deleted projects.
  */
-export function diaryEntries(data, history) {
+export function diaryEntries(data, history, teamTasks = []) {
   const byDay = new Map();
   const add = (date, line) => { if (!byDay.has(date)) byDay.set(date, []); byDay.get(date).push(line); };
   const exists = new Set(data.projects.map((p) => p.id));
@@ -44,6 +44,16 @@ export function diaryEntries(data, history) {
   for (const e of events) {
     if (e.kind === 'note_added' && !exists.has(e.projectId)) {
       add(indiaDate(e.at), { at: e.at, projectId: e.projectId, name: nameOf(e), exists: false, text: `📝 ${e.detail}` });
+    }
+  }
+  // 👥 the team's newest updates on the tasks you gave (today's and the one before, each once) — owner, 24 Oct
+  const seen = new Set();
+  for (const t of teamTasks || []) {
+    for (const u of [t.today, t.last]) {
+      if (!u || !u.day || !u.note || seen.has(u.id)) continue;
+      seen.add(u.id);
+      const p = data.projects.find((x) => x.id === t.projectRef);
+      add(u.day, { at: u.at || u.day + 'T12:00:00', projectId: p ? p.id : '', name: p ? p.name : t.project || t.title, exists: !!p, text: `👥 ${(t.assignee && t.assignee.name) || 'Team'}${p && t.title !== p.name ? ` (${t.title})` : ''}: ${u.note}` });
     }
   }
   const sorted = new Map();

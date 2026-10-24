@@ -198,20 +198,24 @@ export const everyText = (n) => (n === 1 ? 'every day' : `every ${n} days`);
 const openSteps = (p) => (p.steps || []).filter((s) => !s.done);
 /** Its target date, or an open step's due date, has passed. */
 function datePassed(p, today) {
-  return (!!p.deadline && p.deadline < today) || openSteps(p).some((s) => s.dueDate && s.dueDate < today);
+  return (ownTarget(p) && p.deadline < today) || openSteps(p).some((s) => s.dueDate && s.dueDate < today);
 }
 /** Its target date, or an open step's due date, is today or in the next 2 days. */
 function dateSoon(p, today) {
   const soon = addDays(today, 2);
-  return (!!p.deadline && p.deadline <= soon) || openSteps(p).some((s) => s.dueDate && s.dueDate <= soon);
+  return (ownTarget(p) && p.deadline <= soon) || openSteps(p).some((s) => s.dueDate && s.dueDate <= soon);
 }
+
+const MONTHS3 = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+/** "2026-10-21" → "21 Oct" (as dates are shown everywhere). */
+export const shortDay = (d) => (/^\d{4}-\d{2}-\d{2}$/.test(String(d)) ? `${Number(d.slice(8, 10))} ${MONTHS3[Number(d.slice(5, 7)) - 1]}` : String(d || ''));
 
 /** Why the dot has its colour, in a few words (the dot's tooltip and the task page). */
 export function colourWhy(p, today = todayIndia()) {
   if (p.state === 'finished') return 'Finished';
   if (p.state !== 'active') return 'Paused';
   if (isSnoozed(p, today)) return 'Snoozed';
-  if (p.deadline && p.deadline < today) return `Target date passed (${p.deadline})`;
+  if (ownTarget(p) && p.deadline < today) return `Target date passed (${shortDay(p.deadline)})`;
   if (datePassed(p, today)) return 'A step\'s due date has passed';
   const days = daysWithoutWork(p, today);
   const last = days === 0 ? 'Updated today' : `No update for ${days} day${days === 1 ? '' : 's'}`;
@@ -244,7 +248,20 @@ export function daysWithoutWork(project, today = todayIndia()) {
 }
 
 export function isOverdue(project, today = todayIndia()) {
-  return !!(project.deadline && project.deadline < today);
+  return !!(ownTarget(project) && project.deadline < today);
+}
+
+/** New tasks get a target date 30 days ahead (shown, changeable). */
+export const DEFAULT_TARGET_DAYS = 30;
+/**
+ * A target date the owner chose (not the automatic one a new task gets): only this one makes the dot yellow / red or
+ * says "Overdue" (owner, 24 Oct: the automatic date would turn every task red after 30 days). Older tasks have no mark:
+ * a target exactly 30 days after the day it was made counts as the automatic one.
+ */
+export function ownTarget(p) {
+  if (!p || !p.deadline || p.autoTarget) return false;
+  if (p.targetSet) return true; // set (or kept) by you
+  return !(p.createdAt && p.deadline === addDays(indiaDate(p.createdAt), DEFAULT_TARGET_DAYS));
 }
 
 /** First unfinished step, or null. */
@@ -505,6 +522,7 @@ export function projectTasks(data, id) {
 
 /** Everything inside the project `id` at any depth, in one pass: { tasks, projects } (isMainProject for each, without a scan each). */
 export function projectParts(data, id) {
+  if (id === MISC_ID && hasMisc(data)) return { tasks: childrenOf(data, id), projects: [] }; // 📂 Misc: its loose tasks (they have no parent)
   const ids = descendantIds(data, id);
   const holders = new Set(data.projects.flatMap((p) => parentIdsOf(p)));
   const tasks = [], projects = [];
@@ -604,6 +622,24 @@ export function todayWithoutEmptyMains(list, today = todayIndia()) {
 /** What Today counts (its rows, the progress line, the Daily round, the evening check): awake, empty 📂 projects left out. */
 export function todayList(data, today = todayIndia()) {
   return todayWithoutEmptyMains(awakeProjects(data, today), today);
+}
+
+/**
+ * 📥 Inbox: the tasks an item seems to belong to (up to 3). Two words in common (4+ letters), or one word and a person
+ * named in the item who is on one of the task's steps — one common word alone ("glaze") is too weak (owner, 24 Oct).
+ */
+export function inboxMatches(data, text, today = todayIndia()) {
+  const split = (t) => String(t || '').toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((w) => w.length >= 4);
+  const words = new Set(split(text));
+  const low = String(text || '').toLowerCase();
+  const people = (data.people || []).filter((x) => x.name && low.includes(x.name.toLowerCase()));
+  return stepTargets(data, today)
+    .map((p) => {
+      const common = new Set(split(p.name).filter((w) => words.has(w))).size;
+      const person = people.some((x) => p.steps.some((s) => !s.done && s.text.includes('@' + x.name)));
+      return { p, score: common * 2 + (person ? 1 : 0), ok: common >= 2 || (common >= 1 && person) };
+    })
+    .filter((x) => x.ok).sort((a, b) => b.score - a.score).slice(0, 3).map((x) => x.p);
 }
 
 /** Where a new step can go (Inbox, Chrome clip, a person's task box): awake tasks only — a 📂 project holds tasks, not steps. */
@@ -1310,6 +1346,7 @@ export function stageOf(p, team = null) {
 /** The words on a stage chip: "🟠 Waiting: Approval" (`you` = shown as "Waiting: you"). */
 export function stageText(info, { you = false } = {}) {
   const s = info && STAGES.includes(info.stage) ? info.stage : 'notstarted';
+  if (s === 'done' && info && info.cancelled) return '✖ Cancelled'; // taken back or cancelled: never "Done"
   if (s !== 'waiting') return STAGE_LABELS[s];
   const who = you ? 'you' : cleanWaitingFor(info.waitingFor);
   return who ? `${STAGE_LABELS.waiting}: ${who}` : STAGE_LABELS.waiting;
