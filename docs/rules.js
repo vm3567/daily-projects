@@ -390,7 +390,9 @@ export function projectGiveChanges(data) {
     // the projects it is in, and the ones those are in (a task in a project inside a given project goes too), nearest first
     const given = ancestorsOf(data, t).filter((m) => m.team && m.state !== 'finished');
     const via = t.team && byId.get(t.team.viaProject);
-    const m = (via && given.includes(via) ? via : given[0]) || null;
+    // it stays with the project it went with, unless a given project nearer to it (inside that one) came since
+    const nearer = via && given.includes(via) ? given.find((g) => g !== via && descendantIds(data, via.id).has(g.id)) : null;
+    const m = (via && given.includes(via) ? nearer || via : given[0]) || null;
     if (!m) { if (t.team) out.push({ projectId: t.id, team: null }); continue; }
     if (!t.team && t.teamOff) continue;
     const want = { userId: m.team.userId, name: m.team.name, needsPhoto: !!m.team.needsPhoto, viaProject: m.id };
@@ -491,9 +493,12 @@ export function canPutUnder(data, child, main) {
 
 /** Every id inside the project `id`, at any depth (its tasks and projects, theirs…); each once, safe from circles. */
 export function descendantIds(data, id) {
+  // what is right inside each project, in one pass over the list (not a full scan for every one inside; no deep recursion)
+  const kids = new Map();
+  for (const c of data.projects) for (const pid of parentIdsOf(c)) { if (!kids.has(pid)) kids.set(pid, []); kids.get(pid).push(c.id); }
   const out = new Set();
-  const walk = (x) => { for (const c of data.projects) if (!out.has(c.id) && c.id !== id && parentIdsOf(c).includes(x)) { out.add(c.id); walk(c.id); } };
-  walk(id);
+  const todo = [id];
+  while (todo.length) for (const c of kids.get(todo.pop()) || []) if (c !== id && !out.has(c)) { out.add(c); todo.push(c); }
   return out;
 }
 

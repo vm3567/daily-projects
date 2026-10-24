@@ -339,8 +339,11 @@ function teamTime(v, op) {
 
 /** The projects a task is in (parentIds; an older parentId is folded in). An empty list: the field goes. */
 /** A task put into a project with a "move every" takes it, unless it has its own (owner asked 23 Oct). */
-function inheritEvery(child, main) {
-  if (child && main && Number.isInteger(main.moveEvery) && !Number.isInteger(child.moveEvery)) child.moveEvery = main.moveEvery;
+/** A 📂 project put in: the tasks and projects inside it take it too (each unless it has its own), as setMoveEvery does. */
+function inheritEvery(child, main, data = null) {
+  if (!child || !main || !Number.isInteger(main.moveEvery)) return;
+  const inside = data && isMainProject(data, child) ? data.projects.filter((x) => descendantIds(data, child.id).has(x.id)) : [];
+  for (const x of [child, ...inside]) if (!Number.isInteger(x.moveEvery)) x.moveEvery = main.moveEvery;
 }
 
 function setParents(p, ids) {
@@ -414,7 +417,7 @@ const handlers = {
     if (now.includes(main.id) || !canPutUnder(data, p, main)) return false;
     setParents(p, [...now, main.id]);
     main.isMain = true;
-    inheritEvery(p, main);
+    inheritEvery(p, main, data);
     p.updatedAt = op.at;
     addEvent(state, op, p, 'main_changed', `Added to 📂 ${main.name}`);
     addEvent(state, { ...op, id: op.id + 'm' }, main, 'main_changed', `${p.name} added`);
@@ -461,7 +464,7 @@ const handlers = {
     setParents(p, [main.id]);
     dropFromOrder(data, p.id, now.filter((x) => x !== main.id));
     main.isMain = true;
-    inheritEvery(p, main);
+    inheritEvery(p, main, data);
     p.updatedAt = op.at;
     addEvent(state, op, p, 'main_changed', `Added to 📂 ${main.name}`);
     addEvent(state, { ...op, id: op.id + 'm' }, main, 'main_changed', `${p.name} added`);
@@ -901,7 +904,10 @@ const handlers = {
       p.team = { userId, name, since: old && old.userId === userId ? old.since : indiaDate(op.at), ...(needsPhoto ? { needsPhoto: true } : {}), ...(via ? { viaProject: via } : {}) };
       delete p.teamOff;
       // giving a 📂 project gives all its tasks again, also one taken back on its own before
-      if (main && a.giveTasks) for (const c of state.data.projects) if (parentIdsOf(c).includes(p.id)) delete c.teamOff;
+      if (main && a.giveTasks) { // (at every depth: a task in a project inside it goes with it too, rules.js projectGiveChanges)
+        const inside = descendantIds(state.data, p.id);
+        for (const c of state.data.projects) if (inside.has(c.id)) delete c.teamOff;
+      }
     } else {
       delete p.team;
       if (a.keepOff && !main) p.teamOff = true; // taken back on its own: does not come back with its 📂 project

@@ -3054,6 +3054,69 @@ test('📂 Projects inside projects (owner asked 23 Oct): tasks at any depth, th
   assert.equal(applyOp(s, op('addToProject', { projectId: 'misc', parentId: 'big' }, '2026-10-02')), false);
 });
 
+test('📂 Review fix: a nearer given project wins also after the task already went with the outer one (the changes applied, as the app does)', async () => {
+  const { projectGiveChanges } = await import('../docs/rules.js');
+  const s = withMains(); // k1, k2, m (Kilns), x
+  applyOp(s, op('createMainProject', { projectId: 'big', name: 'Plant upgrade' }, '2026-10-01'));
+  applyOp(s, op('addToProject', { projectId: 'k1', parentId: 'm' }, '2026-10-01'));
+  applyOp(s, op('addToProject', { projectId: 'm', parentId: 'big' }, '2026-10-01'));
+  applyOp(s, op('addToProject', { projectId: 'k2', parentId: 'big' }, '2026-10-01'));
+  const follow = (date) => { for (const c of projectGiveChanges(s.data)) applyOp(s, op('setProjectTeam', c.team ? { projectId: c.projectId, ...c.team } : { projectId: c.projectId, userId: null }, date)); };
+  applyOp(s, op('setProjectTeam', { projectId: 'big', userId: 7, name: 'Ravi', giveTasks: true }, '2026-10-02'));
+  follow('2026-10-02');
+  assert.equal(P(s, 'k1').team.viaProject, 'big');
+  applyOp(s, op('setProjectTeam', { projectId: 'm', userId: 8, name: 'Valar', giveTasks: true }, '2026-10-03'));
+  follow('2026-10-03');
+  assert.deepEqual([P(s, 'k1').team.userId, P(s, 'k1').team.viaProject], [8, 'm'], 'k1 is inside Kilns, given to Valar: it goes to Valar');
+  assert.deepEqual([P(s, 'k2').team.userId, P(s, 'k2').team.viaProject], [7, 'big'], 'k2 is right in Plant upgrade: stays with Ravi');
+  assert.deepEqual(projectGiveChanges(s.data), [], 'and it stays (no flip back and forth)');
+  // Kilns taken back: k1 goes back to the outer project's person
+  applyOp(s, op('setProjectTeam', { projectId: 'm', userId: null }, '2026-10-04'));
+  follow('2026-10-04');
+  assert.deepEqual([P(s, 'k1').team.userId, P(s, 'k1').team.viaProject], [7, 'big']);
+});
+
+test('📂 Review fix: giving a 📂 project again gives a task kept back inside one of its projects too (teamOff cleared at every depth)', async () => {
+  const { projectGiveChanges } = await import('../docs/rules.js');
+  const s = withMains();
+  applyOp(s, op('createMainProject', { projectId: 'big', name: 'Plant upgrade' }, '2026-10-01'));
+  applyOp(s, op('addToProject', { projectId: 'k1', parentId: 'm' }, '2026-10-01'));
+  applyOp(s, op('addToProject', { projectId: 'm', parentId: 'big' }, '2026-10-01'));
+  applyOp(s, op('setProjectTeam', { projectId: 'k1', userId: null, keepOff: true }, '2026-10-01'));
+  assert.equal(P(s, 'k1').teamOff, true);
+  applyOp(s, op('setProjectTeam', { projectId: 'big', userId: 7, name: 'Ravi', giveTasks: true }, '2026-10-02'));
+  assert.equal(P(s, 'k1').teamOff, undefined, 'the box "keep" is unticked when giving: it goes');
+  assert.ok(projectGiveChanges(s.data).some((c) => c.projectId === 'k1' && c.team && c.team.userId === 7));
+});
+
+test('📂 Review fix: a 📂 project put into one with a "move every" brings its tasks along (each unless it has its own)', async () => {
+  const { moveEveryOf } = await import('../docs/rules.js');
+  const s = withMains();
+  applyOp(s, op('createMainProject', { projectId: 'big', name: 'Plant upgrade' }, '2026-10-01'));
+  applyOp(s, op('setMoveEvery', { projectId: 'big', days: 7 }, '2026-10-01'));
+  applyOp(s, op('addToProject', { projectId: 'k1', parentId: 'm' }, '2026-10-01'));
+  applyOp(s, op('addToProject', { projectId: 'k2', parentId: 'm' }, '2026-10-01'));
+  applyOp(s, op('setMoveEvery', { projectId: 'k2', days: 1 }, '2026-10-01'));
+  applyOp(s, op('addToProject', { projectId: 'm', parentId: 'big' }, '2026-10-02'));
+  assert.deepEqual(['m', 'k1', 'k2'].map((id) => moveEveryOf(P(s, id))), [7, 7, 1]);
+  applyOp(s, op('setParent', { projectId: 'x', parentId: 'big' }, '2026-10-02'));
+  assert.equal(moveEveryOf(P(s, 'x')), 7, 'a task as before');
+});
+
+test('📂 Review fix: descendantIds reads each task once (not a full scan for every task inside), and a long chain does not run out of stack', async () => {
+  const { descendantIds } = await import('../docs/rules.js');
+  const data = emptyData();
+  let reads = 0;
+  const mk = (id, parentIds) => { const p = { id, name: id }; Object.defineProperty(p, 'parentIds', { get: () => { reads++; return parentIds; }, enumerable: true }); return p; };
+  data.projects.push({ id: 'm', name: 'm', isMain: true });
+  for (let i = 0; i < 300; i++) data.projects.push(mk('t' + i, ['m']));
+  assert.equal(descendantIds(data, 'm').size, 300);
+  assert.ok(reads <= 2 * 301, `read ${reads} times for 301 rows`);
+  const chain = emptyData();
+  for (let i = 0; i < 20000; i++) chain.projects.push({ id: 'c' + i, name: 'c', ...(i ? { parentIds: ['c' + (i - 1)] } : {}) });
+  assert.equal(descendantIds(chain, 'c0').size, 19999);
+});
+
 test('📂 createMainProject with a 📂 project as its child: the new project holds it (projects inside projects); never 📂 Misc', () => {
   const s = withMains();
   applyOp(s, op('addToProject', { projectId: 'k1', parentId: 'm' }, '2026-10-01'));
