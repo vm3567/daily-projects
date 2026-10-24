@@ -339,7 +339,8 @@ export function subProjectsBlock(ctx, p, today = todayIndia()) {
   };
   return h('section', { class: 'block sub-projects', key: 'subs-' + p.id },
     innerProjects(ctx, p, today),
-    h('h3', null, `TASKS (${all.length})`),
+    // the same count as its row in 📂 Projects (open ones); paused / finished ones say so (owner, 24 Oct: "6 tasks" vs "TASKS (8)")
+    h('h3', null, (() => { const open = all.filter((c) => c.state === 'active').length, rest = all.length - open; return `TASKS (${open})${rest ? ` + ${rest} paused / finished` : ''}`; })()),
     all.length ? stageFilterBar(stageCounts(all, stageOfKid), sf, (k) => { (ctx.ui.subStage ||= {})[p.id] = k; ctx.render(); }) : null,
     !kids.length && all.length ? h('p', { class: 'muted small' }, 'None in this stage.') : null,
     kids.length ? h('table', { class: 'sub-table' },

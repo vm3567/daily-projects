@@ -2,6 +2,7 @@
 
 import { h, morph, installEvents, fmtDay, fmtLongDay, fmtTime, keyHint, withKey } from './ui/dom.js';
 import { pageKey, isTyping } from './ui/listkeys.js';
+import { IN_NO_PROJECT } from './ui/workparts.js';
 import { renderDetail, linkChip, isMailLink, pasteIntoProject, takeBackQuestion, updateState, makeItAProject } from './ui/detail.js';
 import { renderPeopleList, renderPerson, peopleByFollowUp } from './ui/people.js';
 import { installMentions } from './ui/mention.js';
@@ -1211,12 +1212,12 @@ function projectRow(p, today, opts = {}) {
           class: 'quick-add', title: 'Add the first step', 'aria-label': `Add a step to ${p.name}`,
           onClick: () => { ui.quickAdd = ui.quickAdd === p.id ? null : p.id; render(); focusKey('qa-' + p.id); },
         }, '+')
-        : h('span', { class: 'quick-tick-space', 'aria-hidden': 'true' }),
+        : asProject ? null : h('span', { class: 'quick-tick-space', 'aria-hidden': 'true' }), // (📂 Projects rows have no tick box: no empty gap, owner 24 Oct)
     h('button', { class: 'prow-btn', onClick: () => select(p.id) },
       h('span', { class: `dot ${colour}`, 'aria-label': colour }),
       colour === 'green' && greenByTeamOnly(p, today) ? h('span', { class: 'team-green', title: 'On track today because the team sent an update' }, '👥') : null,
       h('span', { class: 'prow-text' },
-        h('span', { class: 'prow-name' }, isMainProject(store.view.data, p) ? '📂 ' : '', p.name,
+        h('span', { class: 'prow-name' }, isMainProject(store.view.data, p) ? '📂 ' : '', p.misc ? IN_NO_PROJECT : p.name, // (📂 Misc: one name everywhere, owner 24 Oct)
           p.state !== 'active' ? h('span', { class: 'tag' }, p.stateChangedAt && (p.state === 'paused' || p.state === 'finished') ? `${p.state === 'paused' ? 'paused since' : 'finished'} ${fmtDay(indiaDate(p.stateChangedAt))}` : p.state) : null,
           p.priority === 'high' ? h('span', { class: 'tag high' }, 'High') : null,
           ui.view === 'all' && !isMainProject(store.view.data, p) ? stageChip(taskStage(p)) : null), // ✅ Tasks: the Stage chip on each row
@@ -1731,7 +1732,7 @@ function renderInbox() {
           h('option', { value: '' }, 'Send to task…'),
           projects.map((p) => h('option', { value: p.id }, p.name)),
           h('option', { value: 'new' }, '+ New task')),
-          h('button', { class: 'icon', title: 'Delete', 'aria-label': 'Delete', onClick: () => inboxAct('removeInbox', { itemId: item.id }, item, 'Removed from Inbox') }, '🗑')));
+          h('button', { class: 'icon inbox-del', title: 'Delete', 'aria-label': 'Delete', onClick: () => inboxAct('removeInbox', { itemId: item.id }, item, 'Removed from Inbox') }, '🗑')));
     })) : h('p', { class: 'empty-list' }, 'Inbox is empty. Press Q anywhere (or 📥 at the top) to write something down fast.'));
 }
 

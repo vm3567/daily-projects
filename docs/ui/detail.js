@@ -15,6 +15,7 @@ import { projectEmailCards, emailThreadBlock } from './replies.js';
 import { mainBox, mainChip, subProjectsBlock, openMainBox } from './mains.js';
 import { isMainProject, timerOn, childrenOf, projectTasks, moveEveryOf, everyText, colourWhy, colourShort, todayList, MOVE_EVERY_PICKS } from '../rules.js';
 import { stageLine } from './stage.js';
+import { IN_NO_PROJECT } from './workparts.js';
 
 /** 'project' for a 📂 project, 'task' for everything else (what the app once called a project). */
 const kindWord = (ctx, p) => (isMainProject(ctx.store.view.data, p) ? 'project' : 'task');
@@ -839,9 +840,9 @@ function stateButtons(ctx, p) {
     return [
       running
         ? h('button', { class: 'btn timer-on', title: 'Stop the timer', onClick: () => ctx.stopTimer() }, `⏸ ${ctx.clockText(t.start)}`)
-        : timed ? h('button', { class: 'btn', title: `Start timing your work on this ${kindWord(ctx, p)}`, onClick: () => ctx.startTimer(p) }, '▶ Start') : null,
+        : timed && !p.misc ? h('button', { class: 'btn', title: `Start timing your work on this ${kindWord(ctx, p)}`, onClick: () => ctx.startTimer(p) }, '▶ Start') : null,
       // 💤 Snooze on the page itself (the owner uses it daily; also in the ⋯ menu)
-      !isSnoozed(p, todayIndia()) || restReason(p, todayIndia()) === 'onlyDays' ? h('button', {
+      !p.misc && (!isSnoozed(p, todayIndia()) || restReason(p, todayIndia()) === 'onlyDays') ? h('button', {
         class: 'btn', title: 'Hide it from Today for some days',
         onClick: () => { ui.snoozeOpen = p.id; ctx.render(); setTimeout(() => { const n = document.querySelector(`[data-key="snooze-${p.id}"]`); if (n) { n.focus(); n.select(); } }, 30); },
       }, '💤 Snooze') : null,
@@ -1145,29 +1146,29 @@ export function renderDetail(ctx) {
     h('div', { class: 'detail-top' },
       h('button', { class: 'icon back', 'aria-label': 'Back to list', onClick: () => { ui.mobile = 'list'; ctx.render(); } }, '←'),
       h('span', { class: `dot ${colour}`, title: colourWhy(p, today) }), // why it has this colour
-      autoField('input', { class: 'title-input', value: p.name, 'aria-label': `${kindWord(ctx, p) === 'task' ? 'Task' : 'Project'} name`, title: `Click to change the ${kindWord(ctx, p)} name`, key: 'name-' + p.id },
+      p.misc ? h('h2', { class: 'misc-title' }, `📂 ${IN_NO_PROJECT}`) : autoField('input', { class: 'title-input', value: p.name, 'aria-label': `${kindWord(ctx, p) === 'task' ? 'Task' : 'Project'} name`, title: `Click to change the ${kindWord(ctx, p)} name`, key: 'name-' + p.id },
         (v) => store.dispatch('setProjectField', { projectId: p.id, field: 'name', value: v })),
-      h('button', {
+      p.misc ? null : h('button', {
         class: 'icon edit-title', title: `Change the ${kindWord(ctx, p)} name`, 'aria-label': `Change the ${kindWord(ctx, p)} name`,
         onClick: () => { const n = document.querySelector(`[data-key="name-${p.id}"]`); if (n) { n.focus(); n.select(); } },
       }, '✎'),
       h('div', { class: 'state-buttons' }, stateButtons(ctx, p))),
     aboutLine(ctx, p),
     colour === 'red' || colour === 'yellow' ? h('div', { class: 'why-line ' + colour, key: 'why-' + p.id }, `${colour === 'red' ? '🔴' : '🟡'} ${colourWhy(p, today)}`) : null, // why it is not green, in words (owner, 24 Oct)
-    stageLine(ctx, p), // the Stage chip near the top: ⚪ Not started · 🔵 In progress · 🟠 Waiting: … · ✅ Done (tap to change)
+    p.misc ? null : stageLine(ctx, p), // (📂 In no project only holds tasks: no stage, priority, target, time or status — owner 24 Oct) the Stage chip near the top: ⚪ Not started · 🔵 In progress · 🟠 Waiting: … · ✅ Done (tap to change)
     projectMenu(ctx, p),
     mainBox(ctx, p, 'parent'),
     snoozeBar(ctx, p),
     onlyDaysBar(ctx, p),
     remindOnceBar(ctx, p),
     teamBar(ctx, p),
-    infoChips(ctx, p, today),
+    p.misc ? null : infoChips(ctx, p, today),
     quickLinks(ctx, p), // its links and files near the top: one click opens (owner asked, 22 Oct)
     projectEmailCards(ctx, p, today), // from an email: who wrote, the newest lines, and the reply (✉ Reply ready)
     ui.editMeta ? metaLine(ctx, p, today) : null,
     ui.showTime === p.id ? timeLine(ctx, p, today) : null,
     teamMessages(ctx, p),
-    statusLine(ctx, p),
+    p.misc ? null : statusLine(ctx, p),
     p.state !== 'active' ? h('p', { class: 'banner' }, p.state === 'paused' ? `This ${kindWord(ctx, p)} is paused. It is hidden from Today.` : `This ${kindWord(ctx, p)} is finished.`) : null,
     mainChip(ctx, p), // 📂 Kilns › 📂 Supplier approval › (the projects this task is in)
     subProjectsBlock(ctx, p, today), // a 📂 project: TASKS (N)

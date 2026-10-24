@@ -1352,8 +1352,8 @@ test('staff ✅ Tasks and 📂 Projects (owner, 23 Oct): every open task once, r
   assert.deepEqual(tasks.map((x) => x.t.id), [2, 3, 5, 4, 1, 6, 7], 'each once; red, then yellow (waiting to send), green, grey');
   assert.deepEqual(tasks.map((x) => x.dot), ['red', 'red', 'red', 'yellow', 'green', 'grey', 'grey']);
   const where = Object.fromEntries(tasks.map((x) => [x.t.id, x.folder.name]));
-  assert.deepEqual(where, { 1: 'Other tasks', 2: 'Ceramic Media', 3: 'Ceramic Media', 4: 'Kiln trial', 5: 'Other tasks', 6: 'Kiln trial', 7: 'Other tasks' }, '📂 Misc is "Other tasks" for staff (owner asked 24 Oct)');
-  assert.deepEqual(folders.map((f) => [f.name, f.tasks.length, f.dot, f.red]), [['Ceramic Media', 2, 'red', 2], ['Kiln trial', 2, 'yellow', 0], ['Other tasks', 3, 'red', 1]], 'worst first; 📂 Misc last (called "Other tasks" for staff, owner asked 24 Oct)');
+  assert.deepEqual(where, { 1: 'In no project', 2: 'Ceramic Media', 3: 'Ceramic Media', 4: 'Kiln trial', 5: 'In no project', 6: 'Kiln trial', 7: 'In no project' }, '📂 Misc is "In no project" for staff (owner asked 24 Oct, round 4: one name everywhere, was "Other tasks")');
+  assert.deepEqual(folders.map((f) => [f.name, f.tasks.length, f.dot, f.red]), [['Ceramic Media', 2, 'red', 2], ['Kiln trial', 2, 'yellow', 0], ['In no project', 3, 'red', 1]], 'worst first; 📂 Misc last (called "In no project", owner asked 24 Oct)');
   assert.equal(folders.find((f) => f.name === 'Kiln trial').ref, 'k1', 'a given project with steps opens its own page (steps in order, add a step)');
   assert.ok(!folders.some((f) => f.name === 'Feldspar' || f.name === 'Paint door'), 'one given task is never also a project');
 });

@@ -542,10 +542,13 @@ export function createTeam(opts) {
   /** 📒 a record's line in a list: "📒 Record · 3 entries today" / "· last entry 22 Oct". */
   const recordLine = (t) => `📒 Record · ${t.entriesToday ? `${t.entriesToday} entr${t.entriesToday === 1 ? 'y' : 'ies'} today` : t.last ? `last entry ${fmtDay(t.last.day)}` : 'no entries yet'}`;
   const photoCount = (t) => ((t.today && t.today.photos) || []).length + ((t.last && t.last.photos) || []).length;
-  const rowOf = (t, sub, dot, warn = false) => taskRow({
+  // the tasks in the list on screen, in order: ‹ › on a task's page go through them (owner, 24 Oct; as the owner's and staff pages)
+  let shownIds = [];
+  const shown = (id) => { if (id && !shownIds.includes(id)) shownIds.push(id); };
+  const rowOf = (t, sub, dot, warn = false) => (shown(t.id), taskRow({
     key: 't-' + t.id, title: t.title, sub, dot: dotOf(dot), warn, current: state.sel === 'task:' + t.id, onOpen: () => open('task:' + t.id), onMenu: (e) => openMenuAt(state, render, { t }, e),
     tags: [state.newIds.has(t.id) ? h('span', { class: 'tag high' }, 'New') : null, t.unread ? h('span', { class: 'tag on-step', title: `${t.unread} new message(s)` }, '💬 New') : null],
-  });
+  }));
 
   /** Once at the top: "turn on notifications" (until done, or Later), as on the staff view. */
   function pushBanner() {
@@ -635,12 +638,15 @@ export function createTeam(opts) {
     const cell = (cls, ...c) => h('td', { class: cls }, ...c);
     const line = (r) => {
       const t = r.t, u = t.today, m = t.lastMessage;
+      shown(t.id);
       return h('tr', { key: 'b-' + t.id, class: 'sub-row board-row' + (state.sel === 'task:' + t.id ? ' current' : ''), onClick: () => open('task:' + t.id),
         onContextmenu: (e) => openMenuAt(state, render, { t }, e) }, // right-click: message, finish, edit, move, cancel
         cell('', h('span', { class: 'dot ' + dotOf(r.colour) })),
         cell('board-task', h('button', { class: 'link sub-name', type: 'button' }, t.title), ' ', state.boardGroup === 'project' || r.project === 'Misc' ? null : h('span', { class: 'tag main-tag' }, '📂 ' + r.project), // (by 📂 project: its line says it; in no project: no "📂 Misc", owner 24 Oct)
           state.newIds.has(t.id) ? h('span', { class: 'tag high' }, 'New') : null,
-          r.stage ? [' ', stageChip(r.stage, { you: r.you })] : null), // its Stage; stuck waiting for "Manager": "Waiting: you"
+          r.stage && t.kind !== 'log' ? [' ', stageChip(r.stage, { you: r.you })] : null, // its Stage; stuck waiting for "Manager": "Waiting: you"
+          // on a phone the Today column is hidden: today's words under the name instead (newest line of a record; owner, 24 Oct)
+          u ? h('span', { class: 'board-today-inline muted small' }, `“${hitLines(String(u.note || '').split('\n').pop(), '')}”`) : null),
         cell('board-who', t.assignee.name),
         // (📒 a record's lines carry their own times: never two, owner 24 Oct)
         cell('board-today col-extra' + (u ? '' : ' muted'), u ? [t.kind === 'log' ? null : h('span', { class: 'muted small' }, fmtTime(u.at) + ' '), u.note, (u.photos || []).length ? ` 📷${u.photos.length}` : ''] : '—'),
@@ -665,6 +671,7 @@ export function createTeam(opts) {
 
   function followRow(r) {
     const sel = r.kind === 'project' ? 'project:' + r.projectRef : 'task:' + r.taskId;
+    if (r.kind !== 'project') shown(r.taskId);
     return h('li', { key: 'fu-' + r.kind + (r.taskId || r.projectRef), class: 'prow' + (state.sel === sel ? ' current' : '') },
       h('span', { class: 'quick-tick-space', 'aria-hidden': 'true' }),
       h('div', { class: 'prow-text' },
@@ -954,7 +961,17 @@ export function createTeam(opts) {
     if (t.status === 'suggested') return null;
     if (t.status !== 'open') return h('button', { class: 'btn', onClick: () => setStatus(t, 'open') }, 'Open again');
     return [h('button', { class: 'btn', onClick: () => setStatus(t, 'done') }, 'Finish task'),
-      h('button', { class: 'btn icon-btn' + (state.taskMenu === t.id ? ' on' : ''), 'aria-label': 'More actions', title: 'Edit, move, instructions, cancel', onClick: () => { state.taskMenu = state.taskMenu === t.id ? 0 : t.id; render(); } }, '⋯')];
+      h('button', { class: 'btn icon-btn' + (state.taskMenu === t.id ? ' on' : ''), 'aria-label': 'More actions', title: 'Edit, move, instructions, cancel', onClick: () => { state.taskMenu = state.taskMenu === t.id ? 0 : t.id; render(); } }, '⋯'),
+      ...navButtons(t)];
+  }
+
+  /** ‹ › the previous / next task in the list on screen. */
+  function navButtons(t) {
+    const i = shownIds.indexOf(t.id);
+    if (i < 0) return [];
+    const go = (k) => (k >= 0 && k < shownIds.length ? () => open('task:' + shownIds[k]) : undefined);
+    return [h('button', { class: 'btn icon-btn', title: 'Previous task', 'aria-label': 'Previous task', disabled: i > 0 ? undefined : true, onClick: go(i - 1) }, '‹'),
+      h('button', { class: 'btn icon-btn', title: 'Next task', 'aria-label': 'Next task', disabled: i < shownIds.length - 1 ? undefined : true, onClick: go(i + 1) }, '›')];
   }
 
   function taskMenu(t) {
@@ -995,8 +1012,10 @@ export function createTeam(opts) {
     const whole = t.seq !== null && t.seq !== undefined;
     return [
       taskMenu(t),
-      t.status === 'suggested' ? null : h('div', { class: 'stage-line' }, stageChip(rules.teamStage(t), { you: rules.teamStage(t).you })), // Stuck for "Manager": "Waiting: you"
-      chipsFor(t, td, { who: true }),
+      // its Stage and chips on one wrapping line, as on the staff page (owner, 24 Oct)
+      h('div', { class: 'task-meta' },
+        t.status === 'suggested' || t.kind === 'log' ? null : h('div', { class: 'stage-line' }, stageChip(rules.teamStage(t), { you: rules.teamStage(t).you })), // Stuck for "Manager": "Waiting: you"
+        chipsFor(t, td, { who: true })),
       t.details ? h('p', { class: 'pre muted' }, t.details) : null,
       filesBlock(t, { pic, openFile, onRemove: removeFile }),
       t.status === 'suggested' ? h('div', { class: 'banner stack' },
@@ -1109,6 +1128,7 @@ export function createTeam(opts) {
   }
 
   function list() {
+    shownIds = [];
     const titles = { today: 'Team today', followup: '🔁 Follow-up', tasks: state.closed ? 'Done / cancelled' : '✅ Tasks', projects: '📂 Projects', report: '📊 Weekly report', search: '🔍 Search', people: 'People', settings: 'Settings' };
     let title = titles[state.view];
     if (state.view === 'today' && state.personFilter && state.team) { const p = state.team.people.find((x) => x.id === state.personFilter); if (p) title = p.name; }

@@ -7,6 +7,7 @@
 // Sending while offline: ui/staffbox.js (Work Task's own outbox on this site, shared by both apps).
 
 import { h, morph, errLine } from './dom.js';
+import { IN_NO_PROJECT } from './workparts.js';
 import { createOutbox } from './staffbox.js';
 import { stageChip, stageFilterBar } from './stage.js';
 import { openMenuAt, menuBox, focusLater } from './rowmenu.js';
@@ -178,7 +179,7 @@ export function staffFolders(d, waiting = () => false) {
     if (t.folder) return { key: 'f:' + t.folder, name: t.folder };
     const pr = t.projectRef && t.seq !== null && t.seq !== undefined ? projs.get(t.projectRef) : null;
     if (pr && pr.real.length >= 2) return { key: 'p:' + pr.ref, name: pr.name, ref: pr.ref };
-    return { key: 'misc', name: 'Other tasks' }; // (the owner's 📂 Misc: a name that means something to the person)
+    return { key: 'misc', name: IN_NO_PROJECT }; // (the owner's 📂 Misc: the same name everywhere, owner 24 Oct)
   };
   const RANK = { red: 0, yellow: 1, green: 2, grey: 3 };
   const dotOf = (t) => staffDot(t, { waiting: !!waiting(t.id), pastFillBy: nowHm() >= (d.fillBy || '18:00') });
@@ -667,7 +668,7 @@ export function createStaff(opts) {
         d ? h('li', { class: 'menu-dots', key: 'dots', title: due ? `${due} still to send today` : 'All sent today' },
           h('span', { class: 'dot red' }), String(dots.red), ' ', h('span', { class: 'dot yellow' }), String(dots.yellow), ' ', h('span', { class: 'dot green' }), String(dots.green)) : null,
         item('✅ Tasks', !state.sel && state.section === 'tasks', () => show('tasks'), d ? String(sf.tasks.length) : null),
-        item('📂 Projects', !state.sel && state.section === 'projects', () => show('projects'), d ? String(sf.folders.length) : null),
+        item('📂 Projects', !state.sel && state.section === 'projects', () => show('projects'), d ? String(sf.folders.filter((f) => f.key !== 'misc').length) : null),
         h('li', { class: 'menu-sep' }),
         item('📅 Coming next', !state.sel && state.section === 'next', () => show('next'), d ? String(d.other.length) : null),
         item('💡 My suggestions', !state.sel && state.section === 'sugg', () => show('sugg'), d ? String((d.suggestions || []).length) : null),
@@ -684,7 +685,7 @@ export function createStaff(opts) {
         h('span', { class: 'dot ' + dot, 'aria-label': dot }),
         h('span', { class: 'prow-text' },
           h('span', { class: 'prow-name' }, t.title, state.newIds.has(t.id) ? h('span', { class: 'tag high' }, 'New') : null, t.unread ? h('span', { class: 'tag on-step', title: `${t.unread} new message(s)` }, '💬 New') : null,
-            t.status === 'suggested' ? null : stageChip(rules.teamStage(t))),
+            t.status === 'suggested' || t.kind === 'log' ? null : stageChip(rules.teamStage(t))), // (📒 a record has no stages, owner 24 Oct)
           h('span', { class: 'prow-next' + (warn ? ' warn' : '') }, sub))));
   }
 
@@ -709,7 +710,7 @@ export function createStaff(opts) {
         h('span', { class: 'dot ' + x.dot, 'aria-label': x.dot }),
         h('span', { class: 'prow-text' },
           h('span', { class: 'prow-name' }, t.title, t.unread ? h('span', { class: 'tag on-step', title: `${t.unread} new message(s)` }, '💬 New') : null),
-          h('span', { class: 'prow-chips' }, x.folder.key === 'misc' ? null : h('span', { class: 'tag main-tag' }, `📂 ${x.folder.name}`), stageChip(rules.teamStage(t))), // (in no project: no "📂 Other tasks" chip, owner 24 Oct)
+          h('span', { class: 'prow-chips' }, x.folder.key === 'misc' ? null : h('span', { class: 'tag main-tag' }, `📂 ${x.folder.name}`), t.kind === 'log' ? null : stageChip(rules.teamStage(t))), // (in no project: no "📂 Other tasks" chip, owner 24 Oct)
           h('span', { class: 'prow-next' + (t.dueDate && t.repeat === 'once' && t.dueDate < td && !t.today ? ' warn' : '') }, sub))));
   }
 
@@ -811,8 +812,10 @@ export function createStaff(opts) {
         tasks.length ? null : h('p', { class: 'empty-list' }, 'No open tasks. 🎉')];
     } else if (state.section === 'projects') {
       const { folders: fs } = folders();
-      const n = fs.reduce((k, f) => k + f.tasks.length, 0);
-      body = [sec(`${fs.length} project${fs.length === 1 ? '' : 's'} · ${n} task${n === 1 ? '' : 's'} in them · red first`),
+      // real projects only: the tasks in no project are their own line (owner, 24 Oct: "1 project" was only "In no project")
+      const real = fs.filter((f) => f.key !== 'misc'), loose = fs.filter((f) => f.key === 'misc').reduce((k, f) => k + f.tasks.length, 0);
+      const n = real.reduce((k, f) => k + f.tasks.length, 0);
+      body = [sec([real.length ? `${real.length} project${real.length === 1 ? '' : 's'} · ${n} task${n === 1 ? '' : 's'} in them` : 'No projects yet', loose ? `${loose} in no project` : '', 'red first'].filter(Boolean).join(' · ')),
         h('ul', { class: 'plist' }, fs.map((f) => h('li', { key: 'f-' + f.key, class: 'prow' + (state.navFolder === f.key && state.sel ? ' current' : '') },
           h('span', { class: 'quick-tick-space', 'aria-hidden': 'true' }),
           h('button', { class: 'prow-btn', onClick: () => openFolder(f) }, h('span', { class: 'dot ' + f.dot }),
@@ -948,7 +951,7 @@ export function createStaff(opts) {
     return [
       // its Stage, its chips and its 📂 on one wrapping line (owner, 24 Oct: the phone showed each on its own line)
       h('div', { class: 'task-meta' },
-        t.status === 'suggested' ? null : h('div', { class: 'stage-line' }, stageChip(rules.teamStage(t))), // its Stage (from your updates)
+        t.status === 'suggested' || t.kind === 'log' ? null : h('div', { class: 'stage-line' }, stageChip(rules.teamStage(t))), // its Stage (from your updates; 📒 a record has none)
         chips(t, td)),
       // its 📂 project, as on the owner's task: opens it (a given project: its steps, where a step can be added)
       f && f.folder.key !== 'misc' ? h('div', { class: 'main-chips' }, h('button', { class: 'main-chip', title: `Open the project ${f.folder.name}`, onClick: () => openFolder(f.folder) }, `📂 ${f.folder.name} ›`),

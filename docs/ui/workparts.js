@@ -4,6 +4,9 @@
 
 import { h, fmtDay as dayOf, errLine } from './dom.js';
 
+/** 📂 Misc's name on every screen (owner, 24 Oct: it was "Misc", "Other tasks" and "in no project"). */
+export const IN_NO_PROJECT = 'In no project';
+
 // the server's times are India time as "2026-10-22 10:30:00"
 export const fmtDay = (d) => (d ? dayOf(String(d).slice(0, 10)) : '');
 export const fmtTime = (dt) => {
