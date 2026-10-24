@@ -3183,3 +3183,11 @@ test('Review2 6 (owner, 24 Oct): tasks.linked summary carries today\'s team word
   assert.ok(u && /Got 12 bags/.test(u.note) && u.name, JSON.stringify(s.updates));
   assert.equal(s.sent, s.updates.length);
 });
+
+test('Review3 15 (owner, 24 Oct): Follow-up shows a 📒 record\'s newest line and how many more, not every line run together', { skip }, async () => {
+  const t = (await call('task.save', { assigneeId: id.suresh, title: 'Follow-up record', repeat: 'daily', skipSunday: false, kind: 'log' }, tok.boss)).task;
+  for (const [i, text] of ['PO sent', 'Supplier says Monday', 'Truck left'].entries()) await call('entry.add', { taskId: t.id, text, clientId: 'fu-rec-000' + i }, tok.suresh);
+  const row = (await call('followup.list', {}, tok.boss)).rows.find((r) => r.title === 'Follow-up record');
+  assert.match(row.lastUpdate.note, /Truck left \(\+2 more\)$/, row.lastUpdate.note);
+  assert.ok(!row.lastUpdate.note.includes('PO sent'));
+});

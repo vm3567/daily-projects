@@ -87,7 +87,7 @@ test('empty project page draws', () => {
 
 test('dashboard draws (tiles, calendar, time, people) on one screen', () => {
   const text = renderDashboard(fakeCtx(sampleState(), {})).textContent;
-  for (const bit of ['Streak', 'Green days', 'Time this week', 'People to contact', 'Needs attention']) assert.ok(text.includes(bit), bit);
+  for (const bit of ['Streak', 'Days on track', 'Time this week', 'People to contact', 'Needs attention']) assert.ok(text.includes(bit), bit); // (owner asked 24 Oct: "on track", was "Green days")
   for (const gone of ['Wins this week', 'This week vs last week']) assert.ok(!text.includes(gone), gone + ' removed');
 });
 
@@ -973,14 +973,14 @@ test('📂 Projects page head: the line (each task counted once) and "+ New proj
   let head;
   try {
     head = mains.renderProjectsHead(ctx);
-    assert.ok(head.textContent.includes('1 project · 2 tasks in them · red first'));
+    assert.ok(head.textContent.includes('1 project · 2 tasks in them'), head.textContent); // (then "· N in no project", owner asked 24 Oct)
     btn(head, '+ New project').__on.click();
   } finally { delete globalThis.prompt; }
   const fur = s.data.projects.find((p) => p.name === 'Furnaces');
   assert.ok(fur && fur.isMain, 'made as a project (shows while empty)');
   applyOps(s, [makeOp('addToProject', { projectId: 'p1', parentId: fur.id })]);
   head = mains.renderProjectsHead(ctx);
-  assert.ok(head.textContent.includes('2 projects · 2 tasks in them · red first'), 'Kiln is in both, counted once');
+  assert.ok(head.textContent.includes('2 projects · 2 tasks in them'), 'Kiln is in both, counted once');
   assert.ok(!head.textContent.includes('Kiln 2'), 'no task lists on the Projects page: only projects');
   const { readFileSync } = await import('node:fs');
   const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
@@ -1060,7 +1060,7 @@ test('📂 Projects page: a click on a project row selects it and stays on the p
   assert.match(mainsSrc, /ctx\.ui\.view === 'mains' && ctx\.showHere \? ctx\.showHere\(c\.id\)/, 'a task in the TASKS table while on the Projects page');
   const here = app.slice(app.indexOf('  showHere: (id) => {'), app.indexOf('  openProject: (id) => {'));
   assert.match(here, /select\(id\);/);
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-47'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-48'/, 'phones get the new copy');
 });
 
 test('📂 project page: "✕ Remove" on a task row takes it out of this project only — the task is kept (and stays in its other projects)', () => {
@@ -1846,7 +1846,7 @@ test('🔌 app wiring (app.js): "🔌 From apps" after ✉ Replies with the wait
   assert.match(app, /function go\(view\) \{\n\s*if \(view !== 'settings'\) forgetOnce\(\);/);
   assert.match(app, /if \(onServer\) loadApps\(appsCtx, force \|\| ui\.view === 'apps'\);/);
   assert.match(app, /replies: '✉ Replies', apps: '🔌 From apps', mains: '📂 Projects' \}\[ui\.view\]/, 'its page title');
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-47'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-48'/, 'phones get the new copy');
 });
 
 test('🔌 the PHP connector (team/connector/worktask-connector.php): the same text the app downloads, placeholders only (no real key), valid PHP 7.4+ (php -l), with wt_push / wt_withdraw / wt_decisions / wt_receive_decision', async () => {
@@ -2293,7 +2293,7 @@ test('one app — staff view: the same layout as Daily Projects (menu, list, pag
   for (const gone of ['📥 Inbox', '✉ Replies', 'Settings', 'People', 'Groups', '🔌 From apps', 'Dashboard', 'Time report', '+ Give a task']) assert.ok(!text.includes(gone), 'no owner screen: ' + gone);
   // dots as on the owner's Today: green = sent today, red = not yet
   const kilnRow = rFind(tree, (n) => n.nodeName === 'LI' && n.textContent.includes('Check kiln temperature'));
-  assert.ok(rFind(kilnRow, (n) => /\bdot red\b/.test(n.className || '')), 'not sent yet: red');
+  assert.ok(rFind(kilnRow, (n) => /\bdot (red|yellow)\b/.test(n.className || '')), 'not sent yet: yellow until updates are due, then red (owner asked 24 Oct, was always red)');
   assert.ok(kilnRow.textContent.includes('💬 New'), 'a new message shows on the row');
   assert.ok(calls.every((c) => staffMod.STAFF_CALLS.includes(c.a)));
   // (owner, 23 Oct: projects are on 📂 Projects, as on the owner's pages — not listed in the menu or on Today any more)
@@ -2783,7 +2783,7 @@ test('one app — the staff view has the owner\'s design: only this app\'s style
   for (const gone of ['card', 'list-body', 'chip on']) assert.ok(!has(gone), 'no Work Task-only .' + gone);
   assert.ok(rFind(v, (n) => n.nodeName === 'TEXTAREA' && /^What happened today\?/.test(n.getAttribute('placeholder') || '')), 'the owner\'s words in the update box');
   const top = rFind(v, (n) => n.className === 'detail-top');
-  assert.ok(rFind(top, (n) => /\bdot red\b/.test(n.className || '')), 'the dot before the title, as on the owner\'s task page');
+  assert.ok(rFind(top, (n) => /\bdot (red|yellow|grey|green)\b/.test(n.className || '')), 'the dot before the title, as on the owner\'s task page (owner asked 24 Oct: yellow until updates are due, then red)');
 });
 
 // ---------------------------------------------------------------- one app, step 4: the team pages (ui/team.js)
@@ -2991,7 +2991,7 @@ test('one app wiring (step 4): 👥 Team, a team task chip and "Give to team" op
   assert.match(hashFn, /how = \{ sel: 'task:' \+ m\[1\], fromProjects: true \};/);
   assert.match(hashFn, /how = \{ sel: 'give', prefill: p && typeof p === 'object' \? p : null, fromProjects: true \};/);
   assert.match(app, /function render\(\) \{\n\s*if \(space === 'team'\) return;/, 'the projects never draw over the team pages');
-  assert.match(app, /function onKey\(e\) \{\n.*\n\s*if \(space === 'team'\) \{ pageKey\(e, document, teamView, \{ say: toast, owner: true \}\); return; \}/, 'the projects\' keys are off on the team pages (they get their own: ui/listkeys.js)');
+  assert.match(app, /function onKey\(e\) \{\n.*dropMenuFocus.*\n.*\n\s*if \(space === 'team'\) \{ pageKey\(e, document, teamView, \{ say: toast, owner: true \}\); return; \}/, 'the projects\' keys are off on the team pages (they get their own: ui/listkeys.js; first the menu lets go of the focus, owner asked 24 Oct)');
   const st = app.slice(app.indexOf('function start() {'), app.indexOf("/** The owner's Daily Projects. */"));
   assert.match(st, /if \(known === 'manager'\) \{ startManager\(undefined, teamTask\); return; \}/);
   // one copy of a task page's pieces: both views use ui/workparts.js
@@ -3392,15 +3392,15 @@ test('staff ✅ Tasks / 📂 Projects pages: the menu as the owner\'s, ✅ Tasks
   s.act.show('tasks');
   assert.match(text(), /3 open tasks · red first/);
   assert.match(text(), /Task 11📂 Ceramic Media/, 'each task with its 📂');
-  assert.match(text(), /Task 13📂 Other tasks/, 'the owner\'s 📂 Misc is "Other tasks" for staff (owner asked 24 Oct)');
+  assert.ok(text().includes('Task 13') && !/Task 13📂 Other tasks/.test(text()), 'a task in no project: no "📂 Other tasks" chip on its row (owner asked 24 Oct, round 3)');
   s.act.open('task:11'); await new Promise((r) => setTimeout(r, 0));
   const nav = (label) => { let f = null; (function w(n) { if (!f && n.nodeName === 'BUTTON' && n.getAttribute && n.getAttribute('aria-label') === label) f = n; (n.childNodes || []).forEach(w); })(s.view()); return f; };
   assert.ok(nav('Previous task').hasAttribute('disabled'), 'first: no previous');
   nav('Next task').__on.click(); await new Promise((r) => setTimeout(r, 0));
   assert.equal(s.state.sel, 'task:12', '› the next one');
-  assert.match(text(), /📂 Other tasks ›/, 'its 📂 on the task, as on the owner\'s task');
+  assert.ok(!/📂 Other tasks ›/.test(text()), 'in no project: no "📂 Other tasks ›" on the task, as on the owner\'s task (owner asked 24 Oct, round 3)');
   s.act.show('projects');
-  assert.match(text(), /📂 Ceramic Media1 task · 1 red/);
+  assert.match(text(), /📂 Ceramic Media1 task( · 1 red)?/); // (owner asked 24 Oct: a task not sent is yellow until updates are due, red after)
   s.act.open('folder:f:Ceramic Media');
   assert.match(text(), /Tasks \(1\).*Task 11/, 'a 📂 project lists its tasks');
   const { readFileSync } = await import('node:fs');
@@ -3965,7 +3965,7 @@ test('📒 staff app: a record is always on the list, never red and never counte
   assert.match(r21.textContent, /📒 2 entries today/);
   assert.match(r22.textContent, /📒 Record · add entries when something happens/);
   assert.ok(rFind(r22, (n) => /\bdot grey\b/.test(n.className || '')), 'never red');
-  assert.match(v.textContent, /1 of 3 sent/, 'records are not counted as "to send"');
+  assert.match(v.textContent, /2 of 4 sent/, 'a record with entries today counts as sent, one without is not counted (owner asked 24 Oct: the same count as Team today; was "1 of 3")');
   s.open('task:21'); await tick(); await tick();
   v = s.view();
   assert.ok(rFind(v, (n) => n.nodeName === 'TEXTAREA' && n.dataset.key === 'up-21'), 'the entry box');
@@ -4097,7 +4097,7 @@ test('Review 7: the dashboard\'s "Most worked" counts real work only (not adding
   const worked = card('Most worked this month').textContent;
   assert.ok(worked.includes('Worked on') && !worked.includes('Only steps added'), worked);
   const att = card('Needs attention').textContent;
-  assert.match(att, /Late one.*Target date passed/);
+  assert.match(att, /Late one.*Overdue · /); // (owner asked 24 Oct, was "Target date passed")
   assert.ok(!att.includes('Worked on'));
   assert.ok(today);
 });
@@ -4160,7 +4160,7 @@ test('Review 15: a red / yellow task says why under its title ("🔴 Target date
   const why = rFind(renderDetail(fakeCtx(s, { selected: 'p1', update: {} })), (n) => /why-line/.test(n.className || ''));
   assert.ok(why);
   assert.match(why.className, /red/);
-  assert.match(why.textContent, /^🔴 Target date passed/);
+  assert.match(why.textContent, /^🔴 Overdue · /); // (owner asked 24 Oct, was "Target date passed")
 });
 
 test('Review 17: a task in no project has no "📂 Misc" chip on its row', () => {
@@ -4344,7 +4344,7 @@ test('Review2 18 (owner, 24 Oct): team "Done / cancelled" lists newest closed fi
 test('Review2 19 (owner, 24 Oct): a paused row says "paused since <day>" and has ▶ Unpause on it', async () => {
   const { readFileSync } = await import('node:fs');
   const APP = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
-  assert.match(APP, /p\.state === 'paused' && p\.stateChangedAt \? `paused since \$\{fmtDay\(indiaDate\(p\.stateChangedAt\)\)\}`/);
+  assert.match(APP, /\$\{p\.state === 'paused' \? 'paused since' : 'finished'\} \$\{fmtDay\(indiaDate\(p\.stateChangedAt\)\)\}/); // (finished rows too, round 3)
   const ra = APP.slice(APP.indexOf('function rowAction'), APP.indexOf('function chase('));
   assert.match(ra, /if \(p\.state === 'paused'\) return h\('button', \{ class: 'row-act'.*act\('unpause', \{ projectId: p\.id \}/);
   const s = { data: emptyData(), history: {} };
@@ -4424,7 +4424,7 @@ test('Review2 25 (owner, 24 Oct): with no task open the right side shows today a
   const el = renderDetail(ctx);
   assert.match(el.textContent, /Today at a glance/);
   assert.match(el.textContent, /1 on track/);
-  assert.match(el.textContent, /Late one.*Target date passed/);
+  assert.match(el.textContent, /Late one.*Overdue · /); // (owner asked 24 Oct, was "Target date passed")
   rFind(el, (n) => n.nodeName === 'BUTTON' && n.textContent === 'Late one').__on.click();
   assert.deepEqual(opened, ['late']);
 });
@@ -4445,4 +4445,157 @@ test('Review2 25 (owner, 24 Oct): the staff app\'s empty right side says what is
   const glance = rFind(el, (n) => /today-glance/.test(n.className || ''));
   assert.ok(glance, 'a glance, not an empty side');
   assert.match(glance.textContent, /still to send today|All of today's updates are sent/);
+});
+
+test('Review3 1 (owner, 24 Oct): the staff dot is yellow until updates are due (red only after fill-by, past its by-date, or stuck), as on Team today', async () => {
+  const { staffDot } = await import('../docs/ui/workparts.js');
+  const due = { status: 'open', dueToday: true, today: null };
+  assert.equal(staffDot(due, { pastFillBy: false }), 'yellow', '11 am, not sent yet');
+  assert.equal(staffDot(due, { pastFillBy: true }), 'red', 'after 6 pm');
+  assert.equal(staffDot({ ...due, late: true }), 'red', 'past its by-date');
+  assert.equal(staffDot({ ...due, stuck: true }), 'red');
+  assert.equal(staffDot({ ...due, today: { note: 'x' } }), 'green');
+  assert.equal(staffDot({ status: 'open', kind: 'log', today: null }), 'grey', 'a record with nothing today');
+  assert.equal(staffDot({ ...due, status: 'cancelled' }), 'grey');
+});
+
+test('Review3 2 (owner, 24 Oct): Done / cancelled counts an update sent on the day it was closed (it never says "taken back before any update" then)', async () => {
+  const valar = { id: 7, name: 'Valar' };
+  const closed = [{ id: 41, title: 'Weigh the test bars', assignee: valar, status: 'cancelled', repeat: 'once', doneAt: '2026-10-24 12:00:00', today: { day: '2026-10-24', note: 'Weighed 10 bars' }, last: null }];
+  const { t } = fakeTeam({ 'tasks.list': (b) => ({ tasks: b && b.status === 'closed' ? closed : [] }) });
+  t.state.closed = true; t.go('tasks'); await tick(); await tick();
+  const row = rAll(t.view(), (n) => n.nodeName === 'LI' && /\bprow\b/.test(n.className || ''))[0].textContent;
+  assert.match(row, /last update 24 Oct/);
+  assert.ok(!row.includes('before any update'));
+});
+
+test('Review3 6 (owner, 24 Oct): a 📂 project whose tasks hold the updates never shows an orange "waiting" box in its 7-day strip', () => {
+  const s = mainsState(); // 📂 Kilns holds p1, c2
+  const ctx = liveCtx(s, { selected: 'm', update: {} });
+  const el = renderDetail(ctx);
+  const week = rFind(el, (n) => n.className === 'week');
+  assert.ok(week);
+  assert.ok(!rAll(week, (n) => /\bwk wait\b|\bwk miss\b/.test(n.className || '')).length, week.innerHTML || '');
+});
+
+test('Review3 7 + 8 (owner, 24 Oct): Settings shows which "move every" is chosen; no "Green days" / "tasks green" label is left', async () => {
+  const { readFileSync } = await import('node:fs');
+  const css = readFileSync(new URL('../docs/styles.css', import.meta.url), 'utf8');
+  assert.match(css, /\.every-picks \.chip\.on \{/);
+  for (const f of ['../docs/app.js', '../docs/ui/dashboard.js']) {
+    const src = readFileSync(new URL(f, import.meta.url), 'utf8');
+    assert.ok(!/'Green days'|`Green days|tasks green each day|'Green today/.test(src), f);
+  }
+});
+
+test('Review3 9 (owner, 24 Oct): a task in no project has no "📂 Misc ›" on its page', () => {
+  const s = { data: emptyData(), history: {} };
+  applyOps(s, [makeOp('createProject', { projectId: 'lone', name: 'Lone task', deadline: null })]);
+  const text = renderDetail(liveCtx(s, { selected: 'lone', update: {} })).textContent;
+  assert.ok(!text.includes('Misc ›'), text.slice(0, 200));
+});
+
+test('Review3 10 (owner, 24 Oct): the menu shows the right key letters: A for ✅ Tasks, I for Inbox (Q is Capture)', async () => {
+  const { readFileSync } = await import('node:fs');
+  const APP = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
+  assert.match(APP, /const MENU_KEYS = \{ today: 'T', all: 'A', dashboard: 'B', people: 'P', diary: 'D', inbox: 'I', replies: 'E', mains: 'M' \}/);
+});
+
+test('Review3 11 (owner, 24 Oct): the stage filter buttons stay on one line (scroll sideways if needed)', async () => {
+  const { readFileSync } = await import('node:fs');
+  const css = readFileSync(new URL('../docs/styles.css', import.meta.url), 'utf8');
+  assert.match(css, /\.stage-filters \{ display: flex; flex-wrap: nowrap;[^}]*overflow-x: auto;/);
+  assert.match(css, /\.stage-filters > \* \{ flex: none; white-space: nowrap; \}/);
+});
+
+test('Review3 12 (owner, 24 Oct): no key letters or Enter tips on a phone-size screen', async () => {
+  const { readFileSync } = await import('node:fs');
+  const css = readFileSync(new URL('../docs/styles.css', import.meta.url), 'utf8');
+  assert.match(css, /@media \(max-width: 760px\) \{ kbd\.hint, \.key-tip, \.keys-hint \{ display: none; \} \}/);
+  assert.match(readFileSync(new URL('../docs/ui/detail.js', import.meta.url), 'utf8'), /class: 'muted small key-tip' \}, hint\)/);
+});
+
+test('Review3 13 (owner, 24 Oct): on a phone the 🔔 steps aside once the page is scrolled (never covers a box), and comes back at the top', async () => {
+  const { bellAway } = await import('../docs/ui/bell.js');
+  assert.equal(bellAway(200, 375), true);
+  assert.equal(bellAway(20, 375), false, 'at the top');
+  assert.equal(bellAway(200, 1300), false, 'a computer keeps it');
+  const { readFileSync } = await import('node:fs');
+  assert.match(readFileSync(new URL('../docs/styles.css', import.meta.url), 'utf8'), /\.bell-wrap\.away \{ opacity: 0;[^}]*pointer-events: none; \}/);
+});
+
+test('Review3 14 (owner, 24 Oct): the staff task page keeps its stage and chips on one wrapping line', async () => {
+  const { s } = fakeStaff2({ 'task.get': () => ({ ok: true, task: staffData().tasks[0], updates: [], comments: [] }) });
+  await s.load();
+  s.open('task:' + staffData().tasks[0].id); await tick(); await tick();
+  const meta = rFind(s.view(), (n) => n.className === 'task-meta');
+  assert.ok(meta && rFind(meta, (n) => /stage-line/.test(n.className || '')) && rFind(meta, (n) => /info-chips/.test(n.className || '')));
+});
+
+test('Review3 16 (owner, 24 Oct): a key pressed after clicking a menu item takes the focus box off that item', async () => {
+  const { readFileSync } = await import('node:fs');
+  const APP = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
+  const fn = APP.slice(APP.indexOf('export function dropMenuFocus'), APP.indexOf('function onKey(e)'));
+  const dropMenuFocus = new Function('return ' + fn.replace('export ', ''))();
+  let blurred = 0;
+  const btn = { nodeName: 'BUTTON', closest: (q) => (q.includes('#menu') ? {} : null), blur: () => { blurred++; } };
+  dropMenuFocus({ activeElement: btn });
+  assert.equal(blurred, 1);
+  dropMenuFocus({ activeElement: { ...btn, nodeName: 'INPUT' } });
+  assert.equal(blurred, 1, 'the menu search box keeps its cursor');
+  assert.match(APP, /if \(!\['Enter', ' ', 'Tab'\]\.includes\(e\.key\)\) dropMenuFocus\(document\);/);
+});
+
+test('Review3 17 (owner, 24 Oct): a finished row says "finished <day>" and has ↺ Reopen', async () => {
+  const { readFileSync } = await import('node:fs');
+  const APP = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
+  assert.match(APP, /\$\{p\.state === 'paused' \? 'paused since' : 'finished'\} \$\{fmtDay\(indiaDate\(p\.stateChangedAt\)\)\}/);
+  const ra = APP.slice(APP.indexOf('function rowAction'), APP.indexOf('function chase('));
+  assert.match(ra, /if \(p\.state === 'finished' && !p\.misc\) return h\('button'.*act\('reopen', \{ projectId: p\.id \}/);
+  const s = { data: emptyData(), history: {} };
+  applyOps(s, [makeOp('createProject', { projectId: 'z', name: 'Done one', deadline: null }), makeOp('finish', { projectId: 'z' }), makeOp('reopen', { projectId: 'z' })]);
+  assert.equal(s.data.projects[0].state, 'active', 'reopen brings it back');
+});
+
+test('Review3 18 (owner, 24 Oct): team pages with no task open show Team today at a glance (who is still to send, tap to open)', async () => {
+  const { t } = fakeTeam({ 'tasks.list': () => ({ tasks: [] }) });
+  t.go('today'); await tick(); await tick();
+  t.go('tasks'); await tick(); await tick();
+  const glance = rFind(t.view(), (n) => /today-glance/.test(n.className || ''));
+  assert.ok(glance, 'a glance, not an empty side');
+  assert.match(glance.textContent, /Team today at a glance/);
+  assert.match(glance.textContent, /Sweep kiln room/, 'a task still to send');
+  rFind(glance, (n) => n.nodeName === 'BUTTON' && n.textContent === 'Sweep kiln room').__on.click();
+  assert.equal(t.state.sel, 'task:23');
+});
+
+test('Review3 19 (owner, 24 Oct): 📂 Projects counts real projects only (not 📂 Misc) and the same tasks as ✅ Tasks', () => {
+  const s = mainsState(); // 📂 Kilns holds p1, c2
+  applyOps(s, [makeOp('createProject', { projectId: 'loose', name: 'Loose task', deadline: null }),
+    makeOp('createProject', { projectId: 'rest', name: 'Resting', deadline: null }), makeOp('addToProject', { projectId: 'rest', parentId: 'm' }), makeOp('pause', { projectId: 'rest' })]);
+  const head = mains.renderProjectsHead(liveCtx(s, { view: 'mains', update: {} }));
+  assert.match(head.textContent, /^1 project · 2 tasks in them · \d+ in no project · red first/, head.textContent);
+});
+
+test('Review3 20 (owner, 24 Oct): "1 step done" (not "1 steps"); an overdue task says "Overdue · 21 Oct" everywhere', async () => {
+  const { colourWhy } = await import('../docs/rules.js');
+  assert.equal(colourWhy({ state: 'active', steps: [], deadline: '2026-10-21', targetSet: true }, '2026-10-24'), 'Overdue · 21 Oct');
+  const s = { data: emptyData(), history: {} };
+  applyOps(s, [makeOp('createProject', { projectId: 'o', name: 'One step', deadline: null }), makeOp('addStep', { projectId: 'o', stepId: 's1', text: 'Only step' })]);
+  const text = renderDetail(liveCtx(s, { selected: 'o', update: {} })).textContent;
+  assert.ok(text.includes('0 of 1 step done') && !text.includes('1 steps'), text.slice(0, 300));
+});
+
+test('Review3 1 (owner, 24 Oct): every staff dot (Today rows, menu count, task page) is yellow before updates are due and red after', async () => {
+  for (const [fillBy, colour] of [['23:59', 'yellow'], ['00:00', 'red']]) {
+    const data = { ...staffData(), fillBy };
+    const { s } = fakeStaff2({ 'my.today': () => data, 'task.get': (b) => ({ ok: true, task: data.tasks.find((t) => t.id === b.id), updates: [], comments: [] }) });
+    await s.load();
+    const unsent = data.tasks.find((t) => !t.today && t.kind !== 'log');
+    const row = rAll(s.view(), (n) => n.nodeName === 'LI' && /\bprow\b/.test(n.className || '')).find((r) => r.textContent.includes(unsent.title));
+    assert.ok(rFind(row, (n) => new RegExp('\\bdot ' + colour + '\\b').test(n.className || '')), `${fillBy}: the row is ${colour}`);
+    s.open('task:' + unsent.id); await tick(); await tick();
+    const top = rFind(s.view(), (n) => n.className === 'detail-top');
+    assert.ok(rFind(top, (n) => new RegExp('\\bdot ' + colour + '\\b').test(n.className || '')), `${fillBy}: the task page is ${colour}`);
+  }
 });

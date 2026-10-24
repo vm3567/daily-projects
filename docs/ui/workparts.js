@@ -231,3 +231,19 @@ export function hitLines(text, q) {
   const hit = lines.filter((l) => words.some((w) => l.toLowerCase().includes(w)));
   return (hit.length ? hit : lines).slice(0, 2).join(' · ');
 }
+
+/**
+ * A task's dot in the staff app, the same rule as Team today (owner, 24 Oct: red at 11 am was wrong):
+ * sent today = green; waiting on the phone = yellow; due and not sent = yellow until the updates are due
+ * (fill-by), red after that, or when it is past its by-date, or stuck; a 📒 record with nothing today, or not due = grey.
+ */
+export function staffDot(t, { waiting = false, pastFillBy = false } = {}) {
+  if (!t || t.status !== 'open') return 'grey';
+  if (t.today) return 'green';
+  if (waiting) return 'yellow';
+  if (t.kind === 'log') return 'grey';
+  if (t.stuck) return 'red';
+  const late = t.late === true;
+  if (t.dueToday === false && !late) return 'grey'; // (the server always says; on today's list a task is due)
+  return late || pastFillBy ? 'red' : 'yellow';
+}

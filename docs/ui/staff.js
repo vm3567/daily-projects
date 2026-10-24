@@ -10,7 +10,7 @@ import { h, morph, errLine } from './dom.js';
 import { createOutbox } from './staffbox.js';
 import { stageChip, stageFilterBar } from './stage.js';
 import { openMenuAt, menuBox, focusLater } from './rowmenu.js';
-import { fmtDay, fmtTime, STATES, stateTag, newClientId, istDay, repeatLabel, block, chipsFor, makePics, photosRow, filesBlock, diaryBlock, messagesBlock, logbookBlock, bottomBar, hitLines } from './workparts.js';
+import { fmtDay, fmtTime, STATES, stateTag, newClientId, istDay, repeatLabel, block, chipsFor, makePics, photosRow, filesBlock, diaryBlock, messagesBlock, logbookBlock, bottomBar, hitLines, staffDot, nowHm } from './workparts.js';
 
 export { STATES, repeatLabel }; // (the pieces of a task page are shared with the team pages: ui/workparts.js)
 const KEEP_FAIL = 'Could not keep this on the phone. Try again when online.';
@@ -181,7 +181,7 @@ export function staffFolders(d, waiting = () => false) {
     return { key: 'misc', name: 'Other tasks' }; // (the owner's 📂 Misc: a name that means something to the person)
   };
   const RANK = { red: 0, yellow: 1, green: 2, grey: 3 };
-  const dotOf = (t) => (t.today ? 'green' : waiting(t.id) ? 'yellow' : t.dueToday ? 'red' : 'grey');
+  const dotOf = (t) => staffDot(t, { waiting: !!waiting(t.id), pastFillBy: nowHm() >= (d.fillBy || '18:00') });
   const tasks = all.map((t, i) => ({ t, dot: dotOf(t), folder: folderOf(t), i })).sort((a, b) => RANK[a.dot] - RANK[b.dot] || a.i - b.i);
   const by = new Map();
   for (const x of tasks) { if (!by.has(x.folder.key)) by.set(x.folder.key, { ...x.folder, tasks: [] }); by.get(x.folder.key).tasks.push(x); }
@@ -303,6 +303,8 @@ export function createStaff(opts) {
   }
   // ✅ Tasks and 📂 Projects, as on the owner's pages (staffFolders)
   const folders = () => staffFolders(state.data, (id) => !!waitingFor(id));
+  // one dot rule everywhere in the staff app (owner, 24 Oct): green sent · yellow not yet / waiting to send · red after the due time, late or stuck
+  const dotFor = (t) => staffDot(t, { waiting: !!waitingFor(t.id), pastFillBy: nowHm() >= ((state.data && state.data.fillBy) || '18:00') });
   /** A 📂 project: a given project with its steps opens its own page (steps in order, add a step); the others list their tasks. */
   function openFolder(f) { state.navFolder = f.key; open(f.ref ? 'project:' + f.ref : 'folder:' + f.key); }
   /** ‹ › on a task: the list it was opened from (a 📂 project, ✅ Tasks, Coming next, else Today), one by one. */
@@ -655,7 +657,7 @@ export function createStaff(opts) {
     // the same menu as the owner's projects page (owner, 23 Oct): the search box on top, Today with its count and the
     // red / yellow / green count under it (the same dots as the list), the other lists, a line, the rest
     const dots = { red: 0, yellow: 0, green: 0 };
-    if (d) for (const x of d.tasks) dots[x.today ? 'green' : waitingFor(x.id) ? 'yellow' : 'red']++;
+    if (d) for (const x of d.tasks) { const c = dotFor(x); if (c in dots) dots[c]++; } // (the list's own rule: yellow until updates are due)
     return h('nav', { class: 'menu-inner' },
       h('div', { class: 'brand' }, h('img', { src: 'icons/icon-192.png', alt: '', width: 28, height: 28 }), h('span', null, 'Task List')),
       h('input', { class: 'search', type: 'search', placeholder: 'Search…', key: 'staff-menu-search', 'aria-label': 'Search', value: state.searchQ || '',
@@ -707,7 +709,7 @@ export function createStaff(opts) {
         h('span', { class: 'dot ' + x.dot, 'aria-label': x.dot }),
         h('span', { class: 'prow-text' },
           h('span', { class: 'prow-name' }, t.title, t.unread ? h('span', { class: 'tag on-step', title: `${t.unread} new message(s)` }, '💬 New') : null),
-          h('span', { class: 'prow-chips' }, h('span', { class: 'tag main-tag' }, `📂 ${x.folder.name}`), stageChip(rules.teamStage(t))),
+          h('span', { class: 'prow-chips' }, x.folder.key === 'misc' ? null : h('span', { class: 'tag main-tag' }, `📂 ${x.folder.name}`), stageChip(rules.teamStage(t))), // (in no project: no "📂 Other tasks" chip, owner 24 Oct)
           h('span', { class: 'prow-next' + (t.dueDate && t.repeat === 'once' && t.dueDate < td && !t.today ? ' warn' : '') }, sub))));
   }
 
@@ -732,7 +734,7 @@ export function createStaff(opts) {
     return h('li', { key: 'p-' + pr.ref, class: 'prow' + (state.sel === 'project:' + pr.ref ? ' current' : '') },
       h('span', { class: 'quick-tick-space', 'aria-hidden': 'true' }),
       h('button', { class: 'prow-btn', onClick: () => open('project:' + pr.ref) },
-        h('span', { class: 'dot ' + (pr.current && pr.current.today ? 'green' : 'red') }),
+        h('span', { class: 'dot ' + (pr.current ? dotFor(pr.current) : 'grey') }),
         h('span', { class: 'prow-text' }, h('span', { class: 'prow-name' }, '📂 ', pr.name), h('span', { class: 'prow-next' }, now))));
   }
 
@@ -829,7 +831,8 @@ export function createStaff(opts) {
             h('span', { class: 'prow-text' }, h('span', { class: 'prow-name' }, x.title), h('span', { class: 'prow-next' }, '⏳ Waiting to send')))))),
         s.length || waiting.length ? null : h('p', { class: 'empty-list' }, 'No suggestions yet. Tap 💡 Suggest a task in the menu.')];
     } else {
-      const due = d.tasks.filter((t) => t.kind !== 'log'); // (📒 records are never "to send": they are not counted)
+      // the same count as Team today (owner, 24 Oct): a 📒 record counts once it has entries today (as sent), never as "to send"
+      const due = d.tasks.filter((t) => t.kind !== 'log' || t.today);
       const sent = due.filter((t) => t.today).length;
       body = [
         d.stale ? h('p', { class: 'empty-list' }, `📴 Saved copy from ${fmtDay(d.today)} — today's updates are not shown yet.`) : null,
@@ -842,7 +845,7 @@ export function createStaff(opts) {
           const sub = waiting ? '⏳ Waiting to send' : t.today ? `✓ Sent ${fmtTime(t.today.at)}${t.today.state === 'stuck' ? ' · stuck' : t.today.state === 'finished' ? ' · finished' : ''}`
             : [t.project, repeatLabel(t, td)].filter(Boolean).join(' · ') || 'Send today\'s update';
           // the same dots as the owner's Today: green = sent today, yellow = written (waits to send), red = not yet
-          return row(t, sub, t.today ? 'green' : waiting ? 'yellow' : 'red', late && !t.today && !waiting);
+          return row(t, sub, dotFor(t), late && !t.today && !waiting); // (yellow until updates are due, then red: as Team today, owner 24 Oct)
         })),
         d.tasks.length ? null : h('p', { class: 'empty-list' }, 'No tasks for today. 🎉'),
       ];
@@ -943,10 +946,12 @@ export function createStaff(opts) {
     const td = today();
     const f = folders().tasks.find((x) => x.t.id === t.id);
     return [
-      t.status === 'suggested' ? null : h('div', { class: 'stage-line' }, stageChip(rules.teamStage(t))), // its Stage (from your updates)
-      chips(t, td),
+      // its Stage, its chips and its 📂 on one wrapping line (owner, 24 Oct: the phone showed each on its own line)
+      h('div', { class: 'task-meta' },
+        t.status === 'suggested' ? null : h('div', { class: 'stage-line' }, stageChip(rules.teamStage(t))), // its Stage (from your updates)
+        chips(t, td)),
       // its 📂 project, as on the owner's task: opens it (a given project: its steps, where a step can be added)
-      f ? h('div', { class: 'main-chips' }, h('button', { class: 'main-chip', title: `Open the project ${f.folder.name}`, onClick: () => openFolder(f.folder) }, `📂 ${f.folder.name} ›`),
+      f && f.folder.key !== 'misc' ? h('div', { class: 'main-chips' }, h('button', { class: 'main-chip', title: `Open the project ${f.folder.name}`, onClick: () => openFolder(f.folder) }, `📂 ${f.folder.name} ›`),
         !f.folder.ref && t.projectRef && t.seq !== null && t.seq !== undefined ? h('button', { class: 'main-chip', title: 'Its steps (add the steps you will do)', onClick: () => open('project:' + t.projectRef) }, `Steps of ${t.project || 'this work'} ›`) : null) : null,
       t.details ? h('p', { class: 'pre muted' }, t.details) : null,
       files(t),
@@ -982,7 +987,7 @@ export function createStaff(opts) {
           : 'No steps yet. Add the steps you will do, in order. Until then, send your daily update on the whole project.'),
         block('Steps', h('ul', { class: 'plist' }, (pr.real.length ? pr.real : pr.steps).map((t, i) => row(t,
           (!pr.real.length ? sentSub(t) : t === pr.current ? `Step ${k + i + 1} · current · ${sentSub(t)}` : `Step ${k + i + 1} · next${t.fromStaff ? ' · added by you' : ''}`) + pics(t),
-          t === pr.current || !pr.real.length ? (t.today ? 'green' : 'red') : 'grey')),
+          t === pr.current || !pr.real.length ? dotFor(t) : 'grey')),
           waiting.map((x) => h('li', { class: 'prow', key: 'wstep-' + x.id }, h('span', { class: 'quick-tick-space' }), h('div', { class: 'prow-btn' }, h('span', { class: 'dot grey' }),
             h('span', { class: 'prow-text' }, h('span', { class: 'prow-name' }, x.title), h('span', { class: 'prow-next' }, '⏳ Waiting to send')))))),
         h('form', { class: 'row add-step', onSubmit: (e) => { e.preventDefault(); addStep(ref).then((m) => { err.say(m); }); } }, // (the owner's "Steps" box)
@@ -1059,7 +1064,7 @@ export function createStaff(opts) {
     else if (sel.startsWith('task:')) {
       const t = state.detail.task;
       title = t.title; body = taskPage();
-      dot = t.status !== 'open' ? 'grey' : t.today ? 'green' : waitingFor(t.id) ? 'yellow' : t.kind === 'log' ? 'grey' : 'red'; // (📒 a record is never red)
+      dot = dotFor(t); // (the same rule as the list and Team today)
       const ids = navIds(), i = ids.indexOf(t.id); // ‹ › one by one, as on the owner's task page
       const go = (k) => (k >= 0 && k < ids.length ? () => open('task:' + ids[k]) : undefined);
       actions = i < 0 ? null : [

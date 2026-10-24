@@ -990,7 +990,10 @@ function last_updates(array $taskIds, array $refs): array {
   }
   $out = [];
   foreach ($newest as $key => $u) {
-    $note = trim(preg_replace('/\s+/u', ' ', $u['note']) ?? '');
+    // a 📒 record's day has many lines (oldest first): its newest line and how many more, never all run together (owner, 24 Oct)
+    $lines = array_values(array_filter(array_map('trim', preg_split('/\R/u', (string)$u['note']) ?: []), 'strlen'));
+    $note = count($lines) > 1 ? end($lines) . ' (+' . (count($lines) - 1) . ' more)' : ($lines[0] ?? '');
+    $note = trim(preg_replace('/\s+/u', ' ', $note) ?? '');
     $out[$key] = ['day' => $u['day'], 'note' => mb_strlen($note) > 80 ? rtrim(mb_substr($note, 0, 79)) . '…' : $note];
   }
   return $out;

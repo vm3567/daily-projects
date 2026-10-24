@@ -642,7 +642,8 @@ export function createTeam(opts) {
           state.newIds.has(t.id) ? h('span', { class: 'tag high' }, 'New') : null,
           r.stage ? [' ', stageChip(r.stage, { you: r.you })] : null), // its Stage; stuck waiting for "Manager": "Waiting: you"
         cell('board-who', t.assignee.name),
-        cell('board-today col-extra' + (u ? '' : ' muted'), u ? [h('span', { class: 'muted small' }, fmtTime(u.at) + ' '), u.note, (u.photos || []).length ? ` 📷${u.photos.length}` : ''] : '—'),
+        // (📒 a record's lines carry their own times: never two, owner 24 Oct)
+        cell('board-today col-extra' + (u ? '' : ' muted'), u ? [t.kind === 'log' ? null : h('span', { class: 'muted small' }, fmtTime(u.at) + ' '), u.note, (u.photos || []).length ? ` 📷${u.photos.length}` : ''] : '—'),
         cell('board-status', h('span', { class: 'tag ' + STATUS[r.status][1] }, r.status === 'late' ? `⏰ Late (by ${fmtDay(t.dueDate)})` : STATUS[r.status][0])),
         cell('board-msg col-extra' + (m ? '' : ' muted'), m ? [r.msg ? h('span', { class: 'tag on-step' }, '💬 New') : null, ` ${m.mine ? 'You' : m.by}: ${m.text || '📷'}`] : '—'));
     };
@@ -774,7 +775,7 @@ export function createTeam(opts) {
       // Done / cancelled: newest closed first, each with the day it was closed (owner, 24 Oct)
       state.closed ? h('ul', { class: 'plist' }, [...d.tasks].sort((a, b) => String(b.doneAt || '').localeCompare(String(a.doneAt || ''))).map((t) => rowOf(t,
         [`${t.status === 'done' ? '✓ Done' : '✖ Cancelled'}${t.doneAt ? ' ' + fmtDay(String(t.doneAt).slice(0, 10)) : ''}`, t.assignee.name, t.project && t.project !== 'Misc' ? t.project : null,
-          t.kind === 'log' ? recordLine(t) : t.last ? `last update ${fmtDay(t.last.day)}` : t.status === 'cancelled' ? 'taken back before any update' : null].filter(Boolean).join(' · '), 'grey')))
+          t.kind === 'log' ? recordLine(t) : t.today || t.last ? `last update ${fmtDay((t.today || t.last).day)}` : t.status === 'cancelled' ? 'taken back before any update' : null].filter(Boolean).join(' · '), 'grey')))
       : [...groups].map(([name, tasks]) => [sec(name, h('span', { class: 'tag waiting' }, String(tasks.length))),
         h('ul', { class: 'plist' }, tasks.map((t) => rowOf(t,
           [t.status !== 'open' ? (t.status === 'done' ? 'Done' : 'Cancelled') : null, t.project, t.kind === 'log' ? recordLine(t) : repeatLabel(t), t.kind === 'log' ? null : t.today ? 'sent today' : t.last ? `last ${fmtDay(t.last.day)}` : 'no update yet'].filter(Boolean).join(' · '),
@@ -1124,9 +1125,21 @@ export function createTeam(opts) {
     return h('div', { class: 'col-inner' }, head, bars(), give, body);
   }
 
+  /** Nothing open on the right: today's team at a glance (owner, 24 Oct) — sent / not yet / stuck, who is still to send (tap to open). */
+  function teamGlance() {
+    const t = state.team, rows = (t && t.tasks) || [];
+    const notYet = rows.filter((x) => !x.today && !x.stuck), stuck = rows.filter((x) => x.stuck);
+    const line = (x) => h('li', { key: 'tg-' + x.id }, h('button', { class: 'link', type: 'button', onClick: () => open('task:' + x.id) }, x.title), h('span', { class: 'muted small' }, ` · ${x.assignee.name}`));
+    return h('div', { class: 'empty today-glance' },
+      t ? [h('h3', { key: 'h' }, '👥 Team today at a glance'),
+        h('p', { class: 'glance-counts', key: 'c' }, `✓ ${rows.length - notYet.length - stuck.length} sent · ⏳ ${notYet.length} not yet · ⚠️ ${stuck.length} stuck`),
+        stuck.length || notYet.length ? h('ul', { class: 'glance-list', key: 'l' }, [...stuck, ...notYet].slice(0, 6).map(line)) : h('p', { class: 'muted', key: 'ok' }, 'Every update is in 🎉')] : null,
+      h('p', { class: 'muted small' }, 'Pick a task on the left, or ', h('button', { class: 'link', type: 'button', onClick: () => open('give') }, '+ Give a task'), '.'));
+  }
+
   function detail() {
     const sel = state.sel;
-    if (!sel) return h('div', { class: 'empty' }, h('p', null, 'Pick a task on the left.'), h('p', null, h('button', { class: 'link', onClick: () => open('give') }, '+ Give a task')));
+    if (!sel) return teamGlance();
     let title = '', body, dot = '', actions = null;
     if (sel === 'give' || sel.startsWith('edit:')) { title = sel === 'give' ? 'Give a task' : 'Edit task'; body = state.people.length ? taskForm() : h('p', { class: 'muted' }, state.detailFailed || 'Loading…'); }
     else if (sel === 'password') { title = 'Change password'; body = passwordPage(); }

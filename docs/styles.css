@@ -939,7 +939,7 @@ a.tag.me:hover { color: var(--brand); border-color: var(--brand); }
 .row-menu-stages { display: flex; flex-wrap: wrap; gap: 4px; padding: 4px 6px 8px; border-bottom: 1px solid #f1f5f9; margin-bottom: 4px; }
 .row-menu-stages .stage-chip { font-size: 12px; padding: 2px 8px; }
 .every-picker { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; width: 100%; margin-top: 6px; }
-.every-picker .chip.on, .row-menu-every .chip.on { background: var(--brand-soft); border-color: var(--brand); font-weight: 600; }
+.every-picker .chip.on, .row-menu-every .chip.on, .every-picks .chip.on { background: var(--brand-soft); border-color: var(--brand); font-weight: 600; }
 .row-menu-every { align-items: center; }
 .row-menu-every .chip { font-size: 12px; padding: 2px 7px; }
 .row-menu-stages .stage-chip.on { outline: 2px solid currentColor; outline-offset: 1px; }
@@ -1073,7 +1073,7 @@ a.team-line.msg { background: #eef4ff; border-color: #93b4f8; color: #1e40af; fo
 .sub-name { font-weight: 600; text-align: left; }
 .sub-buttons { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
 .mains-page { padding: 4px 8px 20px; display: flex; flex-direction: column; gap: 10px; }
-.mains-line { margin: 0; }
+.mains-line { margin: 0 0 8px; }
 .new-main { align-self: flex-start; }
 .main-card { border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 12px; background: #fff; }
 .main-card-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
@@ -1197,6 +1197,11 @@ body.has-bell .detail-top { padding-right: 56px; }
 /* Team today as one table (ui/team.js board): counts on top, By person | By 📂 project, a row per task */
 .board-counts { margin: 10px 14px 8px; gap: 6px; }
 .board-table { width: calc(100% - 28px); margin: 6px 14px 20px; }
+@media (max-width: 760px) { kbd.hint, .key-tip, .keys-hint { display: none; } } /* (a phone has no keyboard: no key letters or Enter tips, owner 24 Oct) */
+.bell-wrap { transition: opacity .15s, transform .15s; }
+.bell-wrap.away { opacity: 0; transform: translateY(-56px); pointer-events: none; }
+.task-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0 0 6px; }
+.task-meta > .stage-line, .task-meta > .info-chips { margin: 0; }
 .today-glance { text-align: left; max-width: 460px; margin: 40px auto; padding: 0 20px; }
 .today-glance h3 { margin: 0 0 8px; }
 .glance-counts { display: flex; align-items: center; gap: 4px; margin: 0 0 12px; }
@@ -1239,8 +1244,10 @@ button.stage-chip.tap { cursor: pointer; font-size: 12.5px; padding: 3px 10px; }
 .stage-wait input { flex: 1; min-width: 0; }
 .stage-picks { display: flex; flex-wrap: wrap; gap: 6px; }
 .stage-picks .chip.on { background: var(--brand-soft); border-color: var(--brand); }
-.stage-filters { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
-.stage-filter { font-size: 12.5px; padding: 3px 10px; border-radius: 99px; border: 1px solid var(--line); background: var(--bg); color: var(--text); cursor: pointer; }
+.stage-filters { display: flex; flex-wrap: nowrap; gap: 5px; margin: 6px 0; overflow-x: auto; scrollbar-width: none; } /* (one line: "Done 0" never alone on a second line, owner 24 Oct) */
+.stage-filters::-webkit-scrollbar { display: none; }
+.stage-filters > * { flex: none; white-space: nowrap; }
+.stage-filter { font-size: 12.5px; padding: 3px 8px; border-radius: 99px; border: 1px solid var(--line); background: var(--bg); color: var(--text); cursor: pointer; }
 .stage-filter.on { background: var(--brand); border-color: var(--brand); color: #fff; }
 /* (no dark colours: the app's pages are light only, so the chips stay light too) */
 

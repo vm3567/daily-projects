@@ -332,7 +332,7 @@ test('project description: taken from the project\'s tasks (the first one that h
   // (one app: the team pages)
   assert.match(TEAM, /p\.projectAbout \? rules\.aboutShort\(p\.projectAbout\) \+ ' · ' : ''/, 'the Projects list row');
   assert.match(TEAM, /const about = state\.detail && sel\.startsWith\('task:'\) \? rules\.projectAboutOf\(\[state\.detail\.task\]\) : state\.detail && sel\.startsWith\('project:'\) \? rules\.projectAboutOf\(/, 'under the title of the project and task pages');
-  assert.match(readFileSync(new URL('../team/public_html/sw.js', import.meta.url), 'utf8'), /const CACHE = 'worktask-v34'/, 'new files reach the phones');
+  assert.match(readFileSync(new URL('../team/public_html/sw.js', import.meta.url), 'utf8'), /const CACHE = 'worktask-v35'/, 'new files reach the phones');
 });
 
 // ---------------------------------------------------------------- 📧 morning email (one person's pending work as a table to fill in)
@@ -567,7 +567,7 @@ test('follow-up: the colour and the reason line for each case', () => {
   assert.equal(r({ dueDate: '2026-10-23' }).reason, 'Due tomorrow · no update yet');
   assert.deepEqual(r({ silentDays: 1, lastUpdate: { day: '2026-10-20', note: 'ok' } }), { colour: 'orange', reason: 'Silent 1 day · last: 20 Oct ok', rank: 1 });
   assert.deepEqual(r({ lastUpdate: { day: FT, note: '42 s, ok' } }), { colour: 'green', reason: 'Updated today · 42 s, ok', rank: 3 });
-  assert.deepEqual(r({ dueDate: '2026-10-30', lastUpdate: { day: '2026-10-21', note: 'ok' } }), { colour: 'grey', reason: 'On track · last: 21 Oct ok', rank: 2 }, 'nothing to chase yet');
+  assert.deepEqual(r({ dueDate: '2026-10-30', lastUpdate: { day: '2026-10-21', note: 'ok' } }), { colour: 'grey', reason: 'Nothing to chase yet · last: 21 Oct ok', rank: 2 }, 'nothing to chase yet (owner asked 24 Oct: was "On track", beside a grey dot)');
   assert.equal(r({ silentDays: 2, chasedAt: `${FT} 10:15:00` }).reason, 'Silent 2 days · no update yet · 🔔 chased 10:15', 'chased today shows');
   assert.equal(r({ silentDays: 2, chasedAt: '2026-10-21 10:15:00' }).reason, 'Silent 2 days · no update yet', 'an older chase does not');
 });
@@ -1346,6 +1346,7 @@ test('staff ✅ Tasks and 📂 Projects (owner, 23 Oct): every open task once, r
       T(5, { projectRef: 'w1', seq: 1, stepRef: 'w1:whole', project: 'Paint door', title: 'Paint door' }), // one task, no 📂: just a task (Misc)
     ],
     other: [T(6, { projectRef: 'k1', seq: 2, stepRef: 'k1b', project: 'Kiln trial', dueToday: false, queued: true }), T(7, { dueToday: false }), T(3)], // (3 again: once)
+    fillBy: '00:00', // (past the time updates are due: not sent = red; before it, yellow — owner asked 24 Oct)
   };
   const { tasks, folders } = staffFolders(d, (id) => id === 4);
   assert.deepEqual(tasks.map((x) => x.t.id), [2, 3, 5, 4, 1, 6, 7], 'each once; red, then yellow (waiting to send), green, grey');
@@ -1523,4 +1524,13 @@ test('Team today table (review 2): Late is the server\'s rule (a Sunday does not
   // without the server's field (an older copy): past its by-date and not waiting its turn
   assert.equal(teamBoard({ today: '2026-10-23', tasks: [T(6, V, { dueDate: '2026-10-20' })], suggestions: [] }).groups[0].rows[0].status, 'late');
   assert.equal(teamBoard({ today: '2026-10-23', tasks: [T(7, V, { dueDate: '2026-10-20', queued: true })], suggestions: [] }).groups[0].rows[0].status, 'notyet');
+});
+
+test('Review3 4 + 15 (owner, 24 Oct): Follow-up says "Nothing to chase yet" (not "On track" beside a grey dot); a 📒 record shows its newest line and how many more', () => {
+  const today = '2026-10-24';
+  const r = followupRule({ lastUpdate: { day: today, note: '8:53 am PO sent\n8:53 am Supplier says Monday\n8:54 am Truck left' } }, today);
+  assert.equal(r.reason, 'Updated today · 8:54 am Truck left (+2 more)');
+  assert.match(followupRule({}, today).reason, /^Nothing to chase yet · no update yet$/);
+  const src = readFileSync(new URL('../docs/ui/team.js', import.meta.url), 'utf8');
+  assert.match(src, /u \? \[t\.kind === 'log' \? null : h\('span', \{ class: 'muted small' \}, fmtTime\(u\.at\) \+ ' '\)/, 'Team today: a record row has no second time');
 });

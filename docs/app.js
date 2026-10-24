@@ -1099,7 +1099,7 @@ function renderMenu() {
   const { data } = store.view;
   const active = data.projects.filter((p) => p.state === 'active');
   const count = (f) => data.projects.filter(f).length;
-  const MENU_KEYS = { today: 'T', dashboard: 'B', people: 'P', diary: 'D', inbox: 'Q', replies: 'E', mains: 'M' };
+  const MENU_KEYS = { today: 'T', all: 'A', dashboard: 'B', people: 'P', diary: 'D', inbox: 'I', replies: 'E', mains: 'M' }; // (the keys that open them; i = Inbox, q = Capture, owner 24 Oct)
   const item = (view, label, n, extra) => h('li', { key: 'm-' + view },
     h('button', { class: 'menu-item' + (ui.view === view && !ui.search ? ' current' : ''), onClick: () => go(view) },
       h('span', null, label, MENU_KEYS[view] ? keyHint(MENU_KEYS[view]) : null), n !== undefined ? h('span', { class: 'count' }, String(n)) : null),
@@ -1214,10 +1214,10 @@ function projectRow(p, today, opts = {}) {
         : h('span', { class: 'quick-tick-space', 'aria-hidden': 'true' }),
     h('button', { class: 'prow-btn', onClick: () => select(p.id) },
       h('span', { class: `dot ${colour}`, 'aria-label': colour }),
-      colour === 'green' && greenByTeamOnly(p, today) ? h('span', { class: 'team-green', title: 'Green today because the team sent an update' }, '👥') : null,
+      colour === 'green' && greenByTeamOnly(p, today) ? h('span', { class: 'team-green', title: 'On track today because the team sent an update' }, '👥') : null,
       h('span', { class: 'prow-text' },
         h('span', { class: 'prow-name' }, isMainProject(store.view.data, p) ? '📂 ' : '', p.name,
-          p.state !== 'active' ? h('span', { class: 'tag' }, p.state === 'paused' && p.stateChangedAt ? `paused since ${fmtDay(indiaDate(p.stateChangedAt))}` : p.state) : null,
+          p.state !== 'active' ? h('span', { class: 'tag' }, p.stateChangedAt && (p.state === 'paused' || p.state === 'finished') ? `${p.state === 'paused' ? 'paused since' : 'finished'} ${fmtDay(indiaDate(p.stateChangedAt))}` : p.state) : null,
           p.priority === 'high' ? h('span', { class: 'tag high' }, 'High') : null,
           ui.view === 'all' && !isMainProject(store.view.data, p) ? stageChip(taskStage(p)) : null), // ✅ Tasks: the Stage chip on each row
         asProject ? h('span', { class: 'prow-next' }, projectLine(store.view.data, p, today)) : null, // "2 projects · 5 tasks · 1 red"
@@ -1282,6 +1282,8 @@ function pickBar(list) {
 function rowAction(p, ns, colour) {
   // ⏸ Paused list: Unpause right on the row (owner, 24 Oct)
   if (p.state === 'paused') return h('button', { class: 'row-act', title: `Unpause ${p.name}`, onClick: () => act('unpause', { projectId: p.id }, `▶ ${p.name} is back on your lists`) }, '▶ Unpause');
+  // ✓ Finished list: Reopen right on the row (owner, 24 Oct)
+  if (p.state === 'finished' && !p.misc) return h('button', { class: 'row-act', title: `Open ${p.name} again`, onClick: () => act('reopen', { projectId: p.id }, `↺ ${p.name} is open again`) }, '↺ Reopen');
   if (p.state !== 'active' || colour === 'green' || colour === 'grey') return null; // grey = snoozed
   if (ns && ns.waiting) {
     return h('button', { class: 'row-act chase', title: `Followed up${ns.waitingOn ? ' with ' + ns.waitingOn : ''} today`, onClick: () => chase(p, ns) }, 'Chased');
@@ -2103,7 +2105,7 @@ function weekBars() {
   for (let i = 6; i >= 0; i--) days.push(addDays(today, -i));
   const wd = new Intl.DateTimeFormat('en-IN', { weekday: 'short', timeZone: 'UTC' });
   return h('div', { class: 'week', key: 'week' },
-    h('div', { class: 'week-title' }, 'Last 7 days — tasks green each day'),
+    h('div', { class: 'week-title' }, 'Last 7 days — tasks on track each day'),
     h('div', { class: 'week-bars' }, days.map((d) => {
       const sc = d === today ? todayScore() : saved[d];
       const pct = sc && sc.total ? Math.round((sc.green / sc.total) * 100) : 0;
@@ -3237,7 +3239,14 @@ function listenKeys() {
   window.addEventListener('scroll', () => closeTheirs(null), true);
 }
 
+/** A key after a click on the menu: the clicked item lets go of the focus, so no box stays around it (owner, 24 Oct). */
+export function dropMenuFocus(doc) {
+  const a = doc && doc.activeElement;
+  if (a && a.nodeName !== 'INPUT' && a.closest && a.closest('#menu, .tabbar') && typeof a.blur === 'function') a.blur();
+}
+
 function onKey(e) {
+  if (!['Enter', ' ', 'Tab'].includes(e.key)) dropMenuFocus(document);
   // the team pages and the staff app: their own keys (↓ ↑ j k next task, Esc, /, n, ?; ui/listkeys.js)
   if (space === 'team') { pageKey(e, document, teamView, { say: toast, owner: true }); return; }
   if (staffView && !store) { pageKey(e, document, staffView, { say: toast }); return; }

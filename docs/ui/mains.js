@@ -6,7 +6,7 @@
 import { h, fmtDay } from './dom.js';
 import { dotColour, nextStep, todayIndia, indiaDate, childrenOf, parentsOf, isMainProject, mainProjects, mainColour, mainSummary, projectTasks, projectLine, subProjectsOf, projectParts, mainChoices, moveChoices, moveSteps, addHereChoices, orderedTasks, movedOrder, dropSlot, droppedOrder } from '../rules.js';
 import { newId } from '../ops.js';
-import { stageCounts, byStage } from '../rules.js';
+import { stageCounts, byStage, activeTasks } from '../rules.js';
 import { stageChip, stageFilterBar, ownerStage } from './stage.js';
 import { newTaskBox, createTaskWithNote, findEditor } from './richedit.js';
 
@@ -224,7 +224,7 @@ export function openAddTasks(ctx, m) {
 
 /** On a task that is in projects: "📂 Kilns ›" for each (opens that project). */
 export function mainChip(ctx, p) {
-  const mains = parentsOf(ctx.store.view.data, p);
+  const mains = parentsOf(ctx.store.view.data, p).filter((m) => !m.misc); // (in no project: no "📂 Misc ›", owner 24 Oct)
   if (!mains.length) return null;
   return h('div', { class: 'main-chips', key: 'mainchips-' + p.id }, mains.map((m) => h('button', {
     class: 'main-chip', key: 'mainchip-' + p.id + '-' + m.id, title: `Open the project ${m.name}`, onClick: () => ctx.openProject(m.id),
@@ -439,8 +439,11 @@ function newHereBox(ctx, p) {
 export function renderProjectsHead(ctx) {
   const { store } = ctx;
   const data = store.view.data;
-  const mains = mainProjects(data).filter((m) => m.state !== 'finished');
-  const inside = new Set(mains.flatMap((m) => projectTasks(data, m.id).filter((c) => c.state !== 'finished').map((c) => c.id))).size; // each task once
+  // the same tasks as ✅ Tasks (active ones), each once; 📂 Misc is not counted as a project: its tasks are "in no project" (owner, 24 Oct)
+  const mains = mainProjects(data).filter((m) => m.state !== 'finished' && !m.misc);
+  const inSet = new Set(mains.flatMap((m) => projectTasks(data, m.id).filter((c) => c.state === 'active').map((c) => c.id)));
+  const inside = inSet.size;
+  const loose = activeTasks(data).filter((c) => !inSet.has(c.id)).length;
   const newMain = () => {
     const name = globalThis.prompt ? prompt('Name of the new project (it holds a few tasks):') : null;
     if (!name || !name.trim()) return;
@@ -451,7 +454,7 @@ export function renderProjectsHead(ctx) {
     }
   };
   return h('div', { class: 'mains-head', key: 'mains-head' },
-    h('p', { class: 'muted mains-line' }, `${mains.length} project${mains.length === 1 ? '' : 's'} · ${inside} task${inside === 1 ? '' : 's'} in them · red first`),
+    h('p', { class: 'muted mains-line' }, `${mains.length} project${mains.length === 1 ? '' : 's'} · ${inside} task${inside === 1 ? '' : 's'} in them${loose ? ` · ${loose} in no project` : ''} · red first`),
     h('button', { class: 'btn primary new-main', type: 'button', onClick: newMain }, '+ New project'),
     mains.length ? null : h('p', { class: 'empty-list' }, 'No projects yet. Make one here, or open a task and use ⋯ → 📂 Add to a project.'));
 }

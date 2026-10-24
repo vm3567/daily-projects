@@ -223,7 +223,7 @@ export function colourWhy(p, today = todayIndia()) {
   if (p.state === 'finished') return 'Finished';
   if (p.state !== 'active') return 'Paused';
   if (isSnoozed(p, today)) return 'Snoozed';
-  if (ownTarget(p) && p.deadline < today) return `Target date passed (${shortDay(p.deadline)})`;
+  if (ownTarget(p) && p.deadline < today) return `Overdue · ${shortDay(p.deadline)}`; // (the same words as the list's tag, owner 24 Oct)
   if (datePassed(p, today)) return 'A step\'s due date has passed';
   const days = daysWithoutWork(p, today);
   const last = days === 0 ? 'Updated today' : `No update for ${days} day${days === 1 ? '' : 's'}`;
@@ -247,6 +247,7 @@ export function colourShort(p, today = todayIndia()) {
   if (c !== 'red' && c !== 'yellow') return '';
   const days = daysWithoutWork(p, today);
   if (c === 'yellow' && days < moveEveryOf(p) && dateSoon(p, today)) return soonText(p, today);
+  if (ownTarget(p) && p.deadline < today) return `Overdue · ${shortDay(p.deadline)}`;
   return colourWhy(p, today).split(' · ')[0];
 }
 

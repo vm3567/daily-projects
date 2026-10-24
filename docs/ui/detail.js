@@ -522,7 +522,7 @@ function updateBox(ctx, p) {
     h('button', { class: 'btn small', type: 'submit' }, editing ? 'Save change' : 'Save'),
     due ? h('button', { class: 'btn primary small', type: 'button', title: `Save the note and tick "${due.text}" (${MOD}+Enter)`, onClick: () => save(findEditor(key), true) }, '✓ Save + done') : null,
     editing ? h('button', { class: 'btn small', type: 'button', onClick: cancelEdit }, 'Cancel') : null,
-    h('span', { class: 'muted small' }, hint)));
+    h('span', { class: 'muted small key-tip' }, hint)));
   return { stepId: due ? due.id : null, box };
 }
 
@@ -963,7 +963,7 @@ function infoChips(ctx, p, today) {
   // finished: the day it ended, not a target any more (owner, 24 Oct)
   if (p.state === 'finished') out.push(chip(`✓ Finished ${p.stateChangedAt ? fmtDay(indiaDate(p.stateChangedAt)) : ''}`.trim(), 'The day it was finished', null, ' good'));
   else out.push(chip(p.deadline ? `${overdue ? 'Overdue' : 'Target'} ${fmtDay(p.deadline)}` : '+ Target date', 'Target date — tap to change', editMeta, overdue ? ' bad' : ''));
-  if (p.steps.length && !isMainProject(ctx.store.view.data, p)) out.push(chip(`✓ ${p.steps.filter((x) => x.done).length} of ${p.steps.length} steps done`, 'Steps done', null));
+  if (p.steps.length && !isMainProject(ctx.store.view.data, p)) out.push(chip(`✓ ${p.steps.filter((x) => x.done).length} of ${p.steps.length} step${p.steps.length === 1 ? '' : 's'} done`, 'Steps done', null));
   const timer = store.view.data.timer;
   const logs = p.timeLogs || [];
   const timed = timerOn(data);
@@ -1286,13 +1286,14 @@ function projectDiary(ctx, p, upd) {
   // paused or finished: no update is asked for from that day (owner, 24 Oct: never "Waiting for today's update")
   const stoppedFrom = p.state !== 'active' ? (p.stateChangedAt ? indiaDate(p.stateChangedAt) : today) : null;
   const stopWord = p.state === 'finished' ? '✓ Finished' : '⏸ Paused';
-  const WHAT = { ok: 'work done', miss: 'no progress', off: 'Sunday — off', wait: 'waiting for today\'s update', none: 'before the project started', stop: stopWord.slice(2).toLowerCase() };
+  const WHAT = { ok: 'work done', miss: 'no progress', off: 'Sunday — off', wait: 'waiting for today\'s update', none: 'before the project started', stop: stopWord.slice(2).toLowerCase(), held: 'its tasks have the updates' };
+  const holder = isMainProject(ctx.store.view.data, p) && !p.steps.some((s) => !s.done); // its tasks have the updates (the strip says so too, owner 24 Oct)
   const LONG = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
   const week = [];
   for (let i = 6; i >= 0; i--) {
     const day = addDays(today, -i);
-    const state = day < created ? 'none' : workOn(day) ? 'ok' : stoppedFrom && day >= stoppedFrom ? 'stop' : weekday(day) === 0 ? 'off' : day === today && nowHm < fillBy ? 'wait' : 'miss';
-    week.push(h('span', { class: `wk ${state === 'stop' ? 'none' : state}`, key: 'wk-' + day, title: `${W[weekday(day)]} ${fmtDay(day)}: ${WHAT[state]}` }, W[weekday(day)][0]));
+    const state = day < created ? 'none' : workOn(day) ? 'ok' : stoppedFrom && day >= stoppedFrom ? 'stop' : holder ? 'held' : weekday(day) === 0 ? 'off' : day === today && nowHm < fillBy ? 'wait' : 'miss';
+    week.push(h('span', { class: `wk ${state === 'stop' || state === 'held' ? 'none' : state}`, key: 'wk-' + day, title: `${W[weekday(day)]} ${fmtDay(day)}: ${WHAT[state]}` }, W[weekday(day)][0]));
   }
   let start = addDays(today, -(shownDays - 1));
   if (created > start) start = created;
@@ -1303,7 +1304,6 @@ function projectDiary(ctx, p, upd) {
   }
   const days = [];
   for (let day = today; day >= start; day = addDays(day, -1)) days.push(day);
-  const holder = isMainProject(ctx.store.view.data, p) && !p.steps.some((s) => !s.done); // its tasks have the updates
   return h('section', { class: 'block diary', key: 'diary-' + p.id },
     h('div', { class: 'diary-head' }, h('h3', null, "📅 What's happening"), h('div', { class: 'week', title: 'Last 7 days' }, week)),
     upd.box,

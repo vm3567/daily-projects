@@ -63,7 +63,7 @@ test('dots by "move every N days" (owner asked 23 Oct): green while a real updat
   applyOp(s, op('setProjectField', { projectId: 'p1', field: 'deadline', value: '2026-10-09' }, '2026-10-06'));
   assert.equal(dotColour(p, '2026-10-07'), 'yellow', 'target in 2 days');
   assert.equal(dotColour(p, '2026-10-10'), 'red', 'target passed');
-  assert.match(colourWhy(p, '2026-10-10'), /Target date passed/);
+  assert.match(colourWhy(p, '2026-10-10'), /Overdue · /); // (owner asked 24 Oct: the same words as the list, was "Target date passed")
   // values
   assert.equal(applyOp(s, op('setMoveEvery', { projectId: 'p1', days: 0 }, '2026-10-06')), false);
   assert.equal(applyOp(s, op('setMoveEvery', { projectId: 'p1', days: 91 }, '2026-10-06')), false);
@@ -3148,7 +3148,7 @@ test('The server checks pick free ports for their throwaway servers (a fixed por
 test('Review 15: the reason line shows the date as "21 Oct", not "2026-10-21"', async () => {
   const { colourWhy, shortDay } = await import('../docs/rules.js');
   assert.equal(shortDay('2026-10-21'), '21 Oct');
-  assert.equal(colourWhy({ state: 'active', steps: [], deadline: '2026-10-21', targetSet: true }, '2026-10-24'), 'Target date passed (21 Oct)');
+  assert.equal(colourWhy({ state: 'active', steps: [], deadline: '2026-10-21', targetSet: true }, '2026-10-24'), 'Overdue · 21 Oct'); // (owner asked 24 Oct, was "Target date passed (21 Oct)")
 });
 
 test('Review2 4 (owner, 24 Oct): a yellow task worked on today gives its near date as the reason, never "Updated today"', async () => {
@@ -3159,7 +3159,7 @@ test('Review2 4 (owner, 24 Oct): a yellow task worked on today gives its near da
   const p = s.data.projects.find((x) => x.id === 'y');
   assert.match(colourShort(p, today), /^Target \d+ \w{3} is near$/);
   applyOps(s, [makeOp('setProjectField', { projectId: 'y', field: 'deadline', value: '2020-01-01' })]);
-  assert.match(colourShort(p, today), /Target date passed/);
+  assert.match(colourShort(p, today), /Overdue · /); // (owner asked 24 Oct: the same words as the list, was "Target date passed")
 });
 
 test('Review2 6 (owner, 24 Oct): the 📋 summary\'s Team updates use the server\'s rows (a 📒 record too) and never a taken-back step', async () => {
