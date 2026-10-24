@@ -656,7 +656,7 @@ export function createStaff(opts) {
     const dots = { red: 0, yellow: 0, green: 0 };
     if (d) for (const x of d.tasks) dots[x.today ? 'green' : waitingFor(x.id) ? 'yellow' : 'red']++;
     return h('nav', { class: 'menu-inner' },
-      h('div', { class: 'brand' }, h('img', { src: 'icons/icon-192.png', alt: '', width: 28, height: 28 }), h('span', null, 'Work Task')),
+      h('div', { class: 'brand' }, h('img', { src: 'icons/icon-192.png', alt: '', width: 28, height: 28 }), h('span', null, 'Task List')),
       h('input', { class: 'search', type: 'search', placeholder: 'Search…', key: 'staff-menu-search', 'aria-label': 'Search', value: state.searchQ || '',
         onInput: (e, el) => { if (state.section !== 'search' || state.sel) show('search'); search(el.value); } }),
       h('ul', { class: 'menu-list' },
@@ -1022,14 +1022,14 @@ export function createStaff(opts) {
     } else if (s === 'default' || s === 'granted') {
       parts.push(h('button', { class: 'btn primary small', onClick: notifyOn }, '🔔 Turn on notifications'));
     } else if (s === 'denied') {
-      parts.push(h('p', { class: 'warn' }, 'Notifications are blocked for Work Task on this phone. To allow them:'),
+      parts.push(h('p', { class: 'warn' }, 'Notifications are blocked for Task List on this phone. To allow them:'),
         h('ol', null,
-          h('li', null, 'Installed app: press and hold the Work Task icon → App info → Notifications → turn on.'),
+          h('li', null, 'Installed app: press and hold the Task List icon → App info → Notifications → turn on.'),
           h('li', null, 'In Chrome: tap ⋮ → Settings → Site settings → Notifications → worktask.in → Allow.'),
           h('li', null, 'Come back here and open this page again.')));
     } else if (s === 'ios') {
       parts.push(h('p', { class: 'warn' }, 'On iPhone, notifications work only from the Home Screen app:'),
-        h('ol', null, h('li', null, 'Open worktask.in in Safari.'), h('li', null, 'Tap Share → Add to Home Screen.'), h('li', null, 'Open Work Task from the Home Screen and turn notifications on here.')));
+        h('ol', null, h('li', null, 'Open worktask.in in Safari.'), h('li', null, 'Tap Share → Add to Home Screen.'), h('li', null, 'Open Task List from the Home Screen and turn notifications on here.')));
     } else parts.push(h('p', { class: 'muted' }, 'This browser cannot show notifications.'));
     return h('div', { class: 'block stack' }, parts);
   }

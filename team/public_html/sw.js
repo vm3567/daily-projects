@@ -1,7 +1,7 @@
 // Work Task's start page (it sends everyone to the one app, worktask.in/projects/) and the phone notifications.
 // Keeps the start page on the phone so an installed app opens without internet. Data (api/) and the one app
 // (projects/, it has its own) are never kept here.
-const CACHE = 'worktask-v32';
+const CACHE = 'worktask-v33';
 const SHELL = ['./', 'index.html', 'app.js', 'logic.js', 'styles.css', 'projects/styles.css', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png'];
 
 self.addEventListener('install', (e) => {
@@ -87,12 +87,12 @@ self.addEventListener('fetch', (e) => {
 // open and in front, the app shows it as a coloured bar at the top; otherwise the phone shows a notification.
 self.addEventListener('push', (e) => {
   let m = {};
-  try { m = e.data ? e.data.json() : {}; } catch { m = { title: 'Work Task', body: e.data ? e.data.text() : '' }; }
+  try { m = e.data ? e.data.json() : {}; } catch { m = { title: 'Task List', body: e.data ? e.data.text() : '' }; }
   e.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
     // the one app, open: it looks for the news at once (the phone still shows the notification)
     list.filter((c) => new URL(c.url).pathname.startsWith('/projects/')).forEach((c) => c.postMessage({ type: 'push', msg: m }));
     if (self.navigator.setAppBadge && m.kind === 'task') self.navigator.setAppBadge().catch(() => {}); // a dot on the app icon until it is opened
-    return self.registration.showNotification(m.title || 'Work Task', {
+    return self.registration.showNotification(m.title || 'Task List', {
       body: m.body || '', tag: m.tag || undefined, renotify: !!m.tag, icon: 'icons/icon-192.png', data: { url: m.url || '/' },
     });
   }));

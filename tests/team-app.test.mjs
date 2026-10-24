@@ -332,7 +332,7 @@ test('project description: taken from the project\'s tasks (the first one that h
   // (one app: the team pages)
   assert.match(TEAM, /p\.projectAbout \? rules\.aboutShort\(p\.projectAbout\) \+ ' · ' : ''/, 'the Projects list row');
   assert.match(TEAM, /const about = state\.detail && sel\.startsWith\('task:'\) \? rules\.projectAboutOf\(\[state\.detail\.task\]\) : state\.detail && sel\.startsWith\('project:'\) \? rules\.projectAboutOf\(/, 'under the title of the project and task pages');
-  assert.match(readFileSync(new URL('../team/public_html/sw.js', import.meta.url), 'utf8'), /const CACHE = 'worktask-v32'/, 'new files reach the phones');
+  assert.match(readFileSync(new URL('../team/public_html/sw.js', import.meta.url), 'utf8'), /const CACHE = 'worktask-v33'/, 'new files reach the phones');
 });
 
 // ---------------------------------------------------------------- 📧 morning email (one person's pending work as a table to fill in)
@@ -1237,7 +1237,7 @@ test('one app: an old Work Task address goes to the same place in the one app (a
   const html = readFileSync(new URL('../team/public_html/index.html', import.meta.url), 'utf8');
   assert.match(html, /<script type="module" src="app\.js"><\/script>/);
   assert.ok(!/href="styles\.css"/.test(html), 'no old Work Task look');
-  assert.match(html, /<a href="projects\/">Open Work Task<\/a>/, 'without scripts: a plain link');
+  assert.match(html, /<a href="projects\/">Open Task List<\/a>/, 'without scripts: a plain link');
 });
 
 test('one app: a tapped notification opens the one app — an old "/#open=<id>" goes to that task there; an open window of the app takes it without loading again', async () => {

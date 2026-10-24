@@ -185,7 +185,7 @@ export function personMessageText(data, person, today, serverItems = null) {
     r.lateSince ? `— late since ${mailDate(r.lateSince)}` : '', r.stuck ? '— stuck' : ''].filter(Boolean).join(' ');
   if (!team.length && !waiting.length && !discuss.length) return `Hi ${first},\n\nNothing is pending between us right now. Thank you!`;
   const lines = [`Hi ${first},`, '', 'Here are the open items between us:'];
-  if (team.length) lines.push('', serverItems ? 'Projects and tasks (Work Task):' : 'Projects given:', ...team.map(teamLine));
+  if (team.length) lines.push('', serverItems ? 'Projects and tasks (team):' : 'Projects given:', ...team.map(teamLine));
   if (waiting.length) lines.push('', 'Waiting on you:', ...waiting.map((it, i) => line(it, i, true)));
   if (discuss.length) lines.push('', 'To discuss:', ...discuss.map((it, i) => line(it, i, false)));
   lines.push('', 'Could you please share an update on these? Thank you.');

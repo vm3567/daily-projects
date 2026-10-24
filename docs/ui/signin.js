@@ -31,7 +31,7 @@ export function signInCard({ post, onSignedIn, message = '' }) {
     } catch { say('No connection. Try again when the internet is back.'); }
     busy = false; if (btn) btn.disabled = false;
   },
-  h('h1', null, 'Work Task'),
+  h('h1', null, 'Task List'),
   h('p', null, 'Sign in with the username and password from your manager.'),
   field('Username', h('input', { name: 'username', autocomplete: 'username', autocapitalize: 'none', spellcheck: 'false', autofocus: true })),
   field('Password', h('input', { name: 'password', type: 'password', autocomplete: 'current-password' })),

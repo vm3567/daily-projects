@@ -1107,7 +1107,7 @@ function renderMenu() {
 
   const moreOpen = !!ui.moreMenu || ['diary', 'dashboard', 'time'].includes(ui.view);
   return h('nav', { class: 'menu-inner' },
-    h('div', { class: 'brand' }, h('img', { src: 'icons/icon-192.png', alt: '', width: 28, height: 28 }), h('span', null, 'Daily Projects')),
+    h('div', { class: 'brand' }, h('img', { src: 'icons/icon-192.png', alt: '', width: 28, height: 28 }), h('span', null, 'Task List')),
     h('input', {
       class: 'search', type: 'search', placeholder: withKey('Search…', '/'), value: ui.search, key: 'search-desktop', 'aria-label': 'Search',
       onInput: (e, el) => { ui.search = el.value; clearTimeout(searchTimer); searchTimer = setTimeout(render, 120); },
@@ -1949,8 +1949,8 @@ function sendSignIn(person, username, password, isNew) {
   const link = location.origin + '/';
   openSheet({
     title: isNew ? `Sign-in for ${person.name}` : `New password for ${person.name}`,
-    text: `Work Task (daily updates)\nLink: ${link}\nUsername: ${username}\nPassword: ${password}\nAfter signing in, choose your own password.`,
-    subject: 'Your Work Task sign-in', to: person,
+    text: `Task List (daily updates)\nLink: ${link}\nUsername: ${username}\nPassword: ${password}\nAfter signing in, choose your own password.`,
+    subject: 'Your Task List sign-in', to: person,
   });
 }
 
@@ -1973,7 +1973,7 @@ async function giveSignIn(person, email = '') {
       checked = true; // taken: by this person (an earlier try whose reply was lost)? Then a new password, not a second account
       let mine = null;
       try { const users = (await teamApi('users.list')).users || []; team.accounts = users; mine = teamMemberFor(person, users.filter((u) => !u.owner)); } catch (e2) { toast(e2.message, 6000); return; } // cannot tell: never make a second one blind
-      if (mine) { render(); toast(`${person.name} already has a Work Task sign-in: @${mine.username}`, 6000); newPasswordFor(person, mine); return; }
+      if (mine) { render(); toast(`${person.name} already has a Task List sign-in: @${mine.username}`, 6000); newPasswordFor(person, mine); return; }
     }
   }
   toast('Could not find a free username. Add them in Team → People.', 6000);
@@ -2000,18 +2000,18 @@ function personMenu(m) {
     item('📋', 'Send pending list…', () => ctx.openPersonMessage(person)),
     person.phone ? item('💬', `WhatsApp ${person.name}`, () => window.open(`https://wa.me/${person.phone}`, '_blank', 'noopener')) : null,
     item('📞', person.phone || person.email ? 'Change number / email' : 'Add WhatsApp number / email', open),
-    onServer ? (accounts === null ? h('div', { class: 'row-menu-note muted small' }, 'Checking Work Task sign-in…')
+    onServer ? (accounts === null ? h('div', { class: 'row-menu-note muted small' }, 'Checking Task List sign-in…')
       : account ? [
-        h('div', { class: 'row-menu-note muted small' }, `Work Task: @${account.username}${account.active ? '' : ' (switched off)'}`),
+        h('div', { class: 'row-menu-note muted small' }, `Task List: @${account.username}${account.active ? '' : ' (switched off)'}`),
         item('🔑', 'New password…', () => newPasswordFor(person, account)),
         item('👥', 'Their tasks (Team)', () => openTeam()),
-      ] : item('🔑', 'Give a Work Task sign-in', () => giveSignIn(person))) : null,
+      ] : item('🔑', 'Give a Task List sign-in', () => giveSignIn(person))) : null,
     item('✎', 'Rename…', () => {
       const n = prompt('Name:', person.name);
       if (n && n.trim() && n.trim() !== person.name) store.dispatch('renamePerson', { personId: person.id, name: n.trim() });
     }),
     item('🗑', 'Remove from People…', () => {
-      if (confirm(`Remove ${person.name} from People?\n\nTheir name stays in your steps and notes; it is just no longer linked.${account ? '\nTheir Work Task sign-in is not changed.' : ''}`)) { if (store.dispatch('deletePerson', { personId: person.id })) toast(`Removed: ${person.name}`); }
+      if (confirm(`Remove ${person.name} from People?\n\nTheir name stays in your steps and notes; it is just no longer linked.${account ? '\nTheir Task List sign-in is not changed.' : ''}`)) { if (store.dispatch('deletePerson', { personId: person.id })) toast(`Removed: ${person.name}`); }
     }, ' danger'));
   return placeMenu(el, m);
 }
@@ -2388,7 +2388,7 @@ function renderSettings() {
   const usage = data.aiUsage.date === todayIndia() ? data.aiUsage.count : 0;
   return h('div', { class: 'settings' },
     h('section', { class: 'block' }, h('h3', null, onServer ? 'Account' : 'GitHub access key'),
-      h('p', null, isMock ? 'Test mode (no real GitHub).' : onServer ? 'Signed in to Work Task ✓ Your projects are private to you.' : 'Connected to your private data ✓'),
+      h('p', null, isMock ? 'Test mode (no real GitHub).' : onServer ? 'Signed in to Task List ✓ Your projects are private to you.' : 'Connected to your private data ✓'),
       h('div', { class: 'row' },
         isMock || onServer ? null : h('button', { class: 'btn', onClick: () => showKeyScreen('Paste your new GitHub access key.') }, 'Change key'),
         onServer ? h('a', { class: 'btn', href: '#team' }, '👥 Team') : null,
@@ -2453,7 +2453,7 @@ function renderSettings() {
       h('button', { class: 'btn', onClick: downloadBackup }, 'Download backup')),
     h('section', { class: 'block' }, h('h3', null, 'iPhone'),
       h('p', null, onServer ? 'Open worktask.in in Safari and sign in. Share → "Add to Home Screen" puts it on your phone like an app.'
-        : 'Always open Daily Projects from its home-screen icon. In Safari: Share → "Add to Home Screen". Then paste your keys inside the icon app.')));
+        : 'Always open Task List from its home-screen icon. In Safari: Share → "Add to Home Screen". Then paste your keys inside the icon app.')));
 }
 
 async function signOutServer() {
@@ -2500,7 +2500,7 @@ function showKeyScreen(message = '') {
     },
   },
   h('img', { src: 'icons/icon-192.png', alt: '', width: 64, height: 64 }),
-  h('h1', null, 'Daily Projects'),
+  h('h1', null, 'Task List'),
   h('p', null, message || 'Paste your GitHub access key to open your projects.'),
   h('input', { name: 'key', type: 'password', placeholder: 'github_pat_…', autocomplete: 'off', autofocus: true }),
   h('button', { class: 'btn primary', type: 'submit' }, 'Open'),
@@ -2526,7 +2526,7 @@ function showMoved() {
     // changes taken across before: offered again until you say they arrived (the new address adds each one only once)
     screen.replaceChildren(h('div', { class: 'key-card' },
       h('img', { src: 'icons/icon-192.png', alt: '', width: 64, height: 64 }),
-      h('h1', null, 'Daily Projects has moved'),
+      h('h1', null, 'Task List has moved'),
       h('p', null, `${moved.length} change(s) from this device were taken to worktask.in. If they did not arrive there, take them again.`),
       h('a', { class: 'btn primary', href: MOVED_TO + '#ops=' + encodeURIComponent(JSON.stringify(moved)) }, `Take my ${moved.length} change(s) again`),
       h('p', null, h('button', { class: 'btn', type: 'button', onClick: () => { try { localStorage.removeItem('dp.pending.moved'); } catch { /* blocked */ } location.replace(MOVED_TO); } }, 'Done, they arrived'))));
@@ -2539,7 +2539,7 @@ function showMoved() {
   const carry = MOVED_TO + '#ops=' + encodeURIComponent(JSON.stringify(all));
   screen.replaceChildren(h('div', { class: 'key-card' },
     h('img', { src: 'icons/icon-192.png', alt: '', width: 64, height: 64 }),
-    h('h1', null, 'Daily Projects has moved'),
+    h('h1', null, 'Task List has moved'),
     h('p', null, 'Your projects are now at worktask.in. Sign in there with your username and password.'),
     h('p', null, `⚠︎ ${waiting.length} change(s) made on this device were not sent before the move. The button below takes them with you.`),
     h('a', { class: 'btn primary', href: carry, onClick: () => { try { localStorage.setItem('dp.pending.moved', JSON.stringify(all)); localStorage.removeItem('dp.pending'); } catch { /* kept */ } } }, `Open worktask.in with my ${waiting.length} change(s)`)));
@@ -3701,7 +3701,7 @@ function tickFinishedTeamTasks(tasks) {
       ['tickStep', { projectId: p.id, stepId: step.id, byTeam: true, at: serverTime(t.doneAt) }], // their day, not your work today
       // always a note (same id on every device), so no other device ticks it again
       ['addWorkNote', { projectId: p.id, noteId: 'tn' + t.id, stepId: step.id, team: true, at: serverTime(t.doneAt),
-        text: t.closedByPerson === false ? `👥 Marked done in Work Task: “${step.text}” (${t.assignee.name}'s step)` : `👥 ${t.assignee.name} finished “${step.text}”${words ? ': ' + words : '.'}` }],
+        text: t.closedByPerson === false ? `👥 Marked done by the team: “${step.text}” (${t.assignee.name}'s step)` : `👥 ${t.assignee.name} finished “${step.text}”${words ? ': ' + words : '.'}` }],
     ], `✓ ${t.assignee.name} finished: ${step.text}`, teamUndoKey(t));
   }
   // keep every id the server still sends (60 days), so none of them looks new again
@@ -3892,8 +3892,8 @@ if ('serviceWorker' in navigator && onServer) {
 }
 installMentions(() => ctx);
 installAutocorrect(device.autocorrect());
-if (isMock) document.title = 'Daily Projects (test mode)';
-else if (onServer && location.hostname !== 'worktask.in' && location.hostname !== 'www.worktask.in') document.title = 'Daily Projects (server test)';
+if (isMock) document.title = 'Task List (test mode)';
+else if (onServer && location.hostname !== 'worktask.in' && location.hostname !== 'www.worktask.in') document.title = 'Task List (server test)';
 start();
 
 // ---------------------------------------------------------------- a new version was uploaded while this page stayed open

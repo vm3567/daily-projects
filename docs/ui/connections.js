@@ -1,5 +1,5 @@
 // 🔌 Connections: other apps (an ERP, a web form, n8n, Power Automate…) send the owner tasks and approvals through
-// the Work Task server (team/app/connect.php), and get the owner's decisions back.
+// the Task List server (team/app/connect.php), and get the owner's decisions back.
 //  - Settings → "🔌 Connections": the list of apps, "+ New connection", Rotate key, Delete, and — once, right after
 //    making a key — the address, key and signing secret to give to the app (with a ready PHP connector to download).
 //  - "🔌 From apps": approvals waiting for ✓ Approve / ✕ Reject, grouped by app; decided ones fold away.
@@ -11,16 +11,16 @@ import { indiaDate } from '../rules.js';
 /** The same text as team/connector/worktask-connector.php (a check keeps them equal). */
 export const CONNECTOR_TEMPLATE = String.raw`<?php
 /*
- * Work Task connector - one file that lets your app send tasks and approvals to Work Task,
+ * Task List connector - one file that lets your app send tasks and approvals to Task List,
  * and get the owner's decisions (approved / rejected) back.
  *
  * How to use it - 3 steps:
  *
  * 1. Put this file in your app's folder.
- *    If you downloaded it from Work Task (Settings > Connections), the address, key and secret below are
- *    already filled in. If not, paste them below from the box Work Task showed you.
+ *    If you downloaded it from Task List (Settings > Connections), the address, key and secret below are
+ *    already filled in. If not, paste them below from the box Task List showed you.
  *
- * 2. Send something to Work Task:
+ * 2. Send something to Task List:
  *
  *      require_once __DIR__ . '/worktask-connector.php';
  *      wt_push([
@@ -35,14 +35,14 @@ export const CONNECTOR_TEMPLATE = String.raw`<?php
  *
  * 3. Get the decision back - choose one way:
  *
- *    a) A page in your app that Work Task calls (put its address in Work Task as the "Decision address"):
+ *    a) A page in your app that Task List calls (put its address in Task List as the "Decision address"):
  *
  *      require_once __DIR__ . '/worktask-connector.php';
  *      wt_receive_decision(function ($externalId, $status, $reason) {
  *        // $status is 'approved' or 'rejected'; $reason may be empty. Mark it in your app here.
  *      });
  *
- *    b) Or ask Work Task now and then (for example every 5 minutes):
+ *    b) Or ask Task List now and then (for example every 5 minutes):
  *
  *      do {
  *        $answer = wt_decisions($lastTime);    // $lastTime = '' the very first time
@@ -51,7 +51,7 @@ export const CONNECTOR_TEMPLATE = String.raw`<?php
  *      } while ($answer['more']);              // more than 500 waiting: ask again at once from ${'`'}until${'`'}
  *      // the same decision may come twice: skip one you already have (by item_id or external_id)
  *
- * Keep the key and the secret private. If they leak, press "Rotate key" in Work Task and put the new ones here.
+ * Keep the key and the secret private. If they leak, press "Rotate key" in Task List and put the new ones here.
  * Needs PHP 7.4 or newer, with curl.
  */
 
@@ -59,7 +59,7 @@ const WT_ADDRESS = 'https://YOUR-WORK-TASK-ADDRESS/api/';
 const WT_KEY = 'PASTE-YOUR-KEY-HERE';
 const WT_SECRET = 'PASTE-YOUR-SIGNING-SECRET-HERE';
 
-/** Call Work Task. Returns its answer as an array, or throws RuntimeException with the reason in plain words. */
+/** Call Task List. Returns its answer as an array, or throws RuntimeException with the reason in plain words. */
 function wt_call(string $action, array $body): array {
   $ch = curl_init(WT_ADDRESS . '?a=' . rawurlencode($action));
   curl_setopt_array($ch, [
@@ -74,11 +74,11 @@ function wt_call(string $action, array $body): array {
   $raw = curl_exec($ch);
   $code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
   $error = curl_error($ch);
-  if ($raw === false) throw new RuntimeException('Could not reach Work Task: ' . $error);
+  if ($raw === false) throw new RuntimeException('Could not reach Task List: ' . $error);
   $answer = json_decode((string)$raw, true);
   if (!is_array($answer) || empty($answer['ok'])) {
     $why = is_array($answer) && isset($answer['error']) ? (string)$answer['error'] : 'error ' . $code;
-    throw new RuntimeException('Work Task said: ' . $why);
+    throw new RuntimeException('Task List said: ' . $why);
   }
   return $answer;
 }
@@ -88,7 +88,7 @@ function wt_push(array $item): array {
   return wt_call('connect.push', $item);
 }
 
-/** You took it back: Work Task marks it withdrawn. */
+/** You took it back: Task List marks it withdrawn. */
 function wt_withdraw(string $externalId): array {
   return wt_call('connect.withdraw', ['external_id' => $externalId]);
 }
@@ -107,7 +107,7 @@ function wt_decisions(string $since = ''): array {
   ];
 }
 
-/** Is this really from Work Task? The time must be within 5 minutes, and the signature must match. */
+/** Is this really from Task List? The time must be within 5 minutes, and the signature must match. */
 function wt_signature_ok(string $body, string $timestamp, string $signature, ?int $now = null): bool {
   if (!preg_match('/^[0-9]{1,12}$/', $timestamp)) return false;
   if (abs(($now === null ? time() : $now) - (int)$timestamp) > 300) return false;
@@ -155,7 +155,7 @@ export function buildConnector({ address, key, secret }) {
   return out;
 }
 
-/** The addresses an app calls, from the Work Task address this page is opened on ("https://worktask.in/api/"). */
+/** The addresses an app calls, from the Task List address this page is opened on ("https://worktask.in/api/"). */
 export function appAddresses(base) {
   return { push: base + '?a=connect.push', withdraw: base + '?a=connect.withdraw', decisions: base + '?a=connect.decisions' };
 }
@@ -164,7 +164,7 @@ export function appAddresses(base) {
 export function howToText({ base, key }) {
   const a = appAddresses(base);
   return [
-    'How to connect an app to Work Task',
+    'How to connect an app to Task List',
     '',
     '1. Send a task or an approval (POST, JSON):',
     '   Address: ' + a.push,
@@ -179,7 +179,7 @@ export function howToText({ base, key }) {
     '2. Take it back:  POST ' + a.withdraw + '  {"external_id": "PO-1001"}',
     '',
     '3. Get the decision back, one of two ways:',
-    '   a) Decision address: Work Task sends a POST with',
+    '   a) Decision address: Task List sends a POST with',
     '      {"event": "decision", "external_id": "PO-1001", "status": "approved" or "rejected", "reason": "...", "decided_at": "...", "item_id": 12}',
     '      and the headers X-WorkTask-Timestamp and X-WorkTask-Signature: sha256=<hex>.',
     '      Check it: <hex> = HMAC-SHA256(signing secret, timestamp + "." + body), and the timestamp is within 5 minutes.',
@@ -393,7 +393,7 @@ function newForm(ctx) {
       h('input', { type: 'text', maxlength: 80, value: f.name, placeholder: 'e.g. Purchase app', 'aria-label': 'Name of the app', onInput: (e, el) => { f.name = el.value; } })),
     h('label', null, 'Decision address (callback URL) — optional',
       h('input', { type: 'url', maxlength: 500, value: f.url, placeholder: 'https://your-app.example/worktask-decision.php', 'aria-label': 'Decision address', onInput: (e, el) => { f.url = el.value; } })),
-    h('p', { class: 'muted small' }, 'Where Work Task sends your ✓ Approve / ✕ Reject (https:// only). Leave it empty if the app asks for decisions itself.'),
+    h('p', { class: 'muted small' }, 'Where Task List sends your ✓ Approve / ✕ Reject (https:// only). Leave it empty if the app asks for decisions itself.'),
     h('div', { class: 'row' },
       h('button', { class: 'btn primary', type: 'submit', disabled: cx.busy.has('create') }, cx.busy.has('create') ? 'Making…' : 'Create'),
       h('button', { class: 'btn', type: 'button', onClick: () => { cx.form = null; cx.editUrl = null; ctx.render(); } }, 'Cancel')));

@@ -100,7 +100,7 @@ function push_merge(array $list): array {
   if (count($list) === 1) return $list[0];
   $kind = in_array('task', array_column($list, 'kind'), true) ? 'task' : $list[0]['kind'];
   $lines = array_map(fn($m) => $m['title'] . ($m['body'] !== '' ? ': ' . $m['body'] : ''), $list);
-  return ['kind' => $kind, 'title' => '🔔 ' . count($list) . ' new things in Work Task', 'body' => mb_substr(implode("\n", array_slice($lines, 0, 4)), 0, 240), 'url' => '/projects/', 'tag' => 'many'];
+  return ['kind' => $kind, 'title' => '🔔 ' . count($list) . ' new things in Task List', 'body' => mb_substr(implode("\n", array_slice($lines, 0, 4)), 0, 240), 'url' => '/projects/', 'tag' => 'many'];
 }
 
 /** Send what was kept. Called once the answer is on its way. Dead phone addresses are removed. */
@@ -195,7 +195,7 @@ function push_handle(string $a, array $in, array $me): ?array {
     case 'push.test': {
       $n = (int)(one('SELECT COUNT(*) AS n FROM push_subs WHERE user_id = ?', [$me['id']])['n'] ?? 0);
       if (!$n) throw new ApiError('Notifications are not on for this phone yet.');
-      $GLOBALS['push_out'][$me['id']][] = ['kind' => 'task', 'title' => '🔔 Test from Work Task', 'body' => 'Notifications work on this phone.', 'url' => '/projects/', 'tag' => 'test'];
+      $GLOBALS['push_out'][$me['id']][] = ['kind' => 'task', 'title' => '🔔 Test from Task List', 'body' => 'Notifications work on this phone.', 'url' => '/projects/', 'tag' => 'test'];
       return ['phones' => $n];
     }
   }

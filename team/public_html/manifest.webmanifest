@@ -1,7 +1,7 @@
 {
   "id": "/",
-  "name": "Work Task",
-  "short_name": "Work Task",
+  "name": "Task List",
+  "short_name": "Task List",
   "description": "Daily tasks and updates for the team, and your projects.",
   "start_url": "/",
   "scope": "/",

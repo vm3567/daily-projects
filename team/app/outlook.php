@@ -398,7 +398,7 @@ function ol_load(): array {
   if (!$owner) throw new OlError('No projects on this server yet.');
   $head = dp_head($owner);
   $files = dp_tree_files((string)one('SELECT tree FROM dp_commits WHERE id = ?', [$head])['tree']);
-  if (!isset($files['data.json'])) throw new OlError('Open Daily Projects once first.');
+  if (!isset($files['data.json'])) throw new OlError('Open Task List once first.');
   $data = json_decode(dp_get_blob($files['data.json']), false);
   if (!is_object($data)) throw new OlError('The saved projects could not be read.'); // never write over them
   return [$head, $files, $data];
@@ -797,9 +797,9 @@ function ol_callback(array $get): array {
     $saved = json_decode(setting('ol_oauth'), true);
     $state = (string)($get['state'] ?? '');
     if (!is_array($saved) || $state === '' || !hash_equals((string)($saved['state'] ?? ''), hash('sha256', $state)))
-      return [false, 'This sign-in link is not valid any more. Go back to Work Task and press Connect Outlook again.'];
+      return [false, 'This sign-in link is not valid any more. Go back to Task List and press Connect Outlook again.'];
     q("DELETE FROM settings WHERE k = 'ol_oauth'"); // used once
-    if ((int)($saved['exp'] ?? 0) < time()) return [false, 'This sign-in took more than 10 minutes. Go back to Work Task and press Connect Outlook again.'];
+    if ((int)($saved['exp'] ?? 0) < time()) return [false, 'This sign-in took more than 10 minutes. Go back to Task List and press Connect Outlook again.'];
     if ((int)($saved['user'] ?? 0) !== (int)setting('dp_owner', '0')) return [false, 'Only the owner of the projects can connect Outlook.'];
     if (isset($get['error'])) return [false, ol_ms_error(['error' => (string)$get['error'], 'error_description' => (string)($get['error_description'] ?? '')])];
     $code = (string)($get['code'] ?? '');

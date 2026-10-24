@@ -29,7 +29,7 @@ const HISTORY_WORDS = {
   snoozed: 'Snoozed', woke: 'Woken up', step_remind: 'Remind me', time_added: 'Time added', time_logged: 'Time logged',
   group_added: 'Group added', group_renamed: 'Group renamed', group_deleted: 'Group deleted',
   team_ticked: 'Done by the team', team_note: 'Team note', team_step_added: 'Step added by the team', team_step_unticked: 'Opened again by the team',
-  team_note_deleted: 'Team note removed', team_moved: 'Moved in Work Task', mail_note: 'Email reply', mail_task: 'Task made from an email', app_task: '🔌 Task from an app', app_note: '🔌 Update from an app',
+  team_note_deleted: 'Team note removed', team_moved: 'Moved by the team', mail_note: 'Email reply', mail_task: 'Task made from an email', app_task: '🔌 Task from an app', app_note: '🔌 Update from an app',
   reply_prepared: 'Reply prepared', reply_sent: 'Reply sent', mail_replied: 'Reply sent (seen in Outlook)',
   step_to_project: 'Step made a task', main_changed: '📂 Project',
 };
@@ -1213,7 +1213,7 @@ function projectDiary(ctx, p, upd) {
     const files = notePhotos(p, n);
     const team = n.text.startsWith('👥 ');
     entries.push({
-      day: indiaDate(n.createdAt), at: n.createdAt, work: !n.app && !String(n.text).startsWith('👥 Marked done in Work Task'), stepId: n.stepId,
+      day: indiaDate(n.createdAt), at: n.createdAt, work: !n.app && !/^👥 Marked done (in Work Task|by the team)/.test(String(n.text)), stepId: n.stepId,
       // a 🔌 note from an outside app (connect.php) is the app's words, not yours
       node: diaryLine(team ? '👥' : n.app ? '🔌' : '📝', team ? null : n.app ? (p.fromApp || 'App') : 'You', team ? n.text.slice(3) : noteBody(ctx, p, n), [
         about(n.stepId),

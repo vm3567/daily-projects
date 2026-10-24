@@ -72,7 +72,7 @@ export function renderPeopleList(ctx) {
     h('button', { class: 'btn primary small', type: 'submit' }, 'Add'),
     ctx.onServer ? h('label', { class: 'small people-signin', key: 'new-person-signin' },
       h('input', { type: 'checkbox', name: 'signin', checked: !!ui.addSignIn, onChange: (e, el) => { ui.addSignIn = el.checked; ctx.render(); } }),
-      ' Also give them a Work Task sign-in') : null,
+      ' Also give them a Task List sign-in') : null,
     ctx.onServer && ui.addSignIn ? h('input', { name: 'email', type: 'email', key: 'new-person-email', placeholder: 'Email (optional, for the morning email)', autocomplete: 'off' }) : null),
     people.length ? null : h('p', { class: 'empty-list' }, 'No people yet. Add a name above, or type @ and a name in any step.'),
     h('ul', { class: 'plist people-list', key: 'people-list' }, peopleByFollowUp(data).map(({ person, st }) => { const sent = markOf(ctx, person).time; return (
@@ -108,9 +108,9 @@ function stepItem(ctx, { project, step }, give = null) {
       step.dueDate && !step.done ? h('span', { class: 'muted small' }, ` · by ${fmtDay(step.dueDate)}`) : null,
       step.done && step.doneAt ? h('span', { class: 'muted small' }, ` · ${fmtDay(indiaDate(step.doneAt))}`) : null),
     step.waiting && !step.done ? h('button', { class: 'row-act draft', title: 'AI writes a short follow-up message', onClick: () => ctx.draftFollowUp(project, step) }, '✍ Draft') : null,
-    onList ? h('span', { class: 'tag team-tag', title: `A Work Task task for ${task.assignee ? task.assignee.name : 'the team'}` }, `👥 on ${task.assignee ? task.assignee.name.split(/\s+/)[0] : 'their'}'s list`)
+    onList ? h('span', { class: 'tag team-tag', title: `A team task for ${task.assignee ? task.assignee.name : 'the team'}` }, `👥 on ${task.assignee ? task.assignee.name.split(/\s+/)[0] : 'their'}'s list`)
       : give && canGiveStep(give.user, project, step, task)
-        ? h('button', { class: 'row-act give', title: `Put this step on ${give.first}'s Work Task list (daily updates show on the task)`, onClick: () => ctx.giveSteps([{ project, step }], give.user, give.person) }, `→ Give to ${give.first}`)
+        ? h('button', { class: 'row-act give', title: `Put this step on ${give.first}'s Task List (daily updates show on the task)`, onClick: () => ctx.giveSteps([{ project, step }], give.user, give.person) }, `→ Give to ${give.first}`)
         : null,
     h('button', { class: 'tag link-tag', title: 'Open task', onClick: () => ctx.openProject(project.id) }, project.name));
 }
@@ -120,8 +120,8 @@ function list(title, items, ctx, empty, give = null) {
   return h('section', { class: 'block' },
     h('h3', null, `${title} (${items.length})`,
       can.length ? h('button', {
-        class: 'btn small give-all', title: `Put these ${can.length} steps on ${give.first}'s Work Task list`,
-        onClick: () => { if (confirm(`Give ${can.length} step${can.length === 1 ? '' : 's'} to ${give.person.name}? They go on ${give.first}'s Work Task list.`)) ctx.giveSteps(can, give.user, give.person); },
+        class: 'btn small give-all', title: `Put these ${can.length} steps on ${give.first}'s Task List`,
+        onClick: () => { if (confirm(`Give ${can.length} step${can.length === 1 ? '' : 's'} to ${give.person.name}? They go on ${give.first}'s Task List.`)) ctx.giveSteps(can, give.user, give.person); },
       }, `→ Give all ${can.length}`) : null),
     items.length ? h('ul', { class: 'person-steps' }, items.map((it) => stepItem(ctx, it, give))) : h('p', { class: 'muted small' }, empty));
 }
@@ -188,7 +188,7 @@ function taskBox(ctx, person, give = null) {
   h('div', { class: 'person-task-row' },
     chip(t.mode === 'me', 'I do it', () => { t.mode = 'me'; }, `Your task; ${first} is @mentioned`),
     chip(t.mode === 'wait', `Waiting on ${first}`, () => { t.mode = 'wait'; }, `${first} has to do it: shows Waiting with a day count`),
-    give ? chip(t.mode === 'give', `${first} does it (their list)`, () => { t.mode = 'give'; }, `Added to the task AND given to ${first} on Work Task right away`) : null,
+    give ? chip(t.mode === 'give', `${first} does it (their list)`, () => { t.mode = 'give'; }, `Added to the task AND given to ${first} on Task List right away`) : null,
     h('span', { class: 'muted small' }, '· When:'),
     [[0, 'Today'], [1, 'Tomorrow'], [7, '1 week']].map(([d, label]) => chip(t.when === d, label, () => { t.when = d; },
       d ? `Hide it until ${fmtDay(addDays(today, d))}, then it comes back first` : 'From today'))),
@@ -223,7 +223,7 @@ function teamSection(ctx, person, link) {
     const items = teamOrder(link.member.items || []);
     const open = (x) => (x.projectRef && data.projects.some((p) => p.id === x.projectRef) ? () => ctx.openProject(x.projectRef) : null);
     return h('section', { class: 'block wt-block', key: 'wt-' + person.id },
-      h('h3', null, `📁 Projects and tasks from Work Task (${items.length})`),
+      h('h3', null, `📁 Projects and tasks from the team (${items.length})`),
       items.length ? h('table', { class: 'wt-table' },
         h('thead', null, h('tr', null, h('th', null, '#'), h('th', null, 'Work'), h('th', null, 'Last update'))),
         h('tbody', null, items.map((x, i) => {
@@ -232,10 +232,10 @@ function teamSection(ctx, person, link) {
             h('td', null, String(i + 1)),
             h('td', null, h('b', null, (x.kind === 'project' ? '📁 ' : '') + (x.title || '')), ...itemLines(x)),
             h('td', { class: 'muted' }, x.lastUpdate && x.lastUpdate.day ? `${mailDate(x.lastUpdate.day)}: ${x.lastUpdate.note || ''}` : '—'));
-        }))) : h('p', { class: 'muted small' }, `Nothing pending for ${first} on Work Task.`));
+        }))) : h('p', { class: 'muted small' }, `Nothing pending for ${first} on Task List.`));
   }
   const given = givenProjectsOf(data, person);
-  const note = link && link.loading ? 'Loading Work Task…' : link && link.failed ? 'Work Task list could not load — showing the projects given from here.' : '';
+  const note = link && link.loading ? 'Loading Task List…' : link && link.failed ? 'Task List could not load — showing the projects given from here.' : '';
   if (!given.length && !note) return null;
   return h('section', { class: 'block wt-block', key: 'wt-' + person.id },
     h('h3', null, `📁 Projects given to ${person.name} (${given.length})`),
@@ -260,15 +260,15 @@ function teamAccountBox(ctx, person, link) {
   const u = link && link.user;
   if (!u) {
     return h('div', { class: 'block team-account', key: 'ta-' + person.id },
-      h('span', { class: 'muted small' }, `No Work Task sign-in for ${first}. `),
-      ctx.giveSignIn ? h('button', { class: 'btn small', onClick: () => ctx.giveSignIn(person) }, '🔑 Give a Work Task sign-in') : null);
+      h('span', { class: 'muted small' }, `No Task List sign-in for ${first}. `),
+      ctx.giveSignIn ? h('button', { class: 'btn small', onClick: () => ctx.giveSignIn(person) }, '🔑 Give a Task List sign-in') : null);
   }
   const others = (ctx.teamAccounts ? ctx.teamAccounts() || [] : []).filter((x) => x.active && x.id !== u.id && !x.owner);
   return h('div', { class: 'block team-account', key: 'ta-' + person.id },
     h('div', { class: 'small' }, h('strong', null, 'Team account'), ` · @${u.username}`, u.active ? '' : ' · switched off',
       h('span', { class: 'muted' }, u.lastLogin ? ` · last signed in ${String(u.lastLogin).slice(0, 10)}` : ' · not signed in yet')),
     h('label', { class: 'small' }, '✉ ', h('input', {
-      key: 'ta-email-' + u.id, type: 'email', value: u.email || '', placeholder: 'Email (for the pending list)', 'aria-label': 'Work Task email', autocomplete: 'off',
+      key: 'ta-email-' + u.id, type: 'email', value: u.email || '', placeholder: 'Email (for the pending list)', 'aria-label': 'Task List email', autocomplete: 'off',
       onChange: (e, el) => { if (el.value.trim() !== (u.email || '')) ctx.setTeamEmail(u, el.value); },
     })),
     h('div', { class: 'row' },

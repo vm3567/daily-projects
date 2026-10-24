@@ -507,7 +507,7 @@ export function createTeam(opts) {
     const dots = { red: 0, yellow: 0, green: 0 };
     for (const x of today) dots[x.today ? 'green' : t.late ? 'red' : 'yellow']++;
     return h('nav', { class: 'menu-inner' },
-      h('div', { class: 'brand' }, h('img', { src: 'icons/icon-192.png', alt: '', width: 28, height: 28 }), h('span', null, owner ? 'Daily Projects' : 'Work Task')),
+      h('div', { class: 'brand' }, h('img', { src: 'icons/icon-192.png', alt: '', width: 28, height: 28 }), h('span', null, 'Task List')),
       h('input', { class: 'search', type: 'search', placeholder: 'Search…', key: 'team-menu-search', 'aria-label': 'Search', value: state.searchQ || '',
         onInput: (e, el) => { if (state.view !== 'search') go('search'); search(el.value); } }),
       h('ul', { class: 'menu-list' },
@@ -855,7 +855,7 @@ export function createTeam(opts) {
     const err = errLine('perr');
     const share = state.newPerson ? (() => {
       const p = state.newPerson;
-      const text = `Work Task (daily updates)\nLink: ${opts.appLink || location.origin + '/'}\nUsername: ${p.username}\nPassword: ${p.password}\nAfter signing in, choose your own password.`;
+      const text = `Task List (daily updates)\nLink: ${opts.appLink || location.origin + '/'}\nUsername: ${p.username}\nPassword: ${p.password}\nAfter signing in, choose your own password.`;
       return block(`Send this to ${p.name}`, h('div', { class: 'pre small' }, text), h('div', { class: 'row' },
         h('button', { class: 'btn small', onClick: () => copy(text).then(() => toast('Copied ✓'), () => toast('Select the text and copy it')) }, '📋 Copy'),
         h('a', { class: 'btn small', href: 'https://wa.me/?text=' + encodeURIComponent(text), target: '_blank', rel: 'noopener noreferrer' }, 'WhatsApp'),
@@ -928,7 +928,7 @@ export function createTeam(opts) {
       try { const out = await api(a, body); o.status = out.outlook || o.status; state.outlook = !!(o.status && o.status.connected); if (after) after(out); } catch (e) { toast(e.message, 6000); } finally { o.busy = ''; render(); }
     };
     return block('📧 Outlook', h('div', { class: 'stack' },
-      h('p', { class: 'muted small' }, 'Every new email in your Outlook Inbox comes to your Daily Projects 📥 Inbox (replies join the same item). Set up once in Azure (App registrations): register this Redirect URI (type Web), add the delegated permissions offline_access, User.Read and Mail.ReadWrite (it only reads your emails; it never sends any), make a client secret.'),
+      h('p', { class: 'muted small' }, 'Every new email in your Outlook Inbox comes to your Task List 📥 Inbox (replies join the same item). Set up once in Azure (App registrations): register this Redirect URI (type Web), add the delegated permissions offline_access, User.Read and Mail.ReadWrite (it only reads your emails; it never sends any), make a client secret.'),
       h('label', null, 'Redirect URI to register', h('code', null, st ? st.redirectUri || '' : '')),
       h('label', null, 'Application (client) ID', h('input', { key: 'ol-client', autocomplete: 'off', spellcheck: 'false', placeholder: 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx', value: o.clientId, onInput: (e, el) => { o.clientId = el.value; } })),
       h('label', null, 'Directory (tenant) ID', h('input', { key: 'ol-tenant', autocomplete: 'off', spellcheck: 'false', placeholder: 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx', value: o.tenantId, onInput: (e, el) => { o.tenantId = el.value; } })),
@@ -1093,7 +1093,7 @@ export function createTeam(opts) {
         h('button', { class: 'btn small', onClick: async () => { await push.turnOff(); toast('Notifications are off for this phone.'); render(); } }, 'Turn off')));
     } else if (s === 'default' || s === 'granted') parts.push(h('button', { class: 'btn primary small', onClick: notifyOn }, '🔔 Turn on notifications'));
     else if (s === 'denied') {
-      parts.push(h('p', { class: 'warn' }, 'Notifications are blocked for Work Task on this phone. To allow them:'),
+      parts.push(h('p', { class: 'warn' }, 'Notifications are blocked for Task List on this phone. To allow them:'),
         h('ol', null, h('li', null, 'Installed app: press and hold the app icon → App info → Notifications → turn on.'), h('li', null, 'In Chrome: tap ⋮ → Settings → Site settings → Notifications → worktask.in → Allow.'), h('li', null, 'Come back here and open this page again.')));
     } else if (s === 'ios') {
       parts.push(h('p', { class: 'warn' }, 'On iPhone, notifications work only from the Home Screen app:'),

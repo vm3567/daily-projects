@@ -1,15 +1,15 @@
 <?php
 /*
- * Work Task connector - one file that lets your app send tasks and approvals to Work Task,
+ * Task List connector - one file that lets your app send tasks and approvals to Task List,
  * and get the owner's decisions (approved / rejected) back.
  *
  * How to use it - 3 steps:
  *
  * 1. Put this file in your app's folder.
- *    If you downloaded it from Work Task (Settings > Connections), the address, key and secret below are
- *    already filled in. If not, paste them below from the box Work Task showed you.
+ *    If you downloaded it from Task List (Settings > Connections), the address, key and secret below are
+ *    already filled in. If not, paste them below from the box Task List showed you.
  *
- * 2. Send something to Work Task:
+ * 2. Send something to Task List:
  *
  *      require_once __DIR__ . '/worktask-connector.php';
  *      wt_push([
@@ -24,14 +24,14 @@
  *
  * 3. Get the decision back - choose one way:
  *
- *    a) A page in your app that Work Task calls (put its address in Work Task as the "Decision address"):
+ *    a) A page in your app that Task List calls (put its address in Task List as the "Decision address"):
  *
  *      require_once __DIR__ . '/worktask-connector.php';
  *      wt_receive_decision(function ($externalId, $status, $reason) {
  *        // $status is 'approved' or 'rejected'; $reason may be empty. Mark it in your app here.
  *      });
  *
- *    b) Or ask Work Task now and then (for example every 5 minutes):
+ *    b) Or ask Task List now and then (for example every 5 minutes):
  *
  *      do {
  *        $answer = wt_decisions($lastTime);    // $lastTime = '' the very first time
@@ -40,7 +40,7 @@
  *      } while ($answer['more']);              // more than 500 waiting: ask again at once from `until`
  *      // the same decision may come twice: skip one you already have (by item_id or external_id)
  *
- * Keep the key and the secret private. If they leak, press "Rotate key" in Work Task and put the new ones here.
+ * Keep the key and the secret private. If they leak, press "Rotate key" in Task List and put the new ones here.
  * Needs PHP 7.4 or newer, with curl.
  */
 
@@ -48,7 +48,7 @@ const WT_ADDRESS = 'https://YOUR-WORK-TASK-ADDRESS/api/';
 const WT_KEY = 'PASTE-YOUR-KEY-HERE';
 const WT_SECRET = 'PASTE-YOUR-SIGNING-SECRET-HERE';
 
-/** Call Work Task. Returns its answer as an array, or throws RuntimeException with the reason in plain words. */
+/** Call Task List. Returns its answer as an array, or throws RuntimeException with the reason in plain words. */
 function wt_call(string $action, array $body): array {
   $ch = curl_init(WT_ADDRESS . '?a=' . rawurlencode($action));
   curl_setopt_array($ch, [
@@ -63,11 +63,11 @@ function wt_call(string $action, array $body): array {
   $raw = curl_exec($ch);
   $code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
   $error = curl_error($ch);
-  if ($raw === false) throw new RuntimeException('Could not reach Work Task: ' . $error);
+  if ($raw === false) throw new RuntimeException('Could not reach Task List: ' . $error);
   $answer = json_decode((string)$raw, true);
   if (!is_array($answer) || empty($answer['ok'])) {
     $why = is_array($answer) && isset($answer['error']) ? (string)$answer['error'] : 'error ' . $code;
-    throw new RuntimeException('Work Task said: ' . $why);
+    throw new RuntimeException('Task List said: ' . $why);
   }
   return $answer;
 }
@@ -77,7 +77,7 @@ function wt_push(array $item): array {
   return wt_call('connect.push', $item);
 }
 
-/** You took it back: Work Task marks it withdrawn. */
+/** You took it back: Task List marks it withdrawn. */
 function wt_withdraw(string $externalId): array {
   return wt_call('connect.withdraw', ['external_id' => $externalId]);
 }
@@ -96,7 +96,7 @@ function wt_decisions(string $since = ''): array {
   ];
 }
 
-/** Is this really from Work Task? The time must be within 5 minutes, and the signature must match. */
+/** Is this really from Task List? The time must be within 5 minutes, and the signature must match. */
 function wt_signature_ok(string $body, string $timestamp, string $signature, ?int $now = null): bool {
   if (!preg_match('/^[0-9]{1,12}$/', $timestamp)) return false;
   if (abs(($now === null ? time() : $now) - (int)$timestamp) > 300) return false;

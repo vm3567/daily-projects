@@ -328,7 +328,7 @@ test('person page for a Work Task person: the server list as a table, the Team a
     openProject: (id) => opened.push(id), newPasswordFor: () => {}, toggleTeamUser: () => {}, setTeamEmail: () => {}, moveAllTasks: () => {} });
   const el = renderPerson(ctx);
   const text = el.textContent;
-  assert.ok(text.includes('📁 Projects and tasks from Work Task (3)'));
+  assert.ok(text.includes('📁 Projects and tasks from the team (3)'));
   const rows = allIn(findIn(el, hasClass('wt-table')), (n) => n.nodeName === 'TR');
   assert.deepEqual(rows[0].childNodes.map((c) => c.textContent), ['#', 'Work', 'Last update']);
   assert.deepEqual(rows.slice(1).map((r) => r.childNodes[1].childNodes[0].textContent), ['📁 Basin mould', 'Fix press', 'Clean dryer'], 'late, stuck, then the rest');
@@ -338,21 +338,21 @@ test('person page for a Work Task person: the server list as a table, the Team a
   assert.deepEqual(opened, ['p1'], 'tap a project row = open it');
   for (const bit of ['Team account', '@ravi', '🔑 New password', 'Switch off', '↔ Move all tasks to…']) assert.ok(text.includes(bit), bit);
   assert.equal(allIn(el, (n) => n.getAttribute && n.getAttribute('aria-label') === 'Email').length, 0, 'no second email box');
-  assert.equal(findIn(el, (n) => n.getAttribute && n.getAttribute('aria-label') === 'Work Task email').value, 'ravi@acton.in');
-  const order = ['📋 Send pending list', 'Team account', '📁 Projects and tasks from Work Task', 'To discuss with Ravi', 'Notes about Ravi'].map((t) => text.indexOf(t));
+  assert.equal(findIn(el, (n) => n.getAttribute && n.getAttribute('aria-label') === 'Task List email').value, 'ravi@acton.in');
+  const order = ['📋 Send pending list', 'Team account', '📁 Projects and tasks from the team', 'To discuss with Ravi', 'Notes about Ravi'].map((t) => text.indexOf(t));
   assert.ok(order.every((x, i) => x >= 0 && (i === 0 || x > order[i - 1])), 'sections in order: ' + order);
   assert.ok(renderPeopleList(Object.assign(fakeCtx(s, {}), { teamLink: () => ({ user, member }) })).textContent.includes('1 project · 2 tasks'));
 });
 
 test('People: "+ Add a person" can also give a Work Task sign-in (checkbox, only on the server)', () => {
   const s = sampleState();
-  assert.ok(!renderPeopleList(fakeCtx(s, {})).textContent.includes('Work Task sign-in'), 'not off the server');
+  assert.ok(!renderPeopleList(fakeCtx(s, {})).textContent.includes('Task List sign-in'), 'not off the server');
   const given = [];
   const ui = { addSignIn: true };
   const ctx = Object.assign(fakeCtx(s, ui), { onServer: true, giveSignIn: (person, email) => given.push([person.name, email]) });
   ctx.store.dispatch = (type, args) => applyOps(s, [makeOp(type, args)]).length > 0;
   const list = renderPeopleList(ctx);
-  assert.ok(list.textContent.includes('Also give them a Work Task sign-in'));
+  assert.ok(list.textContent.includes('Also give them a Task List sign-in'));
   const form = findIn(list, hasClass('people-add'));
   form.__on.submit({ preventDefault() {}, target: { elements: { name: { value: 'Mani' }, signin: { checked: true }, email: { value: ' mani@acton.in ' } } } });
   assert.ok(s.data.people.some((p) => p.name === 'Mani'));
@@ -1060,7 +1060,7 @@ test('📂 Projects page: a click on a project row selects it and stays on the p
   assert.match(mainsSrc, /ctx\.ui\.view === 'mains' && ctx\.showHere \? ctx\.showHere\(c\.id\)/, 'a task in the TASKS table while on the Projects page');
   const here = app.slice(app.indexOf('  showHere: (id) => {'), app.indexOf('  openProject: (id) => {'));
   assert.match(here, /select\(id\);/);
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-44'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-45'/, 'phones get the new copy');
 });
 
 test('📂 project page: "✕ Remove" on a task row takes it out of this project only — the task is kept (and stays in its other projects)', () => {
@@ -1846,7 +1846,7 @@ test('🔌 app wiring (app.js): "🔌 From apps" after ✉ Replies with the wait
   assert.match(app, /function go\(view\) \{\n\s*if \(view !== 'settings'\) forgetOnce\(\);/);
   assert.match(app, /if \(onServer\) loadApps\(appsCtx, force \|\| ui\.view === 'apps'\);/);
   assert.match(app, /replies: '✉ Replies', apps: '🔌 From apps', mains: '📂 Projects' \}\[ui\.view\]/, 'its page title');
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-44'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-45'/, 'phones get the new copy');
 });
 
 test('🔌 the PHP connector (team/connector/worktask-connector.php): the same text the app downloads, placeholders only (no real key), valid PHP 7.4+ (php -l), with wt_push / wt_withdraw / wt_decisions / wt_receive_decision', async () => {
@@ -2210,7 +2210,7 @@ test('Give a Work Task sign-in: a retry after a lost reply does not make a secon
   await giveSignIn(ravi); // tapped again before that came back
   assert.deepEqual(made, ['ravi'], 'only one account');
   assert.deepEqual(reset, [2], 'a new first password for the account that was made');
-  assert.match(toasts.at(-1), /already has a Work Task sign-in: @ravi/);
+  assert.match(toasts.at(-1), /already has a Task List sign-in: @ravi/);
   accounts.push({ id: 9, name: 'Meena Rao', username: 'meena' });
   await giveSignIn({ name: 'Meena Das' }); // a different Meena: 'meena' is someone else's, so the next number
   assert.deepEqual(made, ['ravi', 'meena1']);
@@ -3010,7 +3010,7 @@ test('one app — sign in: the key screen\'s card asks for the username and pass
   const card = signMod.signInCard({ post: async (a, body) => { posts.push({ a, body }); return body.password === 'right-one' ? { status: 200, out: { ok: true, token: 't'.repeat(64), user: { id: 7, name: 'Valar', role: 'staff' } } } : { status: 401, out: { ok: false, error: 'Wrong username or password.' } }; }, onSignedIn: (x) => { got = x; } });
   assert.equal(card.nodeName, 'FORM'); assert.match(card.className, /\bkey-card\b/, 'the owner\'s key screen card');
   const text = card.textContent;
-  for (const bit of ['Work Task', 'Username', 'Password', 'Sign in']) assert.ok(text.includes(bit), bit);
+  for (const bit of ['Task List', 'Username', 'Password', 'Sign in']) assert.ok(text.includes(bit), bit);
   assert.ok(rFind(card, (n) => n.nodeName === 'INPUT' && n.getAttribute('autocomplete') === 'current-password' && n.getAttribute('type') === 'password'), 'a password box the phone can fill');
   await submit(card, { username: '', password: '' });
   assert.equal(posts.length, 0, 'empty: nothing is sent'); assert.match(shown(card), /Type your username and password/);
@@ -4024,4 +4024,27 @@ test('📒 the chips on a record say "📒 Record" and "✓ 3 entries today" (no
   assert.deepEqual(chips({ kind: 'log', repeat: 'daily', status: 'open', entriesToday: 3, today: { id: 1 } }), ['📒 Record', '✓ 3 entries today']);
   assert.deepEqual(chips({ kind: 'log', repeat: 'daily', status: 'open', entriesToday: 0, today: null }), ['📒 Record']);
   assert.ok(chips({ kind: 'task', repeat: 'daily', skipSunday: true, status: 'open', today: { id: 1 } }).includes('✓ Sent today'), 'a daily update as before');
+});
+
+test('The app is called "Task List" for everyone (owner asked 24 Oct): home-screen names, page titles, the header, sign-in, notifications; old "Marked done in Work Task" history lines still read as the team\'s work', () => {
+  const read = (p) => readFileSync(new URL('../' + p, import.meta.url), 'utf8');
+  for (const p of ['docs/manifest.webmanifest', 'team/public_html/manifest.webmanifest']) {
+    const m = JSON.parse(read(p));
+    assert.deepEqual([m.name, m.short_name], ['Task List', 'Task List'], p);
+  }
+  assert.match(read('docs/index.html'), /<title>Task List<\/title>/);
+  assert.match(read('docs/index.html'), /apple-mobile-web-app-title" content="Task List"/);
+  assert.match(read('team/public_html/index.html'), /<title>Task List<\/title>/);
+  assert.match(read('docs/ui/signin.js'), /h\('h1', null, 'Task List'\)/);
+  assert.match(read('docs/ui/staff.js'), /h\('span', null, 'Task List'\)\)/, 'staff header');
+  assert.match(read('docs/ui/team.js'), /h\('span', null, 'Task List'\)\)/, 'team pages header');
+  assert.match(read('docs/app.js'), /h\('span', null, 'Task List'\)\)/, 'owner header');
+  assert.match(read('team/public_html/sw.js'), /showNotification\(m\.title \|\| 'Task List',/);
+  // no old name left in what people see (strings in the screens' code, not notes for developers)
+  for (const p of ['docs/app.js', 'docs/ui/staff.js', 'docs/ui/team.js', 'docs/ui/people.js', 'docs/ui/signin.js', 'docs/ui/detail.js']) {
+    const shown = read(p).split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).map((l) => l.replace(/\s\/\/\s.*$/, ''));
+    const left = shown.filter((l) => /(['"`])[^'"`]*(Daily Projects|Work Task)/.test(l) && !l.includes('Marked done (in Work Task|by the team)'));
+    assert.deepEqual(left, [], p);
+  }
+  assert.match(read('docs/ui/detail.js'), /!\/\^👥 Marked done \(in Work Task\|by the team\)\/\.test\(String\(n\.text\)\)/, 'old history lines still count as the team\'s');
 });
