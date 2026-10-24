@@ -114,6 +114,8 @@ label.late { color: var(--red); }
 .menu-item:hover { background: #eceef2; }
 .menu-item.current { background: var(--brand-soft); color: #1e40af; font-weight: 600; }
 .menu-item.add { color: var(--muted); }
+a.menu-item { color: inherit; text-decoration: none; } /* (👥 Team opens a page: it looks like the other items, never a blue link) */
+.menu-list .menu-item.more-toggle { padding: 7px 10px; font-size: inherit; font-weight: inherit; color: var(--muted); } /* (in line with the others) */
 .count { font-size: 12.5px; color: var(--muted); }
 .menu-head { font-size: 11.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); padding: 14px 10px 4px; }
 .menu-sep { border-top: 1px solid var(--line); margin: 10px 6px; }
@@ -346,6 +348,7 @@ label.late { color: var(--red); }
   position: fixed; right: 20px; bottom: 76px; z-index: 40; width: min(380px, calc(100vw - 32px));
   background: #fff; border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px;
   box-shadow: 0 12px 36px rgba(0,0,0,.14);
+  max-height: calc(100vh - 100px); overflow-y: auto; /* (a long list scrolls: never cut off at the top, owner 24 Oct) */
 }
 .keys-head { display: flex; justify-content: space-between; align-items: center; }
 .keys-help p { margin: 4px 0 8px; }
@@ -432,8 +435,8 @@ kbd {
 .done-toggle:hover { color: var(--brand); }
 .plist-done { padding: 0 8px; opacity: .85; }
 .all-green { margin: 10px 16px; color: var(--green); font-weight: 600; }
-.progress-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 5px; }
-.progress-row .progress-text { margin: 0; }
+.progress-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; margin-bottom: 5px; }
+.progress-row .progress-text { margin: 0; white-space: nowrap; } /* ("9 of 11 on track" stays on one line; the buttons go under it when there is no room, owner 24 Oct) */
 .round-top { position: sticky; top: 0; z-index: 2; background: var(--bg); display: flex; align-items: center; gap: 10px; padding: 14px 0 10px; border-bottom: 1px solid var(--line); }
 .round-top strong { font-size: 16px; }
 .round-top .muted { flex: 1; }
@@ -1084,7 +1087,9 @@ a.team-line.msg { background: #eef4ff; border-color: #93b4f8; color: #1e40af; fo
 .add-tasks-list { list-style: none; margin: 6px 0; padding: 0; max-height: 260px; overflow-y: auto; }
 .add-tasks-row { display: flex; align-items: center; gap: 8px; padding: 6px 2px; cursor: pointer; font-size: 14px; }
 .add-tasks-row input { margin: 0; }
-.sub-remove { color: var(--muted); white-space: nowrap; }
+.sub-remove { color: var(--muted); white-space: nowrap; opacity: .45; text-decoration: none; padding: 2px 6px; }
+tr:hover .sub-remove, .sub-remove:focus-visible { opacity: 1; }
+th.nowrap { white-space: nowrap; }
 .sub-remove:hover { color: var(--red, #c62828); }
 .old-steps { list-style: none; margin: 4px 0 0; padding: 0; }
 .old-step { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 6px 0; border-top: 1px solid var(--line); font-size: 14px; }
@@ -1192,6 +1197,13 @@ body.has-bell .detail-top { padding-right: 56px; }
 /* Team today as one table (ui/team.js board): counts on top, By person | By 📂 project, a row per task */
 .board-counts { margin: 10px 14px 8px; gap: 6px; }
 .board-table { width: calc(100% - 28px); margin: 6px 14px 20px; }
+.today-glance { text-align: left; max-width: 460px; margin: 40px auto; padding: 0 20px; }
+.today-glance h3 { margin: 0 0 8px; }
+.glance-counts { display: flex; align-items: center; gap: 4px; margin: 0 0 12px; }
+.glance-list { list-style: none; margin: 0 0 14px; padding: 0; display: grid; gap: 8px; }
+.glance-list .link { font-weight: 600; text-align: left; }
+body.has-bell .round-top { padding-right: 56px; } /* (the Daily round's End is never under the 🔔, owner 24 Oct) */
+body:has(.keys-help) .bell-wrap { display: none; } /* (the shortcuts list is open: the 🔔 does not cover it) */
 body.has-bell .layout.wide .list-head { padding-right: 60px; } /* (the 🔔 sits on the right of a page that fills the screen) */
 .board-count.on { background: var(--brand-soft); border-color: var(--brand); color: var(--brand); }
 .board-group-by { margin: 0 14px 8px; }
@@ -1243,6 +1255,8 @@ button.stage-chip.tap { cursor: pointer; font-size: 12.5px; padding: 3px 10px; }
 .log-time { min-width: 58px; }
 .step-photos { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 2px 34px; }
 .step-photos .diary-photo { width: 64px; height: 64px; object-fit: cover; }
+.step-notes .step-photos { margin-left: 0; }
+.step-photos .rich-photo { width: 64px; height: 64px; object-fit: cover; border-radius: 6px; cursor: pointer; }
 
 .stage-chip.stage-cancelled { background: #f1f5f9; color: var(--muted); border-color: var(--line); text-decoration: line-through; }
 .team-join { margin: 14px 4px; display: flex; flex-direction: column; gap: 6px; }
@@ -1272,6 +1286,13 @@ button.stage-chip.tap { cursor: pointer; font-size: 12.5px; padding: 3px 10px; }
 .why-line { margin: 2px 0 6px; padding: 5px 10px; border-radius: 8px; font-size: 13px; }
 .why-line.red { background: #fdecec; color: #b42318; }
 .why-line.yellow { background: #fff4e0; color: #8a5a00; }
+/* (owner, 24 Oct) staff / team rows: no empty space on the left (there is no tick box on them) */
+.layout.staff .prow > .quick-tick-space { display: none; }
+@media (max-width: 760px) {
+  /* Team today's filter chips: one line that scrolls sideways, never 3 rows */
+  .layout.staff .board-counts { flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; margin: 8px 0; padding: 0 14px 4px; }
+  .layout.staff .board-counts .chip { flex: none; white-space: nowrap; padding: 4px 10px; min-height: 34px; }
+}
 /* ---------------------------------------------------------------- the staff view (one app: ui/staff.js)
    Staff see this app's own design. Only the few pieces this app had no style for, and only inside the staff view
    (.layout.staff), so the owner's screens never change. */

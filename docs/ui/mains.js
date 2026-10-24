@@ -343,7 +343,7 @@ export function subProjectsBlock(ctx, p, today = todayIndia()) {
     all.length ? stageFilterBar(stageCounts(all, stageOfKid), sf, (k) => { (ctx.ui.subStage ||= {})[p.id] = k; ctx.render(); }) : null,
     !kids.length && all.length ? h('p', { class: 'muted small' }, 'None in this stage.') : null,
     kids.length ? h('table', { class: 'sub-table' },
-      h('thead', null, h('tr', null, h('th', null, ''), h('th', null, ''), h('th', null, 'Task'), h('th', null, 'Now'), h('th', null, 'Last update'), h('th', null, ''), h('th', null, ''))),
+      h('thead', null, h('tr', null, h('th', null, ''), h('th', null, ''), h('th', null, 'Task'), h('th', null, 'Now'), h('th', { class: 'nowrap' }, 'Last update'), h('th', null, ''), h('th', null, ''))),
       h('tbody', null, kids.map((c) => {
         const ns = c.state === 'active' ? nextStep(c, today) : null;
         const lu = lastUpdate(c);
@@ -367,9 +367,9 @@ export function subProjectsBlock(ctx, p, today = todayIndia()) {
           h('td', { class: 'muted small' }, lu ? `${fmtDay(lu.day)} · ${short(lu.text, 50)}` : '—'),
           // takes the task out of this project only (the task itself stays, with Undo)
           h('td', null, p.misc ? null : h('button', { // (📂 Misc: a task leaves it by going into another project)
-            class: 'link small sub-remove', type: 'button', title: `Take ${c.name} out of this project (the task is kept)`,
+            class: 'link small sub-remove', type: 'button', title: `Take out of project — ${c.name} is kept`, 'aria-label': `Take ${c.name} out of this project`, // (a quiet ✕, not "Remove": it never deletes, owner 24 Oct)
             onClick: (e) => { if (e && e.stopPropagation) e.stopPropagation(); ctx.act('removeFromProject', { projectId: c.id, parentId: p.id }, `${c.name} taken out of 📂 ${p.name} (the task is kept)`); },
-          }, '✕ Remove')));
+          }, '✕')));
       }))) : h('p', { class: 'muted small' }, (() => { // a project that only holds projects: say where its tasks are
         const n = projectParts(data, p.id).tasks.filter((c) => c.state !== 'finished').length;
         return n ? `No tasks right in it — the projects above hold ${n} task${n === 1 ? '' : 's'}.` : 'No tasks in it yet.';

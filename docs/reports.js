@@ -67,6 +67,19 @@ export function backupPayload(data, history, madeAt = new Date().toISOString()) 
   return { app: 'daily-projects', madeAt, data: dataWithoutKeys, history };
 }
 
+/**
+ * "Team updates:" for the 📋 summary: the server's rows sent today (the same as Team today: 📒 records and tasks
+ * given from the team pages too, never a taken-back one); before it answers, the linked tasks (open or done).
+ */
+export function teamUpdatesText(data, summary, linked, today) {
+  const rows = summary && Array.isArray(summary.updates) ? summary.updates
+    : (linked || []).filter((t) => t.today && t.today.day === today && t.status !== 'cancelled')
+      .map((t) => ({ name: t.assignee.name, projectRef: t.projectRef, project: t.project, title: t.title, note: t.today.note, state: t.today.state }));
+  if (!rows.length) return '';
+  const names = new Map(data.projects.map((p) => [p.id, p.name]));
+  return `\n\nTeam updates:\n${rows.map((t) => `- ${t.name} — ${names.get(t.projectRef) || t.project || ''}: ${t.title}: ${t.note}${t.state === 'stuck' ? ' (stuck)' : t.state === 'finished' ? ' (finished)' : ''}`).join('\n')}`;
+}
+
 /** Today's summary text: done steps and notes per project, next steps, and who you are waiting on. */
 export function summaryText(data, history, today, dateText) {
   const events = (history[monthOf(today)] || []).filter((e) => indiaDate(e.at) === today && e.projectId);

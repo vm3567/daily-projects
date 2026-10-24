@@ -514,7 +514,10 @@ export function renderFromApps(ctx) {
     h('p', { class: 'muted small' }, 'Approvals your apps sent. Tasks they send go straight to ✅ Tasks (with a link chip).'),
     cx.itemsError ? h('p', { class: 'conn-error' }, cx.itemsError) : null,
     cx.items === null ? h('p', { class: 'muted' }, 'Loading…')
-      : !pending.length ? h('p', { class: 'muted empty' }, 'Nothing waiting for you ✓')
+      : !pending.length ? [h('p', { class: 'muted empty', key: 'none' }, 'Nothing waiting for you ✓'),
+        // what this page is for, and where to connect an app (owner, 24 Oct)
+        h('p', { class: 'muted small apps-hint', key: 'hint' }, 'An app (an ERP, a web form, n8n…) connected to Task List sends its approvals here. ',
+          ctx.openConnections ? h('button', { class: 'link', type: 'button', onClick: () => ctx.openConnections() }, 'Connect an app in Settings → 🔌 Connections') : 'Connect one in Settings → 🔌 Connections.')]
         : [...groups].map(([app, list]) => h('section', { class: 'apps-group', key: 'g-' + app },
           h('h3', null, `${app} (${list.length})`),
           list.map((it) => itemCard(ctx, it)))),

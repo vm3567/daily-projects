@@ -189,9 +189,17 @@ export function dotColour(project, today = todayIndia()) {
 /** "Move every N days": how often a task or project should have a real update (owner sets it; 3 when not set). */
 export const MOVE_EVERY_DEFAULT = 3;
 export const MOVE_EVERY_PICKS = [1, 2, 3, 5, 7, 14, 30];
+const validEvery = (n) => Number.isInteger(n) && n >= 1 && n <= 90;
+/** The owner's own default (Settings → "Every task should move…", owner 24 Oct): for every task with no choice of its own. */
+let everyDefault = MOVE_EVERY_DEFAULT;
+export function useEveryDefault(data) {
+  const n = data && data.settings ? data.settings.moveEvery : null;
+  everyDefault = validEvery(n) ? n : MOVE_EVERY_DEFAULT;
+}
+export const everyDefaultOf = (data) => (data && data.settings && validEvery(data.settings.moveEvery) ? data.settings.moveEvery : MOVE_EVERY_DEFAULT);
 export function moveEveryOf(p) {
   const n = p ? p.moveEvery : null;
-  return Number.isInteger(n) && n >= 1 && n <= 90 ? n : MOVE_EVERY_DEFAULT;
+  return validEvery(n) ? n : everyDefault;
 }
 export const everyText = (n) => (n === 1 ? 'every day' : `every ${n} days`);
 
@@ -219,7 +227,27 @@ export function colourWhy(p, today = todayIndia()) {
   if (datePassed(p, today)) return 'A step\'s due date has passed';
   const days = daysWithoutWork(p, today);
   const last = days === 0 ? 'Updated today' : `No update for ${days} day${days === 1 ? '' : 's'}`;
-  return `${last} · should move ${everyText(moveEveryOf(p))}${dateSoon(p, today) && days < moveEveryOf(p) ? ' · a date is near' : ''}`;
+  return `${last} · should move ${everyText(moveEveryOf(p))}${dateSoon(p, today) && days < moveEveryOf(p) ? ' · ' + soonText(p, today) : ''}`;
+}
+
+/** Which date is near, in words: "Target 25 Oct is near" or "A step is due 26 Oct". */
+function soonText(p, today) {
+  const soon = addDays(today, 2);
+  if (ownTarget(p) && p.deadline <= soon) return p.deadline === today ? 'Target is today' : `Target ${shortDay(p.deadline)} is near`;
+  const due = openSteps(p).map((s) => s.dueDate).filter((d) => d && d <= soon).sort()[0];
+  return due === today ? 'A step is due today' : `A step is due ${shortDay(due)}`;
+}
+
+/**
+ * The one reason a red / yellow task is not green, short (a list row's chip, the dashboard's Needs attention):
+ * never "Updated today" for a yellow one — then its reason is the near date (owner, 24 Oct).
+ */
+export function colourShort(p, today = todayIndia()) {
+  const c = dotColour(p, today);
+  if (c !== 'red' && c !== 'yellow') return '';
+  const days = daysWithoutWork(p, today);
+  if (c === 'yellow' && days < moveEveryOf(p) && dateSoon(p, today)) return soonText(p, today);
+  return colourWhy(p, today).split(' · ')[0];
 }
 
 /**
@@ -487,8 +515,8 @@ export function mainSummary(children, today = todayIndia()) {
   const head = `${active.length} task${active.length === 1 ? '' : 's'}`;
   const bits = [n.red ? `${n.red} red` : null, n.yellow ? `${n.yellow} yellow` : null].filter(Boolean);
   if (bits.length) return [head, ...bits].join(' · ');
-  if (n.green === active.length) return `${head} · all green`;
-  return [head, n.green ? `${n.green} green` : null, n.grey ? `${n.grey} resting` : null].filter(Boolean).join(' · ');
+  if (n.green === active.length) return `${head} · all on track`;
+  return [head, n.green ? `${n.green} on track` : null, n.grey ? `${n.grey} resting` : null].filter(Boolean).join(' · ');
 }
 
 /**

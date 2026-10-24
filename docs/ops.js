@@ -1577,6 +1577,16 @@ const handlers = {
   },
 
   // ---------- Settings and AI ----------
+  /** Settings: how often a task with no choice of its own should move (1–90 days; null = back to 3). Not work. */
+  setEveryDefault(state, op, a) {
+    const settings = (state.data.settings ||= {});
+    const days = a.days === null || a.days === undefined ? null : a.days;
+    if (days !== null && !(Number.isInteger(days) && days >= 1 && days <= 90)) return false;
+    if ((settings.moveEvery ?? null) === days) return false;
+    if (days === null) delete settings.moveEvery; else settings.moveEvery = days;
+    return true;
+  },
+
   setAiProvider(state, op, a) {
     if (a.provider !== 'claude' && a.provider !== 'gemini') return false;
     state.data.settings.aiProvider = a.provider;
@@ -1670,7 +1680,7 @@ export const CARRIED = new Set(['createProject', 'createMainProject', 'addToProj
   'startTimer', 'stopTimer', 'addTime', 'setStage', 'setMoveEvery']);
 export const NOT_CARRIED = new Set(['deleteProject', 'restoreProject', 'deleteStep', 'setProjectTeam', 'addFile', 'setAiKey', 'setAiProvider',
   'removeFromProject', 'setParent', 'removeLink', 'editLink', 'finish', 'teamWorked', 'deleteWorkNote', 'editWorkNote', 'setProjectField', 'setStepField',
-  'removeFile', 'setTimer', 'deleteTag', 'clearReply', 'markReplySent', 'undoReplySent', 'mailReplied', 'removeInbox', 'inboxUndo', 'deletePerson',
+  'removeFile', 'setTimer', 'setEveryDefault', 'deleteTag', 'clearReply', 'markReplySent', 'undoReplySent', 'mailReplied', 'removeInbox', 'inboxUndo', 'deletePerson',
   'recordScores', 'removeTime', 'incrementAiUsage', 'claimBrief', 'setBriefReady', 'addEvent', 'makeMisc']);
 
 /** Changes carried from the old address (#ops=): keeps only known, harmless ones. Returns { ok, files, dropped }. */

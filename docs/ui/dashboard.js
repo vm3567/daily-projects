@@ -1,7 +1,7 @@
 // Dashboard (one screen): numbers strip, green days calendar, time, what needs attention.
 
 import { h, fmtDay } from './dom.js';
-import { dotColour, isSnoozed, dayScore, todayIndia, addDays, monthOf, daysWithoutWork, indiaDate, initials, minutesBetween, fmtMinutes, weekStart as mondayOf, todayWithoutEmptyMains, WORK, colourWhy } from '../rules.js';
+import { dotColour, isSnoozed, dayScore, todayIndia, addDays, monthOf, daysWithoutWork, indiaDate, initials, minutesBetween, fmtMinutes, weekStart as mondayOf, todayWithoutEmptyMains, WORK, colourShort } from '../rules.js';
 import { peopleByFollowUp } from './people.js';
 
 const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
@@ -126,7 +126,7 @@ export function renderDashboard(ctx) {
     const cls = d > today ? 'future' : pct === null ? 'none' : pct === 1 ? 'full' : pct >= 0.5 ? 'half' : pct > 0 ? 'some' : 'zero';
     cells.push(h('div', {
       class: `cal-cell ${cls}${d === today ? ' today' : ''}`, key: d,
-      title: sc && sc.total ? `${fmtDay(d)}: ${sc.green} of ${sc.total} green` : fmtDay(d),
+      title: sc && sc.total ? `${fmtDay(d)}: ${sc.green} of ${sc.total} on track` : fmtDay(d),
     }, h('span', { class: 'cal-num' }, String(i)), sc && sc.total ? h('span', { class: 'cal-score' }, `${sc.green}/${sc.total}`) : null));
   }
   const shift = (n) => {
@@ -143,8 +143,8 @@ export function renderDashboard(ctx) {
   // One screen: a strip of numbers on top, then three columns.
   return h('div', { class: 'dashboard compact' },
     h('div', { class: 'dash-tiles' },
-      tile('Today', `${greenNow} of ${active.length}`, allGreen ? 'all green 🎉' : 'tasks green', allGreen ? 'good' : ''),
-      tile('Streak', `🔥 ${st.current}`, st.current === 1 ? 'day all green' : 'days in a row', st.current ? 'warm' : ''),
+      tile('Today', `${greenNow} of ${active.length}`, allGreen ? 'all on track 🎉' : 'on track', allGreen ? 'good' : ''),
+      tile('Streak', `🔥 ${st.current}`, st.current === 1 ? 'day all on track' : 'days in a row', st.current ? 'warm' : ''),
       tile('Best streak', String(st.best), st.best === 1 ? 'day' : 'days'),
       tile('Green days', String(allGreenDays), `in ${monthName}`),
       tile('Steps done', String(totalSteps), 'all time'),
@@ -155,7 +155,7 @@ export function renderDashboard(ctx) {
         card('Green days', h('div', null,
           h('div', { class: 'cal' }, WEEKDAYS.map((w) => h('div', { class: 'cal-head', key: 'w' + w }, w)), cells),
           h('div', { class: 'cal-legend' },
-            h('span', null, h('i', { class: 'cal-key full' }), 'all green'),
+            h('span', null, h('i', { class: 'cal-key full' }), 'all on track'),
             h('span', null, h('i', { class: 'cal-key half' }), 'half or more'),
             h('span', null, h('i', { class: 'cal-key some' }), 'a few'),
             h('span', null, h('i', { class: 'cal-key zero' }), 'none'))),
@@ -182,7 +182,7 @@ export function renderDashboard(ctx) {
       h('div', { class: 'dash-col' },
         card('Needs attention', attention.length ? h('ul', { class: 'dash-list' },
           attention.slice(0, 5).map(({ p, c }) => h('li', { key: 'na-' + p.id }, h('span', { class: `dot ${c}` }),
-            h('button', { class: 'link', onClick: () => ctx.openProject(p.id) }, p.name), h('span', { class: 'tag ' + (c === 'red' ? 'late' : 'stale') }, colourWhy(p, today).split(' · ')[0]))))
+            h('button', { class: 'link', onClick: () => ctx.openProject(p.id) }, p.name), h('span', { class: 'tag ' + (c === 'red' ? 'late' : 'stale') }, colourShort(p, today)))))
           : h('p', { class: 'muted small' }, 'Nothing stuck. 👍')),
         card('People to contact', chase.length ? h('ul', { class: 'dash-list' }, chase.slice(0, 4).map(({ person, st: s }) => h('li', { key: 'pc-' + person.id },
           h('span', { class: 'avatar' }, initials(person.name)),

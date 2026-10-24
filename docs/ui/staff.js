@@ -10,7 +10,7 @@ import { h, morph, errLine } from './dom.js';
 import { createOutbox } from './staffbox.js';
 import { stageChip, stageFilterBar } from './stage.js';
 import { openMenuAt, menuBox, focusLater } from './rowmenu.js';
-import { fmtDay, fmtTime, STATES, stateTag, newClientId, istDay, repeatLabel, block, chipsFor, makePics, photosRow, filesBlock, diaryBlock, messagesBlock, logbookBlock } from './workparts.js';
+import { fmtDay, fmtTime, STATES, stateTag, newClientId, istDay, repeatLabel, block, chipsFor, makePics, photosRow, filesBlock, diaryBlock, messagesBlock, logbookBlock, bottomBar, hitLines } from './workparts.js';
 
 export { STATES, repeatLabel }; // (the pieces of a task page are shared with the team pages: ui/workparts.js)
 const KEEP_FAIL = 'Could not keep this on the phone. Try again when online.';
@@ -320,6 +320,7 @@ export function createStaff(opts) {
     render(); loadDetail();
   }
   function show(section) { state.section = section; state.navFolder = null; state.sel = null; state.mobile = 'list'; state.menuOpen = false; render(); }
+  function openSearch() { show('search'); focusLater('staff-search'); } // the cursor is in the box when Search opens (owner, 24 Oct)
   function back() { state.sel = null; state.mobile = 'list'; render(); }
   function reload() { load(); if (state.sel) loadDetail(); }
 
@@ -783,7 +784,7 @@ export function createStaff(opts) {
     const head = h('div', { class: 'list-head' },
       h('button', { class: 'icon menu-btn', 'aria-label': 'Menu', onClick: () => { state.menuOpen = true; render(); } }, '☰'),
       h('h2', null, title),
-      state.section === 'search' ? null : h('button', { class: 'icon head-icon', title: 'Search', 'aria-label': 'Search', onClick: () => show('search') }, '🔍', h('span', { class: 'icon-cap', 'aria-hidden': 'true' }, 'Find')), // (as on the owner's list; on a phone the menu has no search box)
+      state.section === 'search' ? null : h('button', { class: 'icon head-icon', title: 'Search', 'aria-label': 'Search', onClick: openSearch }, '🔍', h('span', { class: 'icon-cap', 'aria-hidden': 'true' }, 'Find')), // (as on the owner's list; on a phone the menu has no search box)
       h('button', { class: 'icon head-icon', title: 'Get latest', 'aria-label': 'Refresh', onClick: reload }, '↻', h('span', { class: 'icon-cap', 'aria-hidden': 'true' }, 'Refresh')));
     // "💡 Suggest a task" at the top of the list, as the owner's "+ New task"
     const top = [offlineBar(), notices(), newsBar(), pushBanner(), ['today', 'sugg'].includes(state.section) ? h('button', { class: 'btn primary new-project', onClick: () => open('suggest') }, '💡 Suggest a task') : null];
@@ -799,7 +800,7 @@ export function createStaff(opts) {
             h('span', { class: 'quick-tick-space' }),
             h('button', { class: 'prow-btn', onClick: () => open('task:' + x.taskId) },
               h('span', { class: 'prow-text' }, h('span', { class: 'prow-name' }, `${icon[x.kind] || ''} ${x.title}`),
-                h('span', { class: 'prow-next' }, `${x.who} · ${fmtDay(x.at)} — ${x.text}`))))))];
+                h('span', { class: 'prow-next' }, `${x.who} · ${fmtDay(x.at)} — ${hitLines(x.text, state.searchQ)}`))))))];
     } else if (state.section === 'tasks') {
       const { tasks } = folders();
       const cut = stageCut(tasks, (x) => x.t);
@@ -949,9 +950,10 @@ export function createStaff(opts) {
         !f.folder.ref && t.projectRef && t.seq !== null && t.seq !== undefined ? h('button', { class: 'main-chip', title: 'Its steps (add the steps you will do)', onClick: () => open('project:' + t.projectRef) }, `Steps of ${t.project || 'this work'} ›`) : null) : null,
       t.details ? h('p', { class: 'pre muted' }, t.details) : null,
       files(t),
-      messages(t.id, comments),
+      // today's update (or the record's entry box) first, then 💬 Messages (owner, 24 Oct: on a phone the box was far down)
       t.kind === 'log' ? [entryCard(t), logbookBlock({ entries: state.detail.entries || [], waiting: state.outbox.filter((x) => x.kind === 'entry' && x.taskId === t.id), photos, meId: state.user.id, td, onDelete: deleteEntry })] // 📒 the logbook
         : t.status === 'suggested' || (t.status !== 'open' && !updates.length) ? updateCard(t) : diary(t, updates, td, updateCard(t)),
+      messages(t.id, comments),
     ];
   }
 
@@ -1041,7 +1043,13 @@ export function createStaff(opts) {
 
   function detail() {
     const sel = state.sel;
-    if (!sel) return h('div', { class: 'empty' }, h('p', null, 'Pick a task on the left.'));
+    if (!sel) { // today at a glance (owner, 24 Oct): what is still to send, tap to open it
+      const d = state.data, todo = d ? (d.tasks || []).filter((t) => !t.today && t.kind !== 'log' && t.status === 'open') : [];
+      return h('div', { class: 'empty today-glance' },
+        d ? h('h3', null, todo.length ? `📝 ${todo.length} update${todo.length === 1 ? '' : 's'} still to send today` : '✓ All of today\'s updates are sent') : null,
+        todo.length ? h('ul', { class: 'glance-list' }, todo.slice(0, 6).map((t) => h('li', { key: 'g-' + t.id }, h('button', { class: 'link', type: 'button', onClick: () => open('task:' + t.id) }, t.title)))) : null,
+        h('p', { class: 'muted small' }, 'Pick a task on the left.'));
+    }
     let title = '', body, dot = '', actions = null; // the dot before the title, as on the owner's task page
     if (sel === 'suggest') { title = '💡 Suggest a task'; body = suggestPage(); }
     else if (sel === 'password') { title = 'Change password'; body = passwordPage(); }
@@ -1083,7 +1091,14 @@ export function createStaff(opts) {
       h('div', { class: 'scrim', onClick: () => { state.menuOpen = false; render(); } }),
       h('main', { id: 'list' }, list()),
       h('section', { id: 'detail' }, detail()),
-      rowMenu());
+      rowMenu(),
+      // 📱 the bottom bar (owner, 24 Oct): Today, Tasks, Projects, Search, More
+      bottomBar([
+        ['☀︎', 'Today', !state.sel && state.section === 'today' && !state.menuOpen, () => show('today'), state.data ? (state.data.tasks || []).filter((t) => !t.today && t.kind !== 'log').length : 0],
+        ['✅', 'Tasks', !state.sel && state.section === 'tasks' && !state.menuOpen, () => show('tasks')],
+        ['📂', 'Projects', !state.sel && state.section === 'projects' && !state.menuOpen, () => show('projects')],
+        ['🔍', 'Search', !state.sel && state.section === 'search' && !state.menuOpen, openSearch],
+      ], () => { state.menuOpen = true; render(); }, state.menuOpen));
   }
 
   /** The number on the app icon (installed app): tasks still to send today. */

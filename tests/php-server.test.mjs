@@ -3162,3 +3162,24 @@ test('Review 6 (owner, 24 Oct): the Today page\'s team line counts the same rows
   const sent = tt.tasks.filter((t) => t.today).length;
   assert.deepEqual([linked.summary.due, linked.summary.sent], [due, sent], 'the same counts as Team today');
 });
+
+test('Review2 1 (owner, 24 Oct): a task taken back after today\'s update leaves the staff list, its counts and Team today', { skip }, async () => {
+  const t = (await call('task.save', { assigneeId: id.suresh, title: 'Taken back after update', repeat: 'once' }, tok.boss)).task;
+  assert.ok((await call('update.save', { taskId: t.id, note: 'half done', state: 'progress' }, tok.suresh)).ok);
+  let my = await call('my.today', {}, tok.suresh);
+  assert.ok(my.tasks.some((x) => x.id === t.id), 'on the list while open');
+  await call('task.status', { id: t.id, status: 'cancelled' }, tok.boss);
+  my = await call('my.today', {}, tok.suresh);
+  assert.ok(![...my.tasks, ...my.other].some((x) => x.id === t.id), 'taken back: off the staff list (not "✓ Sent")');
+  const tt = await call('team.today', {}, tok.boss);
+  assert.ok(!tt.tasks.some((x) => x.id === t.id), 'and off Team today, so it is not counted as Sent');
+});
+
+test('Review2 6 (owner, 24 Oct): tasks.linked summary carries today\'s team words, a 📒 record given from the team pages too', { skip }, async () => {
+  const t = (await call('task.save', { assigneeId: id.suresh, title: 'Summary record', repeat: 'daily', skipSunday: false, kind: 'log' }, tok.boss)).task;
+  assert.ok((await call('entry.add', { taskId: t.id, text: 'Got 12 bags', clientId: 'sum-ent-0001' }, tok.suresh)).entry);
+  const s = (await call('tasks.linked', {}, tok.boss)).summary;
+  const u = s.updates.find((x) => x.title === 'Summary record');
+  assert.ok(u && /Got 12 bags/.test(u.note) && u.name, JSON.stringify(s.updates));
+  assert.equal(s.sent, s.updates.length);
+});

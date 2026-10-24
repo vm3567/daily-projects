@@ -13,7 +13,7 @@ import { richArea, richView, addDraftPhotos, readDraft, clearDraft, photoArgs, f
 import { enterAction, richFileIds, textToHtml } from '../rich.js';
 import { projectEmailCards, emailThreadBlock } from './replies.js';
 import { mainBox, mainChip, subProjectsBlock, openMainBox } from './mains.js';
-import { isMainProject, timerOn, childrenOf, projectTasks, moveEveryOf, everyText, colourWhy, MOVE_EVERY_PICKS } from '../rules.js';
+import { isMainProject, timerOn, childrenOf, projectTasks, moveEveryOf, everyText, colourWhy, colourShort, todayList, MOVE_EVERY_PICKS } from '../rules.js';
 import { stageLine } from './stage.js';
 
 /** 'project' for a 📂 project, 'task' for everything else (what the app once called a project). */
@@ -169,11 +169,17 @@ function remindRow(ctx, p, s, today) {
     waiting ? h('button', { class: 'chip', type: 'button', onClick: () => set(null) }, 'Show it now') : null);
 }
 
-/** Notes written about this step (newest 2), shown under it. */
-function stepNotes(p, s) {
+/** Notes written about this step (newest 2), shown under it, with their photos (owner, 24 Oct: 📷 under the step too). */
+function stepNotes(ctx, p, s) {
   const notes = p.workNotes.filter((n) => n.stepId === s.id).slice(0, 2);
   if (!notes.length) return null;
-  return h('div', { class: 'step-notes' }, notes.map((n) => h('div', { key: 'sn-' + n.id }, `📝 ${fmtDay(indiaDate(n.createdAt))}: ${n.text}`)));
+  const isImage = (f) => /\.(png|jpe?g|gif|webp|heic|heif)$/i.test(f.name || '');
+  const pics = (n) => {
+    const ids = new Set(n.html ? richFileIds(n.html) : []); // a photo put inside the words, and one added under them
+    return (p.files || []).filter((f) => (f.noteId === n.id || ids.has(f.id)) && isImage(f)).slice(0, 5);
+  };
+  return h('div', { class: 'step-notes' }, notes.map((n) => h('div', { key: 'sn-' + n.id }, `📝 ${fmtDay(indiaDate(n.createdAt))}: ${n.text}`,
+    pics(n).length ? h('div', { class: 'step-photos' }, pics(n).map((f) => photoThumb(ctx, f))) : null)));
 }
 
 /**
@@ -287,7 +293,7 @@ function stepRow(ctx, p, s, box = null) {
         class: 'icon step-more', title: 'More', 'aria-label': 'More about this step',
         onClick: () => { ui.openStep = open ? null : s.id; ctx.render(); },
       }, open ? '▴' : '⋯')),
-    stepNotes(p, s),
+    stepNotes(ctx, p, s),
     live && !s.done && (tt.today || tt.last) ? h('div', { class: 'step-last muted small' }, `Last from ${tt.assignee.name} (${fmtDay((tt.today || tt.last).day)}): `, h('span', null, (tt.today || tt.last).note.slice(0, 160))) : null,
     stepPhotos(ctx, tt), // 📷 the photos the person sent on this step (e.g. each test step), done steps too
     box,
@@ -954,7 +960,9 @@ function infoChips(ctx, p, today) {
   if (!p.misc && p.state !== 'finished') out.push(chip(`🔁 ${everyText(moveEveryOf(p))}`, `${colourWhy(p, today)} — tap to change how often it should move`, () => { ui.everyOpen = ui.everyOpen === p.id ? null : p.id; ctx.render(); }));
   if (tagName(data, p)) out.push(chip(`🏷 ${tagName(data, p)}`, 'Tag — tap to change', editMeta));
   out.push(chip(p.priority[0].toUpperCase() + p.priority.slice(1), 'Priority — tap to change', editMeta, p.priority === 'high' ? ' bad' : ''));
-  out.push(chip(p.deadline ? `${overdue ? 'Overdue' : 'Target'} ${fmtDay(p.deadline)}` : '+ Target date', 'Target date — tap to change', editMeta, overdue ? ' bad' : ''));
+  // finished: the day it ended, not a target any more (owner, 24 Oct)
+  if (p.state === 'finished') out.push(chip(`✓ Finished ${p.stateChangedAt ? fmtDay(indiaDate(p.stateChangedAt)) : ''}`.trim(), 'The day it was finished', null, ' good'));
+  else out.push(chip(p.deadline ? `${overdue ? 'Overdue' : 'Target'} ${fmtDay(p.deadline)}` : '+ Target date', 'Target date — tap to change', editMeta, overdue ? ' bad' : ''));
   if (p.steps.length && !isMainProject(ctx.store.view.data, p)) out.push(chip(`✓ ${p.steps.filter((x) => x.done).length} of ${p.steps.length} steps done`, 'Steps done', null));
   const timer = store.view.data.timer;
   const logs = p.timeLogs || [];
@@ -1066,12 +1074,32 @@ export function linkChip(link, label = null) {
   return h('a', { class: 'tag link-chip', href: url, target: '_blank', rel: 'noopener noreferrer', title: link.title || url, key: 'lk' }, label || (isMailLink(link) ? '✉ Open mail' : '↗ Open page'));
 }
 
+/**
+ * Nothing open on the right (a computer): today at a glance instead of an empty side (owner, 24 Oct) —
+ * how many are on track, the red / yellow ones with why (tap to open), and how to open or add one.
+ */
+export function todayGlance(ctx) {
+  const data = ctx.store.view.data;
+  const today = todayIndia();
+  const list = todayList(data, today);
+  const by = (c) => list.filter((x) => dotColour(x, today) === c);
+  const red = by('red'), yellow = by('yellow'), green = by('green');
+  const need = [...red, ...yellow].slice(0, 6);
+  return h('div', { class: 'empty today-glance', key: 'glance' },
+    list.length ? [
+      h('h3', { key: 'gh' }, '☀︎ Today at a glance'),
+      h('p', { class: 'glance-counts', key: 'gc' }, h('span', { class: 'dot green' }), ` ${green.length} on track  `, h('span', { class: 'dot yellow' }), ` ${yellow.length}  `, h('span', { class: 'dot red' }), ` ${red.length}`),
+      need.length ? h('ul', { class: 'glance-list', key: 'gl' }, need.map((x) => h('li', { key: 'g-' + x.id },
+        h('button', { class: 'link', type: 'button', onClick: () => (ctx.openProject ? ctx.openProject(x.id) : null) }, x.name), ' ',
+        h('span', { class: 'tag ' + (dotColour(x, today) === 'red' ? 'late' : 'stale') }, colourShort(x, today))))) : h('p', { class: 'muted', key: 'ok' }, 'Everything is on track 🎉'),
+    ] : null,
+    h('p', { class: 'muted small', key: 'gp' }, 'Pick a task on the left, or add one with "+ New task".'));
+}
+
 export function renderDetail(ctx) {
   const { store, ui } = ctx;
   const p = store.view.data.projects.find((x) => x.id === ui.selected);
-  if (!p) {
-    return h('div', { class: 'empty' }, h('p', null, 'Pick a task on the left,'), h('p', null, 'or add one with "+ New task".'));
-  }
+  if (!p) return todayGlance(ctx);
   const today = todayIndia();
   const colour = dotColour(p, today);
   const openSteps = p.steps.filter((s) => !s.done);
@@ -1147,7 +1175,7 @@ export function renderDetail(ctx) {
     isMainProject(store.view.data, p) ? oldStepsBlock(ctx, p, openSteps) : section(stepsTitle(),
       h('ul', { class: 'steps sortable-steps', key: 'steps-' + p.id, 'data-project': p.id },
         openSteps.map((s) => stepRow(ctx, p, s))),
-      h('form', {
+      p.state === 'finished' ? null : h('form', { // finished: no next step to add (owner, 24 Oct; Reopen first)
         class: 'row add-step',
         onSubmit: (e) => {
           e.preventDefault();
@@ -1255,13 +1283,16 @@ function projectDiary(ctx, p, upd) {
   const weekday = (day) => new Date(day + 'T00:00:00Z').getUTCDay();
   const nowHm = new Date().toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' });
   const W = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-  const WHAT = { ok: 'work done', miss: 'no progress', off: 'Sunday — off', wait: 'waiting for today\'s update', none: 'before the project started' };
+  // paused or finished: no update is asked for from that day (owner, 24 Oct: never "Waiting for today's update")
+  const stoppedFrom = p.state !== 'active' ? (p.stateChangedAt ? indiaDate(p.stateChangedAt) : today) : null;
+  const stopWord = p.state === 'finished' ? '✓ Finished' : '⏸ Paused';
+  const WHAT = { ok: 'work done', miss: 'no progress', off: 'Sunday — off', wait: 'waiting for today\'s update', none: 'before the project started', stop: stopWord.slice(2).toLowerCase() };
   const LONG = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
   const week = [];
   for (let i = 6; i >= 0; i--) {
     const day = addDays(today, -i);
-    const state = day < created ? 'none' : workOn(day) ? 'ok' : weekday(day) === 0 ? 'off' : day === today && nowHm < fillBy ? 'wait' : 'miss';
-    week.push(h('span', { class: `wk ${state}`, key: 'wk-' + day, title: `${W[weekday(day)]} ${fmtDay(day)}: ${WHAT[state]}` }, W[weekday(day)][0]));
+    const state = day < created ? 'none' : workOn(day) ? 'ok' : stoppedFrom && day >= stoppedFrom ? 'stop' : weekday(day) === 0 ? 'off' : day === today && nowHm < fillBy ? 'wait' : 'miss';
+    week.push(h('span', { class: `wk ${state === 'stop' ? 'none' : state}`, key: 'wk-' + day, title: `${W[weekday(day)]} ${fmtDay(day)}: ${WHAT[state]}` }, W[weekday(day)][0]));
   }
   let start = addDays(today, -(shownDays - 1));
   if (created > start) start = created;
@@ -1282,7 +1313,8 @@ function projectDiary(ctx, p, upd) {
       const list = (byDay.get(day) || []).filter((e) => !filter || e.stepId === filter).sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
       let empty = null;
       if (!list.some((e) => e.work)) { // nothing that counts as work (maybe a Stuck or a message): the day's tag too
-        if (holder) empty = list.length ? null : h('span', { class: 'muted small' }, '—'); // a 📂 project with no step of its own: no update of its own is asked for
+        if (stoppedFrom && day >= stoppedFrom) empty = list.length ? null : day === today ? h('span', { class: 'day-tag off' }, stopWord) : h('span', { class: 'muted small' }, '—');
+        else if (holder) empty = list.length ? null : h('span', { class: 'muted small' }, '—'); // a 📂 project with no step of its own: no update of its own is asked for
         else if ((p.teamDays || []).includes(day)) empty = h('span', { class: 'day-tag team' }, '👥 Team worked');
         else if (weekday(day) === 0) empty = h('span', { class: 'day-tag off' }, 'Off');
         else if (day === today && nowHm < fillBy) empty = h('span', { class: 'day-tag wait' }, 'Waiting for today\'s update');

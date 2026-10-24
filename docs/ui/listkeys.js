@@ -3,7 +3,10 @@
 // n give a task (owner), ? shows the keys. Not while typing in a box, and never with Ctrl / ⌘ / Alt.
 // It works on what is on screen: the rows in the list column (#list): list rows (li.prow) and table rows (tr.sub-row).
 
-export const PAGE_KEYS_HELP = '↓ ↑ (or j k): next / previous task · Esc: close · /: search · n: give a task · ?: these keys';
+export const PAGE_KEYS_HELP = '↓ ↑ (or j k): next / previous task · t a m: Today / Tasks / Projects · f: Follow-up · Esc: close · /: search · n: give a task · ?: these keys';
+export const STAFF_KEYS_HELP = '↓ ↑ (or j k): next / previous task · t a m: Today / Tasks / Projects · Esc: close · /: search · ?: these keys';
+/** t a m (f): go to a page (owner, 24 Oct: the same letters as on the owner's pages: t Today, a ✅ Tasks, m 📂 Projects). */
+const PAGE_LETTERS = { t: 'today', a: 'tasks', m: 'projects', f: 'followup' };
 
 export function isTyping(el) {
   if (!el) return false;
@@ -68,6 +71,10 @@ export function pageKey(e, doc, page, { say = () => {}, owner = false } = {}) {
     return false;
   }
   if (k === 'n' && owner && page.open) { e.preventDefault(); page.open('give'); return true; }
-  if (k === '?') { e.preventDefault(); say(PAGE_KEYS_HELP, 8000); return true; }
+  if (PAGE_LETTERS[k]) {
+    if (owner && page.go) { e.preventDefault(); if (k === 'a') st.closed = false; if (k === 't') st.personFilter = 0; page.go(PAGE_LETTERS[k]); return true; }
+    if (!owner && k !== 'f' && page.act && page.act.show) { e.preventDefault(); page.act.show(PAGE_LETTERS[k]); return true; }
+  }
+  if (k === '?') { e.preventDefault(); say(owner ? PAGE_KEYS_HELP : STAFF_KEYS_HELP, 8000); return true; }
   return false;
 }

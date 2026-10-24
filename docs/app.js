@@ -11,7 +11,7 @@ import { renderTimeReport } from './ui/timereport.js';
 import { renderReplies, renderReplyRound, replyArea, readyCount } from './ui/replies.js';
 import { renderConnectionsSettings, renderFromApps, loadApps, appsPending, forgetOnce } from './ui/connections.js';
 import { projectChips, renderProjectsHead, openMainBox, openMoveBox, moveBox, listColour, newInnerProject } from './ui/mains.js';
-import { projectMatches, diaryEntries, backupPayload, summaryText, personMessageText, personMessageHtml, sentMarkOf, copyNotice, tasksListText } from './reports.js';
+import { projectMatches, diaryEntries, backupPayload, summaryText, personMessageText, personMessageHtml, sentMarkOf, copyNotice, tasksListText, teamUpdatesText } from './reports.js';
 import { closeViewer, uploadBlob, photoThumb } from './ui/files.js';
 import { newTaskBox, createTaskWithNote, richView } from './ui/richedit.js';
 import { Store } from './store.js';
@@ -21,7 +21,7 @@ import { MockRepo } from './mockrepo.js';
 import { device } from './device.js';
 import { DATA_OWNER, DATA_REPO, DATA_BRANCH, MOVED_TO, REFRESH_MS, AI_DAILY_LIMIT, BRIEF_CLAIM_MINUTES, WAIT_RED_DAYS, NO_WORK_NOTE_DAYS } from './config.js';
 import { dotColour, greenByTeamOnly, isSnoozed, restUntil, restReason, onlyDaysLabel, openIdFromHash, awakeProjects, activeProjects, nextStep, todayIndia, isSundayIndia, colourCounts, isOverdue, indiaDate, waitingDays, daysWithoutWork, dayScore, greenStreak, addDays, monthOf, fmtMinutes, takeBackWaits, staffStepAction, pasteGoesToProject, singleStepClose, versionRequest, askDiaryAgain, pasteInForm, diaryLoadedAt, photoNeedsFetch, teamUndoKey, teamActionUndone, teamProgressOf, projectKeyIgnored, teamMovedTo, serverHolder, keepMovedStep, teamMemberFor, repliesOf, mailThreads, replyMailto, MAILTO_BODY_MAX, emailPath, pasteReason } from './rules.js';
-import { stageOf, stageCounts, byStage, STAGES, STAGE_LABELS, moveEveryOf, everyText, MOVE_EVERY_PICKS } from './rules.js';
+import { stageOf, stageCounts, byStage, STAGES, STAGE_LABELS, moveEveryOf, everyText, MOVE_EVERY_PICKS, MOVE_EVERY_DEFAULT, everyDefaultOf, useEveryDefault, colourShort, colourWhy } from './rules.js';
 import { stageChip, stageFilterBar } from './ui/stage.js';
 import { whoFromUser, signInTag, timerOn, projectGiveChanges, UNDO_GRACE_MS, MISC_ID } from './rules.js';
 import { signInCard, firstPasswordCard } from './ui/signin.js';
@@ -247,6 +247,7 @@ function teamHowFromHash() {
   let how = null;
   const m = /^#team-task=(\d+)$/.exec(hsh);
   if (hsh === '#team') how = {};
+  else if (hsh === '#team-settings') how = { view: 'settings' }; // Settings → Outlook and the team's settings
   else if (m) how = { sel: 'task:' + m[1], fromProjects: true };
   else if (hsh.startsWith('#team-new=')) { try { const p = JSON.parse(decodeURIComponent(hsh.slice(10))); how = { sel: 'give', prefill: p && typeof p === 'object' ? p : null, fromProjects: true }; } catch { how = { sel: 'give' }; } }
   if (how) history.replaceState(null, '', location.pathname + location.search);
@@ -542,6 +543,7 @@ const appsCtx = {
   toast: (...args) => toast(...args),
   render: () => render(),
   base: () => new URL('../api/', location.href).href,
+  openConnections: () => { go('settings'); setTimeout(() => { const el = document.querySelector('[data-key="connections"]'); if (el && el.scrollIntoView) el.scrollIntoView({ block: 'start' }); }, 50); },
 };
 
 // ---------------------------------------------------------------- AI
@@ -879,10 +881,7 @@ function todaySummaryText() {
   const base = summaryText(store.view.data, store.view.history, todayIndia(), dateText);
   // the team's updates today (worktask.in), under their projects
   const today = todayIndia();
-  const teamToday = [...team.byStep.values()].filter((t) => t.today && t.today.day === today);
-  if (!teamToday.length) return base;
-  const names = new Map(store.view.data.projects.map((p) => [p.id, p.name]));
-  return `${base}\n\nTeam updates:\n${teamToday.map((t) => `- ${t.assignee.name} — ${names.get(t.projectRef) || t.project || ''}: ${t.title}: ${t.today.note}${t.today.state === 'stuck' ? ' (stuck)' : t.today.state === 'finished' ? ' (finished)' : ''}`).join('\n')}`;
+  return base + teamUpdatesText(store.view.data, team.summary, [...team.byStep.values()], today);
 }
 
 function openSummary() {
@@ -985,11 +984,14 @@ function go(view) {
   ui.replyOpen = null;
   resetRedOrder();
   ui.search = '';
+  // the task open on the right stays only if this page lists it (owner, 24 Oct: no old task beside 🔌 From apps)
+  if (ui.selected && (!TASK_PAGES.includes(view) || !visibleProjects({ stage: false }).some((p) => p.id === ui.selected))) ui.selected = null;
   ui.menuOpen = false;
   ui.mobile = 'list';
   rememberUi();
   render();
 }
+const TASK_PAGES = ['today', 'all', 'mains', 'paused', 'finished'];
 
 /** First open of the day turns a red dot yellow. */
 function markOpened(id) {
@@ -1215,7 +1217,7 @@ function projectRow(p, today, opts = {}) {
       colour === 'green' && greenByTeamOnly(p, today) ? h('span', { class: 'team-green', title: 'Green today because the team sent an update' }, '👥') : null,
       h('span', { class: 'prow-text' },
         h('span', { class: 'prow-name' }, isMainProject(store.view.data, p) ? '📂 ' : '', p.name,
-          p.state !== 'active' ? h('span', { class: 'tag' }, p.state) : null,
+          p.state !== 'active' ? h('span', { class: 'tag' }, p.state === 'paused' && p.stateChangedAt ? `paused since ${fmtDay(indiaDate(p.stateChangedAt))}` : p.state) : null,
           p.priority === 'high' ? h('span', { class: 'tag high' }, 'High') : null,
           ui.view === 'all' && !isMainProject(store.view.data, p) ? stageChip(taskStage(p)) : null), // ✅ Tasks: the Stage chip on each row
         asProject ? h('span', { class: 'prow-next' }, projectLine(store.view.data, p, today)) : null, // "2 projects · 5 tasks · 1 red"
@@ -1278,6 +1280,8 @@ function pickBar(list) {
 
 /** One-tap action on a row that is not green yet: "Chased" for a waiting step (a real update). */
 function rowAction(p, ns, colour) {
+  // ⏸ Paused list: Unpause right on the row (owner, 24 Oct)
+  if (p.state === 'paused') return h('button', { class: 'row-act', title: `Unpause ${p.name}`, onClick: () => act('unpause', { projectId: p.id }, `▶ ${p.name} is back on your lists`) }, '▶ Unpause');
   if (p.state !== 'active' || colour === 'green' || colour === 'grey') return null; // grey = snoozed
   if (ns && ns.waiting) {
     return h('button', { class: 'row-act chase', title: `Followed up${ns.waitingOn ? ' with ' + ns.waitingOn : ''} today`, onClick: () => chase(p, ns) }, 'Chased');
@@ -1336,6 +1340,9 @@ function quickAddForm(p) {
 /** "No real work for 6 days": no update, tick, follow-up or time for that long. */
 function noWorkTag(p, today) {
   if (p.state !== 'active') return null;
+  // a red / yellow row says why (owner, 24 Oct): "Target 25 Oct is near", "No update for 4 days" (Overdue has its own tag)
+  const why = isOverdue(p, today) ? '' : colourShort(p, today);
+  if (why) return h('span', { class: 'tag ' + (dotColour(p, today) === 'red' ? 'late' : 'stale'), title: colourWhy(p, today) }, why);
   const d = daysWithoutWork(p, today);
   return d >= NO_WORK_NOTE_DAYS ? h('span', { class: 'tag stale' }, `No real work for ${d} days`) : null;
 }
@@ -2085,7 +2092,7 @@ function celebration() {
 
 function streakBadge() {
   const n = greenStreak(store.view.data.dayScores || {}, todayScore());
-  return n >= 1 ? h('span', { class: 'streak', title: 'Days in a row with every task green' }, ` · 🔥 ${n} day${n > 1 ? 's' : ''} all green`) : null;
+  return n >= 1 ? h('span', { class: 'streak', title: 'Days in a row with every task on track' }, ` · 🔥 ${n} day${n > 1 ? 's' : ''} all on track`) : null;
 }
 
 /** Last 7 days: how many projects were green each day (today is live). */
@@ -2102,7 +2109,7 @@ function weekBars() {
       const pct = sc && sc.total ? Math.round((sc.green / sc.total) * 100) : 0;
       const fill = h('div', { class: 'week-fill' + (pct === 100 ? ' full' : '') });
       fill.style.height = `${Math.max(pct, sc && sc.total ? 4 : 0)}%`; // style object (allowed by the page's safety rules)
-      return h('div', { class: 'week-day', key: 'wk-' + d, title: sc ? `${sc.green} of ${sc.total} green` : 'No data' },
+      return h('div', { class: 'week-day', key: 'wk-' + d, title: sc ? `${sc.green} of ${sc.total} on track` : 'No data' },
         h('div', { class: 'week-bar' }, fill),
         h('div', { class: 'week-num' }, sc && sc.total ? `${sc.green}/${sc.total}` : '–'),
         h('div', { class: 'week-label' + (d === today ? ' today' : '') }, d === today ? 'Today' : wd.format(new Date(d + 'T00:00:00Z'))));
@@ -2120,7 +2127,7 @@ function progressLine(today) {
   return h('div', { class: 'progress', key: 'progress' },
     h('div', { class: 'progress-row' },
       h('div', { class: 'progress-text' },
-        h('strong', null, `${done} of ${active.length}`), done === active.length ? ' on track — all green! 🎉' : ' on track',
+        h('strong', null, `${done} of ${active.length}`), done === active.length ? ' on track — all of them! 🎉' : ' on track',
         streakBadge()),
       h('div', { class: 'progress-btns' },
         h('button', { class: 'btn small', title: "Everything you did today, ready to send", onClick: openSummary }, '📋 Summary'),
@@ -2420,6 +2427,13 @@ function renderSettings() {
       h('p', null, `AI uses today: ${usage} / ${AI_DAILY_LIMIT}`),
       keyForm('claude', 'Claude', 'From console.anthropic.com → API keys. Saved in your private data, so all your devices use it.'),
       keyForm('gemini', 'Gemini', 'Optional backup. From aistudio.google.com → Get API key. Shared with all your devices. On the free plan Google may read the text.')),
+    // 🔁 how often a task should move when it has no choice of its own (was always 3, owner 24 Oct)
+    h('section', { class: 'block', key: 'every-default' }, h('h3', null, '🔁 How often a task should move'),
+      h('p', { class: 'muted small' }, 'A task with no real update for this many days turns yellow (twice as long: red). Each task or 📂 project can still have its own.'),
+      h('div', { class: 'row every-picks' }, MOVE_EVERY_PICKS.map((n) => h('button', {
+        class: 'chip' + (everyDefaultOf(data) === n ? ' on' : ''), type: 'button', key: 'ed-' + n, 'aria-pressed': String(everyDefaultOf(data) === n),
+        onClick: () => { if (store.dispatch('setEveryDefault', { days: n === MOVE_EVERY_DEFAULT ? null : n })) toast(`Tasks with no choice of their own: should move ${everyText(n)}`); },
+      }, everyText(n))))),
     h('section', { class: 'block' }, h('h3', null, 'Tags and timer'),
       h('p', { class: 'muted small' }, 'Each task can pick one tag. The Time report shows your time by tag.'),
       h('div', { class: 'group-set' },
@@ -2451,9 +2465,15 @@ function renderSettings() {
     h('section', { class: 'block' }, h('h3', null, 'Backup'),
       h('p', { class: 'muted' }, 'Every save is kept as a version, so nothing is lost. You can also download a copy.'),
       h('button', { class: 'btn', onClick: downloadBackup }, 'Download backup')),
-    h('section', { class: 'block' }, h('h3', null, 'iPhone'),
-      h('p', null, onServer ? 'Open worktask.in in Safari and sign in. Share → "Add to Home Screen" puts it on your phone like an app.'
-        : 'Always open Task List from its home-screen icon. In Safari: Share → "Add to Home Screen". Then paste your keys inside the icon app.')));
+    // Outlook, the morning email and the team's times are on the team's Settings page: one tap there (owner, 24 Oct)
+    onServer ? h('section', { class: 'block', key: 'team-settings' }, h('h3', null, '📧 Outlook and the team'),
+      h('p', { class: 'muted small' }, 'Connect Outlook, the morning email and the time updates are due are in the team\'s Settings.'),
+      h('a', { class: 'btn', href: '#team-settings' }, 'Open the team\'s Settings ›')) : null,
+    h('section', { class: 'block' }, h('h3', null, 'Phone'),
+      h('p', null, h('strong', null, 'iPhone: '), onServer ? 'Open worktask.in in Safari and sign in. Share → "Add to Home Screen" puts it on your phone like an app.'
+        : 'Always open Task List from its home-screen icon. In Safari: Share → "Add to Home Screen". Then paste your keys inside the icon app.'),
+      h('p', null, h('strong', null, 'Android: '), onServer ? 'Open worktask.in in Chrome and sign in. Tap ⋮ → "Add to Home screen" (or "Install app").'
+        : 'Open Task List in Chrome. Tap ⋮ → "Add to Home screen" (or "Install app"), then paste your keys inside the icon app.')));
 }
 
 async function signOutServer() {
@@ -2628,6 +2648,7 @@ function render() {
     root.replaceChildren(h('div', { class: 'loading' }, store && store.status === 'offline' ? 'No connection. Retrying…' : 'Loading…'));
     return;
   }
+  useEveryDefault(store.view.data); // 🔁 Settings: the owner's own "should move every N days" for tasks with no choice of their own
   if (ui.selected && !store.view.data.projects.some((p) => p.id === ui.selected)) ui.selected = null;
   if (!(ui.capture && typeof ui.capture === 'object')) { try { localStorage.removeItem(CLIP_KEY); } catch { /* blocked */ } } // added or closed
   const wide = ['diary', 'settings', 'dashboard', 'time'].includes(ui.view) && !ui.search;
@@ -2769,6 +2790,7 @@ function startRound() {
 
 function endRound() {
   ui.round = null;
+  ui.selected = null; // (the right side does not keep the task from before the round, owner 24 Oct)
   ui.mobile = 'list';
   render();
 }
@@ -2845,7 +2867,7 @@ function renderRound() {
   const top = h('div', { class: 'round-top' },
     h('button', { class: 'icon back', 'aria-label': 'End round', onClick: endRound }, '←'),
     h('strong', null, 'Daily round'),
-    h('span', { class: 'muted small' }, `${greenCount} of ${active.length} green · ${left} left`),
+    h('span', { class: 'muted small' }, `${greenCount} of ${active.length} on track · ${left} left`),
     h('button', { class: 'btn small', onClick: endRound, title: 'End the round (Esc)' }, 'End'));
   // The current project was deleted / paused on another device: quietly move on.
   if (!r.done && !roundProject()) {
@@ -3124,6 +3146,7 @@ const KEYS = [
   ['q', 'Quick capture: write an idea or task into the Inbox'],
   ['r', 'Switch "My order" / "Red first"'],
   ['t  b  d  p', 'Go to Today / Dashboard / Diary / People'],
+  ['a  i', 'Go to ✅ Tasks / 📥 Inbox'],
   ['e', 'Go to ✉ Replies (emails waiting for your reply)'],
   ['m', 'Go to 📂 Projects'],
   ['@', 'In a step or note: pick a person'],
@@ -3132,6 +3155,7 @@ const KEYS = [
   ['Right-click', 'On a task in the list: quick menu'],
   ['Esc', 'Leave a box, or close what is open'],
   ['?', 'Show or hide this list'],
+  ['👥 Team pages', 't a m f: Team today / Tasks / Projects / Follow-up · n: give a task · ↓ ↑ · / · Esc'],
 ];
 
 function keysHelp() {
@@ -3306,6 +3330,8 @@ function onKey(e) {
   else if (k === 'p') go('people');
   else if (k === 'e') go('replies');
   else if (k === 'm') go('mains');
+  else if (k === 'a') go('all');
+  else if (k === 'i') go('inbox');
   else if (k === 'b') go('dashboard');
   else if (k === '?') { ui.showKeys = !ui.showKeys; render(); }
   else handled = false;

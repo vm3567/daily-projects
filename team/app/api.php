@@ -193,7 +193,7 @@ function comments_of(int $taskId): array {
 /** Team today's rows: open tasks due today, and any task with an update today (closed today too); never a replaced whole-project task. */
 function team_today_rows(string $day): array {
   $tasks = all(TASK_SELECT . " WHERE (t.status = 'open' OR t.done_at >= ?) ORDER BY t.id", [$day . ' 00:00:00']);
-  return array_values(array_filter(tasks_out($tasks, $day), fn($t) => ($t['dueToday'] || $t['today'] !== null) && !($t['status'] === 'cancelled' && str_ends_with((string)$t['stepRef'], ':whole'))));
+  return array_values(array_filter(tasks_out($tasks, $day), fn($t) => ($t['dueToday'] || $t['today'] !== null) && $t['status'] !== 'cancelled')); // (taken back or cancelled: off today's list and its counts, owner 24 Oct)
 }
 
 function team_attention(): array {
@@ -252,7 +252,7 @@ function handle(string $a, array $in): array {
     case 'my.today': {
       $tasks = all(TASK_SELECT . " WHERE t.assignee_id = ? AND (t.status = 'open' OR t.done_at >= ?) ORDER BY t.repeat_kind = 'once', t.due_date IS NULL, t.due_date, t.project_ref, t.seq, t.id", [$me['id'], $day . ' 00:00:00']);
       $out = array_values(array_filter(tasks_out($tasks, $day), fn($t) => !($t['status'] === 'cancelled' && str_ends_with((string)$t['stepRef'], ':whole')))); // a replaced whole-project task: its words are on the step
-      $onList = fn($t) => $t['dueToday'] || $t['today'] !== null || ($t['kind'] === 'log' && $t['status'] === 'open'); // 📒 a record is always on the list (never "due")
+      $onList = fn($t) => $t['status'] !== 'cancelled' && ($t['dueToday'] || $t['today'] !== null || ($t['kind'] === 'log' && $t['status'] === 'open')); // (taken back: off the list, owner 24 Oct) 📒 a record is always on the list (never "due")
       $due = array_values(array_filter($out, $onList));
       $other = array_values(array_filter($out, fn($t) => !$onList($t) && $t['status'] === 'open'));
       // my suggestions: waiting for a yes, or said no this week (with the reason in the messages)
@@ -789,7 +789,10 @@ function handle(string $a, array $in): array {
         'summary' => (function () use ($day) { // one line for the manager's Today page: the same rows and count as Team today
           $rows = team_today_rows($day);
           $missing = array_values(array_unique(array_map(fn($t) => $t['assignee']['name'], array_filter($rows, fn($t) => !$t['today']))));
-          return ['due' => count($rows), 'sent' => count(array_filter($rows, fn($t) => (bool)$t['today'])), 'notFilled' => $missing];
+          // today's words for the 📋 summary: every row sent today, a 📒 record and a task given from the team pages too (owner, 24 Oct)
+          $ups = array_map(fn($t) => ['name' => $t['assignee']['name'], 'projectRef' => $t['projectRef'], 'project' => $t['project'], 'title' => $t['title'], 'note' => $t['today']['note'], 'state' => $t['today']['state']],
+            array_values(array_filter($rows, fn($t) => (bool)$t['today'])));
+          return ['due' => count($rows), 'sent' => count($ups), 'notFilled' => $missing, 'updates' => $ups];
         })()];
     }
     case 'tasks.adopted': { // Daily Projects added these steps (written by the person) to the project: from now on they are normal steps

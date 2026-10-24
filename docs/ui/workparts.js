@@ -55,7 +55,7 @@ export function chipsFor(t, td, { who = false } = {}) {
   const late = t.status === 'open' && t.dueDate && t.dueDate < td;
   return h('div', { class: 'info-chips' },
     who && t.assignee ? c(`👤 ${t.assignee.name}`, ' team') : null,
-    t.project && t.project !== t.title ? c(`📁 ${t.project}`) : null, // (not when it only says the task's own name again)
+    t.project && t.project !== t.title && t.project !== 'Misc' ? c(`📁 ${t.project}`) : null, // (not when it only says the task's own name again, nor "Misc")
     t.kind === 'log' ? c('📒 Record') : c(repeatLabel({ ...t, dueDate: null }, td)), // (a record has no "every day": entries come when something happens)
     t.dueDate ? c(late ? `⏰ Late — was by ${fmtDay(t.dueDate)}` : `By ${fmtDay(t.dueDate)}`, late ? ' bad' : '') : null,
     t.needsPhoto ? c('📷 Photo to finish') : null,
@@ -209,3 +209,25 @@ export function logbookBlock({ entries = [], waiting = [], photos, meId = 0, td 
         photos ? photos('photo', e.photos) : null)))));
 }
 const addDaysIso = (day, n) => new Date(Date.parse(day + 'T00:00:00Z') + n * 86400e3).toISOString().slice(0, 10);
+
+/**
+ * The phone's bottom bar on the team and staff pages, as on the owner's pages (owner, 24 Oct): the pages used most,
+ * then ☰ More (the menu). tabs: [icon, label, on, onTap, count?]. Shown only on a phone (styles.css .tabbar).
+ */
+export function bottomBar(tabs, onMore, moreOn = false) {
+  const tab = ([icon, label, on, onTap, count], i) => h('button', { class: 'tab' + (on ? ' current' : ''), key: 'tab-' + i, 'aria-label': label, onClick: onTap },
+    h('span', { class: 'tab-icon', 'aria-hidden': 'true' }, icon), h('span', { class: 'tab-label' }, label),
+    count ? h('span', { class: 'tab-count' }, String(count)) : null);
+  return h('nav', { class: 'tabbar', key: 'tabbar', 'aria-label': 'Main pages' }, tabs.filter(Boolean).map(tab),
+    h('button', { class: 'tab' + (moreOn ? ' current' : ''), key: 'tab-more', 'aria-label': 'More pages', onClick: onMore },
+      h('span', { class: 'tab-icon', 'aria-hidden': 'true' }, '☰'), h('span', { class: 'tab-label' }, 'More')));
+}
+
+/** A search result's words: a 📒 record's day has many lines, so only the lines with the words searched (up to 2). */
+export function hitLines(text, q) {
+  const lines = String(text || '').split('\n').map((l) => l.trim()).filter(Boolean);
+  if (lines.length < 2) return lines[0] || '';
+  const words = String(q || '').toLowerCase().split(/\s+/).filter((w) => w.length > 1);
+  const hit = lines.filter((l) => words.some((w) => l.toLowerCase().includes(w)));
+  return (hit.length ? hit : lines).slice(0, 2).join(' · ');
+}

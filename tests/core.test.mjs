@@ -1842,7 +1842,7 @@ test('📂 rules: childrenOf, parentsOf, isMainProject, mainColour (worst; resti
   assert.equal(dotColour(P(s, 'k1'), d), 'grey');
   assert.equal(mainColour(P(s, 'm'), childrenOf(s.data, 'm'), d), 'green', 'a snoozed task counts as grey (better than green)');
   applyOp(s, op('pause', { projectId: 'k1' }, d));
-  assert.equal(mainSummary(childrenOf(s.data, 'm'), d), '1 task · all green', 'only active ones');
+  assert.equal(mainSummary(childrenOf(s.data, 'm'), d), '1 task · all on track', 'only active ones');
   assert.equal(mainSummary([], d), 'No tasks in it yet');
 });
 
@@ -3149,4 +3149,43 @@ test('Review 15: the reason line shows the date as "21 Oct", not "2026-10-21"', 
   const { colourWhy, shortDay } = await import('../docs/rules.js');
   assert.equal(shortDay('2026-10-21'), '21 Oct');
   assert.equal(colourWhy({ state: 'active', steps: [], deadline: '2026-10-21', targetSet: true }, '2026-10-24'), 'Target date passed (21 Oct)');
+});
+
+test('Review2 4 (owner, 24 Oct): a yellow task worked on today gives its near date as the reason, never "Updated today"', async () => {
+  const { colourShort, addDays: plus, todayIndia: td } = await import('../docs/rules.js');
+  const today = td();
+  const s = { data: emptyData(), history: {} };
+  applyOps(s, [makeOp('createProject', { projectId: 'y', name: 'Near one', deadline: null }), makeOp('setProjectField', { projectId: 'y', field: 'deadline', value: plus(today, 1) }), makeOp('addWorkNote', { projectId: 'y', noteId: 'n', text: 'did it' })]);
+  const p = s.data.projects.find((x) => x.id === 'y');
+  assert.match(colourShort(p, today), /^Target \d+ \w{3} is near$/);
+  applyOps(s, [makeOp('setProjectField', { projectId: 'y', field: 'deadline', value: '2020-01-01' })]);
+  assert.match(colourShort(p, today), /Target date passed/);
+});
+
+test('Review2 6 (owner, 24 Oct): the 📋 summary\'s Team updates use the server\'s rows (a 📒 record too) and never a taken-back step', async () => {
+  const { teamUpdatesText } = await import('../docs/reports.js');
+  const data = emptyData();
+  const rows = [{ name: 'Suresh', projectRef: null, project: '', title: 'Material log', note: '8:53 am Got 12 bags', state: 'progress' }];
+  assert.match(teamUpdatesText(data, { updates: rows }, [], '2026-10-24'), /Team updates:\n- Suresh — : Material log: 8:53 am Got 12 bags/);
+  const linked = [{ assignee: { name: 'Anita' }, title: 'Taken back', status: 'cancelled', today: { day: '2026-10-24', note: 'x', state: 'progress' } }];
+  assert.equal(teamUpdatesText(data, null, linked, '2026-10-24'), '', 'a cancelled one is left out');
+});
+
+test('Review2 22 (owner, 24 Oct): Settings sets how often a task with no choice of its own should move (was always 3); a task\'s own choice still wins', async () => {
+  const { moveEveryOf, useEveryDefault, everyDefaultOf } = await import('../docs/rules.js');
+  const s = { data: emptyData(), history: {} };
+  applyOps(s, [makeOp('createProject', { projectId: 'a', name: 'Plain', deadline: null }), makeOp('createProject', { projectId: 'b', name: 'Own', deadline: null }), makeOp('setMoveEvery', { projectId: 'b', days: 2 })]);
+  const pr = (id) => s.data.projects.find((x) => x.id === id);
+  assert.equal(everyDefaultOf(s.data), 3);
+  assert.ok(applyOp(s, makeOp('setEveryDefault', { days: 7 })));
+  assert.equal(s.data.settings.moveEvery, 7);
+  assert.ok(!applyOp(s, makeOp('setEveryDefault', { days: 0 })), 'a wrong number is refused');
+  useEveryDefault(s.data);
+  try {
+    assert.equal(moveEveryOf(pr('a')), 7, 'no choice of its own: the Settings one');
+    assert.equal(moveEveryOf(pr('b')), 2, 'its own choice wins');
+    assert.ok(applyOp(s, makeOp('setEveryDefault', { days: null })));
+    useEveryDefault(s.data);
+    assert.equal(moveEveryOf(pr('a')), 3, 'back to 3');
+  } finally { useEveryDefault(null); }
 });

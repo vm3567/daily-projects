@@ -9,7 +9,7 @@ import { h, morph, errLine } from './dom.js';
 import { createOutbox } from './staffbox.js';
 import { stageChip } from './stage.js';
 import { openMenuAt, menuBox, focusLater } from './rowmenu.js';
-import { fmtDay, fmtTime, LONG_DAYS, stateTag, newClientId, istDay, daysBetween, repeatLabel, block, sec, taskRow, chipsFor, makePics, photosRow, filesBlock, diaryBlock, messagesBlock, phoneBack, logbookBlock } from './workparts.js';
+import { fmtDay, fmtTime, LONG_DAYS, stateTag, newClientId, istDay, daysBetween, repeatLabel, block, sec, taskRow, chipsFor, makePics, photosRow, filesBlock, diaryBlock, messagesBlock, phoneBack, logbookBlock, bottomBar, hitLines } from './workparts.js';
 
 const KEEP_FAIL = 'Could not keep this on the phone. Try again when online.';
 const OFFLINE_KEPT = '📴 Saved on this phone — it will be sent when you are online';
@@ -174,8 +174,9 @@ export function createTeam(opts) {
   }
   const toProjects = () => { if (!opts.toProjects) return false; state.fromProjects = false; opts.toProjects(); return true; };
 
-  async function start({ sel = null, prefill = null, fromProjects = false } = {}) {
+  async function start({ sel = null, prefill = null, fromProjects = false, view = null } = {}) {
     state.prefill = prefill; state.fromProjects = fromProjects;
+    if (view === 'settings') { state.view = 'settings'; state.sel = null; } // (the owner's Settings → "Outlook and the team's settings")
     render();
     await refreshOutbox();
     if (state.outbox.length) flush();
@@ -637,7 +638,7 @@ export function createTeam(opts) {
       return h('tr', { key: 'b-' + t.id, class: 'sub-row board-row' + (state.sel === 'task:' + t.id ? ' current' : ''), onClick: () => open('task:' + t.id),
         onContextmenu: (e) => openMenuAt(state, render, { t }, e) }, // right-click: message, finish, edit, move, cancel
         cell('', h('span', { class: 'dot ' + dotOf(r.colour) })),
-        cell('board-task', h('button', { class: 'link sub-name', type: 'button' }, t.title), ' ', state.boardGroup === 'project' ? null : h('span', { class: 'tag main-tag' }, '📂 ' + r.project), // (by 📂 project: its line says it)
+        cell('board-task', h('button', { class: 'link sub-name', type: 'button' }, t.title), ' ', state.boardGroup === 'project' || r.project === 'Misc' ? null : h('span', { class: 'tag main-tag' }, '📂 ' + r.project), // (by 📂 project: its line says it; in no project: no "📂 Misc", owner 24 Oct)
           state.newIds.has(t.id) ? h('span', { class: 'tag high' }, 'New') : null,
           r.stage ? [' ', stageChip(r.stage, { you: r.you })] : null), // its Stage; stuck waiting for "Manager": "Waiting: you"
         cell('board-who', t.assignee.name),
@@ -770,7 +771,11 @@ export function createTeam(opts) {
     return [
       h('div', { class: 'list-tools' }, h('div', { class: 'segmented', role: 'group', 'aria-label': 'Which tasks' }, seg(!state.closed, 'Open', false), seg(state.closed, 'Done / cancelled', true))),
       d.tasks.length ? null : h('p', { class: 'empty-list' }, state.closed ? 'Nothing closed yet.' : 'No open tasks. Give one with “+ Give a task”.'),
-      [...groups].map(([name, tasks]) => [sec(name, h('span', { class: 'tag waiting' }, String(tasks.length))),
+      // Done / cancelled: newest closed first, each with the day it was closed (owner, 24 Oct)
+      state.closed ? h('ul', { class: 'plist' }, [...d.tasks].sort((a, b) => String(b.doneAt || '').localeCompare(String(a.doneAt || ''))).map((t) => rowOf(t,
+        [`${t.status === 'done' ? '✓ Done' : '✖ Cancelled'}${t.doneAt ? ' ' + fmtDay(String(t.doneAt).slice(0, 10)) : ''}`, t.assignee.name, t.project && t.project !== 'Misc' ? t.project : null,
+          t.kind === 'log' ? recordLine(t) : t.last ? `last update ${fmtDay(t.last.day)}` : t.status === 'cancelled' ? 'taken back before any update' : null].filter(Boolean).join(' · '), 'grey')))
+      : [...groups].map(([name, tasks]) => [sec(name, h('span', { class: 'tag waiting' }, String(tasks.length))),
         h('ul', { class: 'plist' }, tasks.map((t) => rowOf(t,
           [t.status !== 'open' ? (t.status === 'done' ? 'Done' : 'Cancelled') : null, t.project, t.kind === 'log' ? recordLine(t) : repeatLabel(t), t.kind === 'log' ? null : t.today ? 'sent today' : t.last ? `last ${fmtDay(t.last.day)}` : 'no update yet'].filter(Boolean).join(' · '),
           t.status !== 'open' ? 'grey' : t.stuck ? 'red' : t.today ? 'green' : t.kind === 'log' ? 'grey' : 'yellow')))]),
@@ -822,7 +827,7 @@ export function createTeam(opts) {
     const icon = { task: '📋', message: '💬', update: '📝' };
     return [h('div', { class: 'search-box' }, h('input', { class: 'search', type: 'search', key: 'team-search', placeholder: 'Search tasks, messages, updates…', 'aria-label': 'Search', value: state.searchQ, onInput: (e, el) => search(el.value) })),
       !r ? h('p', { class: 'empty-list' }, 'Type 2 or more letters.') : r.error ? h('p', { class: 'empty-list' }, r.error) : !r.length ? h('p', { class: 'empty-list' }, 'Nothing found.')
-        : h('ul', { class: 'plist' }, r.map((x, i) => taskRow({ key: 'sr-' + i, title: `${icon[x.kind] || ''} ${x.title}`, sub: `${x.who} · ${fmtDay(x.at)} — ${x.text}`, onOpen: () => open('task:' + x.taskId) })))];
+        : h('ul', { class: 'plist' }, r.map((x, i) => taskRow({ key: 'sr-' + i, title: `${icon[x.kind] || ''} ${x.title}`, sub: `${x.who} · ${fmtDay(x.at)} — ${hitLines(x.text, state.searchQ)}`, onOpen: () => open('task:' + x.taskId) })))];
   }
 
   function reportPage() {
@@ -1109,7 +1114,7 @@ export function createTeam(opts) {
     const head = h('div', { class: 'list-head' },
       h('button', { class: 'icon menu-btn', 'aria-label': 'Menu', onClick: () => { state.menuOpen = true; render(); } }, '☰'),
       h('h2', null, title),
-      state.view === 'search' ? null : h('button', { class: 'icon head-icon', title: 'Search', 'aria-label': 'Search', onClick: () => go('search') }, '🔍', h('span', { class: 'icon-cap', 'aria-hidden': 'true' }, 'Find')), // (as on the owner's list; on a phone the menu has no search box)
+      state.view === 'search' ? null : h('button', { class: 'icon head-icon', title: 'Search', 'aria-label': 'Search', onClick: () => { go('search'); focusLater('team-search'); } }, '🔍', h('span', { class: 'icon-cap', 'aria-hidden': 'true' }, 'Find')), // (as on the owner's list; on a phone the menu has no search box)
       state.view === 'settings' ? null : h('button', { class: 'icon head-icon', title: 'Get latest', 'aria-label': 'Refresh', onClick: reload }, '↻', h('span', { class: 'icon-cap', 'aria-hidden': 'true' }, 'Refresh')));
     if (!state.data) return h('div', { class: 'col-inner' }, head, bars(), h('p', { class: 'empty-list' }, state.loadFailed ? [state.loadFailed === 'You are offline. Try again when the internet is back.' ? 'No saved copy on this phone yet.' : state.loadFailed, ' ', h('button', { class: 'link', onClick: reload }, 'Try again')] : 'Loading…'));
     const body = state.view === 'followup' ? followupList() : state.view === 'tasks' ? tasksList() : state.view === 'projects' ? projectsList()
@@ -1143,6 +1148,7 @@ export function createTeam(opts) {
       body);
   }
 
+  const onList = (v) => !state.sel && state.view === v; // (the bottom bar: this page is on screen)
   function view() {
     const wide = WIDE.includes(state.view) || (state.view === 'today' && !state.sel && !!state.data); // Team today's table fills the screen until a task is open
     return h('div', { class: ['layout', 'staff', 'team', wide ? 'wide' : '', state.mobile === 'detail' && !wide ? 'show-detail' : '', state.menuOpen ? 'menu-open' : ''].join(' ').replace(/\s+/g, ' ').trim() },
@@ -1150,7 +1156,14 @@ export function createTeam(opts) {
       h('div', { class: 'scrim', onClick: () => { state.menuOpen = false; render(); } }),
       h('main', { id: 'list' }, list()),
       wide ? null : h('section', { id: 'detail' }, detail()),
-      rowMenu());
+      rowMenu(),
+      // 📱 the bottom bar (owner, 24 Oct): Team today, Tasks, Projects, Follow-up, More
+      bottomBar([
+        ['👥', 'Today', onList('today') && !state.menuOpen, () => { state.personFilter = 0; go('today'); }],
+        ['✅', 'Tasks', onList('tasks') && !state.closed && !state.menuOpen, () => { state.closed = false; go('tasks'); }],
+        ['📂', 'Projects', onList('projects') && !state.menuOpen, () => go('projects')],
+        ['🔁', 'Follow-up', onList('followup') && !state.menuOpen, () => go('followup')],
+      ], () => { state.menuOpen = true; render(); }, state.menuOpen));
   }
 
   // the phone's Back button closes the menu, then the page on the right (never leaves the app)
