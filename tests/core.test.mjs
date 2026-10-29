@@ -3273,3 +3273,19 @@ test('ownerTaskMatches (owner, 29 Oct): Give a task finds your own open tasks by
   assert.deepEqual(ownerTaskMatches(s.data, '  '), []);
   assert.deepEqual(ownerTaskMatches(null, 'x'), []);
 });
+
+test('openTasksInside (owner, 29 Oct): finishing a 📂 project offers its open tasks (any depth, paused too) — not finished ones, not a task also in another open project', async () => {
+  const { applyOps, emptyData, makeOp } = await import('../docs/ops.js');
+  const { openTasksInside } = await import('../docs/rules.js');
+  const s = { data: emptyData(), history: {} };
+  applyOps(s, [makeOp('createMainProject', { projectId: 'm', name: 'Feldspar trial' }), makeOp('createMainProject', { projectId: 'o', name: 'Other' }),
+    makeOp('createMainProject', { projectId: 'sub', name: 'Sub' }), makeOp('addToProject', { projectId: 'sub', parentId: 'm' }),
+    ...['a', 'b', 'c', 'd', 'e'].map((id) => makeOp('createProject', { projectId: id, name: 'Task ' + id })),
+    makeOp('addToProject', { projectId: 'a', parentId: 'm' }), makeOp('addToProject', { projectId: 'b', parentId: 'sub' }),
+    makeOp('addToProject', { projectId: 'c', parentId: 'm' }), makeOp('finish', { projectId: 'c' }),
+    makeOp('addToProject', { projectId: 'd', parentId: 'm' }), makeOp('addToProject', { projectId: 'd', parentId: 'o' }),
+    makeOp('addToProject', { projectId: 'e', parentId: 'm' }), makeOp('pause', { projectId: 'e' })]);
+  const p = (id) => s.data.projects.find((x) => x.id === id);
+  assert.deepEqual(openTasksInside(s.data, p('m')).map((t) => t.id).sort(), ['a', 'b', 'e'], 'd goes on in "Other"; c is finished');
+  assert.deepEqual(openTasksInside(s.data, p('a')), [], 'a task has no tasks inside');
+});

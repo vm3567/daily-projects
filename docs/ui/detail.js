@@ -14,7 +14,7 @@ import { richArea, richView, addDraftPhotos, readDraft, clearDraft, photoArgs, f
 import { enterAction, richFileIds, textToHtml } from '../rich.js';
 import { projectEmailCards, emailThreadBlock } from './replies.js';
 import { mainBox, mainChip, subProjectsBlock, openMainBox } from './mains.js';
-import { isMainProject, timerOn, childrenOf, projectTasks, moveEveryOf, everyText, colourWhy, colourShort, todayList, MOVE_EVERY_PICKS } from '../rules.js';
+import { isMainProject, timerOn, childrenOf, projectTasks, openTasksInside, moveEveryOf, everyText, colourWhy, colourShort, todayList, MOVE_EVERY_PICKS } from '../rules.js';
 import { stageLine } from './stage.js';
 import { IN_NO_PROJECT } from './workparts.js';
 
@@ -107,6 +107,19 @@ export function startNextTask(ctx, p) {
   const done = ctx.actMany(p.id, steps, `✓ ${p.name} finished · ➜ next: ${name.trim()}`);
   if (done && ctx.openProject) ctx.openProject(nextId);
   return !!done;
+}
+
+/**
+ * 🏁 Finish: a 📂 project with open tasks inside asks first — OK finishes them too (one action, one Undo), Cancel
+ * finishes only the project and the tasks stay open (owner, 29 Oct).
+ */
+export function finishProject(ctx, p) {
+  const open = openTasksInside(ctx.store.view.data, p);
+  const n = open.length, s = n === 1 ? '' : 's';
+  const list = open.slice(0, 8).map((t) => `• ${t.name}`).join('\n') + (n > 8 ? `\n… and ${n - 8} more` : '');
+  const all = n && globalThis.confirm ? confirm(`${n} task${s} still open inside 📂 ${p.name}:\n${list}\n\nFinish ${n === 1 ? 'it' : 'them'} too?\nOK = finish the project and ${n === 1 ? 'this task' : 'these tasks'}\nCancel = finish only the project (the task${s} stay${n === 1 ? 's' : ''} open)`) : false;
+  if (!all) return ctx.act('finish', { projectId: p.id }, `Finished: ${p.name} (moved to Finished)`);
+  return ctx.actMany(p.id, [...open.map((t) => ['finish', { projectId: t.id }]), ['finish', { projectId: p.id }]], `Finished: ${p.name} and its ${n} open task${s}`);
 }
 
 /** ↩ the task this one came from, ➜ the next task made from it: tap to open. */
@@ -913,7 +926,7 @@ function stateButtons(ctx, p) {
         class: 'btn', title: 'Hide it from Today for some days',
         onClick: () => { ui.snoozeOpen = p.id; ctx.render(); setTimeout(() => { const n = document.querySelector(`[data-key="snooze-${p.id}"]`); if (n) { n.focus(); n.select(); } }, 30); },
       }, '💤 Snooze') : null,
-      p.misc ? null : h('button', { class: 'btn', onClick: () => ctx.act('finish', { projectId: p.id }, `Finished: ${p.name} (moved to Finished)`) }, `Finish ${kindWord(ctx, p)}`),
+      p.misc ? null : h('button', { class: 'btn', onClick: () => finishProject(ctx, p) }, `Finish ${kindWord(ctx, p)}`),
       menuButton(ctx, p),
       navButtons(ctx),
     ];
@@ -921,7 +934,7 @@ function stateButtons(ctx, p) {
   if (p.state === 'paused') {
     return [
       h('button', { class: 'btn primary', onClick: () => store.dispatch('unpause', { projectId: p.id }) }, 'Unpause'),
-      p.misc ? null : h('button', { class: 'btn', onClick: () => ctx.act('finish', { projectId: p.id }, `Finished: ${p.name} (moved to Finished)`) }, `Finish ${kindWord(ctx, p)}`),
+      p.misc ? null : h('button', { class: 'btn', onClick: () => finishProject(ctx, p) }, `Finish ${kindWord(ctx, p)}`),
       p.misc ? null : deleteButton(ctx, p),
       navButtons(ctx),
     ];

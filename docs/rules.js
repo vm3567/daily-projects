@@ -549,6 +549,18 @@ export function projectTasks(data, id) {
   return projectParts(data, id).tasks;
 }
 
+/**
+ * Finishing a 📂 project: its open tasks (paused too) that would be left behind — at any depth, but not a task that is
+ * also in another project still open (it goes on there). Owner, 29 Oct: "Finish project" asks about these.
+ */
+export function openTasksInside(data, p) {
+  if (!data || !p || p.misc || !isMainProject(data, p)) return [];
+  const inside = new Set([p.id, ...descendantIds(data, p.id)]);
+  const byId = new Map(data.projects.map((x) => [x.id, x]));
+  return projectTasks(data, p.id).filter((t) => t.state !== 'finished'
+    && parentIdsOf(t).every((id) => inside.has(id) || (byId.get(id) || {}).state === 'finished'));
+}
+
 /** Everything inside the project `id` at any depth, in one pass: { tasks, projects } (isMainProject for each, without a scan each). */
 export function projectParts(data, id) {
   if (id === MISC_ID && hasMisc(data)) return { tasks: childrenOf(data, id), projects: [] }; // 📂 Misc: its loose tasks (they have no parent)

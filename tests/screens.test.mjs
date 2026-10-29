@@ -722,7 +722,7 @@ test('project page: a 💤 Snooze button sits next to Finish (not only in the �
   const { readFileSync } = await import('node:fs');
   const src = readFileSync(new URL('../docs/ui/detail.js', import.meta.url), 'utf8');
   const top = src.slice(src.indexOf('function stateButtons('), src.indexOf("if (p.state === 'paused')", src.indexOf('function stateButtons(')));
-  assert.match(top, /'💤 Snooze'\) : null,\s*p\.misc \? null : h\('button', \{ class: 'btn', onClick: \(\) => ctx\.act\('finish'/, 'Snooze right before Finish (none on 📂 Misc: it is never finished)');
+  assert.match(top, /'💤 Snooze'\) : null,\s*p\.misc \? null : h\('button', \{ class: 'btn', onClick: \(\) => finishProject\(ctx, p\)/, 'Snooze right before Finish (none on 📂 Misc: it is never finished; Finish now asks about a project\'s open tasks, owner asked 29 Oct)');
   assert.match(top, /ui\.snoozeOpen = p\.id; ctx\.render\(\);/, 'it opens the snooze box');
 });
 
@@ -1060,7 +1060,7 @@ test('📂 Projects page: a click on a project row selects it and stays on the p
   assert.match(mainsSrc, /ctx\.ui\.view === 'mains' && ctx\.showHere \? ctx\.showHere\(c\.id\)/, 'a task in the TASKS table while on the Projects page');
   const here = app.slice(app.indexOf('  showHere: (id) => {'), app.indexOf('  openProject: (id) => {'));
   assert.match(here, /select\(id\);/);
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-56'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-57'/, 'phones get the new copy');
 });
 
 test('📂 project page: "✕ Remove" on a task row takes it out of this project only — the task is kept (and stays in its other projects)', () => {
@@ -1846,7 +1846,7 @@ test('🔌 app wiring (app.js): "🔌 From apps" after ✉ Replies with the wait
   assert.match(app, /function go\(view\) \{\n\s*if \(view !== 'settings'\) forgetOnce\(\);/);
   assert.match(app, /if \(onServer\) loadApps\(appsCtx, force \|\| ui\.view === 'apps'\);/);
   assert.match(app, /replies: '✉ Replies', apps: '🔌 From apps', mains: '📂 Projects' \}\[ui\.view\]/, 'its page title');
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-56'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-57'/, 'phones get the new copy');
 });
 
 test('🔌 the PHP connector (team/connector/worktask-connector.php): the same text the app downloads, placeholders only (no real key), valid PHP 7.4+ (php -l), with wt_push / wt_withdraw / wt_decisions / wt_receive_decision', async () => {
@@ -4977,4 +4977,36 @@ test('Give a task (owner, 29 Oct): typing in Task shows your own matching tasks;
   rFind(t.view(), (n) => n.nodeName === 'BUTTON' && n.textContent === '✕ Not this one').__on.click();
   assert.equal(t.state.giveForm.picked, null);
   assert.ok(rFind(t.view(), (n) => n.dataset && n.dataset.key === 'g-how'), 'the new-task fields are back');
+});
+
+test('🏁 Finish on a 📂 project (owner, 29 Oct): asks about its open tasks — OK finishes them too in one action, Cancel finishes only the project; a task just finishes', async () => {
+  const { finishProject } = await import('../docs/ui/detail.js');
+  const make = () => {
+    const s = { data: emptyData(), history: {} };
+    applyOps(s, [makeOp('createMainProject', { projectId: 'm', name: 'Feldspar trial' }), makeOp('createProject', { projectId: 'a', name: 'Get sample' }), makeOp('addToProject', { projectId: 'a', parentId: 'm' })]);
+    const ctx = liveCtx(s, {});
+    ctx.actMany = (pid, steps, msg) => { ctx.calls.push(['many', msg]); return applyOps(s, steps.map(([t, a]) => makeOp(t, a))); };
+    return { s, ctx, p: (id) => s.data.projects.find((x) => x.id === id) };
+  };
+  const was = globalThis.confirm;
+  try {
+    let asked = '';
+    let { ctx, p } = make();
+    globalThis.confirm = (q) => { asked = q; return true; };
+    finishProject(ctx, p('m'));
+    assert.match(asked, /1 task still open inside 📂 Feldspar trial:\n• Get sample/);
+    assert.equal(p('m').state, 'finished'); assert.equal(p('a').state, 'finished', 'OK: the task too');
+    assert.ok(ctx.calls.some((c) => c[0] === 'many' && c[1] === 'Finished: Feldspar trial and its 1 open task'), 'one action, one Undo');
+    ({ ctx, p } = make());
+    globalThis.confirm = () => false;
+    finishProject(ctx, p('m'));
+    assert.equal(p('m').state, 'finished'); assert.equal(p('a').state, 'active', 'Cancel: the task stays open');
+    ({ ctx, p } = make());
+    globalThis.confirm = () => assert.fail('a task alone is never asked about');
+    finishProject(ctx, p('a'));
+    assert.equal(p('a').state, 'finished');
+  } finally { globalThis.confirm = was; }
+  const { readFileSync } = await import('node:fs');
+  assert.match(readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8'), /item\('🏁', `Finish \$\{kindWord\(p\)\}`, \(\) => finishProject\(ctx, p\)\)/, 'right-click on a row asks too');
+  assert.equal((readFileSync(new URL('../docs/ui/detail.js', import.meta.url), 'utf8').match(/onClick: \(\) => finishProject\(ctx, p\) \}, `Finish/g) || []).length, 2, 'the page\'s Finish button (open and paused)');
 });

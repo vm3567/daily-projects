@@ -3,7 +3,7 @@
 import { h, morph, installEvents, fmtDay, fmtLongDay, fmtTime, keyHint, withKey } from './ui/dom.js';
 import { pageKey, isTyping } from './ui/listkeys.js';
 import { IN_NO_PROJECT } from './ui/workparts.js';
-import { renderDetail, linkChip, isMailLink, pasteIntoProject, pasteIntoStep, startNextTask, takeBackQuestion, updateState, makeItAProject } from './ui/detail.js';
+import { renderDetail, linkChip, isMailLink, pasteIntoProject, pasteIntoStep, startNextTask, finishProject, takeBackQuestion, updateState, makeItAProject } from './ui/detail.js';
 import { renderPeopleList, renderPerson, peopleByFollowUp } from './ui/people.js';
 import { installMentions } from './ui/mention.js';
 import { installAutocorrect, setAutocorrect, autocorrectOn } from './ui/autocorrect.js';
@@ -1855,7 +1855,7 @@ function rowMenu() {
       if (n && n.trim() && n.trim() !== p.name) act('setProjectField', { projectId: p.id, field: 'name', value: n.trim() }, `Renamed: ${n.trim()}`);
     }),
     p.state === 'finished' ? item('↺', `Reopen ${kindWord(p)}`, () => act('reopen', { projectId: p.id }, `Reopened: ${p.name}`))
-      : !p.misc ? item('🏁', `Finish ${kindWord(p)}`, () => act('finish', { projectId: p.id }, `Finished: ${p.name} (moved to Finished)`)) : null,
+      : !p.misc ? item('🏁', `Finish ${kindWord(p)}`, () => finishProject(ctx, p)) : null,
     task && !p.misc && !p.nextId ? item('➜', p.state === 'finished' ? 'Start the next task from it…' : 'Finish + start the next task…', () => startNextTask(ctx, p)) : null, // (owner, 29 Oct: a sample passed → "get 20 kg")
     p.misc ? null : item('🗑', `Delete ${kindWord(p)}…`, () => {
       if (!confirm(deleteQuestion(store.view.data, p))) return;
