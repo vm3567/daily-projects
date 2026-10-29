@@ -997,6 +997,38 @@ export function ownerTaskMatches(data, q) {
     .map((p) => ({ id: p.id, name: p.name, project: (parentIdsOf(p).map((id) => byId.get(id)).find((m) => m && !m.misc) || {}).name || '', steps: p.steps.filter((s) => !s.done).length }));
 }
 
+/**
+ * 📷 The photos on given steps that the person's task does not have yet (owner, 29 Oct: "he cannot see the images in
+ * the steps"): a step's own photos (pasted on it) and the photos of your updates about it. Each goes once, under a
+ * name that says which photo it is ("step-photo-<id>.jpg"), so a second device or a later look never sends it again.
+ * Up to 10 files per task (the server's limit). byStep: stepRef → the team task ({ id, status, files }).
+ * Returns [{ taskId, file, name }].
+ */
+export function stepPhotosToSend(data, byStep) {
+  const out = [];
+  if (!data || !byStep) return out;
+  const isImage = (f) => /\.(png|jpe?g|gif|webp|heic|heif)$/i.test(f.name || '') || /^image\//.test(f.type || '');
+  for (const p of data.projects) {
+    if (!p.team || p.state !== 'active') continue;
+    for (const s of p.steps) {
+      const t = s.done ? null : byStep.get(s.id);
+      if (!t || t.status !== 'open') continue;
+      const notes = new Set(p.workNotes.filter((n) => n.stepId === s.id).map((n) => n.id));
+      const have = new Set((t.files || []).map((f) => f.name));
+      let room = 10 - (t.files || []).length;
+      for (const f of p.files || []) {
+        if (room <= 0) break;
+        if (!f.sha || !isImage(f) || !(f.stepId === s.id || (f.noteId && notes.has(f.noteId)))) continue;
+        const name = `step-photo-${f.id}.jpg`;
+        if (have.has(name)) continue;
+        out.push({ taskId: t.id, file: f, name });
+        room--;
+      }
+    }
+  }
+  return out;
+}
+
 export function pasteInForm(target) {
   const el = target && target.nodeType === 3 ? target.parentNode : target; // (a text node inside a box)
   return !!(el && typeof el.closest === 'function' && el.closest('.new-task-box'));

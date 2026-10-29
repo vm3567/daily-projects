@@ -3289,3 +3289,30 @@ test('openTasksInside (owner, 29 Oct): finishing a 📂 project offers its open 
   assert.deepEqual(openTasksInside(s.data, p('m')).map((t) => t.id).sort(), ['a', 'b', 'e'], 'd goes on in "Other"; c is finished');
   assert.deepEqual(openTasksInside(s.data, p('a')), [], 'a task has no tasks inside');
 });
+
+test('stepPhotosToSend (owner, 29 Oct): a given step\'s photos (pasted on it, or with an update about it) go to the person\'s open task once each; not other steps\', not files, not when the task has them, up to 10', async () => {
+  const { applyOps, emptyData, makeOp } = await import('../docs/ops.js');
+  const { stepPhotosToSend } = await import('../docs/rules.js');
+  const s = { data: emptyData(), history: {} };
+  applyOps(s, [makeOp('createProject', { projectId: 'p', name: 'Exhaust check' }),
+    makeOp('addStep', { projectId: 'p', stepId: 'a', text: 'Check the opening' }), makeOp('addStep', { projectId: 'p', stepId: 'b', text: 'Other step' }),
+    makeOp('addFile', { projectId: 'p', fileId: 'f1', name: '3.jpg', sha: 'x1', size: 5, type: 'image/jpeg', stepId: 'a' }),
+    makeOp('addWorkNote', { projectId: 'p', noteId: 'n1', text: 'Photo of it', stepId: 'a' }),
+    makeOp('addFile', { projectId: 'p', fileId: 'f2', name: 'IMG_1.HEIC', sha: 'x2', size: 5, type: '', noteId: 'n1' }),
+    makeOp('addFile', { projectId: 'p', fileId: 'f3', name: 'drawing.pdf', sha: 'x3', size: 5, type: 'application/pdf', stepId: 'a' }),
+    makeOp('addFile', { projectId: 'p', fileId: 'f4', name: '4.jpg', sha: 'x4', size: 5, type: 'image/jpeg', stepId: 'b' }),
+    makeOp('setProjectTeam', { projectId: 'p', userId: 7, name: 'Ruturaj' })]);
+  const byStep = new Map([['a', { id: 51, status: 'open', files: [] }], ['b', { id: 52, status: 'done', files: [] }]]);
+  assert.deepEqual(stepPhotosToSend(s.data, byStep).map((x) => [x.taskId, x.file.id, x.name]), [[51, 'f1', 'step-photo-f1.jpg'], [51, 'f2', 'step-photo-f2.jpg']], 'its photos only; a PDF and a closed task\'s step are left');
+  byStep.get('a').files = [{ name: 'step-photo-f1.jpg' }];
+  assert.deepEqual(stepPhotosToSend(s.data, byStep).map((x) => x.file.id), ['f2'], 'one already there: not again');
+  byStep.get('a').files = Array.from({ length: 10 }, (_, i) => ({ name: 'x' + i }));
+  assert.deepEqual(stepPhotosToSend(s.data, byStep), [], 'a full task (10 files)');
+  applyOps(s, [makeOp('setProjectTeam', { projectId: 'p', userId: null, name: '' })]);
+  byStep.get('a').files = [];
+  assert.deepEqual(stepPhotosToSend(s.data, byStep), [], 'not given: nothing goes');
+  const { readFileSync } = await import('node:fs');
+  const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
+  assert.match(app, /await syncGivenProjects\(gen\);\n\s*sendStepPhotos\(\);/, 'sent after each look at the team list');
+  assert.match(app, /fd\.append\('taskId', String\(taskId\)\); fd\.append\('file', blob, name\);[\s\S]{0,200}a=task\.file\.add/, 'as the task\'s instruction photos');
+});

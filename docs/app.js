@@ -21,7 +21,7 @@ import { ServerRepo, SERVER_TOKEN_KEY } from './serverrepo.js';
 import { MockRepo } from './mockrepo.js';
 import { device } from './device.js';
 import { DATA_OWNER, DATA_REPO, DATA_BRANCH, MOVED_TO, REFRESH_MS, AI_DAILY_LIMIT, BRIEF_CLAIM_MINUTES, WAIT_RED_DAYS, NO_WORK_NOTE_DAYS } from './config.js';
-import { dotColour, greenByTeamOnly, isSnoozed, restUntil, restReason, onlyDaysLabel, openIdFromHash, awakeProjects, activeProjects, nextStep, todayIndia, isSundayIndia, colourCounts, isOverdue, indiaDate, waitingDays, daysWithoutWork, dayScore, greenStreak, addDays, monthOf, fmtMinutes, takeBackWaits, staffStepAction, pasteGoesToProject, emptyPaste, EMPTY_PASTE, ownerTaskMatches, singleStepClose, versionRequest, askDiaryAgain, pasteInForm, diaryLoadedAt, photoNeedsFetch, teamUndoKey, teamActionUndone, teamProgressOf, projectKeyIgnored, teamMovedTo, serverHolder, keepMovedStep, teamMemberFor, repliesOf, mailThreads, replyMailto, MAILTO_BODY_MAX, emailPath, pasteReason } from './rules.js';
+import { dotColour, greenByTeamOnly, isSnoozed, restUntil, restReason, onlyDaysLabel, openIdFromHash, awakeProjects, activeProjects, nextStep, todayIndia, isSundayIndia, colourCounts, isOverdue, indiaDate, waitingDays, daysWithoutWork, dayScore, greenStreak, addDays, monthOf, fmtMinutes, takeBackWaits, staffStepAction, pasteGoesToProject, emptyPaste, EMPTY_PASTE, ownerTaskMatches, stepPhotosToSend, singleStepClose, versionRequest, askDiaryAgain, pasteInForm, diaryLoadedAt, photoNeedsFetch, teamUndoKey, teamActionUndone, teamProgressOf, projectKeyIgnored, teamMovedTo, serverHolder, keepMovedStep, teamMemberFor, repliesOf, mailThreads, replyMailto, MAILTO_BODY_MAX, emailPath, pasteReason } from './rules.js';
 import { stageOf, stageCounts, byStage, STAGES, STAGE_LABELS, moveEveryOf, everyText, MOVE_EVERY_PICKS, MOVE_EVERY_DEFAULT, everyDefaultOf, useEveryDefault, colourShort, colourWhy } from './rules.js';
 import { stageChip, stageFilterBar } from './ui/stage.js';
 import { whoFromUser, signInTag, timerOn, projectGiveChanges, UNDO_GRACE_MS, MISC_ID } from './rules.js';
@@ -3775,6 +3775,31 @@ async function loadTeam(force = false) {
   } finally { team.loading = false; }
 }
 
+/** 📷 A given step's photos (pasted on it, or with an update about it) go to the person's task as instruction photos, once each. */
+let sendingStepPhotos = false;
+async function sendStepPhotos() {
+  if (sendingStepPhotos || !store || !store.view || !onServer) return;
+  const list = stepPhotosToSend(store.view.data, team.byStep);
+  if (!list.length) return;
+  sendingStepPhotos = true;
+  try {
+    const { isHeic, heicToJpeg } = await import('./ui/heic.js');
+    for (const { taskId, file, name } of list) {
+      try {
+        let blob = new Blob([await store.repo.blobBytes(file.sha)], { type: file.type || 'image/jpeg' });
+        if (isHeic(file.name, file.type)) blob = await heicToJpeg(blob, 1600); // (the server reads JPEG / PNG / WebP)
+        const fd = new FormData();
+        fd.append('taskId', String(taskId)); fd.append('file', blob, name);
+        const r = await fetch('../api/?a=task.file.add', { method: 'POST', cache: 'no-store', headers: { Authorization: 'Bearer ' + serverToken() }, body: fd });
+        const out = await r.json().catch(() => ({}));
+        if (!out.ok) continue; // tried again at the next look
+        const t = [...team.byStep.values()].find((x) => x.id === taskId);
+        if (t) (t.files ||= []).push({ id: out.fileId, name, image: true }); // (not sent twice before the next list)
+      } catch { /* no connection: the next look sends it */ }
+    }
+  } finally { sendingStepPhotos = false; }
+}
+
 async function loadTeamOnce() {
   team.at = Date.now();
   const gen = team.gen; // changed by giveProject while this list is on its way: the list is old
@@ -3798,6 +3823,7 @@ async function loadTeamOnce() {
     // only from data checked against the server a moment ago (a phone that was asleep could otherwise undo the PC's changes)
     if (Date.now() - dataFreshAt < 90000) {
       await syncGivenProjects(gen);
+      sendStepPhotos(); // 📷 a given step's photos reach the person's task (owner, 29 Oct)
       await syncSingleSteps(out.tasks);
     }
     render();
