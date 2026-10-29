@@ -1060,7 +1060,7 @@ test('📂 Projects page: a click on a project row selects it and stays on the p
   assert.match(mainsSrc, /ctx\.ui\.view === 'mains' && ctx\.showHere \? ctx\.showHere\(c\.id\)/, 'a task in the TASKS table while on the Projects page');
   const here = app.slice(app.indexOf('  showHere: (id) => {'), app.indexOf('  openProject: (id) => {'));
   assert.match(here, /select\(id\);/);
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-58'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-59'/, 'phones get the new copy');
 });
 
 test('📂 project page: "✕ Remove" on a task row takes it out of this project only — the task is kept (and stays in its other projects)', () => {
@@ -1846,7 +1846,7 @@ test('🔌 app wiring (app.js): "🔌 From apps" after ✉ Replies with the wait
   assert.match(app, /function go\(view\) \{\n\s*if \(view !== 'settings'\) forgetOnce\(\);/);
   assert.match(app, /if \(onServer\) loadApps\(appsCtx, force \|\| ui\.view === 'apps'\);/);
   assert.match(app, /replies: '✉ Replies', apps: '🔌 From apps', mains: '📂 Projects' \}\[ui\.view\]/, 'its page title');
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-58'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-59'/, 'phones get the new copy');
 });
 
 test('🔌 the PHP connector (team/connector/worktask-connector.php): the same text the app downloads, placeholders only (no real key), valid PHP 7.4+ (php -l), with wt_push / wt_withdraw / wt_decisions / wt_receive_decision', async () => {
@@ -3229,7 +3229,8 @@ test('review r4-1 (whole code): typing the same phone number written another way
 test('review r4-2 (whole code): the server\'s own notes (a move, a chase) show no change/delete buttons; the owner\'s sign out sends this phone\'s notification address so it stops', async () => {
   const { readFileSync } = await import('node:fs');
   const parts = readFileSync(new URL('../docs/ui/workparts.js', import.meta.url), 'utf8');
-  assert.match(parts, /c\.mine && [^?]*c\.kind !== 'move' && c\.kind !== 'chase' \? h\('span', \{ class: 'msg-acts' \}/);
+  assert.match(parts, /export function msgActs\(c, manager = false\) \{\n\s*if \(!c \|\| c\.kind === 'move' \|\| c\.kind === 'chase' \|\| String\(c\.text \|\| ''\)\.startsWith\('↔ Moved'\)\) return \{ edit: false, del: false \};/);
+  assert.match(parts, /\(\(a\) => \(a\.edit \|\| a\.del \? h\('span', \{ class: 'msg-acts' \}/);
   const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
   const out = app.slice(app.indexOf('async function signOutServer()'), app.indexOf('// ---------------------------------------------------------------- key screen'));
   assert.match(out, /pushManager\.getSubscription\(\)/);
@@ -5009,4 +5010,46 @@ test('🏁 Finish on a 📂 project (owner, 29 Oct): asks about its open tasks �
   const { readFileSync } = await import('node:fs');
   assert.match(readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8'), /item\('🏁', `Finish \$\{kindWord\(p\)\}`, \(\) => finishProject\(ctx, p\)\)/, 'right-click on a row asks too');
   assert.equal((readFileSync(new URL('../docs/ui/detail.js', import.meta.url), 'utf8').match(/onClick: \(\) => finishProject\(ctx, p\) \}, `Finish/g) || []).length, 2, 'the page\'s Finish button (open and paused)');
+});
+
+test('a manager can delete a message the staff wrote (owner, 29 Oct: "allow me to delete a msg added by the staff"): ✕ on it in the team task page and in the project page\'s new-messages box; never ✎ on it; staff still only their own; never a move note', async () => {
+  const { messagesBlock } = await import('../docs/ui/workparts.js');
+  const comments = [{ id: 1, text: 'Wrong photo, ignore', mine: false, by: 'Ruturaj', at: '2026-10-29 09:00:00' }, { id: 2, text: 'OK', mine: true, at: '2026-10-29 09:05:00' },
+    { id: 3, text: '↔ Moved from Ravi to Ruturaj.', mine: false, by: 'Boss', kind: 'move', at: '2026-10-29 08:00:00' }];
+  const deleted = [];
+  const box = (manager) => messagesBlock({ taskId: 7, comments, photos: () => null, placeholder: '', onInput() {}, onSend: async () => '', onPhoto: async () => '', onEdit() {}, onDelete: (c) => deleted.push(c.id), manager });
+  const btns = (el, label) => rAll(el, (n) => n.nodeName === 'BUTTON' && n.getAttribute('aria-label') === label);
+  const mgr = box(true);
+  assert.equal(btns(mgr, 'Delete this message').length, 2, 'manager: ✕ on the staff message and on their own, not on the move note');
+  assert.equal(btns(mgr, 'Change this message').length, 1, 'manager: ✎ only on their own (a staff message is never changed)');
+  btns(mgr, 'Delete this message')[0].__on.click();
+  assert.deepEqual(deleted, [1], 'the ✕ deletes the staff message');
+  const staff = box(false);
+  assert.equal(btns(staff, 'Delete this message').length, 1, 'staff: ✕ only on their own');
+  assert.match(readFileSync(new URL('../docs/ui/team.js', import.meta.url), 'utf8'), /onDelete: deleteMessage,\n\s*manager: !!\(state\.user && state\.user\.role === 'admin'\),/, 'the team task page is a manager\'s');
+  assert.doesNotMatch(readFileSync(new URL('../docs/ui/staff.js', import.meta.url), 'utf8'), /manager: !!/, 'the staff view never passes manager');
+  // the owner's project page: the "New messages from the team" box
+  const s = sampleState();
+  const ctx = fakeCtx(s, { selected: 'p1', update: {} });
+  ctx.onServer = true;
+  ctx.teamInfo = () => ({ byStep: new Map(), fillBy: '18:00' });
+  ctx.teamPeople = () => [];
+  ctx.teamTask = () => null;
+  ctx.teamDaily = () => ({ data: { tasks: [], updates: [], comments: [{ id: 41, taskId: 7, by: 'Ruturaj', at: '2026-10-29 10:00:00', text: 'wrong one', unread: true }] } });
+  const gone = [];
+  ctx.teamDeleteMsg = (p, id) => { gone.push([p.id, id]); return Promise.resolve(); };
+  const was = globalThis.confirm;
+  try {
+    let asked = '';
+    globalThis.confirm = (q) => { asked = q; return false; };
+    const x = rFind(renderDetail(ctx), (n) => n.nodeName === 'BUTTON' && n.getAttribute('aria-label') === "Delete Ruturaj's message");
+    assert.ok(x, '✕ on the staff message in the project page');
+    x.__on.click();
+    assert.match(asked, /Delete Ruturaj's message\? It goes for everyone\./);
+    assert.deepEqual(gone, [], 'Cancel: nothing deleted');
+    globalThis.confirm = () => true;
+    x.__on.click();
+    assert.deepEqual(gone, [['p1', 41]]);
+  } finally { globalThis.confirm = was; }
+  assert.match(readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8'), /teamDeleteMsg: \(p, id\) => teamApi\('comment\.delete', \{ id \}\)\.then\(\(\) => \{ refreshDaily\(p\.id\); loadTeam\(true\); toast\('Deleted'\); \}\),/);
 });

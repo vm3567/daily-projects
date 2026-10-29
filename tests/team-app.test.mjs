@@ -1536,3 +1536,19 @@ test('Review3 4 + 15 (owner, 24 Oct): Follow-up says "Nothing to chase yet" (not
   const src = readFileSync(new URL('../docs/ui/team.js', import.meta.url), 'utf8');
   assert.match(src, /u \? \[t\.kind === 'log' \? null : h\('span', \{ class: 'muted small' \}, fmtTime\(u\.at\) \+ ' '\)/, 'Team today: a record row has no second time');
 });
+
+test('a manager can delete a staff member\'s message, never change it; never a move or chase note (owner, 29 Oct)', async () => {
+  const { msgActs } = await import('../docs/ui/workparts.js');
+  assert.deepEqual(msgActs({ mine: false, text: 'x' }, true), { edit: false, del: true });
+  assert.deepEqual(msgActs({ mine: false, text: 'x' }, false), { edit: false, del: false });
+  assert.deepEqual(msgActs({ mine: true, text: 'x' }, false), { edit: true, del: true });
+  assert.deepEqual(msgActs({ mine: true, kind: 'chase', text: 'x' }, true), { edit: false, del: false });
+  assert.deepEqual(msgActs({ mine: false, kind: 'move', text: 'x' }, true), { edit: false, del: false });
+  assert.deepEqual(msgActs({ mine: true, text: '↔ Moved from A to B.' }, true), { edit: false, del: false });
+  const asked = [];
+  const { t, calls } = await teamPages({ 'comment.delete': () => ({ comments: [] }) }, { ask: { confirm: (q) => { asked.push(q); return true; } } });
+  t.state.detail = { task: { id: 5 }, comments: [{ id: 8, by: 'Ruturaj', mine: false, text: 'oops' }] };
+  await t.act.deleteMessage(t.state.detail.comments[0]);
+  assert.deepEqual(asked, ["Delete Ruturaj's message? It goes for everyone."]);
+  assert.deepEqual(calls.filter((c) => c.a === 'comment.delete').map((c) => c.body), [{ id: 8 }]);
+});

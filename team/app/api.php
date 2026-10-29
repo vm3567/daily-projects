@@ -478,9 +478,10 @@ function handle(string $a, array $in): array {
       return ['comments' => comments_of((int)$t['id'])];
     }
     case 'comment.edit':
-    case 'comment.delete': { // only your own message
+    case 'comment.delete': { // your own message; a manager may also delete a staff member's message (never change it)
       $c = one('SELECT * FROM comments WHERE id = ?', [(int)($in['id'] ?? 0)]);
-      if (!$c || (int)$c['user_id'] !== $me['id']) throw new ApiError('You can change only your own messages.', 403);
+      $mgrDelete = $c && $a === 'comment.delete' && $me['role'] === 'admin';
+      if (!$c || ((int)$c['user_id'] !== $me['id'] && !$mgrDelete)) throw new ApiError('You can change only your own messages.', 403);
       own_task($me, (int)$c['task_id']);
       // the server's own notes (a move, a chase) are the task's record: never changed or deleted (the chase limit and
       // Follow-up's "chased" read them)

@@ -207,7 +207,9 @@ function teamMessages(ctx, p) {
     list.map((c) => {
       const src = c.photo && ctx.teamMsgPhoto ? ctx.teamMsgPhoto(c.id) : null;
       return h('div', { class: 'team-msg', key: 'tm-' + c.id },
-        h('span', { class: 'muted small' }, `${c.by} · ${fmtDay(c.at.slice(0, 10))} ${fmtTime(c.at.replace(' ', 'T') + '+05:30')}`),
+        h('span', { class: 'muted small' }, `${c.by} · ${fmtDay(c.at.slice(0, 10))} ${fmtTime(c.at.replace(' ', 'T') + '+05:30')}`,
+          ctx.teamDeleteMsg ? h('button', { class: 'link small', title: 'Delete', 'aria-label': `Delete ${c.by}'s message`, // (the owner can delete a staff message, 29 Oct)
+            onClick: () => { if (confirm(`Delete ${c.by}'s message? It goes for everyone.`)) ctx.teamDeleteMsg(p, c.id).catch((e) => ctx.toast(e.message, 5000)); } }, ' ✕') : null),
         c.text ? h('div', null, `“${c.text}”`) : null,
         c.photo ? (src ? h('img', { class: 'diary-photo', src, alt: 'Photo', onClick: () => window.open(src, '_blank', 'noopener') }) : h('span', { class: 'muted small' }, '📷 photo')) : null);
     }),

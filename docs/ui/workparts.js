@@ -166,7 +166,16 @@ export function msgTicks(c) {
   return by.length ? { cls: 'ticks seen', text: '✓✓', title: 'Seen by ' + by.join(', ') } : { cls: 'ticks', text: '✓', title: 'Sent — not seen yet' };
 }
 
-export function messagesBlock({ taskId, comments, waiting = [], draft, sending, placeholder, onInput, onSend, onPhoto, onEdit, onDelete, photos }) {
+/**
+ * Which buttons a message gets: ✎ change and ✕ delete on your own; a manager also gets ✕ on someone else's (owner, 29 Oct:
+ * "allow me to delete a msg added by the staff"). Never on the server's own notes (a move, a chase). Pure: tested.
+ */
+export function msgActs(c, manager = false) {
+  if (!c || c.kind === 'move' || c.kind === 'chase' || String(c.text || '').startsWith('↔ Moved')) return { edit: false, del: false };
+  return { edit: !!c.mine, del: !!c.mine || !!manager };
+}
+
+export function messagesBlock({ taskId, comments, waiting = [], draft, sending, placeholder, onInput, onSend, onPhoto, onEdit, onDelete, photos, manager = false }) {
   const err = errLine('merr-' + taskId);
   const say = (m) => err.say(m);
   const pick = h('input', { type: 'file', accept: 'image/*', class: 'visually-hidden', onChange: (e, el) => { const f = el.files[0]; el.value = ''; if (f) onPhoto(f).then(say); } });
@@ -174,9 +183,9 @@ export function messagesBlock({ taskId, comments, waiting = [], draft, sending, 
     comments.length ? comments.map((c) => h('div', { class: 'team-msg' + (c.mine ? ' mine' : ''), key: 'c-' + c.id },
       h('div', { class: 'row small' }, h('strong', null, c.mine ? 'You' : c.by), h('span', { class: 'muted' }, `${fmtDay(c.at)} ${fmtTime(c.at)}${c.editedAt ? ' · edited' : ''}`),
         ((t) => (t ? h('span', { class: t.cls, title: t.title, 'aria-label': t.title }, t.text) : null))(msgTicks(c)),
-        c.mine && !String(c.text || '').startsWith('↔ Moved') && c.kind !== 'move' && c.kind !== 'chase' ? h('span', { class: 'msg-acts' }, // (the server's own notes stay as they are)
-          h('button', { class: 'link small', title: 'Change', 'aria-label': 'Change this message', onClick: () => onEdit(c) }, '✎'),
-          h('button', { class: 'link small', title: 'Delete', 'aria-label': 'Delete this message', onClick: () => onDelete(c) }, '✕')) : null),
+        ((a) => (a.edit || a.del ? h('span', { class: 'msg-acts' }, // (the server's own notes stay as they are)
+          a.edit ? h('button', { class: 'link small', title: 'Change', 'aria-label': 'Change this message', onClick: () => onEdit(c) }, '✎') : null,
+          a.del ? h('button', { class: 'link small', title: 'Delete', 'aria-label': 'Delete this message', onClick: () => onDelete(c) }, '✕') : null) : null))(msgActs(c, manager))),
       c.photo ? photos('comment.photo', [c.id]) : null,
       c.text ? h('div', { class: 'pre' }, c.text) : null)) : (waiting.length ? null : h('span', { class: 'muted small' }, 'No messages yet.')),
     waiting.map((x) => h('div', { class: 'team-msg mine', key: 'wc-' + x.id },

@@ -3204,3 +3204,18 @@ test('Review5 2 (owner, 24 Oct): a 📒 record is on the person\'s People list a
   await call('task.status', { id: t.id, status: 'cancelled' }, tok.boss);
   assert.ok(!(await call('people.morning', {}, tok.boss)).people.find((x) => x.id === id.suresh).items.some((x) => x.taskId === t.id), 'a cancelled record is not');
 });
+
+test('a manager can delete a staff member\'s message (owner, 29 Oct), but not change it; staff still cannot delete someone else\'s; a move note stays', { skip }, async () => {
+  const t = (await call('task.save', { assigneeId: id.suresh, title: 'Manager deletes a message', repeat: 'once' }, tok.boss)).task;
+  const theirs = (await call('comment.add', { taskId: t.id, text: 'sent by mistake' }, tok.suresh)).comments.at(-1);
+  const bosss = (await call('comment.add', { taskId: t.id, text: 'from the boss' }, tok.boss)).comments.at(-1);
+  assert.equal((await call('comment.edit', { id: theirs.id, text: 'changed' }, tok.boss)).s, 403, 'never changed by the manager');
+  assert.equal((await call('comment.delete', { id: bosss.id }, tok.suresh)).s, 403, 'staff cannot delete the manager\'s message');
+  const del = await call('comment.delete', { id: theirs.id }, tok.boss);
+  assert.ok(del.ok, del.error);
+  assert.ok(!del.comments.some((c) => c.id === theirs.id), 'gone');
+  assert.ok((await call('task.get', { id: t.id }, tok.suresh)).comments.every((c) => c.id !== theirs.id), 'gone for the staff member too');
+  const ch = await call('task.chase', { id: t.id }, tok.boss);
+  const note = ch.comments.find((c) => c.kind === 'chase');
+  assert.match((await call('comment.delete', { id: note.id }, tok.boss)).error || '', /cannot be changed/, 'the server\'s own notes stay');
+});

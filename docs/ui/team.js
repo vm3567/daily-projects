@@ -276,7 +276,7 @@ export function createTeam(opts) {
     try { const tid = openTaskId(); const out = await api('comment.edit', { id: c.id, text }); if (openTaskId() === tid && tid) state.detail.comments = out.comments; render(); toast('Changed ✓'); } catch (e) { say(e); }
   }
   async function deleteMessage(c) {
-    if (!ask.confirm('Delete this message?')) return;
+    if (!ask.confirm(c.mine ? 'Delete this message?' : `Delete ${c.by}'s message? It goes for everyone.`)) return;
     try { const tid = openTaskId(); const out = await api('comment.delete', { id: c.id }); if (openTaskId() === tid && tid) state.detail.comments = out.comments; render(); toast('Deleted'); } catch (e) { say(e); }
   }
 
@@ -1044,6 +1044,7 @@ export function createTeam(opts) {
         draft: state.msgDrafts[t.id], sending: !!state.sending['m' + t.id],
         onInput: (v) => { state.msgDrafts[t.id] = v; },
         onSend: () => sendMessage(t.id), onPhoto: (f) => sendMessagePhoto(t.id, f), onEdit: editMessage, onDelete: deleteMessage,
+        manager: !!(state.user && state.user.role === 'admin'),
       }),
       t.kind === 'log' ? block('📒 Record', logbookBlock({ entries: state.detail.entries || [], photos, meId: state.user.id, td })) // its entries, newest first
         : t.status === 'suggested' || t.declined ? null : diaryBlock({ rules, t, updates, td, staff: false, meId: state.user.id, n: state.diaryDays,

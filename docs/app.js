@@ -514,6 +514,7 @@ const ctx = {
     .then(() => { refreshDaily(p.id); loadTeam(true); toast('Sent ✓'); }),
   teamSeen: (p, taskIds, upTo = 0) => teamApi('tasks.read', { ids: taskIds, ...(upTo ? { upTo } : {}) }).then(() => { refreshDaily(p.id); loadTeam(true); }),
   teamMsgPhoto: (id) => teamMsgPhoto(id),
+  teamDeleteMsg: (p, id) => teamApi('comment.delete', { id }).then(() => { refreshDaily(p.id); loadTeam(true); toast('Deleted'); }),
   moreDaily: (p) => { const e = daily.get(p.id); teamDaily(p, (e ? e.days : 30) + 30); },
   teamBusy: (id) => team.busy.has(id),
   giveProject: (p, person) => giveProject(p, person),
