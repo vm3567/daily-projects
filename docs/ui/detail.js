@@ -182,6 +182,17 @@ function promptEditNote(ctx, p, n) {
 }
 
 /** New messages from the team on this project: read them and answer here (or mark them seen). */
+/**
+ * ✕ on a team message in the projects (owner, 29 Oct: "allow me to delete a msg added by the staff"): the new-messages
+ * box and the 💬 lines in What's happening. Never on the server's own notes (a move, a chase).
+ */
+function teamMsgDelete(ctx, p, c) {
+  if (!ctx.teamDeleteMsg || c.kind === 'move' || c.kind === 'chase') return null;
+  const who = c.mine ? 'your' : `${c.by}'s`;
+  return h('button', { class: 'link small', title: 'Delete', 'aria-label': `Delete ${who} message`, key: 'del-' + c.id,
+    onClick: () => { if (confirm(`Delete ${who} message? It goes for everyone.`)) ctx.teamDeleteMsg(p, c.id).catch((e) => ctx.toast(e.message, 5000)); } }, ' ✕');
+}
+
 function teamMessages(ctx, p) {
   const t = ctx.onServer && ctx.teamDaily ? ctx.teamDaily(p) : null;
   const list = t && t.data ? (t.data.comments || []).filter((c) => c.unread).slice().reverse() : [];
@@ -208,8 +219,7 @@ function teamMessages(ctx, p) {
       const src = c.photo && ctx.teamMsgPhoto ? ctx.teamMsgPhoto(c.id) : null;
       return h('div', { class: 'team-msg', key: 'tm-' + c.id },
         h('span', { class: 'muted small' }, `${c.by} · ${fmtDay(c.at.slice(0, 10))} ${fmtTime(c.at.replace(' ', 'T') + '+05:30')}`,
-          ctx.teamDeleteMsg ? h('button', { class: 'link small', title: 'Delete', 'aria-label': `Delete ${c.by}'s message`, // (the owner can delete a staff message, 29 Oct)
-            onClick: () => { if (confirm(`Delete ${c.by}'s message? It goes for everyone.`)) ctx.teamDeleteMsg(p, c.id).catch((e) => ctx.toast(e.message, 5000)); } }, ' ✕') : null),
+          teamMsgDelete(ctx, p, c)),
         c.text ? h('div', null, `“${c.text}”`) : null,
         c.photo ? (src ? h('img', { class: 'diary-photo', src, alt: 'Photo', onClick: () => window.open(src, '_blank', 'noopener') }) : h('span', { class: 'muted small' }, '📷 photo')) : null);
     }),
@@ -1372,7 +1382,7 @@ function projectDiary(ctx, p, upd) {
     const src = c.photo && ctx.teamMsgPhoto ? ctx.teamMsgPhoto(c.id) : null;
     entries.push({ day: c.at.slice(0, 10), at: iso(c.at), work: false, stepId: taskStep.get(c.taskId), node: diaryLine('💬', c.mine ? 'You' : c.by, c.text ? `“${c.text}”` : '', [
       c.photo ? (src ? h('img', { class: 'diary-photo', src, alt: 'Photo', key: 'mp-' + c.id, onClick: () => window.open(src, '_blank', 'noopener') }) : h('span', { class: 'muted small', key: 'mp-' + c.id }, ' 📷 Photo')) : null,
-      about(taskStep.get(c.taskId))]) });
+      about(taskStep.get(c.taskId)), teamMsgDelete(ctx, p, c)]) });
   }
   const byDay = new Map();
   for (const e of entries) { if (!byDay.has(e.day)) byDay.set(e.day, []); byDay.get(e.day).push(e); }
