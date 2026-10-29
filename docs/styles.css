@@ -235,11 +235,15 @@ a.menu-item { color: inherit; text-decoration: none; } /* (👥 Team opens a pag
 .key-card p { margin: 0; }
 .key-card .sign-field { width: 100%; display: flex; flex-direction: column; gap: 4px; text-align: left; font-size: 14px; } /* signing in on worktask.in */
 
+/* a photo / file in a framed box over the page (owner, 29 Oct: "make the frame smaller ... so it is easy to close it");
+   a tap outside the box or Escape closes it, and the 🔔 is hidden while it is open (it covered Close) */
 #viewer {
-  position: fixed; inset: 0; z-index: 50; background: rgba(15, 20, 30, .92);
-  display: flex; flex-direction: column;
+  position: fixed; inset: 0; z-index: 50; background: rgba(15, 20, 30, .7);
+  display: flex; flex-direction: column; padding: max(16px, 5vh) max(12px, 6vw);
 }
-.viewer-bar { display: flex; gap: 8px; align-items: center; padding: 10px 14px; background: #fff; }
+.viewer-bar { display: flex; gap: 8px; align-items: center; padding: 10px 14px; background: #fff; border-radius: 12px 12px 0 0; }
+#viewer:not(.sheet-mode) .viewer-body { background: rgba(15, 20, 30, .96); border-radius: 0 0 12px 12px; min-height: 0; }
+body:has(#viewer:not([hidden])) .bell-wrap { display: none; }
 .viewer-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .viewer-body { flex: 1; display: grid; place-items: center; overflow: auto; padding: 10px; color: #fff; }
 .viewer-body img { max-width: 100%; max-height: 100%; object-fit: contain; }

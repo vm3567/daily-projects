@@ -3254,3 +3254,18 @@ test('☑ steps in a single task, with photos (owner, 29 Oct): the person adds, 
   await call('task.status', { id: t.id, status: 'done' }, tok.boss);
   assert.match((await call('tstep.add', { taskId: t.id, title: 'late' }, tok.suresh)).error || '', /closed/);
 });
+
+test('the manager deletes a staff update and its photos (owner, 29 Oct: "delete this info only"); staff cannot; a Finished that closed the task opens it again', { skip }, async () => {
+  const t = (await call('task.save', { assigneeId: id.suresh, title: 'AMC 30x30 trial', repeat: 'once' }, tok.boss)).task;
+  const up = (await call('update.save', { taskId: t.id, note: 'AMC 30x30 ACT unfired', state: 'finished' }, tok.suresh)).update;
+  assert.ok(up && up.id, 'sent');
+  assert.ok((await photo(up.id, tok.suresh)).ok);
+  assert.equal((await call('task.get', { id: t.id }, tok.boss)).task.status, 'done', 'Finished closed it');
+  assert.equal((await call('update.delete', { id: up.id }, tok.suresh)).s, 403, 'staff cannot');
+  const del = await call('update.delete', { id: up.id }, tok.boss);
+  assert.ok(del.ok, del.error);
+  const g = await call('task.get', { id: t.id }, tok.boss);
+  assert.equal(g.updates.length, 0, 'the update is gone');
+  assert.equal(g.task.status, 'open', 'the task is open again (its Finished was deleted)');
+  assert.equal(sqlOut(`SELECT COUNT(*) FROM wt.photos WHERE update_id = ${up.id}`).trim(), '0', 'its photos went too');
+});

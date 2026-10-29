@@ -196,7 +196,7 @@ function serverTools(api, more = {}) {
   const viewer = (url, name, image) => {
     const v = document.getElementById('viewer');
     const close = () => { v.hidden = true; v.replaceChildren(); };
-    v.replaceChildren(h('div', { class: 'viewer-bar' }, h('strong', { class: 'viewer-name' }, name), h('a', { class: 'btn', href: url, download: name }, 'Download'), h('button', { class: 'btn', onClick: close }, 'Close')),
+    v.replaceChildren(h('div', { class: 'viewer-bar' }, h('strong', { class: 'viewer-name' }, name), h('a', { class: 'btn', href: url, download: name }, 'Download'), h('button', { class: 'btn', title: 'Close (Esc)', onClick: close }, 'Close')),
       h('div', { class: 'viewer-body' }, image ? h('img', { src: url, alt: name }) : h('iframe', { src: url, title: name })));
     v.hidden = false;
   };
@@ -514,6 +514,7 @@ const ctx = {
     .then(() => { refreshDaily(p.id); loadTeam(true); toast('Sent ✓'); }),
   teamSeen: (p, taskIds, upTo = 0) => teamApi('tasks.read', { ids: taskIds, ...(upTo ? { upTo } : {}) }).then(() => { refreshDaily(p.id); loadTeam(true); }),
   teamMsgPhoto: (id) => teamMsgPhoto(id),
+  teamDeleteUpdate: (p, id) => teamApi('update.delete', { id }).then(() => { refreshDaily(p.id); loadTeam(true); toast('Deleted'); }),
   teamDeleteMsg: (p, id) => teamApi('comment.delete', { id }).then(() => { refreshDaily(p.id); loadTeam(true); toast('Deleted'); }),
   moreDaily: (p) => { const e = daily.get(p.id); teamDaily(p, (e ? e.days : 30) + 30); },
   teamBusy: (id) => team.busy.has(id),
@@ -3964,6 +3965,8 @@ function startOwner() {
 installEvents(document.body);
 installSwipe();
 // Keep the app's files on the device so it opens without internet (not in test mode on this Mac).
+// a tap on the dark space around a photo closes it (owner, 29 Oct: easy to close); a sheet (summary, draft) stays
+document.getElementById('viewer')?.addEventListener('click', (e) => { if (e.target === e.currentTarget && !e.currentTarget.classList.contains('sheet-mode')) closeViewer(); });
 if ('serviceWorker' in navigator && !isMock && !(onServer && !['worktask.in', 'www.worktask.in'].includes(location.hostname))) navigator.serviceWorker.register('sw.js').catch(() => {});
 // A phone notification tapped (or arriving) while this app is open: the site's service worker (../sw.js) tells it.
 // Tapped: open that team task (or the owner's project reminder). Arriving: look for the news now.

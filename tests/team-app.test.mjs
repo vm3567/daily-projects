@@ -1592,3 +1592,16 @@ test('☑ steps in a single task: a new step goes with its photos (one by one, a
   await t2.act.tsteps.tick({ id: 1 }, true);
   assert.deepEqual(t2.state.detail.steps, ['other']);
 });
+
+test('the manager deletes a staff update: asks first (with the photo count), then the task page is looked at again (owner, 29 Oct)', async () => {
+  const asked = [];
+  const { t, calls } = await teamPages({ 'task.get': () => ({ task: { id: 5, title: 'X' }, updates: [], comments: [] }) }, { ask: { confirm: (q) => { asked.push(q); return asked.length > 1; } } });
+  t.state.sel = 'task:5'; t.state.detail = { task: { id: 5 }, updates: [], comments: [] };
+  const u = { id: 77, day: '2026-10-29', by: 'Ruturaj', photos: [1, 2] };
+  await t.act.deleteUpdate(u);
+  assert.equal(calls.filter((c) => c.a === 'update.delete').length, 0, 'Cancel: nothing deleted');
+  await t.act.deleteUpdate(u);
+  assert.match(asked[1], /^Delete Ruturaj's update of .+ and its 2 photos\? It goes for everyone\.$/);
+  assert.deepEqual(calls.filter((c) => c.a === 'update.delete').map((c) => c.body), [{ id: 77 }]);
+  assert.ok(calls.some((c) => c.a === 'task.get'), 'the page is fetched again');
+});

@@ -279,6 +279,12 @@ export function createTeam(opts) {
     if (text === null || text === undefined || text.trim() === String(c.text || '').trim()) return;
     try { const tid = openTaskId(); const out = await api('comment.edit', { id: c.id, text }); if (openTaskId() === tid && tid) state.detail.comments = out.comments; render(); toast('Changed ✓'); } catch (e) { say(e); }
   }
+  /** The manager deletes a day's update and its photos (owner, 29 Oct: "delete this info only"). */
+  async function deleteUpdate(u) {
+    const n = (u.photos || []).length;
+    if (!ask.confirm(`Delete ${u.by}'s update of ${fmtDay(u.day)}${n ? ` and its ${n} photo${n > 1 ? 's' : ''}` : ''}? It goes for everyone.`)) return;
+    try { await api('update.delete', { id: u.id }); toast('Deleted'); await loadDetail(); load(); } catch (e) { say(e); }
+  }
   async function deleteMessage(c) {
     if (!ask.confirm(c.mine ? 'Delete this message?' : `Delete ${c.by}'s message? It goes for everyone.`)) return;
     try { const tid = openTaskId(); const out = await api('comment.delete', { id: c.id }); if (openTaskId() === tid && tid) state.detail.comments = out.comments; render(); toast('Deleted'); } catch (e) { say(e); }
@@ -494,7 +500,7 @@ export function createTeam(opts) {
     catch (e) { toast('Could not turn on notifications: ' + e.message, 6000); }
   }
 
-  const act = { go, open, back, reload, setStatus, answerSuggestion, move, addFiles, removeFile, openFile, sendMessage, sendMessagePhoto, editMessage, deleteMessage,
+  const act = { go, open, back, reload, setStatus, answerSuggestion, move, addFiles, removeFile, openFile, sendMessage, sendMessagePhoto, editMessage, deleteMessage, deleteUpdate,
     saveTask, giveQuick, chase, closeFollow, takeBack, startRound, morningEmail, addPerson, resetPassword, switchPerson, editPerson, moveAll, changePassword, search, liveCheck, paste, flush, notifyOn, outlookConnected };
   act.tsteps = tsteps; // ☑ a task's steps (for the checks)
 
@@ -1053,7 +1059,7 @@ export function createTeam(opts) {
         manager: !!(state.user && state.user.role === 'admin'),
       }),
       t.kind === 'log' ? block('📒 Record', logbookBlock({ entries: state.detail.entries || [], photos, meId: state.user.id, td })) // its entries, newest first
-        : t.status === 'suggested' || t.declined ? null : diaryBlock({ rules, t, updates, td, staff: false, meId: state.user.id, n: state.diaryDays,
+        : t.status === 'suggested' || t.declined ? null : diaryBlock({ rules, t, updates, td, staff: false, meId: state.user.id, n: state.diaryDays, onDeleteUpdate: deleteUpdate,
         fillBy: (state.data && state.data.fillBy) || state.fillBy || '18:00', photos, onMore: () => { state.diaryDays += 14; render(); } }),
     ];
   }

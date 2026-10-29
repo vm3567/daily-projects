@@ -1060,7 +1060,7 @@ test('📂 Projects page: a click on a project row selects it and stays on the p
   assert.match(mainsSrc, /ctx\.ui\.view === 'mains' && ctx\.showHere \? ctx\.showHere\(c\.id\)/, 'a task in the TASKS table while on the Projects page');
   const here = app.slice(app.indexOf('  showHere: (id) => {'), app.indexOf('  openProject: (id) => {'));
   assert.match(here, /select\(id\);/);
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-61'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-62'/, 'phones get the new copy');
 });
 
 test('📂 project page: "✕ Remove" on a task row takes it out of this project only — the task is kept (and stays in its other projects)', () => {
@@ -1846,7 +1846,7 @@ test('🔌 app wiring (app.js): "🔌 From apps" after ✉ Replies with the wait
   assert.match(app, /function go\(view\) \{\n\s*if \(view !== 'settings'\) forgetOnce\(\);/);
   assert.match(app, /if \(onServer\) loadApps\(appsCtx, force \|\| ui\.view === 'apps'\);/);
   assert.match(app, /replies: '✉ Replies', apps: '🔌 From apps', mains: '📂 Projects' \}\[ui\.view\]/, 'its page title');
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-61'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-62'/, 'phones get the new copy');
 });
 
 test('🔌 the PHP connector (team/connector/worktask-connector.php): the same text the app downloads, placeholders only (no real key), valid PHP 7.4+ (php -l), with wt_push / wt_withdraw / wt_decisions / wt_receive_decision', async () => {
@@ -5126,4 +5126,58 @@ test('☑ steps in a single task (owner, 29 Oct: "let staff add steps to single 
   assert.match(team, /filesBlock\(t, \{ pic, openFile, onRemove: removeFile \}\),\n\s*takesSteps\(t\) \? stepsBox\(t\) : null,/, 'the team task page has the box');
   assert.match(team, /stepsBlock\(\{ t, steps: state\.detail\.steps \|\| \[\], meId: state\.user\.id, manager: true,/);
   assert.match(readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8'), /fetch\(`\.\.\/api\/\?a=\$\{kind\}&id=\$\{id\}`/, 'step photos come like every other photo (tstep.photo)');
+});
+
+test('photo viewer (owner, 29 Oct: "the close button and the bell icon is interfearifn ... escape shortcut ... make the frame smaller"): Escape closes it on the team and staff pages too; the 🔔 hides while it is open; a framed box; a tap outside closes it', async () => {
+  const { pageKey } = await import('../docs/ui/listkeys.js');
+  const viewer = { hidden: false, cls: new Set(['sheet-mode']), kids: 1, classList: { remove(c) { viewer.cls.delete(c); } }, replaceChildren() { viewer.kids = 0; } };
+  const doc = { getElementById: (id) => (id === 'viewer' ? viewer : null), activeElement: null };
+  let backs = 0;
+  const page = { state: { sel: 'task:5' }, back: () => { backs++; }, render() {} };
+  assert.equal(pageKey({ key: 'Escape', preventDefault() {} }, doc, page), true);
+  assert.equal(viewer.hidden, true, 'Escape closed the photo');
+  assert.equal(viewer.kids, 0);
+  assert.equal(backs, 0, 'and did not also leave the task page');
+  pageKey({ key: 'Escape', preventDefault() {} }, doc, page);
+  assert.equal(backs, 1, 'the next Escape goes back as before');
+  const css = readFileSync(new URL('../docs/styles.css', import.meta.url), 'utf8');
+  assert.match(css, /body:has\(#viewer:not\(\[hidden\]\)\) \.bell-wrap \{ display: none; \}/, 'the 🔔 never covers Close');
+  assert.match(css, /#viewer \{\n\s*position: fixed; inset: 0; z-index: 50; background: rgba\(15, 20, 30, \.7\);\n\s*display: flex; flex-direction: column; padding: max\(16px, 5vh\) max\(12px, 6vw\);/, 'a framed box with space around it');
+  const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
+  assert.match(app, /document\.getElementById\('viewer'\)\?\.addEventListener\('click', \(e\) => \{ if \(e\.target === e\.currentTarget && !e\.currentTarget\.classList\.contains\('sheet-mode'\)\) closeViewer\(\); \}\);/, 'a tap outside the photo closes it');
+  assert.match(app, /if \(e\.key === 'Escape'\) \{\n\s*const viewer = document\.getElementById\('viewer'\);\n\s*if \(!viewer\.hidden\) \{ closeSheet\(\); return; \}/, 'the owner\'s pages: Escape closes it (as before)');
+  assert.match(app, /title: 'Close \(Esc\)'/);
+  assert.match(readFileSync(new URL('../docs/ui/files.js', import.meta.url), 'utf8'), /title: 'Close \(Esc\)'/);
+});
+
+test('the manager can delete a staff member\'s day update with its photos (owner, 29 Oct: "delete this info only"): ✕ in the team task page\'s What\'s happening and on the project page; never on the staff view', async () => {
+  const wp = await import('../docs/ui/workparts.js');
+  const u = { id: 77, day: '2026-10-29', note: 'AMC 30x30 ACT unfired', state: 'progress', at: '2026-10-29 13:50:00', photos: [1, 2, 3, 4, 5], byId: 3, by: 'Ruturaj' };
+  const t = { id: 5, status: 'open', repeat: 'once', startDate: '2026-10-29', createdAt: '2026-10-29 09:00:00' };
+  const gone = [];
+  const draw = (onDeleteUpdate) => wp.diaryBlock({ rules: teamRules, t, updates: [u], td: '2026-10-29', staff: false, meId: 1, n: 14, fillBy: '18:00', photos: () => null, onMore() {}, onDeleteUpdate });
+  const x = rFind(draw((v) => gone.push(v.id)), (n) => n.nodeName === 'BUTTON' && n.getAttribute('aria-label') === "Delete Ruturaj's update");
+  assert.ok(x, '✕ on the update');
+  x.__on.click();
+  assert.deepEqual(gone, [77]);
+  assert.equal(rFind(draw(null), (n) => n.nodeName === 'BUTTON' && /update$/.test(n.getAttribute('aria-label') || '')), undefined, 'no ✕ without it (the staff view)');
+  assert.doesNotMatch(readFileSync(new URL('../docs/ui/staff.js', import.meta.url), 'utf8'), /onDeleteUpdate/, 'the staff view never passes it');
+  // the owner's project page
+  const s = sampleState();
+  const ctx = fakeCtx(s, { selected: 'p1', update: {} });
+  ctx.onServer = true;
+  ctx.teamInfo = () => ({ byStep: new Map(), fillBy: '18:00' });
+  ctx.teamPeople = () => [];
+  ctx.teamTask = () => null;
+  ctx.teamDaily = () => ({ data: { tasks: [], comments: [], updates: [{ ...u, taskId: 7 }] } });
+  const del = [];
+  ctx.teamDeleteUpdate = (p, id) => { del.push([p.id, id]); return Promise.resolve(); };
+  const was = globalThis.confirm;
+  try {
+    let asked = '';
+    globalThis.confirm = (q) => { asked = q; return true; };
+    rFind(renderDetail(ctx), (n) => n.nodeName === 'BUTTON' && n.getAttribute('aria-label') === "Delete Ruturaj's update").__on.click();
+    assert.equal(asked, "Delete Ruturaj's update and its 5 photos? It goes for everyone.");
+    assert.deepEqual(del, [['p1', 77]]);
+  } finally { globalThis.confirm = was; }
 });

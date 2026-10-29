@@ -41,6 +41,8 @@ export function pageKey(e, doc, page, { say = () => {}, owner = false } = {}) {
   const k = e.key;
   const st = page.state || {};
   if (k === 'Escape') {
+    const open = doc.getElementById('viewer');
+    if (open && !open.hidden) { open.hidden = true; open.classList.remove('sheet-mode'); open.replaceChildren(); return true; } // a photo on top closes first (owner, 29 Oct)
     if (isTyping(doc.activeElement)) { doc.activeElement.blur(); return true; }
     if (st.rowMenu) { st.rowMenu = null; page.render(); return true; } // (the right-click menu first)
     if (st.menuOpen) { st.menuOpen = false; page.render(); return true; }

@@ -1370,6 +1370,8 @@ function projectDiary(ctx, p, upd) {
       day: u.day, at: iso(u.at), work: u.state !== 'stuck', stepId: taskStep.get(u.taskId),
       node: diaryLine('👥', u.by, `“${u.note}”${words}`, [
         about(taskStep.get(u.taskId)),
+        ctx.teamDeleteUpdate && u.id ? h('button', { class: 'link small', title: 'Delete', 'aria-label': `Delete ${u.by}'s update`, key: 'du-' + u.id, // (owner, 29 Oct: "delete this info only")
+          onClick: () => { const n = (u.photos || []).length; if (confirm(`Delete ${u.by}'s update${n ? ` and its ${n} photo${n > 1 ? 's' : ''}` : ''}? It goes for everyone.`)) ctx.teamDeleteUpdate(p, u.id).catch((e) => ctx.toast(e.message, 5000)); } }, ' ✕') : null,
         ...(u.photos || []).map((pid) => {
           const src = ctx.teamPhoto ? ctx.teamPhoto(pid) : null;
           return src ? h('img', { class: 'diary-photo', src, alt: 'Photo', key: 'tp-' + pid, onClick: () => window.open(src, '_blank', 'noopener') }) : h('span', { class: 'muted small', key: 'tp-' + pid }, ' 📷');

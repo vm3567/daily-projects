@@ -105,7 +105,7 @@ export async function openFile(ctx, file) {
   const v = document.getElementById('viewer');
   closeViewer();
   v.hidden = false;
-  const close = h('button', { class: 'btn', onClick: closeViewer }, 'Close');
+  const close = h('button', { class: 'btn', title: 'Close (Esc)', onClick: closeViewer }, 'Close');
   v.replaceChildren(h('div', { class: 'viewer-bar' }, h('strong', { class: 'viewer-name' }, file.name), close),
     h('div', { class: 'viewer-body' }, h('p', { class: 'muted' }, 'Loading…')));
   const my = ++openSeq;

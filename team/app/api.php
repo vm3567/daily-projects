@@ -604,6 +604,23 @@ function handle(string $a, array $in): array {
   // ---------- manager only ----------
   require_admin($me);
   switch ($a) {
+    case 'update.delete': { // the manager deletes a day's update and its photos (owner, 29 Oct: "delete this info only")
+      $u = one('SELECT * FROM updates WHERE id = ?', [(int)($in['id'] ?? 0)]);
+      if (!$u) throw new ApiError('That update was not found.', 404);
+      $t = own_task($me, (int)$u['task_id']);
+      in_tx_with_alerts(function () use ($u, $t) {
+        foreach (all('SELECT * FROM photos WHERE update_id = ?', [$u['id']]) as $p) { @unlink(UPLOAD_DIR . '/' . $p['file']); q('DELETE FROM photos WHERE id = ?', [$p['id']]); }
+        q('DELETE FROM entries WHERE update_id = ?', [$u['id']]); // 📒 a record's entries of that day go with it
+        q('DELETE FROM updates WHERE id = ?', [$u['id']]);
+        // its Finished closed a one-time task, and nothing came after it: the task is open again
+        if ($u['state'] === 'finished' && $t['status'] === 'done' && $t['repeat_kind'] === 'once' && (int)$t['closed_by'] === (int)$u['user_id']
+          && !one('SELECT id FROM updates WHERE task_id = ? AND day > ?', [$t['id'], $u['day']])) {
+          q("UPDATE tasks SET status = 'open', closed_from = done_at, done_at = NULL, closed_by = NULL, reopened_at = ?, updated_at = ? WHERE id = ?", [now(), now(), $t['id']]);
+        }
+      });
+      audit($me['id'], 'update_deleted', "{$t['title']}: {$u['day']} by " . user_name((int)$u['user_id']));
+      return [];
+    }
     case 'team.today': {
       $people = all("SELECT * FROM users WHERE active = 1 AND role = 'staff' ORDER BY name");
       $out = team_today_rows($day);

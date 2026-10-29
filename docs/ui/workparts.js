@@ -121,7 +121,7 @@ export function filesBlock(t, { pic, openFile, onRemove = null }) {
  * "What's happening" (ui/detail.js): the last-7-days strip, box (today's update form) under the heading, the day in
  * bold with its date under it, the time on the right, the same day tags.
  */
-export function diaryBlock({ rules, t, updates, td, staff, meId, n, fillBy, photos, onMore, box = null, todayInRows = false }) {
+export function diaryBlock({ rules, t, updates, td, staff, meId, n, fillBy, photos, onMore, box = null, todayInRows = false, onDeleteUpdate = null }) {
   // todayInRows: today's update is a "Today" row too (the box above only writes or changes it)
   const { rows, more } = rules.diaryRows(t, updates, td, { staff: staff && !todayInRows, n, fillBy, nowHm: nowHm() });
   const SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -144,7 +144,9 @@ export function diaryBlock({ rules, t, updates, td, staff, meId, n, fillBy, phot
         h('div', { class: 'diary-line' },
           h('span', { class: 'diary-icon' }, u.state === 'stuck' ? '⚠️' : u.state === 'finished' ? '✅' : '📝'),
           h('div', { class: 'diary-text' }, h('strong', null, (staff && u.byId === meId ? 'You' : u.by) + ' '), u.state !== 'progress' ? [stateTag(u.state), ' '] : null, `“${u.note}”`, photos('photo', u.photos))),
-        h('span', { class: 'diary-time' }, fmtTime(u.at))))
+        h('span', { class: 'diary-time' }, fmtTime(u.at),
+          // the manager deletes an update and its photos (owner, 29 Oct: "delete this info only")
+          onDeleteUpdate && u.id ? h('button', { class: 'link small danger', type: 'button', title: 'Delete this update', 'aria-label': `Delete ${u.by}'s update`, onClick: () => onDeleteUpdate(u) }, ' ✕') : null)))
         : kind === 'off' ? h('span', { class: 'day-tag off' }, 'Off')
           : kind === 'wait' ? h('span', { class: 'day-tag wait' }, 'Waiting for today\'s update')
             : [h('span', { class: 'day-tag miss' }, 'No progress'), h('span', { class: 'muted small' }, staff ? ' no update' : ' no update from anyone')])))) : h('p', { class: 'muted small' }, 'Nothing yet.'),
