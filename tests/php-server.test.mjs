@@ -1979,7 +1979,7 @@ test('connections: Rotate key — the old key stops at once, the new key and a n
   const log = sqlOut("SELECT GROUP_CONCAT(action, ' ', detail SEPARATOR '\\n') FROM wt.audit WHERE action LIKE 'conn\\_%'");
   for (const a of ['conn_create #', 'conn_rotate #', 'conn_delete #', 'conn_update #', 'conn_decide #']) assert.ok(log.includes(a), a);
   assert.ok(!/wt[cs]_[0-9a-f]{20}/.test(log), 'no key or secret in the log');
-  assert.equal(sqlOut("SELECT v FROM wt.settings WHERE k = 'schema'").trim(), '41', 'the tables steps ran (v41: photos.entry_id — 📒 record entries; v39 tasks.kind, v40 entries)');
+  assert.equal(sqlOut("SELECT v FROM wt.settings WHERE k = 'schema'").trim(), '43', 'the tables steps ran (v42 task_steps, v43 step_photos — ☑ steps in a single task; v41: photos.entry_id — 📒 record entries; v39 tasks.kind, v40 entries)');
 });
 
 // ---------------------------------------------------------------- review round 12 (connect.php / outlook.php)
@@ -3060,12 +3060,12 @@ test('Stage: a Stuck update saves "waiting for what" (one short line, up to 80) 
   assert.equal(u.waitingFor, null);
 });
 
-test('Stage: migration v38 (updates.waiting_for) runs again safely — the column already there is not an error, the schema goes on to the newest (41)', { skip }, async () => {
+test('Stage: migration v38 (updates.waiting_for) runs again safely — the column already there is not an error, the schema goes on to the newest (43)', { skip }, async () => {
   sql("UPDATE wt.settings SET v = '37' WHERE k = 'schema'");
   await phpRun('migrate(db()); echo "ok";');
-  assert.equal(sqlOut("SELECT v FROM wt.settings WHERE k = 'schema'").trim(), '41');
+  assert.equal(sqlOut("SELECT v FROM wt.settings WHERE k = 'schema'").trim(), '43');
   await phpRun('migrate(db()); echo "ok";');
-  assert.equal(sqlOut("SELECT v FROM wt.settings WHERE k = 'schema'").trim(), '41');
+  assert.equal(sqlOut("SELECT v FROM wt.settings WHERE k = 'schema'").trim(), '43');
   assert.match(sqlOut("SHOW COLUMNS FROM wt.updates LIKE 'waiting_for'"), /waiting_for\s+varchar\(80\)\s+YES/i);
 });
 
@@ -3218,4 +3218,39 @@ test('a manager can delete a staff member\'s message (owner, 29 Oct), but not ch
   const ch = await call('task.chase', { id: t.id }, tok.boss);
   const note = ch.comments.find((c) => c.kind === 'chase');
   assert.match((await call('comment.delete', { id: note.id }, tok.boss)).error || '', /cannot be changed/, 'the server\'s own notes stay');
+});
+
+test('☑ steps in a single task, with photos (owner, 29 Oct): the person adds, changes, ticks, adds photos; the manager sees and can delete; others cannot see; not on a project step or a record', { skip }, async () => {
+  const t = (await call('task.save', { assigneeId: id.suresh, title: 'Pack 20 kg sample', repeat: 'once' }, tok.boss)).task;
+  const add = await call('tstep.add', { taskId: t.id, title: 'Weigh the sample', clientId: 'tstep-0001' }, tok.suresh);
+  assert.ok(add.ok, add.error);
+  assert.equal((await call('tstep.add', { taskId: t.id, title: 'Weigh the sample', clientId: 'tstep-0001' }, tok.suresh)).steps.length, 1, 'sent twice: one step');
+  const fd = () => { const f = new FormData(); f.append('stepId', String(add.stepId)); f.append('clientId', 'photo-' + String(Math.random()).slice(2, 12)); f.append('file', new Blob([png], { type: 'image/png' }), 'p.png'); return f; };
+  const ph = await call('tstep.photo', fd(), tok.suresh, true);
+  assert.ok(ph.ok, ph.error);
+  const pid = ph.steps[0].photos[0].id;
+  assert.equal((await fetch(`${B}tstep.photo&id=${pid}`, { headers: { Authorization: 'Bearer ' + tok.boss } })).headers.get('content-type'), 'image/jpeg', 'the manager sees the photo');
+  assert.equal((await fetch(`${B}tstep.photo&id=${pid}`, { headers: { Authorization: 'Bearer ' + tok.anita } })).status, 404, 'someone else does not');
+  assert.equal((await call('tstep.add', { taskId: t.id, title: 'x' }, tok.anita)).s, 404, 'not their task');
+  const ed = await call('tstep.edit', { id: add.stepId, title: 'Weigh 20 kg', done: true }, tok.suresh);
+  assert.equal(ed.steps[0].title, 'Weigh 20 kg'); assert.equal(ed.steps[0].done, true);
+  assert.equal((await call('tstep.edit', { id: add.stepId, done: false }, tok.suresh)).steps[0].done, false, 'ticked off again');
+  // the manager's view of the task carries the steps
+  const g = await call('task.get', { id: t.id }, tok.boss);
+  assert.deepEqual(g.steps.map((s) => [s.title, s.by, s.photos.length]), [['Weigh 20 kg', 'Suresh', 1]]);
+  const mgrStep = (await call('tstep.add', { taskId: t.id, title: 'Seal the bag' }, tok.boss)).steps.at(-1);
+  assert.equal((await call('tstep.delete', { id: mgrStep.id }, tok.suresh)).s, 403, 'staff cannot delete the manager\'s step');
+  assert.equal((await call('tstep.edit', { id: mgrStep.id, done: true }, tok.suresh)).steps.at(-1).done, true, 'but can tick it');
+  assert.ok((await call('tstep.photo.delete', { id: pid }, tok.boss)).ok, 'the manager removes a staff photo');
+  const del = await call('tstep.delete', { id: add.stepId }, tok.boss);
+  assert.deepEqual(del.steps.map((s) => s.title), ['Seal the bag'], 'the manager deletes a staff step');
+  // not on a project's step, not on a record
+  await call('project.sync', { projectRef: 'tsp', project: 'Step proj', assigneeId: id.suresh, steps: [{ stepRef: 'tsp1', title: 'One' }] }, tok.boss);
+  const ps = (await call('project.team', { projectRef: 'tsp' }, tok.boss)).tasks[0];
+  assert.match((await call('tstep.add', { taskId: ps.id, title: 'x' }, tok.suresh)).error || '', /step of a project/);
+  const rec = (await call('task.save', { assigneeId: id.suresh, title: 'Kiln log', repeat: 'once', kind: 'log' }, tok.boss)).task;
+  if (rec && rec.kind === 'log') assert.match((await call('tstep.add', { taskId: rec.id, title: 'x' }, tok.suresh)).error || '', /record/);
+  // a closed task takes no new step
+  await call('task.status', { id: t.id, status: 'done' }, tok.boss);
+  assert.match((await call('tstep.add', { taskId: t.id, title: 'late' }, tok.suresh)).error || '', /closed/);
 });

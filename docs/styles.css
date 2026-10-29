@@ -1344,6 +1344,14 @@ button.stage-chip.tap { cursor: pointer; font-size: 12.5px; padding: 3px 10px; }
 .pick-list > .muted { flex-basis: 100%; }
 .chip.pick-task { text-align: left; }
 
+/* ☑ steps inside a single task, each with photos (owner, 29 Oct) */
+.tsteps .tstep { border-bottom: 1px solid var(--line, #e5e7eb); padding: 6px 0; }
+.tsteps .tstep-line { align-items: center; flex-wrap: nowrap; }
+.tsteps .tstep-title { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.tsteps .tstep.done .tstep-title { text-decoration: line-through; color: var(--muted, #6b7280); }
+.tsteps .tstep-photo { display: inline-flex; align-items: flex-start; gap: 2px; }
+.tsteps .add-step input { flex: 1; min-width: 0; }
+
 /* ---------------------------------------------------------------- the staff view (one app: ui/staff.js)
    Staff see this app's own design. Only the few pieces this app had no style for, and only inside the staff view
    (.layout.staff), so the owner's screens never change. */

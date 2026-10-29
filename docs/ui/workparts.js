@@ -274,3 +274,123 @@ export function staffDot(t, { waiting = false, pastFillBy = false } = {}) {
   if (t.dueToday === false && !late) return 'grey'; // (the server always says; on today's list a task is due)
   return late || pastFillBy ? 'red' : 'yellow';
 }
+
+/**
+ * ☑ Steps inside a single task (owner, 29 Oct: "let staff add steps to single tasks too", "steps with photos, with add
+ * photos option, edit and add photos option"). Who may do what, by the server's rules: anyone on the task (the person
+ * doing it, the manager) ticks, changes the words and adds photos; who added a step (or the manager) deletes it; who
+ * took a photo (or the manager) removes it. Pure: tested.
+ */
+export function stepActs(s, meId, manager = false) {
+  return { tick: true, edit: true, photo: (s.photos || []).length < STEP_PHOTOS, del: !!manager || s.byId === meId };
+}
+export const STEP_PHOTOS = 10; // (the server's MAX_STEP_PHOTOS)
+export const canRemoveStepPhoto = (p, meId, manager = false) => !!manager || p.byId === meId;
+/** Steps belong on a single task: not a project's step (those add steps in the project), not a 📒 record, not a suggestion. */
+export const takesSteps = (t) => !!t && (t.seq === null || t.seq === undefined) && t.kind !== 'log' && t.status !== 'suggested';
+
+export function stepsBlock({ t, steps = [], meId = 0, manager = false, draft = {}, adding = false, pic, viewer, onDraft, onAdd, onTick, onEdit, onDelete, onPhotos, onRemovePhoto }) {
+  const err = errLine('tserr-' + t.id);
+  const open = t.status === 'open';
+  const done = steps.filter((s) => s.done).length;
+  const files = draft.files || [];
+  const pickPhotos = (label, onPick, key) => h('label', { class: 'btn small', key, title: label, 'aria-label': label }, '📷',
+    h('input', { type: 'file', accept: 'image/*', multiple: true, class: 'visually-hidden', onChange: (e, el) => { const f = [...el.files]; el.value = ''; if (f.length) onPick(f); } }));
+  const photoBox = (s, p) => {
+    const src = pic('tstep.photo', p.id);
+    return h('span', { class: 'tstep-photo', key: 'sp-' + p.id },
+      h('img', { class: 'diary-photo', alt: src === '' ? 'Photo missing' : 'Photo', src: src || undefined, onClick: () => { if (src) viewer(src, 'Photo', true); } }),
+      canRemoveStepPhoto(p, meId, manager) ? h('button', { class: 'link small danger', type: 'button', title: 'Remove this photo', 'aria-label': 'Remove this photo', onClick: () => onRemovePhoto(s, p) }, '✕') : null);
+  };
+  return block(`☑ Steps${steps.length ? ` · ${done} of ${steps.length} done` : ''}`, h('div', { class: 'stack tsteps', key: 'tsteps-' + t.id },
+    steps.length ? steps.map((s) => {
+      const a = stepActs(s, meId, manager);
+      return h('div', { class: 'tstep' + (s.done ? ' done' : ''), key: 'ts-' + s.id },
+        h('div', { class: 'row tstep-line' },
+          h('input', { type: 'checkbox', checked: s.done ? true : undefined, disabled: open ? undefined : true, 'aria-label': `${s.done ? 'Not done' : 'Done'}: ${s.title}`, onChange: () => onTick(s, !s.done) }),
+          h('span', { class: 'tstep-title' }, s.title, s.byId !== meId && s.by ? h('span', { class: 'muted small' }, ` · ${s.by}`) : null),
+          h('span', { class: 'msg-acts' },
+            a.edit ? h('button', { class: 'link small', type: 'button', title: 'Change the words', 'aria-label': 'Change this step', onClick: () => onEdit(s) }, '✎') : null,
+            a.photo ? pickPhotos('Add photos to this step', (f) => onPhotos(s, f).then((m) => err.say(m)), 'pp-' + s.id) : null,
+            a.del ? h('button', { class: 'link small danger', type: 'button', title: 'Delete', 'aria-label': 'Delete this step', onClick: () => onDelete(s) }, '✕') : null)),
+        s.photos && s.photos.length ? h('div', { class: 'row' }, s.photos.map((p) => photoBox(s, p))) : null);
+    }) : h('p', { class: 'muted small' }, open ? 'No steps yet. Add the steps of this work — each can have photos.' : 'No steps.'),
+    open ? h('form', { class: 'row add-step', onSubmit: (e) => { e.preventDefault(); onAdd().then((m) => err.say(m)); } },
+      h('input', { key: 'tsadd-' + t.id, placeholder: '+ Add a step…', 'aria-label': 'Add a step', maxlength: '300', enterkeyhint: 'enter', autocomplete: 'off', value: draft.title || '',
+        onInput: (e, el) => { onDraft({ ...draft, title: el.value }); err.clear(); } }),
+      pickPhotos('Photos for the new step', (f) => onDraft({ ...draft, files: [...files, ...f].slice(0, STEP_PHOTOS) }), 'pp-new'),
+      h('button', { class: 'btn primary small', type: 'submit', disabled: adding ? true : undefined }, 'Add step')) : null,
+    files.length ? h('div', { class: 'row small muted' }, `📷 ${files.length} photo${files.length > 1 ? 's' : ''} go with the new step`,
+      h('button', { class: 'link small', type: 'button', onClick: () => onDraft({ ...draft, files: [] }) }, 'Clear')) : null,
+    err));
+}
+
+/**
+ * What the ☑ Steps box does, the same in the staff view and the team pages. env: { api, state, render, toast, shrink,
+ * ask, fail }. Each answer carries the task's steps; they are shown only while that task is still the open page.
+ */
+export function makeStepActs({ api, state, render, toast, shrink, ask, fail }) {
+  const openId = () => (state.detail && state.detail.task ? state.detail.task.id : null);
+  const put = (tid, out) => { if (out && out.steps && openId() === tid) state.detail.steps = out.steps; render(); };
+  const say = (e) => { const m = fail(e); if (m) toast(m, 5000); return m; };
+  const drafts = () => (state.tstepDrafts ||= {});
+  const cids = {}; // the same id for a retry of the same words: the step is added once
+  async function sendPhotos(tid, stepId, files) {
+    if (state.offline) return 'Photos need the internet. Try again when online.';
+    toast(files.length > 1 ? `Sending ${files.length} photos…` : 'Sending photo…');
+    let out = null;
+    try {
+      for (const f of files) {
+        const fd = new FormData();
+        fd.append('stepId', String(stepId)); fd.append('clientId', newClientId()); fd.append('file', await shrink(f), 'photo.jpg');
+        out = await api('tstep.photo', fd, true);
+        put(tid, out);
+      }
+      toast('📷 Added ✓');
+      return '';
+    } catch (e) { return e.offline ? 'Photos need the internet. Try again when online.' : say(e); }
+  }
+  return {
+    draftFor: (tid) => drafts()[tid] || {},
+    setDraft: (tid, d) => { drafts()[tid] = d; render(); },
+    async add(tid) {
+      const d = drafts()[tid] || {};
+      const title = String(d.title || '').trim();
+      if (!title) return 'Write the step first.';
+      if (state.offline) return 'Adding a step needs the internet. Try again when online.';
+      if (state.addingStep) return '';
+      if (!cids[tid] || cids[tid].title !== title) cids[tid] = { id: newClientId(), title };
+      state.addingStep = true; render();
+      try {
+        const out = await api('tstep.add', { taskId: tid, title, clientId: cids[tid].id });
+        delete cids[tid]; delete drafts()[tid];
+        put(tid, out);
+        if ((d.files || []).length && out.stepId) return await sendPhotos(tid, out.stepId, d.files);
+        toast('➕ Step added');
+        return '';
+      } catch (e) { return e.offline ? 'Adding a step needs the internet. Try again when online.' : fail(e); }
+      finally { state.addingStep = false; render(); }
+    },
+    photos: (s, files) => sendPhotos(openId(), s.id, files),
+    async tick(s, done) {
+      const tid = openId();
+      try { put(tid, await api('tstep.edit', { id: s.id, done })); return ''; } catch (e) { return say(e); }
+    },
+    async edit(s) {
+      const title = ask.prompt('Change the step:', s.title);
+      if (title === null || title === undefined || !title.trim() || title.trim() === s.title) return '';
+      const tid = openId();
+      try { put(tid, await api('tstep.edit', { id: s.id, title: title.trim() })); toast('Changed ✓'); return ''; } catch (e) { return say(e); }
+    },
+    async remove(s) {
+      if (!ask.confirm(`Delete the step "${s.title}"${(s.photos || []).length ? ' and its photos' : ''}?`)) return '';
+      const tid = openId();
+      try { put(tid, await api('tstep.delete', { id: s.id })); toast('Deleted'); return ''; } catch (e) { return say(e); }
+    },
+    async removePhoto(s, p) {
+      if (!ask.confirm('Remove this photo?')) return '';
+      const tid = openId();
+      try { put(tid, await api('tstep.photo.delete', { id: p.id })); toast('Removed'); return ''; } catch (e) { return say(e); }
+    },
+  };
+}

@@ -17,6 +17,8 @@ const MAX_FAILS = 5;            // wrong passwords before a pause
 const LOCK_MINUTES = 15;        // the pause
 const TOKEN_DAYS = 60;          // stay signed in this long without using the app
 const MAX_PHOTOS = 5;           // per update
+const MAX_STEP_PHOTOS = 10;     // per ☑ step of a single task
+const MAX_TASK_STEPS = 50;      // ☑ steps in one task
 const MAX_UPLOAD_BYTES = 15 * 1024 * 1024;
 
 function now(): string { return date('Y-m-d H:i:s'); }
@@ -318,6 +320,32 @@ function migrate(PDO $pdo): void {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
     // v41: a photo can belong to one entry of a record (it is also on that day's update, so every photo list shows it)
     "ALTER TABLE photos ADD COLUMN entry_id INT NULL, ADD INDEX (entry_id)",
+    // v42: ☑ steps inside a single task (owner, 29 Oct: "let staff add steps to single tasks too ... with photos, edit and add photos")
+    "CREATE TABLE IF NOT EXISTS task_steps (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      task_id INT NOT NULL,
+      title VARCHAR(300) NOT NULL,
+      done_at DATETIME NULL,
+      done_by INT NULL,
+      created_by INT NOT NULL,
+      created_at DATETIME NOT NULL,
+      updated_at DATETIME NOT NULL,
+      client_id VARCHAR(60) NULL,
+      UNIQUE KEY tstep_once (created_by, client_id),
+      INDEX (task_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+    // v43: a step's photos
+    "CREATE TABLE IF NOT EXISTS step_photos (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      step_id INT NOT NULL,
+      user_id INT NOT NULL,
+      file VARCHAR(160) NOT NULL,
+      size INT NOT NULL,
+      created_at DATETIME NOT NULL,
+      client_id VARCHAR(60) NULL,
+      UNIQUE KEY sphoto_once (step_id, client_id),
+      INDEX (step_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
   ];
   $pdo->exec($steps[0]);
   $done = (int)($pdo->query("SELECT v FROM settings WHERE k = 'schema'")->fetchColumn() ?: 0);

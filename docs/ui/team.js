@@ -10,7 +10,7 @@ import { isPhoto } from './heic.js';
 import { createOutbox } from './staffbox.js';
 import { stageChip, stageFilterBar } from './stage.js';
 import { openMenuAt, menuBox, focusLater } from './rowmenu.js';
-import { fmtDay, fmtTime, LONG_DAYS, stateTag, newClientId, istDay, daysBetween, repeatLabel, block, sec, taskRow, chipsFor, makePics, photosRow, filesBlock, diaryBlock, messagesBlock, phoneBack, logbookBlock, bottomBar, hitLines, HERE, blockedSteps, quickExample } from './workparts.js';
+import { fmtDay, fmtTime, LONG_DAYS, stateTag, newClientId, istDay, daysBetween, repeatLabel, block, sec, taskRow, chipsFor, makePics, photosRow, filesBlock, diaryBlock, messagesBlock, phoneBack, logbookBlock, bottomBar, hitLines, HERE, blockedSteps, quickExample, stepsBlock, makeStepActs, takesSteps } from './workparts.js';
 
 const KEEP_FAIL = 'Could not keep this on the phone. Try again when online.';
 const OFFLINE_KEPT = `📴 Saved on ${HERE} — it will be sent when you are online`;
@@ -69,6 +69,10 @@ export function createTeam(opts) {
 
   const pic = makePics(photo, () => render());
   const photos = (kind, list) => photosRow(pic, viewer, kind, list);
+  const tsteps = makeStepActs({ api, state, render: () => render(), toast, shrink, ask, fail });
+  // ☑ a single task's steps, each with photos (owner, 29 Oct): the manager adds, changes and deletes them too
+  const stepsBox = (t) => stepsBlock({ t, steps: state.detail.steps || [], meId: state.user.id, manager: true, draft: tsteps.draftFor(t.id), adding: !!state.addingStep, pic, viewer,
+    onDraft: (d) => tsteps.setDraft(t.id, d), onAdd: () => tsteps.add(t.id), onTick: tsteps.tick, onEdit: tsteps.edit, onDelete: tsteps.remove, onPhotos: tsteps.photos, onRemovePhoto: tsteps.removePhoto });
 
   const ob = createOutbox({
     box: opts.box, api, rules, lock: opts.lock, toast,
@@ -492,6 +496,7 @@ export function createTeam(opts) {
 
   const act = { go, open, back, reload, setStatus, answerSuggestion, move, addFiles, removeFile, openFile, sendMessage, sendMessagePhoto, editMessage, deleteMessage,
     saveTask, giveQuick, chase, closeFollow, takeBack, startRound, morningEmail, addPerson, resetPassword, switchPerson, editPerson, moveAll, changePassword, search, liveCheck, paste, flush, notifyOn, outlookConnected };
+  act.tsteps = tsteps; // ☑ a task's steps (for the checks)
 
   // ---------------------------------------------------------------- screens
 
@@ -1028,6 +1033,7 @@ export function createTeam(opts) {
         chipsFor(t, td, { who: true })),
       t.details ? h('p', { class: 'pre muted' }, t.details) : null,
       filesBlock(t, { pic, openFile, onRemove: removeFile }),
+      takesSteps(t) ? stepsBox(t) : null,
       t.status === 'suggested' ? h('div', { class: 'banner stack' },
         h('span', null, h('span', { class: 'tag' }, `💡 Suggested by ${t.assignee.name}`)),
         h('div', { class: 'row' },

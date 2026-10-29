@@ -385,6 +385,65 @@ function handle(string $a, array $in): array {
     }
     case 'photo.add':
       return ['photoId' => add_photo($me, (int)($in['updateId'] ?? 0))];
+    // ---------- ☑ steps inside a single task (each with photos): the person doing it and the manager ----------
+    case 'tstep.add': {
+      $t = own_task($me, (int)($in['taskId'] ?? 0));
+      if ($t['seq'] !== null) throw new ApiError('This task is a step of a project: add steps in the project.');
+      if (($t['kind'] ?? '') === 'log') throw new ApiError('A record takes entries, not steps.');
+      $cid = client_id($in['clientId'] ?? null);
+      if ($cid && ($dup = one('SELECT id FROM task_steps WHERE created_by = ? AND client_id = ?', [$me['id'], $cid]))) return ['stepId' => (int)$dup['id'], 'steps' => steps_of((int)$t['id'])]; // sent twice: kept once
+      if ($t['status'] !== 'open') throw new ApiError('This task is closed, so the step was not added.');
+      $title = txt($in['title'] ?? '', 300, true, 'The step');
+      if ((int)one('SELECT COUNT(*) AS n FROM task_steps WHERE task_id = ?', [$t['id']])['n'] >= MAX_TASK_STEPS) throw new ApiError('Up to ' . MAX_TASK_STEPS . ' steps in one task.');
+      if (!insert_once('INSERT INTO task_steps (task_id, title, created_by, created_at, updated_at, client_id) VALUES (?, ?, ?, ?, ?, ?)', [$t['id'], $title, $me['id'], now(), now(), $cid])) {
+        $dup = one('SELECT id FROM task_steps WHERE created_by = ? AND client_id = ?', [$me['id'], $cid]);
+        return ['stepId' => (int)$dup['id'], 'steps' => steps_of((int)$t['id'])];
+      }
+      $sid = (int)db()->lastInsertId();
+      $to = (int)$t['assignee_id'] === $me['id'] ? admin_ids() : [(int)$t['assignee_id']]; // the person adds: the managers hear; the manager adds: the person hears
+      notify($to, 'update', "➕ {$me['name']} added a step", $t['title'] . ': ' . $title, '/projects/#team-task=' . $t['id'], 's' . $t['id']);
+      return ['stepId' => $sid, 'steps' => steps_of((int)$t['id'])];
+    }
+    case 'tstep.edit': { // change its words, or tick it done / not done
+      $st = task_step_for($me, (int)($in['id'] ?? 0));
+      if (array_key_exists('title', $in)) q('UPDATE task_steps SET title = ?, updated_at = ? WHERE id = ?', [txt($in['title'], 300, true, 'The step'), now(), $st['id']]);
+      if (array_key_exists('done', $in)) {
+        if ($in['done']) q('UPDATE task_steps SET done_at = COALESCE(done_at, ?), done_by = COALESCE(done_by, ?), updated_at = ? WHERE id = ?', [now(), $me['id'], now(), $st['id']]);
+        else q('UPDATE task_steps SET done_at = NULL, done_by = NULL, updated_at = ? WHERE id = ?', [now(), $st['id']]);
+      }
+      return ['steps' => steps_of((int)$st['task_id'])];
+    }
+    case 'tstep.delete': { // who added it, or the manager; its photos go with it
+      $st = task_step_for($me, (int)($in['id'] ?? 0));
+      if ((int)$st['created_by'] !== $me['id'] && $me['role'] !== 'admin') throw new ApiError('Only who added this step (or the manager) can delete it.', 403);
+      foreach (all('SELECT file FROM step_photos WHERE step_id = ?', [$st['id']]) as $p) @unlink(UPLOAD_DIR . '/' . $p['file']);
+      q('DELETE FROM step_photos WHERE step_id = ?', [$st['id']]);
+      q('DELETE FROM task_steps WHERE id = ?', [$st['id']]);
+      return ['steps' => steps_of((int)$st['task_id'])];
+    }
+    case 'tstep.photo': { // a photo on a step (multipart: stepId, clientId, file)
+      $st = task_step_for($me, (int)($in['stepId'] ?? 0));
+      $cid = client_id($in['clientId'] ?? null);
+      if ($cid && one('SELECT id FROM step_photos WHERE step_id = ? AND client_id = ?', [$st['id'], $cid])) return ['steps' => steps_of((int)$st['task_id'])]; // sent before
+      $full = fn(): bool => (int)one('SELECT COUNT(*) AS n FROM step_photos WHERE step_id = ?', [$st['id']])['n'] >= MAX_STEP_PHOTOS;
+      if ($full()) throw new ApiError('Up to ' . MAX_STEP_PHOTOS . ' photos per step.');
+      [$file, $size] = save_uploaded_photo();
+      in_tx_with_alerts(function () use ($st, $me, $full, $file, $size, $cid) {
+        one('SELECT id FROM task_steps WHERE id = ? FOR UPDATE', [$st['id']]); // photos sent at the same moment are counted one after the other
+        if ($full()) { @unlink(UPLOAD_DIR . '/' . $file); throw new ApiError('Up to ' . MAX_STEP_PHOTOS . ' photos per step.'); }
+        insert_once('INSERT INTO step_photos (step_id, user_id, file, size, created_at, client_id) VALUES (?, ?, ?, ?, ?, ?)', [$st['id'], $me['id'], $file, $size, now(), $cid], $file);
+      });
+      return ['steps' => steps_of((int)$st['task_id'])];
+    }
+    case 'tstep.photo.delete': { // who took it, or the manager
+      $p = one('SELECT * FROM step_photos WHERE id = ?', [(int)($in['id'] ?? 0)]);
+      if (!$p) throw new ApiError('Photo not found.', 404);
+      $st = task_step_for($me, (int)$p['step_id']);
+      if ((int)$p['user_id'] !== $me['id'] && $me['role'] !== 'admin') throw new ApiError('Only who added this photo (or the manager) can remove it.', 403);
+      @unlink(UPLOAD_DIR . '/' . $p['file']);
+      q('DELETE FROM step_photos WHERE id = ?', [$p['id']]);
+      return ['steps' => steps_of((int)$st['task_id'])];
+    }
     // ---------- 📒 a record task: many short entries a day (each with up to 5 photos) ----------
     case 'entry.add':
       return ['entry' => add_entry($me, $in, $day)];
@@ -419,6 +478,7 @@ function handle(string $a, array $in): array {
       $photos = photos_of(array_map(fn($u) => (int)$u['id'], $ups));
       $out = ['task' => tasks_out([$t], $day)[0], 'updates' => array_map(fn($u) => update_out($u, $photos), $ups), 'comments' => comments_of((int)$t['id'])];
       if (($t['kind'] ?? '') === 'log') $out['entries'] = entries_of((int)$t['id']); // 📒 the record's entries, newest first
+      elseif ($t['seq'] === null) $out['steps'] = steps_of((int)$t['id']); // ☑ a single task's steps, with their photos
       mark_read([(int)$t['id']], $me['id']);
       notifs_read_task($me['id'], (int)$t['id']); // its 🔔 notifications are seen too
       return $out;
@@ -1302,6 +1362,41 @@ function entries_of(int $taskId): array {
   return array_map(fn($e) => entry_out($e, $photos), $rows);
 }
 
+/** A ☑ step of a task this person may see (theirs, or any for the manager): 404 otherwise. */
+function task_step_for(array $me, int $id): array {
+  $st = one('SELECT * FROM task_steps WHERE id = ?', [$id]);
+  if (!$st) throw new ApiError('That step was not found.', 404);
+  own_task($me, (int)$st['task_id']);
+  return $st;
+}
+
+/** A single task's ☑ steps, in the order added, each with its photos ({id, byId}) and who added it. */
+function steps_of(int $taskId): array {
+  $meId = (int)($GLOBALS['me']['id'] ?? 0);
+  $rows = all('SELECT s.*, u.name FROM task_steps s JOIN users u ON u.id = s.created_by WHERE s.task_id = ? ORDER BY s.id', [$taskId]);
+  if (!$rows) return [];
+  $ids = array_map(fn($r) => (int)$r['id'], $rows);
+  $photos = [];
+  foreach (all('SELECT id, step_id, user_id FROM step_photos WHERE step_id IN (' . implode(',', array_fill(0, count($ids), '?')) . ') ORDER BY id', $ids) as $p) $photos[(int)$p['step_id']][] = ['id' => (int)$p['id'], 'byId' => (int)$p['user_id']];
+  return array_map(fn($r) => ['id' => (int)$r['id'], 'title' => $r['title'], 'done' => $r['done_at'] !== null, 'doneAt' => $r['done_at'],
+    'byId' => (int)$r['created_by'], 'by' => $r['name'], 'mine' => (int)$r['created_by'] === $meId, 'photos' => $photos[(int)$r['id']] ?? []], $rows);
+}
+
+/** The photo just sent ($_FILES['file']): checked, made smaller, saved as JPEG. Returns [file, size]. */
+function save_uploaded_photo(): array {
+  $f = $_FILES['file'] ?? null;
+  if (!$f || $f['error'] !== UPLOAD_ERR_OK || !is_uploaded_file($f['tmp_name'])) throw new ApiError('The photo did not arrive. Try again.');
+  if ($f['size'] > MAX_UPLOAD_BYTES) throw new ApiError('That photo is too big.');
+  $mime = (new finfo(FILEINFO_MIME_TYPE))->file($f['tmp_name']);
+  if (!in_array($mime, ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif'], true)) throw new ApiError('Only photos can be added.');
+  $jpeg = shrink_photo($f['tmp_name'], $mime);
+  $dir = date('Y-m');
+  make_dir(UPLOAD_DIR . "/$dir");
+  $file = "$dir/" . bin2hex(random_bytes(12)) . '.jpg';
+  file_put_contents(UPLOAD_DIR . "/$file", $jpeg);
+  return [$file, strlen($jpeg)];
+}
+
 /** A photo for today's update: made smaller (max 1600 px), turned the right way up, saved as JPEG. */
 function add_photo(array $me, int $updateId, int $entryId = 0): int {
   // 📒 a record's entry: the photo goes on its entry (and so on that day's update); only the entry's writer adds them
@@ -1450,6 +1545,21 @@ function send_comment_photo(int $id): void {
   if (!is_file($path)) throw new ApiError('Photo not found.', 404);
   header('Content-Type: image/jpeg');
   header('Cache-Control: private, max-age=86400'); header('Vary: Authorization', false); // kept only for the same sign-in (address bar / next person: asked again)
+  header('Content-Length: ' . filesize($path));
+  readfile($path);
+}
+
+/** A ☑ step's photo: to whoever may see its task (the person doing it, the manager). */
+function send_step_photo(int $id): void {
+  $me = current_user();
+  $GLOBALS['me'] = $me;
+  $p = one('SELECT * FROM step_photos WHERE id = ?', [$id]);
+  if (!$p) throw new ApiError('Photo not found.', 404);
+  task_step_for($me, (int)$p['step_id']); // 404 for anyone else
+  $path = UPLOAD_DIR . '/' . $p['file'];
+  if (!is_file($path)) throw new ApiError('Photo not found.', 404);
+  header('Content-Type: image/jpeg');
+  header('Cache-Control: private, max-age=86400'); header('Vary: Authorization', false);
   header('Content-Length: ' . filesize($path));
   readfile($path);
 }

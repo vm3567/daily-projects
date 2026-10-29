@@ -29,6 +29,7 @@ try {
   if ($a === 'photo' && ($_SERVER['REQUEST_METHOD'] ?? '') === 'GET') { send_photo((int)($_GET['id'] ?? 0)); exit; }
   if ($a === 'task.file' && ($_SERVER['REQUEST_METHOD'] ?? '') === 'GET') { send_task_file((int)($_GET['id'] ?? 0)); exit; }
   if ($a === 'comment.photo' && ($_SERVER['REQUEST_METHOD'] ?? '') === 'GET') { send_comment_photo((int)($_GET['id'] ?? 0)); exit; }
+  if ($a === 'tstep.photo' && ($_SERVER['REQUEST_METHOD'] ?? '') === 'GET') { send_step_photo((int)($_GET['id'] ?? 0)); exit; }
   if ($a === 'dp.blob' && ($_SERVER['REQUEST_METHOD'] ?? '') === 'GET') { send_dp_blob_safe((string)($_GET['sha'] ?? '')); exit; }
   $get = ($_SERVER['REQUEST_METHOD'] ?? '') === 'GET';
   if ($get && $a === 'connect.decisions') $in = ['since' => (string)($_GET['since'] ?? '')]; // 🔌 an app may also ask with GET

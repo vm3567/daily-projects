@@ -1060,7 +1060,7 @@ test('📂 Projects page: a click on a project row selects it and stays on the p
   assert.match(mainsSrc, /ctx\.ui\.view === 'mains' && ctx\.showHere \? ctx\.showHere\(c\.id\)/, 'a task in the TASKS table while on the Projects page');
   const here = app.slice(app.indexOf('  showHere: (id) => {'), app.indexOf('  openProject: (id) => {'));
   assert.match(here, /select\(id\);/);
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-60'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-61'/, 'phones get the new copy');
 });
 
 test('📂 project page: "✕ Remove" on a task row takes it out of this project only — the task is kept (and stays in its other projects)', () => {
@@ -1846,7 +1846,7 @@ test('🔌 app wiring (app.js): "🔌 From apps" after ✉ Replies with the wait
   assert.match(app, /function go\(view\) \{\n\s*if \(view !== 'settings'\) forgetOnce\(\);/);
   assert.match(app, /if \(onServer\) loadApps\(appsCtx, force \|\| ui\.view === 'apps'\);/);
   assert.match(app, /replies: '✉ Replies', apps: '🔌 From apps', mains: '📂 Projects' \}\[ui\.view\]/, 'its page title');
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-60'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-61'/, 'phones get the new copy');
 });
 
 test('🔌 the PHP connector (team/connector/worktask-connector.php): the same text the app downloads, placeholders only (no real key), valid PHP 7.4+ (php -l), with wt_push / wt_withdraw / wt_decisions / wt_receive_decision', async () => {
@@ -5076,4 +5076,54 @@ test('a team message in What\'s happening has ✕ too (owner, 29 Oct: "i do not 
   assert.deepEqual(gone, [51]);
   delete ctx.teamDeleteMsg;
   assert.equal(rAll(renderDetail(ctx), (n) => n.nodeName === 'BUTTON' && /^Delete .* message$/.test(n.getAttribute('aria-label') || '')).length, 0, 'not on the Mac copy (no team server)');
+});
+
+test('☑ steps in a single task (owner, 29 Oct: "let staff add steps to single tasks too", "steps with photos, with add photos option, edit and add photos option"): staff view and team pages', async () => {
+  const wp = await import('../docs/ui/workparts.js');
+  // where the box shows: a single task; not a project's step, a 📒 record or a suggestion
+  assert.equal(wp.takesSteps({ seq: null, status: 'open' }), true);
+  assert.equal(wp.takesSteps({ seq: 2, status: 'open' }), false, 'a project step: add steps in the project');
+  assert.equal(wp.takesSteps({ seq: null, kind: 'log', status: 'open' }), false);
+  assert.equal(wp.takesSteps({ seq: null, status: 'suggested' }), false);
+  const steps = [
+    { id: 1, title: 'Weigh 20 kg', done: true, byId: 7, by: 'Valar', mine: true, photos: [{ id: 31, byId: 7 }, { id: 32, byId: 1 }] },
+    { id: 2, title: 'Pack it', done: false, byId: 1, by: 'Boss', mine: false, photos: [] },
+  ];
+  const t = { id: 12, title: 'Pack the samples', status: 'open', seq: null };
+  const got = [];
+  const on = (k) => (...a) => { got.push([k, ...a.map((x) => (x && x.id) || x)]); return Promise.resolve(''); };
+  const box = (manager, draft = {}) => wp.stepsBlock({ t, steps, meId: 7, manager, draft, pic: (kind, id) => `blob:${kind}/${id}`, viewer() {},
+    onDraft: on('draft'), onAdd: on('add'), onTick: on('tick'), onEdit: on('edit'), onDelete: on('delete'), onPhotos: on('photos'), onRemovePhoto: on('rmphoto') });
+  const by = (el, label) => rAll(el, (n) => n.getAttribute && n.getAttribute('aria-label') === label);
+  const staff = box(false);
+  assert.match(staff.textContent, /☑ Steps · 1 of 2 done/);
+  assert.equal(by(staff, 'Change this step').length, 2, '✎ on every step (anyone on the task changes the words)');
+  assert.equal(by(staff, 'Add photos to this step').length, 2, '📷 on every step');
+  assert.equal(by(staff, 'Delete this step').length, 1, 'staff: ✕ only on the step they added');
+  assert.equal(by(staff, 'Remove this photo').length, 1, 'staff: ✕ only on their own photo');
+  assert.equal(rAll(staff, (n) => n.nodeName === 'IMG').map((i) => i.getAttribute('src')).join(), 'blob:tstep.photo/31,blob:tstep.photo/32', 'the step\'s photos show');
+  by(staff, 'Done: Pack it')[0].__on.change();
+  by(staff, 'Change this step')[0].__on.click();
+  by(staff, 'Delete this step')[0].__on.click();
+  assert.deepEqual(got, [['tick', 2, true], ['edit', 1], ['delete', 1]]);
+  const mgr = box(true);
+  assert.equal(by(mgr, 'Delete this step').length, 2, 'manager: ✕ on every step');
+  assert.equal(by(mgr, 'Remove this photo').length, 2);
+  assert.ok(by(mgr, 'Add a step').length && by(mgr, 'Photos for the new step').length, 'the add box with 📷 photos for the new step');
+  assert.match(box(false, { title: 'x', files: [{}, {}] }).textContent, /📷 2 photos go with the new step/);
+  // a full step (10 photos) has no 📷 any more
+  assert.equal(wp.stepActs({ byId: 7, photos: Array(10).fill({}) }, 7).photo, false);
+  // the staff view: on a single task's page, not on a project step's
+  const { s, calls } = fakeStaff2({ 'task.get': (b) => ({ ok: true, task: b.id === 13 ? { ...staffData().tasks[2] } : { ...staffData().tasks[1], seq: null }, updates: [], comments: [], steps: b.id === 13 ? undefined : steps }) });
+  await s.load();
+  s.open('task:12'); await tick();
+  assert.match(s.view().textContent, /☑ Steps · 1 of 2 done/);
+  s.open('task:13'); await tick();
+  assert.doesNotMatch(s.view().textContent, /☑ Steps/, 'a project step: no ☑ box');
+  for (const a of ['tstep.add', 'tstep.edit', 'tstep.delete', 'tstep.photo', 'tstep.photo.delete']) assert.ok(staffMod.STAFF_CALLS.includes(a), a + ' is a staff call');
+  void calls;
+  const team = readFileSync(new URL('../docs/ui/team.js', import.meta.url), 'utf8');
+  assert.match(team, /filesBlock\(t, \{ pic, openFile, onRemove: removeFile \}\),\n\s*takesSteps\(t\) \? stepsBox\(t\) : null,/, 'the team task page has the box');
+  assert.match(team, /stepsBlock\(\{ t, steps: state\.detail\.steps \|\| \[\], meId: state\.user\.id, manager: true,/);
+  assert.match(readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8'), /fetch\(`\.\.\/api\/\?a=\$\{kind\}&id=\$\{id\}`/, 'step photos come like every other photo (tstep.photo)');
 });

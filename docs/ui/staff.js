@@ -12,7 +12,7 @@ import { createOutbox } from './staffbox.js';
 import { isHeic, heicToJpeg, isPhoto } from './heic.js';
 import { stageChip, stageFilterBar } from './stage.js';
 import { openMenuAt, menuBox, focusLater } from './rowmenu.js';
-import { fmtDay, fmtTime, STATES, stateTag, newClientId, istDay, repeatLabel, block, chipsFor, makePics, photosRow, filesBlock, diaryBlock, messagesBlock, logbookBlock, bottomBar, hitLines, staffDot, nowHm, HERE, blockedSteps } from './workparts.js';
+import { fmtDay, fmtTime, STATES, stateTag, newClientId, istDay, repeatLabel, block, chipsFor, makePics, photosRow, filesBlock, diaryBlock, messagesBlock, logbookBlock, bottomBar, hitLines, staffDot, nowHm, HERE, blockedSteps, stepsBlock, makeStepActs, takesSteps } from './workparts.js';
 
 export { STATES, repeatLabel }; // (the pieces of a task page are shared with the team pages: ui/workparts.js)
 const KEEP_FAIL = 'Could not keep this on the phone. Try again when online.';
@@ -20,7 +20,7 @@ const OFFLINE_KEPT = `📴 Saved on ${HERE} — it will be sent when you are onl
 
 /** The only server calls the staff view makes (a check in tests/screens.test.mjs holds it to this list). */
 export const STAFF_CALLS = ['me', 'my.today', 'task.get', 'project.mine', 'update.save', 'photo.add', 'comment.add', 'comment.edit', 'comment.delete',
-  'comment.photo', 'project.addStep', 'entry.add', 'entry.photo', 'entry.delete', 'suggest', 'search', 'password', 'logout', 'push.key', 'push.subscribe', 'push.unsubscribe', 'push.test'];
+  'comment.photo', 'project.addStep', 'tstep.add', 'tstep.edit', 'tstep.delete', 'tstep.photo', 'tstep.photo.delete', 'entry.add', 'entry.photo', 'entry.delete', 'suggest', 'search', 'password', 'logout', 'push.key', 'push.subscribe', 'push.unsubscribe', 'push.test'];
 /** Lists kept on the phone (the last copy), so the app opens without internet — the same saved copies Work Task keeps. */
 const READS = new Set(['me', 'my.today', 'task.get', 'project.mine', // (and the team pages' lists: ui/team.js)
   'team.today', 'tasks.list', 'users.list', 'projects.overview', 'project.team', 'report.week', 'followup.list', 'people.morning']);
@@ -860,6 +860,11 @@ export function createStaff(opts) {
   }
 
   const pic = makePics(photo, () => render());
+  const tsteps = makeStepActs({ api, state, render: () => render(), toast, shrink, ask, fail });
+  act.tsteps = tsteps; // ☑ a task's steps (for the checks)
+  // ☑ a single task's steps, each with photos (owner, 29 Oct)
+  const stepsBox = (t) => stepsBlock({ t, steps: state.detail.steps || [], meId: state.user.id, manager: false, draft: tsteps.draftFor(t.id), adding: !!state.addingStep, pic, viewer,
+    onDraft: (d) => tsteps.setDraft(t.id, d), onAdd: () => tsteps.add(t.id), onTick: tsteps.tick, onEdit: tsteps.edit, onDelete: tsteps.remove, onPhotos: tsteps.photos, onRemovePhoto: tsteps.removePhoto });
   const photos = (kind, list) => photosRow(pic, viewer, kind, list);
   const chips = (t, td) => chipsFor(t, td);
   const files = (t) => filesBlock(t, { pic, openFile });
@@ -962,6 +967,7 @@ export function createStaff(opts) {
         !f.folder.ref && t.projectRef && t.seq !== null && t.seq !== undefined ? h('button', { class: 'main-chip', title: 'Its steps (add the steps you will do)', onClick: () => open('project:' + t.projectRef) }, `Steps of ${t.project || 'this work'} ›`) : null) : null,
       t.details ? h('p', { class: 'pre muted' }, t.details) : null,
       files(t),
+      takesSteps(t) ? stepsBox(t) : null,
       // today's update (or the record's entry box) first, then 💬 Messages (owner, 24 Oct: on a phone the box was far down)
       t.kind === 'log' ? [entryCard(t), logbookBlock({ entries: state.detail.entries || [], waiting: state.outbox.filter((x) => x.kind === 'entry' && x.taskId === t.id), photos, meId: state.user.id, td, onDelete: deleteEntry })] // 📒 the logbook
         : t.status === 'suggested' || (t.status !== 'open' && !updates.length) ? updateCard(t) : diary(t, updates, td, updateCard(t)),

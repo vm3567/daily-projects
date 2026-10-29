@@ -1552,3 +1552,43 @@ test('a manager can delete a staff member\'s message, never change it; never a m
   assert.deepEqual(asked, ["Delete Ruturaj's message? It goes for everyone."]);
   assert.deepEqual(calls.filter((c) => c.a === 'comment.delete').map((c) => c.body), [{ id: 8 }]);
 });
+
+test('☑ steps in a single task: a new step goes with its photos (one by one, after the step); a retry of the same words is the same step; offline says so; tick, change, delete (owner, 29 Oct)', async () => {
+  const steps = [{ id: 4, title: 'Weigh', done: false, byId: 1, photos: [] }];
+  const asked = [];
+  const { t, calls } = await teamPages({
+    'tstep.add': () => { if (calls.filter((c) => c.a === 'tstep.add').length === 1) throw new Error('Busy, try again in a moment.'); return { stepId: 4, steps }; },
+    'tstep.photo': () => ({ steps: [{ ...steps[0], photos: [{ id: 9, byId: 1 }] }] }),
+    'tstep.edit': (b) => ({ steps: [{ ...steps[0], ...(b.title ? { title: b.title } : {}), ...(b.done !== undefined ? { done: b.done } : {}) }] }),
+    'tstep.delete': () => ({ steps: [] }),
+  }, { ask: { prompt: () => 'Weigh 20 kg', confirm: (q) => { asked.push(q); return true; } } });
+  t.state.detail = { task: { id: 5, seq: null, status: 'open' }, steps: [] };
+  const a = t.act.tsteps;
+  assert.equal(await a.add(5), 'Write the step first.');
+  a.setDraft(5, { title: 'Weigh', files: [new Blob(['1']), new Blob(['2'])] });
+  assert.match(await a.add(5), /Busy/, 'the first try failed');
+  assert.equal(await a.add(5), '', 'tried again');
+  const adds = calls.filter((c) => c.a === 'tstep.add');
+  assert.equal(adds[0].body.clientId, adds[1].body.clientId, 'the same words: the same id (added once)');
+  const ph = calls.filter((c) => c.a === 'tstep.photo');
+  assert.equal(ph.length, 2, 'both photos, after the step');
+  assert.equal(ph[0].body.get('stepId'), '4');
+  assert.deepEqual(t.state.detail.steps[0].photos, [{ id: 9, byId: 1 }], 'the page shows the photo');
+  assert.deepEqual(a.draftFor(5), {}, 'the box is empty again');
+  await a.tick(steps[0], true);
+  assert.equal(t.state.detail.steps[0].done, true);
+  await a.edit(steps[0]);
+  assert.equal(t.state.detail.steps[0].title, 'Weigh 20 kg');
+  await a.remove({ ...steps[0], photos: [{ id: 9 }] });
+  assert.deepEqual(asked, ['Delete the step "Weigh" and its photos?']);
+  assert.deepEqual(t.state.detail.steps, []);
+  t.state.offline = true;
+  a.setDraft(5, { title: 'Later' });
+  assert.equal(await a.add(5), 'Adding a step needs the internet. Try again when online.');
+  // the answer for another task never lands on the page now open
+  t.state.offline = false;
+  const { t: t2 } = await teamPages({ 'tstep.edit': () => { t2.state.detail = { task: { id: 9 }, steps: ['other'] }; return { steps: ['for 5'] }; } });
+  t2.state.detail = { task: { id: 5 }, steps: [] };
+  await t2.act.tsteps.tick({ id: 1 }, true);
+  assert.deepEqual(t2.state.detail.steps, ['other']);
+});
