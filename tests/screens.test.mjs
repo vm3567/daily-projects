@@ -1060,7 +1060,7 @@ test('📂 Projects page: a click on a project row selects it and stays on the p
   assert.match(mainsSrc, /ctx\.ui\.view === 'mains' && ctx\.showHere \? ctx\.showHere\(c\.id\)/, 'a task in the TASKS table while on the Projects page');
   const here = app.slice(app.indexOf('  showHere: (id) => {'), app.indexOf('  openProject: (id) => {'));
   assert.match(here, /select\(id\);/);
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-53'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-54'/, 'phones get the new copy');
 });
 
 test('📂 project page: "✕ Remove" on a task row takes it out of this project only — the task is kept (and stays in its other projects)', () => {
@@ -1846,7 +1846,7 @@ test('🔌 app wiring (app.js): "🔌 From apps" after ✉ Replies with the wait
   assert.match(app, /function go\(view\) \{\n\s*if \(view !== 'settings'\) forgetOnce\(\);/);
   assert.match(app, /if \(onServer\) loadApps\(appsCtx, force \|\| ui\.view === 'apps'\);/);
   assert.match(app, /replies: '✉ Replies', apps: '🔌 From apps', mains: '📂 Projects' \}\[ui\.view\]/, 'its page title');
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-53'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-54'/, 'phones get the new copy');
 });
 
 test('🔌 the PHP connector (team/connector/worktask-connector.php): the same text the app downloads, placeholders only (no real key), valid PHP 7.4+ (php -l), with wt_push / wt_withdraw / wt_decisions / wt_receive_decision', async () => {
@@ -4891,4 +4891,37 @@ test('Review6 4 + 6 + 9 (owner, 24 Oct): Team today marks a 📒 record; team �
 test('Review6 7 (owner, 24 Oct): the staff update box offers "tap 🎤 on the keyboard" only on a phone', async () => {
   const { readFileSync } = await import('node:fs');
   assert.match(readFileSync(new URL('../docs/ui/staff.js', import.meta.url), 'utf8'), /placeholder: HERE === 'this phone' \? 'What happened today\? \(you can tap 🎤 on the keyboard to speak\)' : 'What happened today\?'/);
+});
+
+test('A photo pasted in a step\'s box goes with the step (owner, 29 Oct): on a step that is there at once; in "+ Add the next step" it waits and goes with the step on Enter; the app sends it there', async () => {
+  const { pasteIntoStep } = await import('../docs/ui/detail.js');
+  const s = sampleState();
+  const ctx = liveCtx(s, { selected: 'p1', update: {} });
+  ctx.store.isOffline = () => false; ctx.store.canEdit = () => true;
+  ctx.store.repo = { createBlobBase64: async () => 'sha-' + Math.random().toString(36).slice(2) };
+  ctx.actMany = (pid, steps, msg) => { ctx.calls.push(['many', msg]); return applyOps(s, steps.map(([t, a]) => makeOp(t, a))); };
+  const photo = (n) => new File([new Uint8Array([1, 2, 3])], n, { type: 'image/jpeg' });
+  // 1. on the step "Fire samples" (s2)
+  await pasteIntoStep(ctx, s.data.projects[0], [photo('3.jpg')], 's2');
+  let p = s.data.projects[0];
+  assert.equal(p.files.filter((f) => f.stepId === 's2').length, 1, 'added to that step');
+  let el = renderDetail(ctx);
+  const row = rAll(el, (n) => n.nodeName === 'LI' && n.getAttribute && n.getAttribute('data-id') === 's2')[0];
+  assert.ok(rFind(row, (n) => /step-own-photos/.test(n.className || '')), 'shown under the step');
+  // 2. in "+ Add the next step": waits, then goes with the new step
+  await pasteIntoStep(ctx, p, [photo('4.jpg')], null);
+  assert.equal(ctx.ui.stepPhotos.p1.length, 1);
+  el = renderDetail(ctx);
+  assert.ok(rFind(el, (n) => /step-wait-photos/.test(n.className || '')) && el.textContent.includes('goes with the step'), 'waits under the box');
+  const form = rFind(el, (n) => n.nodeName === 'FORM' && /add-step/.test(n.className || ''));
+  const input = { value: '  Measure the cut angle ', focus() {} };
+  form.__on.submit({ preventDefault() {}, target: { elements: { text: input } } });
+  p = s.data.projects[0];
+  const step = p.steps.find((x) => x.text === 'Measure the cut angle');
+  assert.ok(step, 'the step is added');
+  assert.equal(p.files.filter((f) => f.stepId === step.id).length, 1, 'with its photo');
+  assert.equal(input.value, '', 'the box empties');
+  assert.ok(!(ctx.ui.stepPhotos || {}).p1, 'nothing waits any more');
+  const { readFileSync } = await import('node:fs');
+  assert.match(readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8'), /if \(stepLi \|\| \(at && at\.closest && at\.closest\('form\.add-step'\)\)\) \{ pasteIntoStep\(ctx, p, files, stepLi \? stepLi\.getAttribute\('data-id'\) : null\); return; \}/, 'Ctrl+V in a step\'s box goes there, not to the update box');
 });

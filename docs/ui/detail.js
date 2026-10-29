@@ -9,7 +9,7 @@ import { WAIT_RED_DAYS } from '../config.js';
 import { newId, PRIORITIES, cleanUrl, MAX_SNOOZE_DAYS, ABOUT_MAX } from '../ops.js';
 
 const STATUS_OLD_DAYS = 7; // a status older than this turns grey and asks for an update
-import { uploadFiles, openFile, photoThumb } from './files.js';
+import { uploadFiles, uploadBlob, openFile, photoThumb } from './files.js';
 import { richArea, richView, addDraftPhotos, readDraft, clearDraft, photoArgs, findEditor, fillEditor, editorPhoto, cursorInBlock, editorIsRich, namePasted } from './richedit.js';
 import { enterAction, richFileIds, textToHtml } from '../rich.js';
 import { projectEmailCards, emailThreadBlock } from './replies.js';
@@ -69,6 +69,34 @@ export function pasteIntoProject(ctx, p, files) {
     focusUpdate(p);
   } else if (images.length) others.push(...images);
   if (others.length) uploadFiles(ctx, p.id, others);
+}
+
+/**
+ * A photo pasted while in a step's box (owner, 29 Oct: "I am trying to add it in the step"): on a step that is
+ * there, it is added to that step at once; in "+ Add the next step" it waits under the box and goes with the step
+ * when Enter adds it. Other files go to the task's Files, as before.
+ */
+export async function pasteIntoStep(ctx, p, files, stepId = null) {
+  const photos = files.filter(isPhoto);
+  const others = files.filter((f) => !isPhoto(f));
+  if (others.length) uploadFiles(ctx, p.id, others);
+  const step = stepId ? p.steps.find((s) => s.id === stepId) : null;
+  for (const f of photos) {
+    const url = typeof URL !== 'undefined' && URL.createObjectURL ? URL.createObjectURL(f) : '';
+    const wait = step ? null : { url, args: null };
+    if (wait) { ((ctx.ui.stepPhotos ||= {})[p.id] ||= []).push(wait); ctx.render(); }
+    const args = await uploadBlob(ctx, f);
+    if (!args) { if (wait) { ctx.ui.stepPhotos[p.id] = ctx.ui.stepPhotos[p.id].filter((x) => x !== wait); ctx.render(); } continue; }
+    if (step) ctx.act('addFile', { projectId: p.id, ...args, stepId: step.id }, `📷 Added to the step “${step.text}”`);
+    else { wait.args = args; ctx.render(); }
+  }
+  if (!step && photos.length) ctx.toast('📷 Now type the step and press Enter: the photo goes with it', 4000);
+}
+
+/** The photos that belong to a step (pasted on it), small; a tap opens one. */
+function stepOwnPhotos(ctx, p, s) {
+  const mine = (p.files || []).filter((f) => f.stepId === s.id);
+  return mine.length ? h('div', { class: 'step-photos step-own-photos' }, mine.map((f) => photoThumb(ctx, f))) : null;
 }
 
 /** A work note's words: a rich one (table, list, photos) drawn from its html, else its plain text. */
@@ -298,6 +326,7 @@ function stepRow(ctx, p, s, box = null, writing = false) {
         class: 'icon step-more', title: 'More', 'aria-label': 'More about this step',
         onClick: () => { ui.openStep = open ? null : s.id; ctx.render(); },
       }, open ? '▴' : '⋯')),
+    stepOwnPhotos(ctx, p, s),
     stepNotes(ctx, p, s),
     live && !s.done && (tt.today || tt.last) ? h('div', { class: 'step-last muted small' }, `Last from ${tt.assignee.name} (${fmtDay((tt.today || tt.last).day)}): `, h('span', null, (tt.today || tt.last).note.slice(0, 160))) : null,
     stepPhotos(ctx, tt), // 📷 the photos the person sent on this step (e.g. each test step), done steps too
@@ -1192,12 +1221,23 @@ export function renderDetail(ctx) {
           e.preventDefault();
           const input = e.target.elements.text;
           const text = input.value.trim();
-          if (!text) return;
-          if (store.dispatch('addStep', { projectId: p.id, stepId: newId(), text })) input.value = '';
+          const waiting = (ui.stepPhotos || {})[p.id] || [];
+          if (!text) { if (waiting.length) ctx.toast('Type the step first, then press Enter', 2500); return; }
+          if (waiting.some((x) => !x.args)) { ctx.toast('A photo is still uploading — press Enter again in a moment', 2500); return; }
+          const stepId = newId();
+          const ok = waiting.length
+            ? ctx.actMany(p.id, [['addStep', { projectId: p.id, stepId, text }], ...waiting.map((x) => ['addFile', { projectId: p.id, ...x.args, stepId }])], `+ ${text} · 📷 ${waiting.length}`)
+            : store.dispatch('addStep', { projectId: p.id, stepId, text });
+          if (ok) { input.value = ''; if (ui.stepPhotos) delete ui.stepPhotos[p.id]; if (waiting.length) ctx.render(); }
           input.focus();
         },
       },
       h('input', { name: 'text', placeholder: openSteps.length ? '+ Add a step (type @ for a person)' : '+ Add the next step…', title: HAS_KEYBOARD ? 'Key: S' : null, key: 'add-step-' + p.id, enterkeyhint: 'enter', 'data-mention': '1', autocomplete: 'off' })),
+      ((ui.stepPhotos || {})[p.id] || []).length ? h('div', { class: 'step-photos step-wait-photos', key: 'swp-' + p.id }, // 📷 pasted here: they go with the step
+        ui.stepPhotos[p.id].map((x, i) => h('span', { class: 'step-wait-photo', key: 'sw-' + i },
+          x.url ? h('img', { class: 'rich-photo', src: x.url, alt: 'Photo for the new step' }) : '📷', x.args ? null : h('span', { class: 'muted small' }, ' uploading…'),
+          h('button', { class: 'link small', type: 'button', title: 'Leave this photo out', onClick: () => { ui.stepPhotos[p.id].splice(i, 1); ctx.render(); } }, '✕'))),
+        h('span', { class: 'muted small' }, 'goes with the step — type it and press Enter')) : null,
       doneSteps.length ? h('details', { class: 'done-steps', key: 'done-' + p.id, open: ui.showDone ? true : undefined },
         h('summary', { onClick: (e) => { e.preventDefault(); ui.showDone = !ui.showDone; if (ctx.rememberUi) ctx.rememberUi(); ctx.render(); } }, `Done (${doneSteps.length})`),
         ui.showDone ? h('ul', { class: 'steps' }, doneSteps.slice(0, ui.doneLimit || 10).map((s) => stepRow(ctx, p, s))) : null,

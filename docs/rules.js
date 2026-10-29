@@ -970,7 +970,7 @@ export function emptyPaste(cd) {
   const has = (t) => !!String(cd.getData(t) || '').trim();
   return ![...(cd.files || [])].length && !has('text/plain') && !has('text/html');
 }
-export const EMPTY_PASTE = 'Nothing to paste: Outlook\'s "Copy" keeps an attachment inside Outlook. Download it and drag the file here — or open the photo, right-click it → Copy image, then paste.';
+export const EMPTY_PASTE = 'Nothing to paste — Outlook keeps its attachments to itself. Download the file and drag it here, or open the photo (Preview), right-click → Copy image, then paste.';
 
 export function pasteInForm(target) {
   const el = target && target.nodeType === 3 ? target.parentNode : target; // (a text node inside a box)

@@ -1117,6 +1117,7 @@ const handlers = {
       id: a.fileId, name, path: filePath(p.id, a.fileId, name), sha: a.sha,
       size: Number(a.size) || 0, type: cleanText(a.type, 100), createdAt: op.at,
       noteId: a.noteId || null, // photo added with a work note
+      ...(a.stepId && p.steps.some((s) => s.id === a.stepId) ? { stepId: a.stepId } : {}), // a photo pasted on a step: it belongs to the step (owner, 29 Oct)
     });
     touch(p, op);
     addEvent(state, op, p, 'file_added', name);

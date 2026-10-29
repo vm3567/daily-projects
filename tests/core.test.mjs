@@ -3218,9 +3218,23 @@ test('emptyPaste (owner, 29 Oct): a paste with no file and no words (Outlook\'s 
   assert.equal(emptyPaste(cd({ 'text/plain': 'hello' })), false);
   assert.equal(emptyPaste(cd({ 'text/html': '<b>x</b>' })), false);
   assert.equal(emptyPaste(null), false);
-  assert.match(EMPTY_PASTE, /Download it and drag the file here/);
-  assert.match(EMPTY_PASTE, /Copy image/);
   const { readFileSync } = await import('node:fs');
+  assert.match(EMPTY_PASTE, /Download the file and drag it here/);
+  const css = readFileSync(new URL('../docs/styles.css', import.meta.url), 'utf8');
+  assert.match(css, /#toast\.full > span \{ display: block; -webkit-line-clamp: unset; \}/, 'shown in full, not cut after 2 lines (owner, 29 Oct)');
+  assert.match(readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8'), /t\.classList\.toggle\('full', !!full\)/, 'the next normal message is 2 lines again');
+  assert.match(EMPTY_PASTE, /Copy image/);
   const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
-  assert.equal((app.match(/if \(emptyPaste\(e\.clipboardData\)\) \{ e\.preventDefault\(\); toast\(EMPTY_PASTE, 8000\); return; \}/g) || []).length, 2, 'the owner\'s pages, and the team pages + staff app');
+  assert.equal((app.match(/if \(emptyPaste\(e\.clipboardData\)\) \{ e\.preventDefault\(\); toast\(EMPTY_PASTE, 10000, null, true\); return; \}/g) || []).length, 2, 'the owner\'s pages, and the team pages + staff app');
+});
+
+test('addFile with stepId (owner, 29 Oct): a photo pasted on a step belongs to that step; a step of another task is not kept', async () => {
+  const { applyOps, emptyData, makeOp } = await import('../docs/ops.js');
+  const s = { data: emptyData(), history: {} };
+  applyOps(s, [makeOp('createProject', { projectId: 'c', name: 'Cut angle of media' }), makeOp('addStep', { projectId: 'c', stepId: 'a', text: 'Measure angles' }),
+    makeOp('addFile', { projectId: 'c', fileId: 'f1', name: '3.jpg', sha: 'x1', size: 5, type: 'image/jpeg', stepId: 'a' }),
+    makeOp('addFile', { projectId: 'c', fileId: 'f2', name: '4.jpg', sha: 'x2', size: 5, type: 'image/jpeg', stepId: 'nope' })]);
+  const files = s.data.projects[0].files;
+  assert.equal(files.find((f) => f.id === 'f1').stepId, 'a');
+  assert.equal(files.find((f) => f.id === 'f2').stepId, undefined, 'unknown step: an ordinary file of the task');
 });

@@ -3,7 +3,7 @@
 import { h, morph, installEvents, fmtDay, fmtLongDay, fmtTime, keyHint, withKey } from './ui/dom.js';
 import { pageKey, isTyping } from './ui/listkeys.js';
 import { IN_NO_PROJECT } from './ui/workparts.js';
-import { renderDetail, linkChip, isMailLink, pasteIntoProject, takeBackQuestion, updateState, makeItAProject } from './ui/detail.js';
+import { renderDetail, linkChip, isMailLink, pasteIntoProject, pasteIntoStep, takeBackQuestion, updateState, makeItAProject } from './ui/detail.js';
 import { renderPeopleList, renderPerson, peopleByFollowUp } from './ui/people.js';
 import { installMentions } from './ui/mention.js';
 import { installAutocorrect, setAutocorrect, autocorrectOn } from './ui/autocorrect.js';
@@ -279,7 +279,7 @@ async function startManager(user, teamTask = 0) {
 const TEAM_BOX = /^Reply or give/, STAFF_BOX = /^Ask or reply/; // (the message boxes' first words)
 function pasteToView(view, e, box) {
   if (e.defaultPrevented || !e.clipboardData) return;
-  if (emptyPaste(e.clipboardData)) { e.preventDefault(); toast(EMPTY_PASTE, 8000); return; } // (say why nothing came: owner, 29 Oct)
+  if (emptyPaste(e.clipboardData)) { e.preventDefault(); toast(EMPTY_PASTE, 10000, null, true); return; } // (say why nothing came: owner, 29 Oct)
   const inMessageBox = !!(e.target && e.target.tagName === 'TEXTAREA' && box.test(e.target.placeholder || ''));
   if (view.act.paste({ files: [...(e.clipboardData.files || [])], text: e.clipboardData.getData('text/plain') || '', inMessageBox })) e.preventDefault();
 }
@@ -348,8 +348,9 @@ let toastTimer = null;
 let searchTimer = null;
 
 /** Message at the bottom. With `undo`, it shows an Undo button and stays a little longer. */
-function toast(text, ms = 3500, undo = null) {
+function toast(text, ms = 3500, undo = null, full = false) {
   const t = document.getElementById('toast');
+  t.classList.toggle('full', !!full); // (full: every line shown — the help for an empty paste, owner 29 Oct)
   const parts = [h('span', null, text)];
   if (undo) parts.push(h('button', { class: 'toast-undo', onClick: () => { t.hidden = true; undo(); } }, 'Undo'));
   t.replaceChildren(...parts); // (replaceChildren would print "null" for an empty slot)
@@ -3896,7 +3897,7 @@ function startOwner() {
   document.addEventListener('paste', (e) => {
     if (space === 'team' && teamView) { pasteToView(teamView, e, TEAM_BOX); return; } // the team pages: an instruction file, or a photo message
     if (e.defaultPrevented || !store || !store.view) return;
-    if (emptyPaste(e.clipboardData)) { e.preventDefault(); toast(EMPTY_PASTE, 8000); return; } // anywhere (a step, the update box): say why nothing came, never stay silent (owner, 29 Oct)
+    if (emptyPaste(e.clipboardData)) { e.preventDefault(); toast(EMPTY_PASTE, 10000, null, true); return; } // anywhere (a step, the update box): say why nothing came, never stay silent (owner, 29 Oct)
     if (pasteInForm(e.target)) return; // naming a new task: its own box takes the paste, never the open task's update
     // the project page must be on screen (not the Diary, Dashboard, Settings, Time, People, the round, Quick capture, or a sheet on top)
     if (!pasteGoesToProject(ui, { viewerOpen: !document.getElementById('viewer').hidden, narrow: matchMedia('(max-width: 760px)').matches })) return;
@@ -3906,6 +3907,10 @@ function startOwner() {
     const p = store.view.data.projects.find((x) => x.id === ui.selected);
     if (!p) return;
     e.preventDefault();
+    // in a step's box: the photo belongs to that step (or waits for the step being typed) — owner, 29 Oct
+    const at = e.target && e.target.nodeType === 3 ? e.target.parentNode : e.target;
+    const stepLi = at && at.closest ? at.closest('li.step[data-id]') : null;
+    if (stepLi || (at && at.closest && at.closest('form.add-step'))) { pasteIntoStep(ctx, p, files, stepLi ? stepLi.getAttribute('data-id') : null); return; }
     pasteIntoProject(ctx, p, files);
   });
   // a click anywhere else closes the right-click menu
