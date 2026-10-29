@@ -1339,6 +1339,11 @@ button.stage-chip.tap { cursor: pointer; font-size: 12.5px; padding: 3px 10px; }
 .follow-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 8px; }
 .tag.follow-chip { cursor: pointer; background: var(--brand-soft); border-color: var(--brand); color: var(--brand); }
 
+/* 📋 Give a task: the owner's own tasks that match the words (owner, 29 Oct) */
+.pick-list { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.pick-list > .muted { flex-basis: 100%; }
+.chip.pick-task { text-align: left; }
+
 /* ---------------------------------------------------------------- the staff view (one app: ui/staff.js)
    Staff see this app's own design. Only the few pieces this app had no style for, and only inside the staff view
    (.layout.staff), so the owner's screens never change. */

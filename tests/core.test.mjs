@@ -3257,3 +3257,19 @@ test('linkFollow (owner, 29 Oct): the next task is linked both ways and sits whe
   assert.equal(applyOps(s, [makeOp('linkFollow', { projectId: 'm', nextId: 'c' })]).length, 0, 'not a 📂 project');
   assert.ok(NOT_CARRIED.has('linkFollow'));
 });
+
+test('ownerTaskMatches (owner, 29 Oct): Give a task finds your own open tasks by every typed word, any case; not given ones only; no 📂 projects or "In no project"; its project named', async () => {
+  const { applyOps, emptyData, makeOp } = await import('../docs/ops.js');
+  const { ownerTaskMatches } = await import('../docs/rules.js');
+  const s = { data: emptyData(), history: {} };
+  applyOps(s, [makeOp('createMainProject', { projectId: 'm', name: 'Raw materials' }),
+    makeOp('createProject', { projectId: 'a', name: 'Get 20 kg of 400# Feldspar' }), makeOp('addToProject', { projectId: 'a', parentId: 'm' }),
+    makeOp('addStep', { projectId: 'a', stepId: 's', text: 'Ask supplier' }),
+    makeOp('createProject', { projectId: 'b', name: 'Feldspar old trial' }), makeOp('finish', { projectId: 'b' }),
+    makeOp('createProject', { projectId: 'c', name: 'Feldspar given one' }), makeOp('setProjectTeam', { projectId: 'c', userId: 7, name: 'Ruturaj' })]);
+  assert.deepEqual(ownerTaskMatches(s.data, 'feldspar 20'), [{ id: 'a', name: 'Get 20 kg of 400# Feldspar', project: 'Raw materials', steps: 1 }]);
+  assert.deepEqual(ownerTaskMatches(s.data, 'FELD').map((x) => x.id), ['a'], 'finished and given ones left out');
+  assert.deepEqual(ownerTaskMatches(s.data, 'raw'), [], 'a 📂 project is not a task to give here');
+  assert.deepEqual(ownerTaskMatches(s.data, '  '), []);
+  assert.deepEqual(ownerTaskMatches(null, 'x'), []);
+});

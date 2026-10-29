@@ -1076,39 +1076,58 @@ export function createTeam(opts) {
     const people = [...state.people];
     if (t && !people.some((p) => p.id === t.assignee.id)) people.push({ id: t.assignee.id, name: t.assignee.name + ' (switched off)' }); // kept, so a small change does not force someone else
     const td = today();
+    const mine = !editing && opts.ownerTasks && !f.picked && f.title.trim().length >= 2 ? opts.ownerTasks(f.title).slice(0, 6) : [];
     return [
       !editing ? block('Work in one line', quickBox(state.people)) : null,
       block(editing ? 'Change the task' : 'Give a task', h('div', { class: 'stack' },
         h('label', null, 'Who', h('select', { key: 'g-who', value: String(f.assigneeId || ''), onChange: (e, el) => { f.assigneeId = Number(el.value); } },
           h('option', { value: '' }, 'Choose a person…'), people.map((p) => h('option', { value: String(p.id) }, p.name + (p.role === 'admin' ? ' (manager)' : ''))))),
-        h('label', null, 'Task', h('input', { key: 'g-title', placeholder: 'Record kiln 3 temperature', value: f.title, onInput: set('title') })),
+        h('label', null, 'Task', h('input', { key: 'g-title', placeholder: opts.ownerTasks && !editing ? 'Type to find one of your tasks, or a new one' : 'Record kiln 3 temperature', value: f.title, readonly: f.picked ? true : undefined,
+          onInput: (e, el) => { f.title = el.value; if (opts.ownerTasks && !editing) render(); } })),
+        // 📋 the owner's own tasks that match the words: tap one to give it as it is (owner, 29 Oct)
+        mine.length ? h('div', { class: 'pick-list', key: 'g-pick' }, h('span', { class: 'muted small' }, '📋 Your tasks — tap one to give it as it is:'),
+          mine.map((x) => h('button', { class: 'chip pick-task', type: 'button', key: 'pk-' + x.id, onClick: () => { f.picked = x; f.title = x.name; f.project = x.project || ''; render(); } },
+            x.name, x.project ? h('span', { class: 'muted small' }, ` · 📂 ${x.project}`) : null, x.steps ? h('span', { class: 'muted small' }, ` · ${x.steps} step${x.steps === 1 ? '' : 's'}`) : null))) : null,
+        f.picked ? h('p', { class: 'banner picked-task', key: 'g-picked' }, `📋 Your task “${f.picked.name}” goes as it is: its steps come along, and their updates show on its page.`, ' ',
+          h('button', { class: 'link small', type: 'button', onClick: () => { f.picked = null; f.title = ''; f.project = ''; render(); } }, '✕ Not this one')) : null,
         h('div', { class: 'segmented', role: 'group', 'aria-label': 'Kind of task' },
           h('button', { class: 'seg' + (f.record ? '' : ' on'), type: 'button', key: 'g-kind-task', 'aria-pressed': String(!f.record), onClick: () => { f.record = false; render(); } }, '📅 Daily update'),
           h('button', { class: 'seg' + (f.record ? ' on' : ''), type: 'button', key: 'g-kind-log', 'aria-pressed': String(!!f.record), onClick: () => { f.record = true; render(); } }, '📒 Record (entries)')),
         f.record ? h('p', { class: 'muted small' }, 'They add an entry (a line + photos) whenever something happens — e.g. a material order follow-up. Never "not sent" or late.') : null,
-        h('label', null, 'Details', h('textarea', { key: 'g-details', placeholder: 'Anything they need to know (optional)', value: f.details, onInput: set('details') })),
-        h('label', null, 'Project', h('input', { key: 'g-project', placeholder: 'Kiln trial (optional)', value: f.project, onInput: set('project') })),
-        f.record ? null : h('label', null, 'How often', h('select', { key: 'g-how', value: f.how, onChange: set('how') }, // (a 📒 record has no "how often": entries come when something happens)
+        f.picked ? null : h('label', null, 'Details', h('textarea', { key: 'g-details', placeholder: 'Anything they need to know (optional)', value: f.details, onInput: set('details') })),
+        f.picked ? null : h('label', null, 'Project', h('input', { key: 'g-project', placeholder: 'Kiln trial (optional)', value: f.project, onInput: set('project') })),
+        f.record || f.picked ? null : h('label', null, 'How often', h('select', { key: 'g-how', value: f.how, onChange: set('how') }, // (a 📒 record has no "how often": entries come when something happens)
           h('option', { value: 'daily' }, 'Every day (Mon–Sat)'), h('option', { value: 'daily7' }, 'Every day, Sunday too'), h('option', { value: 'weekly' }, 'Once a week'), h('option', { value: 'once' }, 'One time'))),
-        !f.record && f.how === 'weekly' ? h('label', null, 'On', h('select', { key: 'g-wd', value: String(f.weekday), onChange: (e, el) => { f.weekday = Number(el.value); } }, LONG_DAYS.map((n, i) => h('option', { value: String(i) }, n)))) : null,
-        f.how === 'once' ? h('label', null, 'By (date, optional)', h('input', { key: 'g-due', type: 'date', value: f.dueDate, onInput: set('dueDate') })) : null,
-        h('label', null, 'Start on (optional — empty = today)', h('input', { key: 'g-start', type: 'date', min: td, value: f.startDate, onInput: set('startDate') })),
+        !f.record && !f.picked && f.how === 'weekly' ? h('label', null, 'On', h('select', { key: 'g-wd', value: String(f.weekday), onChange: (e, el) => { f.weekday = Number(el.value); } }, LONG_DAYS.map((n, i) => h('option', { value: String(i) }, n)))) : null,
+        f.how === 'once' && !f.picked ? h('label', null, 'By (date, optional)', h('input', { key: 'g-due', type: 'date', value: f.dueDate, onInput: set('dueDate') })) : null,
+        f.picked ? null : h('label', null, 'Start on (optional — empty = today)', h('input', { key: 'g-start', type: 'date', min: td, value: f.startDate, onInput: set('startDate') })),
         h('label', { class: 'row' }, h('input', { key: 'g-photo', type: 'checkbox', checked: f.needsPhoto ? true : undefined, onChange: set('needsPhoto') }), ' 📷 Photo needed to finish'),
-        h('div', { class: 'stack file-pick' }, h('span', null, '📎 Instruction photos / PDF (optional)'),
+        f.picked ? null : h('div', { class: 'stack file-pick' }, h('span', null, '📎 Instruction photos / PDF (optional)'),
           h('div', { class: 'row' }, // (the app's own button, not the browser's grey "Choose files": owner, 24 Oct)
             h('label', { class: 'btn small' }, (f.files || []).length ? '📎 Change files' : '📎 Add files',
               h('input', { key: 'g-files', type: 'file', accept: 'image/*,application/pdf', multiple: true, class: 'visually-hidden', onChange: (e, el) => { f.files = [...el.files]; render(); } })),
             h('span', { class: 'muted small' }, (f.files || []).length ? (f.files || []).map((x) => x.name).join(', ') : 'None chosen'))),
         err,
         h('div', { class: 'row' },
-          h('button', { class: 'btn primary small', onClick: () => saveTask({
+          h('button', { class: 'btn primary small', onClick: () => (f.picked ? giveMine(f, people).then((m) => { err.say(m); }) : saveTask({
             id: t ? t.id : 0, assigneeId: Number(f.assigneeId), title: f.title, details: f.details, project: f.project,
             repeat: f.how === 'daily7' ? 'daily' : f.how, skipSunday: f.how === 'daily' || (f.how === 'once' && (!t || t.skipSunday)), weekday: Number(f.weekday), dueDate: f.dueDate,
             projectRef: f.projectRef, stepRef: f.stepRef, needsPhoto: !!f.needsPhoto, startDate: f.startDate || (t && t.startDate && t.startDate > td ? td : ''),
             kind: f.record ? 'log' : '',
-          }, f.files).then((m) => { err.say(m); }) }, editing ? 'Save' : 'Give task'),
+          }, f.files).then((m) => { err.say(m); })) }, editing ? 'Save' : 'Give task'),
           h('button', { class: 'btn small', onClick: () => { state.prefill = null; state.giveForm = null; if (editing) open('task:' + t.id); else if (!(state.fromProjects && toProjects())) back(); } }, 'Cancel')))),
     ];
+  }
+
+  /** 📋 Give one of the owner's own tasks as it is (the same as 👥 Give on its page): '' when given, else why not. */
+  async function giveMine(f, people) {
+    const person = people.find((p) => p.id === Number(f.assigneeId));
+    if (!person) return 'Choose a person first.';
+    const ok = await opts.giveOwnerTask(f.picked.id, { id: person.id, name: person.name }, { needsPhoto: !!f.needsPhoto, record: !!f.record });
+    if (!ok) return 'It could not be given. Try again.';
+    state.giveForm = null; state.prefill = null;
+    go('tasks');
+    return '';
   }
 
   function passwordPage() {

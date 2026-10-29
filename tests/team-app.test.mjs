@@ -247,7 +247,9 @@ test('team: a finished send never redraws over a form opened and typed in meanwh
   assert.match(STAFF, /draft: state\.msgDrafts\[taskId\],[^\n]*\n\s*onInput: \(v\) => \{ state\.msgDrafts\[taskId\] = v; \},/, 'the staff view keeps the message words');
   assert.match(TEAM, /draft: state\.msgDrafts\[t\.id\], [^\n]*\n\s*onInput: \(v\) => \{ state\.msgDrafts\[t\.id\] = v; \},/, 'the team pages keep the message words');
   assert.match(STAFF, /value: state\.stepDrafts\[ref\] \|\| '', onInput: \(e, el\) => \{ state\.stepDrafts\[ref\] = el\.value;/, 'the Add a step box');
-  for (const k of ['title', 'details', 'project']) assert.match(TEAM, new RegExp(`value: f\\.${k}, onInput: set\\('${k}'\\)`), 'Give a task: ' + k);
+  for (const k of ['details', 'project']) assert.match(TEAM, new RegExp(`value: f\\.${k}, onInput: set\\('${k}'\\)`), 'Give a task: ' + k);
+  // (owner, 29 Oct: the Task box also looks up your own tasks as you type — each keystroke is still kept in the form)
+  assert.match(TEAM, /key: 'g-title',[^\n]*value: f\.title,[^\n]*\n\s*onInput: \(e, el\) => \{ f\.title = el\.value;/, 'Give a task: title');
 });
 
 test('team: Ctrl+V of a photo while the update waits on the phone is refused (it would go nowhere)', () => {

@@ -972,6 +972,19 @@ export function emptyPaste(cd) {
 }
 export const EMPTY_PASTE = 'Nothing to paste — Outlook keeps its attachments to itself. Download the file and drag it here, or open the photo (Preview), right-click → Copy image, then paste.';
 
+/**
+ * Give a task (team pages): the owner's own open tasks whose name has every typed word (any case), not given to
+ * anyone yet — newest first: [{ id, name, project, steps }] (project = its first 📂 project, "In no project" left out).
+ */
+export function ownerTaskMatches(data, q) {
+  const words = String(q || '').toLowerCase().split(/\s+/).filter(Boolean);
+  if (!data || !words.length) return [];
+  const byId = new Map(data.projects.map((p) => [p.id, p]));
+  return data.projects
+    .filter((p) => p.state === 'active' && !p.misc && !p.team && !isMainProject(data, p) && words.every((w) => p.name.toLowerCase().includes(w)))
+    .map((p) => ({ id: p.id, name: p.name, project: (parentIdsOf(p).map((id) => byId.get(id)).find((m) => m && !m.misc) || {}).name || '', steps: p.steps.filter((s) => !s.done).length }));
+}
+
 export function pasteInForm(target) {
   const el = target && target.nodeType === 3 ? target.parentNode : target; // (a text node inside a box)
   return !!(el && typeof el.closest === 'function' && el.closest('.new-task-box'));

@@ -21,7 +21,7 @@ import { ServerRepo, SERVER_TOKEN_KEY } from './serverrepo.js';
 import { MockRepo } from './mockrepo.js';
 import { device } from './device.js';
 import { DATA_OWNER, DATA_REPO, DATA_BRANCH, MOVED_TO, REFRESH_MS, AI_DAILY_LIMIT, BRIEF_CLAIM_MINUTES, WAIT_RED_DAYS, NO_WORK_NOTE_DAYS } from './config.js';
-import { dotColour, greenByTeamOnly, isSnoozed, restUntil, restReason, onlyDaysLabel, openIdFromHash, awakeProjects, activeProjects, nextStep, todayIndia, isSundayIndia, colourCounts, isOverdue, indiaDate, waitingDays, daysWithoutWork, dayScore, greenStreak, addDays, monthOf, fmtMinutes, takeBackWaits, staffStepAction, pasteGoesToProject, emptyPaste, EMPTY_PASTE, singleStepClose, versionRequest, askDiaryAgain, pasteInForm, diaryLoadedAt, photoNeedsFetch, teamUndoKey, teamActionUndone, teamProgressOf, projectKeyIgnored, teamMovedTo, serverHolder, keepMovedStep, teamMemberFor, repliesOf, mailThreads, replyMailto, MAILTO_BODY_MAX, emailPath, pasteReason } from './rules.js';
+import { dotColour, greenByTeamOnly, isSnoozed, restUntil, restReason, onlyDaysLabel, openIdFromHash, awakeProjects, activeProjects, nextStep, todayIndia, isSundayIndia, colourCounts, isOverdue, indiaDate, waitingDays, daysWithoutWork, dayScore, greenStreak, addDays, monthOf, fmtMinutes, takeBackWaits, staffStepAction, pasteGoesToProject, emptyPaste, EMPTY_PASTE, ownerTaskMatches, singleStepClose, versionRequest, askDiaryAgain, pasteInForm, diaryLoadedAt, photoNeedsFetch, teamUndoKey, teamActionUndone, teamProgressOf, projectKeyIgnored, teamMovedTo, serverHolder, keepMovedStep, teamMemberFor, repliesOf, mailThreads, replyMailto, MAILTO_BODY_MAX, emailPath, pasteReason } from './rules.js';
 import { stageOf, stageCounts, byStage, STAGES, STAGE_LABELS, moveEveryOf, everyText, MOVE_EVERY_PICKS, MOVE_EVERY_DEFAULT, everyDefaultOf, useEveryDefault, colourShort, colourWhy } from './rules.js';
 import { stageChip, stageFilterBar } from './ui/stage.js';
 import { whoFromUser, signInTag, timerOn, projectGiveChanges, UNDO_GRACE_MS, MISC_ID } from './rules.js';
@@ -228,6 +228,16 @@ async function openTeam(how = {}) {
       teamView = await teamPages(null, {
         toProjects: () => { leaveTeam(); render(); },
         openPeople: () => { leaveTeam(); go('people'); },
+        // 📋 Give a task: find one of your own tasks by its words and give it as it is (owner, 29 Oct)
+        ownerTasks: (q) => ownerTaskMatches(store && store.view ? store.view.data : null, q),
+        giveOwnerTask: async (id, person, { needsPhoto = false, record = false } = {}) => {
+          const p = store.view.data.projects.find((x) => x.id === id);
+          if (!p) return false;
+          ui.giveRecord = !!record;
+          await giveProject(p, person, !!needsPhoto, null);
+          const now = store.view.data.projects.find((x) => x.id === id);
+          return !!(now && now.team && now.team.userId === person.id);
+        },
       });
     }
   } catch (e) { toast(e.message, 5000); return; }
