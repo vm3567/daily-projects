@@ -1060,7 +1060,7 @@ test('📂 Projects page: a click on a project row selects it and stays on the p
   assert.match(mainsSrc, /ctx\.ui\.view === 'mains' && ctx\.showHere \? ctx\.showHere\(c\.id\)/, 'a task in the TASKS table while on the Projects page');
   const here = app.slice(app.indexOf('  showHere: (id) => {'), app.indexOf('  openProject: (id) => {'));
   assert.match(here, /select\(id\);/);
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-54'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-55'/, 'phones get the new copy');
 });
 
 test('📂 project page: "✕ Remove" on a task row takes it out of this project only — the task is kept (and stays in its other projects)', () => {
@@ -1846,7 +1846,7 @@ test('🔌 app wiring (app.js): "🔌 From apps" after ✉ Replies with the wait
   assert.match(app, /function go\(view\) \{\n\s*if \(view !== 'settings'\) forgetOnce\(\);/);
   assert.match(app, /if \(onServer\) loadApps\(appsCtx, force \|\| ui\.view === 'apps'\);/);
   assert.match(app, /replies: '✉ Replies', apps: '🔌 From apps', mains: '📂 Projects' \}\[ui\.view\]/, 'its page title');
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-54'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-55'/, 'phones get the new copy');
 });
 
 test('🔌 the PHP connector (team/connector/worktask-connector.php): the same text the app downloads, placeholders only (no real key), valid PHP 7.4+ (php -l), with wt_push / wt_withdraw / wt_decisions / wt_receive_decision', async () => {
@@ -4924,4 +4924,31 @@ test('A photo pasted in a step\'s box goes with the step (owner, 29 Oct): on a s
   assert.ok(!(ctx.ui.stepPhotos || {}).p1, 'nothing waits any more');
   const { readFileSync } = await import('node:fs');
   assert.match(readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8'), /if \(stepLi \|\| \(at && at\.closest && at\.closest\('form\.add-step'\)\)\) \{ pasteIntoStep\(ctx, p, files, stepLi \? stepLi\.getAttribute\('data-id'\) : null\); return; \}/, 'Ctrl+V in a step\'s box goes there, not to the update box');
+});
+
+test('➜ Finish + start the next task (owner, 29 Oct): one action finishes this task, makes the next one linked to it and opens it; both pages show the link; a finished task offers it too; the ⋯ menu has it', async () => {
+  const { startNextTask } = await import('../docs/ui/detail.js');
+  const s = sampleState();
+  const ctx = liveCtx(s, { selected: 'p1', update: {} });
+  ctx.actMany = (pid, steps, msg) => { ctx.calls.push(['many', msg]); return applyOps(s, steps.map(([t, a]) => makeOp(t, a))); };
+  const was = globalThis.prompt; globalThis.prompt = () => '  Get 20 kg of 400# feldspar ';
+  try { assert.equal(startNextTask(ctx, s.data.projects.find((p) => p.id === 'p1')), true); } finally { globalThis.prompt = was; }
+  const old = s.data.projects.find((p) => p.id === 'p1');
+  const nw = s.data.projects.find((p) => p.name === 'Get 20 kg of 400# feldspar');
+  assert.equal(old.state, 'finished', 'this one is finished');
+  assert.equal(nw.prevId, 'p1'); assert.equal(old.nextId, nw.id);
+  assert.ok(ctx.calls.some((c) => c[0] === 'open' && c[1] === nw.id), 'the next task opens');
+  assert.ok(ctx.calls.some((c) => c[0] === 'many' && /finished · ➜ next: Get 20 kg/.test(c[1])), 'one action (one Undo)');
+  let el = renderDetail(liveCtx(s, { selected: nw.id, update: {} }));
+  const back = rFind(el, (n) => n.nodeName === 'BUTTON' && /^↩ Came from: Kiln ✓$/.test(n.textContent));
+  assert.ok(back, 'the new task shows where it came from');
+  el = renderDetail(liveCtx(s, { selected: 'p1', update: {} }));
+  assert.ok(rFind(el, (n) => n.nodeName === 'BUTTON' && n.textContent === '➜ Next task: Get 20 kg of 400# feldspar'), 'the old one shows its next task');
+  assert.ok(!el.textContent.includes('➜ Start the next task from it'), 'it has one already');
+  applyOps(s, [makeOp('createProject', { projectId: 'z', name: 'Done one' }), makeOp('finish', { projectId: 'z' })]);
+  assert.ok(renderDetail(liveCtx(s, { selected: 'z', update: {} })).textContent.includes('➜ Start the next task from it'), 'a finished task offers it');
+  const { readFileSync } = await import('node:fs');
+  const menu = renderDetail(liveCtx(s, { selected: 'z', update: {}, projMenu: 'z' })).textContent;
+  assert.ok(menu.includes('➜ Start the next task from it…'), 'in the task page\'s ⋯ menu too');
+  assert.match(readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8'), /item\('➜', p\.state === 'finished' \? 'Start the next task from it…' : 'Finish \+ start the next task…', \(\) => startNextTask\(ctx, p\)\)/, 'in the ⋯ and right-click menu');
 });

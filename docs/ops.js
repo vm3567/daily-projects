@@ -719,6 +719,26 @@ const handlers = {
     clearStage(p); // finished = ✅ Done (the stage worked out from it)
     return true;
   },
+  /**
+   * ➜ The next task, made from this one (owner, 29 Oct: "get the 400# sample" passed → "get 20 kg"): the two are linked
+   * (old.nextId ↔ new.prevId), and the new one sits where the old one was — its 📂 projects, tag, priority and "move every".
+   * Finishing the old one is its own change (sent with it as one action, one Undo).
+   */
+  linkFollow(state, op, a) {
+    const old = findProject(state.data, a.projectId);
+    const nw = findProject(state.data, a.nextId);
+    if (!old || !nw || old.id === nw.id || nw.prevId || old.nextId || isMainProject(state.data, old) || old.misc) return false;
+    old.nextId = nw.id;
+    nw.prevId = old.id;
+    setParents(nw, parentIdsOf(old));
+    nw.priority = old.priority;
+    if (old.tagId) nw.tagId = old.tagId;
+    if (Number.isInteger(old.moveEvery)) nw.moveEvery = old.moveEvery;
+    touch(old, op); touch(nw, op);
+    addEvent(state, op, old, 'followed', `➜ Next task: ${nw.name}`);
+    addEvent(state, { ...op, id: op.id + 'n' }, nw, 'followed', `↩ Came from: ${old.name}`);
+    return true;
+  },
   reopen(state, op, a) {
     const p = findProject(state.data, a.projectId);
     if (!setState(state, op, a, 'finished', 'active', 'reopened')) return false;
@@ -1692,7 +1712,7 @@ export const CARRIED = new Set(['createProject', 'createMainProject', 'addToProj
   'setReply', 'replyLater', 'inboxToStep', 'stepToProject', 'inboxToProject', 'addPerson', 'renamePerson', 'setPersonContact', 'markPersonSent',
   'startTimer', 'stopTimer', 'addTime', 'setStage', 'setMoveEvery']);
 export const NOT_CARRIED = new Set(['deleteProject', 'restoreProject', 'deleteStep', 'setProjectTeam', 'addFile', 'setAiKey', 'setAiProvider',
-  'removeFromProject', 'setParent', 'removeLink', 'editLink', 'finish', 'teamWorked', 'deleteWorkNote', 'editWorkNote', 'setNoteStep', 'setProjectField', 'setStepField',
+  'removeFromProject', 'setParent', 'removeLink', 'editLink', 'finish', 'teamWorked', 'deleteWorkNote', 'editWorkNote', 'setNoteStep', 'linkFollow', 'setProjectField', 'setStepField',
   'removeFile', 'setTimer', 'setEveryDefault', 'deleteTag', 'clearReply', 'markReplySent', 'undoReplySent', 'mailReplied', 'removeInbox', 'inboxUndo', 'deletePerson',
   'recordScores', 'removeTime', 'incrementAiUsage', 'claimBrief', 'setBriefReady', 'addEvent', 'makeMisc']);
 

@@ -3238,3 +3238,22 @@ test('addFile with stepId (owner, 29 Oct): a photo pasted on a step belongs to t
   assert.equal(files.find((f) => f.id === 'f1').stepId, 'a');
   assert.equal(files.find((f) => f.id === 'f2').stepId, undefined, 'unknown step: an ordinary file of the task');
 });
+
+test('linkFollow (owner, 29 Oct): the next task is linked both ways and sits where the old one was (projects, tag, priority, move every); never twice, never a 📂 project', async () => {
+  const { applyOps, emptyData, makeOp, NOT_CARRIED } = await import('../docs/ops.js');
+  const s = { data: emptyData(), history: {} };
+  applyOps(s, [makeOp('createMainProject', { projectId: 'm', name: 'Raw materials' }),
+    makeOp('createProject', { projectId: 'a', name: 'Get 400# feldspar sample' }), makeOp('addToProject', { projectId: 'a', parentId: 'm' }),
+    makeOp('setProjectField', { projectId: 'a', field: 'priority', value: 'high' }),
+    makeOp('createProject', { projectId: 'b', name: 'Get 20 kg of 400# feldspar' }),
+    makeOp('linkFollow', { projectId: 'a', nextId: 'b' }), makeOp('finish', { projectId: 'a' })]);
+  const a = s.data.projects.find((p) => p.id === 'a'), b = s.data.projects.find((p) => p.id === 'b');
+  assert.equal(a.nextId, 'b'); assert.equal(b.prevId, 'a');
+  assert.deepEqual(b.parentIds, ['m'], 'in the same 📂 project');
+  assert.equal(b.priority, 'high');
+  assert.equal(a.state, 'finished'); assert.equal(b.state, 'active');
+  applyOps(s, [makeOp('createProject', { projectId: 'c', name: 'Again' })]);
+  assert.equal(applyOps(s, [makeOp('linkFollow', { projectId: 'a', nextId: 'c' })]).length, 0, 'one next task only');
+  assert.equal(applyOps(s, [makeOp('linkFollow', { projectId: 'm', nextId: 'c' })]).length, 0, 'not a 📂 project');
+  assert.ok(NOT_CARRIED.has('linkFollow'));
+});

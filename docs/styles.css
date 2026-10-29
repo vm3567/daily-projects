@@ -1335,6 +1335,10 @@ button.stage-chip.tap { cursor: pointer; font-size: 12.5px; padding: 3px 10px; }
 .step-wait-photos { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 6px 0 2px; }
 .step-wait-photo { display: inline-flex; align-items: center; gap: 4px; }
 
+/* ↩ / ➜ a task and the next task made from it (owner, 29 Oct) */
+.follow-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 8px; }
+.tag.follow-chip { cursor: pointer; background: var(--brand-soft); border-color: var(--brand); color: var(--brand); }
+
 /* ---------------------------------------------------------------- the staff view (one app: ui/staff.js)
    Staff see this app's own design. Only the few pieces this app had no style for, and only inside the staff view
    (.layout.staff), so the owner's screens never change. */

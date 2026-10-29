@@ -93,6 +93,34 @@ export async function pasteIntoStep(ctx, p, files, stepId = null) {
   if (!step && photos.length) ctx.toast('📷 Now type the step and press Enter: the photo goes with it', 4000);
 }
 
+/**
+ * ➜ Finish this task and start the next one from it (owner, 29 Oct): one action, one Undo. The new task is linked
+ * both ways and opens. A finished task (no next one yet) can start its next one too.
+ */
+export function startNextTask(ctx, p) {
+  if (!p || p.misc || p.nextId) return false;
+  const name = globalThis.prompt ? prompt(`What is the next task?\n\n“${p.name}” is finished, and the new task is linked to it (same project, tag and priority).`, '') : null;
+  if (!name || !name.trim()) return false;
+  const nextId = newId();
+  const steps = [['createProject', { projectId: nextId, name: name.trim() }], ['linkFollow', { projectId: p.id, nextId }]];
+  if (p.state !== 'finished') steps.push(['finish', { projectId: p.id }]);
+  const done = ctx.actMany(p.id, steps, `✓ ${p.name} finished · ➜ next: ${name.trim()}`);
+  if (done && ctx.openProject) ctx.openProject(nextId);
+  return !!done;
+}
+
+/** ↩ the task this one came from, ➜ the next task made from it: tap to open. */
+function followChips(ctx, p) {
+  const all = ctx.store.view.data.projects;
+  const prev = p.prevId ? all.find((x) => x.id === p.prevId) : null;
+  const next = p.nextId ? all.find((x) => x.id === p.nextId) : null;
+  if (!prev && !next) return null;
+  const chip = (x, words) => h('button', { class: 'tag follow-chip', type: 'button', title: 'Open it', onClick: () => ctx.openProject(x.id) }, words);
+  return h('div', { class: 'follow-chips', key: 'follow-' + p.id },
+    prev ? chip(prev, `↩ Came from: ${prev.name}${prev.state === 'finished' ? ' ✓' : ''}`) : null,
+    next ? chip(next, `➜ Next task: ${next.name}`) : null);
+}
+
 /** The photos that belong to a step (pasted on it), small; a tap opens one. */
 function stepOwnPhotos(ctx, p, s) {
   const mine = (p.files || []).filter((f) => f.stepId === s.id);
@@ -942,6 +970,7 @@ function projectMenu(ctx, p) {
     p.state === 'active' ? item('📅 Only on…', () => { ui.onlyDaysOpen = p.id; }) : null,
     p.state === 'active' ? item('🔔 Remind me once…', () => { ui.remindOnceOpen = p.id; }) : null,
     p.state === 'active' ? item('⏸ Pause', () => ctx.act('pause', { projectId: p.id }, `Paused: ${p.name}`)) : null,
+    !p.misc && !p.nextId && !isMainProject(store.view.data, p) ? item(p.state === 'finished' ? '➜ Start the next task from it…' : '➜ Finish + start the next task…', () => startNextTask(ctx, p)) : null, // (owner, 29 Oct)
     timed ? item('⏱ Add time', () => addTimePrompt(ctx, p)) : null,
     item('✎ Tag, priority, target date', () => { ui.editMeta = true; }),
     // 📂 a task can be in several projects; a project can be inside other projects too (never 📂 Misc)
@@ -1208,7 +1237,9 @@ export function renderDetail(ctx) {
     ui.showTime === p.id ? timeLine(ctx, p, today) : null,
     teamMessages(ctx, p),
     p.misc ? null : statusLine(ctx, p),
-    p.state !== 'active' ? h('p', { class: 'banner' }, p.state === 'paused' ? `This ${kindWord(ctx, p)} is paused. It is hidden from Today.` : `This ${kindWord(ctx, p)} is finished.`) : null,
+    p.state !== 'active' ? h('p', { class: 'banner' }, p.state === 'paused' ? `This ${kindWord(ctx, p)} is paused. It is hidden from Today.` : `This ${kindWord(ctx, p)} is finished.`,
+      p.state === 'finished' && !p.nextId && !p.misc && !isMainProject(store.view.data, p) ? [' ', h('button', { class: 'link', type: 'button', onClick: () => startNextTask(ctx, p) }, '➜ Start the next task from it')] : null) : null,
+    followChips(ctx, p), // ↩ came from / ➜ next task (owner, 29 Oct)
     mainChip(ctx, p), // 📂 Kilns › 📂 Supplier approval › (the projects this task is in)
     subProjectsBlock(ctx, p, today), // a 📂 project: TASKS (N)
 
