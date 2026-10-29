@@ -961,6 +961,17 @@ export function pasteGoesToProject(ui, { viewerOpen = false, narrow = false } = 
 }
 
 /** Ctrl+V inside the "+ New task" box: it belongs to the new task, never to the project open on the right. */
+/**
+ * A paste with nothing in it this app can read (no file, no words): e.g. Outlook's "Copy" on an attachment, which keeps
+ * only Outlook's own note of it on the clipboard ("application/owa-item-drag-data"), never the file (owner, 29 Oct).
+ */
+export function emptyPaste(cd) {
+  if (!cd) return false;
+  const has = (t) => !!String(cd.getData(t) || '').trim();
+  return ![...(cd.files || [])].length && !has('text/plain') && !has('text/html');
+}
+export const EMPTY_PASTE = 'Nothing to paste: Outlook\'s "Copy" keeps an attachment inside Outlook. Download it and drag the file here — or open the photo, right-click it → Copy image, then paste.';
+
 export function pasteInForm(target) {
   const el = target && target.nodeType === 3 ? target.parentNode : target; // (a text node inside a box)
   return !!(el && typeof el.closest === 'function' && el.closest('.new-task-box'));

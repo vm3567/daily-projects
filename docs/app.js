@@ -21,7 +21,7 @@ import { ServerRepo, SERVER_TOKEN_KEY } from './serverrepo.js';
 import { MockRepo } from './mockrepo.js';
 import { device } from './device.js';
 import { DATA_OWNER, DATA_REPO, DATA_BRANCH, MOVED_TO, REFRESH_MS, AI_DAILY_LIMIT, BRIEF_CLAIM_MINUTES, WAIT_RED_DAYS, NO_WORK_NOTE_DAYS } from './config.js';
-import { dotColour, greenByTeamOnly, isSnoozed, restUntil, restReason, onlyDaysLabel, openIdFromHash, awakeProjects, activeProjects, nextStep, todayIndia, isSundayIndia, colourCounts, isOverdue, indiaDate, waitingDays, daysWithoutWork, dayScore, greenStreak, addDays, monthOf, fmtMinutes, takeBackWaits, staffStepAction, pasteGoesToProject, singleStepClose, versionRequest, askDiaryAgain, pasteInForm, diaryLoadedAt, photoNeedsFetch, teamUndoKey, teamActionUndone, teamProgressOf, projectKeyIgnored, teamMovedTo, serverHolder, keepMovedStep, teamMemberFor, repliesOf, mailThreads, replyMailto, MAILTO_BODY_MAX, emailPath, pasteReason } from './rules.js';
+import { dotColour, greenByTeamOnly, isSnoozed, restUntil, restReason, onlyDaysLabel, openIdFromHash, awakeProjects, activeProjects, nextStep, todayIndia, isSundayIndia, colourCounts, isOverdue, indiaDate, waitingDays, daysWithoutWork, dayScore, greenStreak, addDays, monthOf, fmtMinutes, takeBackWaits, staffStepAction, pasteGoesToProject, emptyPaste, EMPTY_PASTE, singleStepClose, versionRequest, askDiaryAgain, pasteInForm, diaryLoadedAt, photoNeedsFetch, teamUndoKey, teamActionUndone, teamProgressOf, projectKeyIgnored, teamMovedTo, serverHolder, keepMovedStep, teamMemberFor, repliesOf, mailThreads, replyMailto, MAILTO_BODY_MAX, emailPath, pasteReason } from './rules.js';
 import { stageOf, stageCounts, byStage, STAGES, STAGE_LABELS, moveEveryOf, everyText, MOVE_EVERY_PICKS, MOVE_EVERY_DEFAULT, everyDefaultOf, useEveryDefault, colourShort, colourWhy } from './rules.js';
 import { stageChip, stageFilterBar } from './ui/stage.js';
 import { whoFromUser, signInTag, timerOn, projectGiveChanges, UNDO_GRACE_MS, MISC_ID } from './rules.js';
@@ -279,6 +279,7 @@ async function startManager(user, teamTask = 0) {
 const TEAM_BOX = /^Reply or give/, STAFF_BOX = /^Ask or reply/; // (the message boxes' first words)
 function pasteToView(view, e, box) {
   if (e.defaultPrevented || !e.clipboardData) return;
+  if (emptyPaste(e.clipboardData)) { e.preventDefault(); toast(EMPTY_PASTE, 8000); return; } // (say why nothing came: owner, 29 Oct)
   const inMessageBox = !!(e.target && e.target.tagName === 'TEXTAREA' && box.test(e.target.placeholder || ''));
   if (view.act.paste({ files: [...(e.clipboardData.files || [])], text: e.clipboardData.getData('text/plain') || '', inMessageBox })) e.preventDefault();
 }
@@ -3895,6 +3896,7 @@ function startOwner() {
   document.addEventListener('paste', (e) => {
     if (space === 'team' && teamView) { pasteToView(teamView, e, TEAM_BOX); return; } // the team pages: an instruction file, or a photo message
     if (e.defaultPrevented || !store || !store.view) return;
+    if (emptyPaste(e.clipboardData)) { e.preventDefault(); toast(EMPTY_PASTE, 8000); return; } // anywhere (a step, the update box): say why nothing came, never stay silent (owner, 29 Oct)
     if (pasteInForm(e.target)) return; // naming a new task: its own box takes the paste, never the open task's update
     // the project page must be on screen (not the Diary, Dashboard, Settings, Time, People, the round, Quick capture, or a sheet on top)
     if (!pasteGoesToProject(ui, { viewerOpen: !document.getElementById('viewer').hidden, narrow: matchMedia('(max-width: 760px)').matches })) return;

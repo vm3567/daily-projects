@@ -3208,3 +3208,19 @@ test('setNoteStep (owner, 24 Oct): an update saved under the wrong step moves to
   assert.equal(note().text, 'All photos of the residue', 'the words stay');
   assert.ok(NOT_CARRIED.has('setNoteStep') && !CARRIED.has('setNoteStep'));
 });
+
+test('emptyPaste (owner, 29 Oct): a paste with no file and no words (Outlook\'s attachment "Copy") is told, not ignored; a photo or words are not "empty"', async () => {
+  const { emptyPaste, EMPTY_PASTE } = await import('../docs/rules.js');
+  const cd = (data = {}, files = []) => ({ files, getData: (t) => data[t] || '' });
+  assert.equal(emptyPaste(cd()), true, 'Outlook\'s copy: only its own note, nothing we can read');
+  assert.equal(emptyPaste(cd({ 'text/html': '  ' })), true);
+  assert.equal(emptyPaste(cd({}, [{ name: '3.jpg', type: 'image/jpeg' }])), false, 'a real photo');
+  assert.equal(emptyPaste(cd({ 'text/plain': 'hello' })), false);
+  assert.equal(emptyPaste(cd({ 'text/html': '<b>x</b>' })), false);
+  assert.equal(emptyPaste(null), false);
+  assert.match(EMPTY_PASTE, /Download it and drag the file here/);
+  assert.match(EMPTY_PASTE, /Copy image/);
+  const { readFileSync } = await import('node:fs');
+  const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
+  assert.equal((app.match(/if \(emptyPaste\(e\.clipboardData\)\) \{ e\.preventDefault\(\); toast\(EMPTY_PASTE, 8000\); return; \}/g) || []).length, 2, 'the owner\'s pages, and the team pages + staff app');
+});
