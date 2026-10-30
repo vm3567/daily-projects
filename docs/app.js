@@ -14,6 +14,7 @@ import { renderConnectionsSettings, renderFromApps, loadApps, appsPending, forge
 import { projectChips, renderProjectsHead, openMainBox, openMoveBox, moveBox, listColour, newInnerProject } from './ui/mains.js';
 import { projectMatches, diaryEntries, backupPayload, summaryText, personMessageText, personMessageHtml, sentMarkOf, copyNotice, tasksListText, teamUpdatesText } from './reports.js';
 import { closeViewer, uploadBlob, photoThumb } from './ui/files.js';
+import { showPhotos } from './ui/photoview.js';
 import { newTaskBox, createTaskWithNote, richView } from './ui/richedit.js';
 import { Store } from './store.js';
 import { GitHubRepo } from './github.js';
@@ -193,8 +194,10 @@ function serverTools(api, more = {}) {
     location.replace(location.pathname); // this app's sign-in
   };
   /** A photo or PDF on top of the page (the same viewer as the owner's files). */
-  const viewer = (url, name, image) => {
+  const viewer = (url, name, image, gallery = null) => {
     const v = document.getElementById('viewer');
+    // a photo (and the others next to it): the Facebook-like viewer (owner, 30 Oct)
+    if (image) { showPhotos(v, { items: gallery ? gallery.items : [() => url], index: gallery ? gallery.index : 0, name: name === 'Photo' ? '' : name }); return; }
     const close = () => { v.hidden = true; v.replaceChildren(); };
     v.replaceChildren(h('div', { class: 'viewer-bar' }, h('strong', { class: 'viewer-name' }, name), h('a', { class: 'btn', href: url, download: name }, 'Download'), h('button', { class: 'btn', title: 'Close (Esc)', onClick: close }, 'Close')),
       h('div', { class: 'viewer-body' }, image ? h('img', { src: url, alt: name }) : h('iframe', { src: url, title: name })));
@@ -514,6 +517,8 @@ const ctx = {
     .then(() => { refreshDaily(p.id); loadTeam(true); toast('Sent ✓'); }),
   teamSeen: (p, taskIds, upTo = 0) => teamApi('tasks.read', { ids: taskIds, ...(upTo ? { upTo } : {}) }).then(() => { refreshDaily(p.id); loadTeam(true); }),
   teamMsgPhoto: (id) => teamMsgPhoto(id),
+  // the team's photos on the project pages open in the photo viewer, with ‹ › through the ones next to it (owner, 30 Oct)
+  viewTeamPhotos: (kind, ids, index = 0, name = '') => showPhotos(document.getElementById('viewer'), { items: ids.map((id) => () => teamPhotoUrl(kind, id)), index, name, onClose: closeViewer }),
   teamDeleteUpdate: (p, id) => teamApi('update.delete', { id }).then(() => { refreshDaily(p.id); loadTeam(true); toast('Deleted'); }),
   teamDeleteMsg: (p, id) => teamApi('comment.delete', { id }).then(() => { refreshDaily(p.id); loadTeam(true); toast('Deleted'); }),
   moreDaily: (p) => { const e = daily.get(p.id); teamDaily(p, (e ? e.days : 30) + 30); },
@@ -3399,6 +3404,21 @@ function withSyncLock(fn) {
 
 /** A team member's photo for the diary (needs the sign-in, so it is fetched, then shown). null while loading. */
 const teamPhotos = new Map(); // photo id -> object URL, 'loading', or { failedAt } (tried again after a minute, or on ↻)
+/** A team photo's address for the viewer (fetched once, kept): kind 'photo' (an update's) or 'comment.photo' (a message's). */
+const teamPhotoUrls = new Map();
+function teamPhotoUrl(kind, id) {
+  const shown = kind === 'photo' ? teamPhotos.get(id) : null;
+  if (typeof shown === 'string' && shown !== 'loading') return Promise.resolve(shown);
+  const k = kind + ':' + id;
+  if (!teamPhotoUrls.has(k)) {
+    const p = fetch(`../api/?a=${kind}&id=${id}`, { headers: { Authorization: 'Bearer ' + serverToken() } })
+      .then((r) => (r.ok ? r.blob() : Promise.reject(new Error('photo')))).then((b) => URL.createObjectURL(b));
+    p.catch(() => teamPhotoUrls.delete(k)); // tried again next time
+    teamPhotoUrls.set(k, p);
+  }
+  return teamPhotoUrls.get(k);
+}
+
 function teamPhoto(id) {
   const v = teamPhotos.get(id);
   if (typeof v === 'string' && v !== 'loading') return v;

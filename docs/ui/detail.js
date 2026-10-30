@@ -221,7 +221,7 @@ function teamMessages(ctx, p) {
         h('span', { class: 'muted small' }, `${c.by} · ${fmtDay(c.at.slice(0, 10))} ${fmtTime(c.at.replace(' ', 'T') + '+05:30')}`,
           teamMsgDelete(ctx, p, c)),
         c.text ? h('div', null, `“${c.text}”`) : null,
-        c.photo ? (src ? h('img', { class: 'diary-photo', src, alt: 'Photo', onClick: () => window.open(src, '_blank', 'noopener') }) : h('span', { class: 'muted small' }, '📷 photo')) : null);
+        c.photo ? (src ? h('img', { class: 'diary-photo', src, alt: 'Photo', onClick: () => viewTeam(ctx, 'comment.photo', [c.id], 0, c.by, src) }) : h('span', { class: 'muted small' }, '📷 photo')) : null);
     }),
     h('form', { class: 'row', onSubmit: (e) => { e.preventDefault(); send(e.target); } },
       h('input', { name: 'reply', key: 'reply-' + p.id, placeholder: 'Answer…', autocomplete: 'off', value: (ui.teamReply || {})[p.id] || '', onInput: (e, el) => { (ui.teamReply = typeof ui.teamReply === 'object' && ui.teamReply ? ui.teamReply : {})[p.id] = el.value; } }),
@@ -282,13 +282,19 @@ export function makeItAProject(ctx, p, s, tt) {
 }
 
 /** The photos on a staff step (its newest updates: today's and the one before), small; a tap opens one. */
+/** A team photo opens in the photo viewer, with ‹ › through the ones next to it (owner, 30 Oct: "like a facebook photos"). */
+function viewTeam(ctx, kind, ids, index, name, src) {
+  if (ctx.viewTeamPhotos) ctx.viewTeamPhotos(kind, ids, index, name);
+  else window.open(src, '_blank', 'noopener');
+}
+
 export function stepPhotos(ctx, tt) {
   if (!tt || !ctx.teamPhoto) return null;
   const ids = [...new Set([...((tt.today && tt.today.photos) || []), ...((tt.last && tt.last.photos) || [])])];
   if (!ids.length) return null;
-  return h('div', { class: 'step-photos', key: 'sp-' + tt.id }, ids.map((pid) => {
+  return h('div', { class: 'step-photos', key: 'sp-' + tt.id }, ids.map((pid, i) => {
     const src = ctx.teamPhoto(pid);
-    return src ? h('img', { class: 'diary-photo', src, alt: 'Photo', key: 'spp-' + pid, onClick: () => window.open(src, '_blank', 'noopener') }) : h('span', { class: 'muted small', key: 'spp-' + pid }, ' 📷');
+    return src ? h('img', { class: 'diary-photo', src, alt: 'Photo', key: 'spp-' + pid, onClick: () => viewTeam(ctx, 'photo', ids, i, '', src) }) : h('span', { class: 'muted small', key: 'spp-' + pid }, ' 📷');
   }));
 }
 
@@ -1372,9 +1378,9 @@ function projectDiary(ctx, p, upd) {
         about(taskStep.get(u.taskId)),
         ctx.teamDeleteUpdate && u.id ? h('button', { class: 'link small', title: 'Delete', 'aria-label': `Delete ${u.by}'s update`, key: 'du-' + u.id, // (owner, 29 Oct: "delete this info only")
           onClick: () => { const n = (u.photos || []).length; if (confirm(`Delete ${u.by}'s update${n ? ` and its ${n} photo${n > 1 ? 's' : ''}` : ''}? It goes for everyone.`)) ctx.teamDeleteUpdate(p, u.id).catch((e) => ctx.toast(e.message, 5000)); } }, ' ✕') : null,
-        ...(u.photos || []).map((pid) => {
+        ...(u.photos || []).map((pid, i) => {
           const src = ctx.teamPhoto ? ctx.teamPhoto(pid) : null;
-          return src ? h('img', { class: 'diary-photo', src, alt: 'Photo', key: 'tp-' + pid, onClick: () => window.open(src, '_blank', 'noopener') }) : h('span', { class: 'muted small', key: 'tp-' + pid }, ' 📷');
+          return src ? h('img', { class: 'diary-photo', src, alt: 'Photo', key: 'tp-' + pid, onClick: () => viewTeam(ctx, 'photo', u.photos, i, `${u.by} · ${fmtDay(u.day)}`, src) }) : h('span', { class: 'muted small', key: 'tp-' + pid }, ' 📷');
         }),
       ]),
     });
@@ -1383,7 +1389,7 @@ function projectDiary(ctx, p, upd) {
     if (c.unread) continue; // new ones are in the message box at the top (not twice)
     const src = c.photo && ctx.teamMsgPhoto ? ctx.teamMsgPhoto(c.id) : null;
     entries.push({ day: c.at.slice(0, 10), at: iso(c.at), work: false, stepId: taskStep.get(c.taskId), node: diaryLine('💬', c.mine ? 'You' : c.by, c.text ? `“${c.text}”` : '', [
-      c.photo ? (src ? h('img', { class: 'diary-photo', src, alt: 'Photo', key: 'mp-' + c.id, onClick: () => window.open(src, '_blank', 'noopener') }) : h('span', { class: 'muted small', key: 'mp-' + c.id }, ' 📷 Photo')) : null,
+      c.photo ? (src ? h('img', { class: 'diary-photo', src, alt: 'Photo', key: 'mp-' + c.id, onClick: () => viewTeam(ctx, 'comment.photo', [c.id], 0, c.mine ? 'You' : c.by, src) }) : h('span', { class: 'muted small', key: 'mp-' + c.id }, ' 📷 Photo')) : null,
       about(taskStep.get(c.taskId)), teamMsgDelete(ctx, p, c)]) });
   }
   const byDay = new Map();

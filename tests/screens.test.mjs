@@ -1060,7 +1060,7 @@ test('📂 Projects page: a click on a project row selects it and stays on the p
   assert.match(mainsSrc, /ctx\.ui\.view === 'mains' && ctx\.showHere \? ctx\.showHere\(c\.id\)/, 'a task in the TASKS table while on the Projects page');
   const here = app.slice(app.indexOf('  showHere: (id) => {'), app.indexOf('  openProject: (id) => {'));
   assert.match(here, /select\(id\);/);
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-62'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-63'/, 'phones get the new copy');
 });
 
 test('📂 project page: "✕ Remove" on a task row takes it out of this project only — the task is kept (and stays in its other projects)', () => {
@@ -1846,7 +1846,7 @@ test('🔌 app wiring (app.js): "🔌 From apps" after ✉ Replies with the wait
   assert.match(app, /function go\(view\) \{\n\s*if \(view !== 'settings'\) forgetOnce\(\);/);
   assert.match(app, /if \(onServer\) loadApps\(appsCtx, force \|\| ui\.view === 'apps'\);/);
   assert.match(app, /replies: '✉ Replies', apps: '🔌 From apps', mains: '📂 Projects' \}\[ui\.view\]/, 'its page title');
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-62'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-63'/, 'phones get the new copy');
 });
 
 test('🔌 the PHP connector (team/connector/worktask-connector.php): the same text the app downloads, placeholders only (no real key), valid PHP 7.4+ (php -l), with wt_push / wt_withdraw / wt_decisions / wt_receive_decision', async () => {
@@ -4832,7 +4832,7 @@ test('Review6 1 (owner, 24 Oct): iPhone photos (.heic) become JPEG pictures — 
   const files = readFileSync(new URL('../docs/ui/files.js', import.meta.url), 'utf8');
   assert.match(files, /if \(isHeic\(file\.name, file\.type\)\) \{[^}]*heicToJpeg\(file, IMAGE_MAX_WIDTH\)/, 'owner upload: JPEG, even a small one');
   assert.match(files, /heic \? await heicToJpeg\(bytes, 800\)/, 'an old one shown as a picture');
-  assert.match(files, /if \(isHeic\(file\.name\)\) body = h\('img'/, 'and in the viewer');
+  assert.match(files, /if \(isHeic\(file\.name\) \|\| \(type && type\.startsWith\('image\/'\)\)\) \{\n\s*const url = isHeic\(file\.name\) \? URL\.createObjectURL\(await heicToJpeg\(bytes\)\) : currentUrl;/, 'and in the viewer (now the photo viewer, owner 30 Oct)');
   assert.match(readFileSync(new URL('../docs/ui/staff.js', import.meta.url), 'utf8'), /if \(isHeic\(file\.name, file\.type\)\) \{ try \{ return await heicToJpeg\(file, 1600\)/, 'staff and team uploads');
   for (const f of ['team.js', 'detail.js', 'richedit.js', 'staff.js']) assert.ok(!/files\.filter\(\(f\) => [^)]*startsWith\('image\/'\)\)/.test(readFileSync(new URL('../docs/ui/' + f, import.meta.url), 'utf8')), f + ': iPhone photos count as photos');
   assert.ok(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8').includes("'ui/heic.js'"));
@@ -5056,15 +5056,16 @@ test('a manager can delete a message the staff wrote (owner, 29 Oct: "allow me t
 
 test('a team message in What\'s happening has ✕ too (owner, 29 Oct: "i do not see a delete option"); never on a move note', async () => {
   const s = sampleState();
+  const tday = new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10); // (the project page shows days since the project began: today)
   const ctx = fakeCtx(s, { selected: 'p1', update: {} });
   ctx.onServer = true;
   ctx.teamInfo = () => ({ byStep: new Map(), fillBy: '18:00' });
   ctx.teamPeople = () => [];
   ctx.teamTask = () => null;
   ctx.teamDaily = () => ({ data: { tasks: [], updates: [], comments: [
-    { id: 51, taskId: 7, by: 'Ruturaj', at: '2026-10-29 10:00:00', text: 'sent by mistake', unread: false, kind: null },
-    { id: 52, taskId: 7, by: 'Boss', mine: true, at: '2026-10-29 09:00:00', text: 'call them', unread: false, kind: null },
-    { id: 53, taskId: 7, by: 'Boss', mine: true, at: '2026-10-29 08:00:00', text: '↔ Moved from Ravi to Ruturaj.', unread: false, kind: 'move' },
+    { id: 51, taskId: 7, by: 'Ruturaj', at: `${tday} 10:00:00`, text: 'sent by mistake', unread: false, kind: null },
+    { id: 52, taskId: 7, by: 'Boss', mine: true, at: `${tday} 09:00:00`, text: 'call them', unread: false, kind: null },
+    { id: 53, taskId: 7, by: 'Boss', mine: true, at: `${tday} 08:00:00`, text: '↔ Moved from Ravi to Ruturaj.', unread: false, kind: 'move' },
   ] } });
   const gone = [];
   ctx.teamDeleteMsg = (p, id) => { gone.push(id); return Promise.resolve(); };
@@ -5169,7 +5170,8 @@ test('the manager can delete a staff member\'s day update with its photos (owner
   ctx.teamInfo = () => ({ byStep: new Map(), fillBy: '18:00' });
   ctx.teamPeople = () => [];
   ctx.teamTask = () => null;
-  ctx.teamDaily = () => ({ data: { tasks: [], comments: [], updates: [{ ...u, taskId: 7 }] } });
+  const tday = new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10); // (the project page shows days since the project began: today)
+  ctx.teamDaily = () => ({ data: { tasks: [], comments: [], updates: [{ ...u, day: tday, at: `${tday} 13:50:00`, taskId: 7 }] } });
   const del = [];
   ctx.teamDeleteUpdate = (p, id) => { del.push([p.id, id]); return Promise.resolve(); };
   const was = globalThis.confirm;
@@ -5180,4 +5182,68 @@ test('the manager can delete a staff member\'s day update with its photos (owner
     assert.equal(asked, "Delete Ruturaj's update and its 5 photos? It goes for everyone.");
     assert.deepEqual(del, [['p1', 77]]);
   } finally { globalThis.confirm = was; }
+});
+
+test('🖼 the photo viewer, like Facebook photos (owner, 30 Oct): black page, round ✕ and ⬇, ‹ › and "2 / 5" through the photos next to it, arrow keys, Escape, a tap on the black space closes; one viewer everywhere', async () => {
+  const pv = await import('../docs/ui/photoview.js');
+  assert.equal(pv.nextIndex(0, 1, 5), 1);
+  assert.equal(pv.nextIndex(4, 1, 5), 0, 'after the last: the first');
+  assert.equal(pv.nextIndex(0, -1, 5), 4, 'before the first: the last');
+  // a small pretend page for the viewer
+  const P = Node.prototype, had = { classList: Object.getOwnPropertyDescriptor(P, 'classList'), ael: P.addEventListener, contains: P.contains };
+  Object.defineProperty(P, 'classList', { configurable: true, get() { const el = this; el._cls ||= new Set(); return { add: (c) => el._cls.add(c), remove: (c) => el._cls.delete(c), contains: (c) => el._cls.has(c) }; } });
+  P.addEventListener = function (k, f) { (this._on ||= {})[k] = f; };
+  P.contains = function (n) { return n === this || this.childNodes.some((c) => c.nodeType === 1 && c.contains(n)); };
+  const keys = [];
+  const doc = globalThis.document;
+  doc.addEventListener = (k, f) => keys.push(f); doc.removeEventListener = (k, f) => { const i = keys.indexOf(f); if (i >= 0) keys.splice(i, 1); };
+  try {
+    const v = new Node('div'); v.hidden = true;
+    const asked = [];
+    const items = ['a', 'b', 'c'].map((x) => () => { asked.push(x); return Promise.resolve('blob:' + x); });
+    pv.showPhotos(v, { items, index: 1, name: 'Ruturaj · 29 Oct' });
+    await tick();
+    const img = rFind(v, (n) => n.nodeName === 'IMG');
+    assert.equal(v.hidden, false);
+    assert.equal(img.src, 'blob:b', 'starts on the photo tapped');
+    assert.deepEqual(asked, ['b'], 'only that one is fetched');
+    assert.match(v.textContent, /2 \/ 3/);
+    assert.match(v.textContent, /Ruturaj · 29 Oct/);
+    const by = (label) => rFind(v, (n) => n.getAttribute && n.getAttribute('aria-label') === label);
+    assert.ok(by('Close') && by('Download this photo') && by('Previous photo') && by('Next photo'));
+    by('Next photo').__on.click({ stopPropagation() {} }); await tick();
+    assert.equal(img.src, 'blob:c'); assert.match(v.textContent, /3 \/ 3/);
+    keys[0]({ key: 'ArrowRight', preventDefault() {}, stopPropagation() {} }); await tick();
+    assert.equal(img.src, 'blob:a', '→ goes round to the first');
+    keys[0]({ key: 'ArrowLeft', preventDefault() {}, stopPropagation() {} }); await tick();
+    assert.equal(img.src, 'blob:c', '← back');
+    const root = v.childNodes[0];
+    root._on.touchstart({ touches: [{ clientX: 300 }] }); root._on.touchend({ changedTouches: [{ clientX: 100 }] }); await tick();
+    assert.equal(img.src, 'blob:a', 'a swipe to the left: the next one');
+    keys[0]({ key: 'Escape', preventDefault() {}, stopPropagation() {} });
+    assert.equal(v.hidden, true, 'Escape closes it');
+    assert.equal(keys.length, 0, 'and stops listening for keys');
+    // one photo: no arrows, no count; a tap on the black space closes
+    pv.showPhotos(v, { items: [() => 'blob:x'] });
+    await tick();
+    assert.equal(rFind(v, (n) => n.getAttribute && n.getAttribute('aria-label') === 'Next photo'), undefined);
+    const stage = rFind(v, (n) => (n.className || '').includes('pv-stage'));
+    stage.__on.click({ target: stage });
+    assert.equal(v.hidden, true);
+  } finally {
+    if (had.classList) Object.defineProperty(P, 'classList', had.classList); else delete P.classList;
+    P.addEventListener = had.ael; P.contains = had.contains; delete doc.addEventListener; delete doc.removeEventListener;
+  }
+  // every place uses it: team and staff pages (a row of photos moves through its row), the owner's files, the team photos on the project pages
+  const wp = readFileSync(new URL('../docs/ui/workparts.js', import.meta.url), 'utf8');
+  assert.match(wp, /onClick: \(\) => \{ if \(src\) viewer\(src, 'Photo', true, galleryOf\(pic, kind, list, i\)\); \}/, 'a row of photos');
+  assert.match(wp, /viewer\(src, s\.title, true, galleryOf\(pic, 'tstep\.photo', s\.photos\.map\(\(x\) => x\.id\), i\)\)/, 'a step\'s photos');
+  const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
+  assert.match(app, /if \(image\) \{ showPhotos\(v, \{ items: gallery \? gallery\.items : \[\(\) => url\], index: gallery \? gallery\.index : 0,/);
+  assert.match(app, /viewTeamPhotos: \(kind, ids, index = 0, name = ''\) => showPhotos\(/);
+  assert.match(readFileSync(new URL('../docs/ui/files.js', import.meta.url), 'utf8'), /showPhotos\(v, \{ items: \[\(\) => url\], name: file\.name, onClose: closeViewer \}\);/, 'the owner\'s own photos');
+  const det = readFileSync(new URL('../docs/ui/detail.js', import.meta.url), 'utf8');
+  assert.doesNotMatch(det, /window\.open\(src, '_blank', 'noopener'\) \}\)/, 'no team photo opens a new browser tab any more');
+  assert.match(readFileSync(new URL('../docs/styles.css', import.meta.url), 'utf8'), /#viewer:has\(> \.pv\) \{ padding: 0; background: #000; \}/, 'a black page');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /'ui\/photoview\.js'/, 'kept for offline');
 });

@@ -5,6 +5,7 @@ import { bytesToBase64 } from '../github.js';
 import { newId } from '../ops.js';
 import { MAX_FILE_BYTES, IMAGE_MAX_WIDTH } from '../config.js';
 import { isHeic, heicToJpeg, jpegName } from './heic.js';
+import { showPhotos } from './photoview.js';
 
 const VIEW_TYPES = {
   png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', pdf: 'application/pdf',
@@ -117,9 +118,14 @@ export async function openFile(ctx, file) {
     currentUrl = URL.createObjectURL(blob);
     const download = h('a', { class: 'btn', href: currentUrl, download: file.name }, 'Download');
     let body;
-    if (isHeic(file.name)) body = h('img', { src: URL.createObjectURL(await heicToJpeg(bytes)), alt: file.name }); // an iPhone photo saved before: shown as a picture
-    else if (type && type.startsWith('image/')) body = h('img', { src: currentUrl, alt: file.name });
-    else if (type === 'application/pdf') body = h('iframe', { src: currentUrl, title: file.name });
+    // a photo: the Facebook-like photo viewer (owner, 30 Oct); an iPhone photo saved before is shown as a picture
+    if (isHeic(file.name) || (type && type.startsWith('image/'))) {
+      const url = isHeic(file.name) ? URL.createObjectURL(await heicToJpeg(bytes)) : currentUrl;
+      if (my !== openSeq || v.hidden) return;
+      showPhotos(v, { items: [() => url], name: file.name, onClose: closeViewer });
+      return;
+    }
+    if (type === 'application/pdf') body = h('iframe', { src: currentUrl, title: file.name });
     else {
       body = h('div', { class: 'viewer-download' },
         h('p', null, `${file.name} (${fmtSize(file.size)})`),

@@ -1356,6 +1356,32 @@ button.stage-chip.tap { cursor: pointer; font-size: 12.5px; padding: 3px 10px; }
 .tsteps .tstep-photo { display: inline-flex; align-items: flex-start; gap: 2px; }
 .tsteps .add-step input { flex: 1; min-width: 0; }
 
+/* 🖼 the photo viewer, like Facebook photos (owner, 30 Oct): black page, photo big in the middle, round ✕ / ⬇ at the
+   top, ‹ › at the sides and "2 / 5" when there are more, the name under it (ui/photoview.js) */
+#viewer:has(> .pv) { padding: 0; background: #000; }
+.pv { position: relative; flex: 1; display: flex; flex-direction: column; min-height: 0; color: #fff; user-select: none; }
+.pv-top { position: absolute; top: 0; left: 0; right: 0; z-index: 2; display: flex; align-items: center; gap: 10px;
+  padding: calc(12px + env(safe-area-inset-top)) 14px 12px; background: linear-gradient(rgba(0,0,0,.55), rgba(0,0,0,0)); }
+.pv-gap { flex: 1; }
+.pv-count { font-size: 14px; font-weight: 600; opacity: .9; }
+.pv-btn { width: 42px; height: 42px; border-radius: 50%; border: 0; display: inline-grid; place-items: center; cursor: pointer;
+  background: rgba(255,255,255,.16); color: #fff; font-size: 20px; line-height: 1; text-decoration: none; transition: background .15s; }
+.pv-btn:hover, .pv-btn:focus-visible { background: rgba(255,255,255,.3); outline: none; }
+.pv-stage { flex: 1; min-height: 0; display: grid; place-items: center; padding: 64px 64px 48px; }
+.pv-img { max-width: 100%; max-height: calc(100dvh - 116px); object-fit: contain; border-radius: 4px; box-shadow: 0 8px 40px rgba(0,0,0,.6); transition: opacity .15s; }
+.pv-img.loading { opacity: .35; }
+.pv-arrow { position: absolute; top: 50%; transform: translateY(-50%); z-index: 2; width: 48px; height: 48px; font-size: 30px; }
+.pv-prev { left: 14px; }
+.pv-next { right: 14px; }
+.pv-name { position: absolute; bottom: 0; left: 0; right: 0; padding: 10px 16px calc(14px + env(safe-area-inset-bottom)); text-align: center;
+  font-size: 14px; background: linear-gradient(rgba(0,0,0,0), rgba(0,0,0,.6)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 760px) {
+  .pv-stage { padding: 60px 0 44px; }
+  .pv-img { max-height: calc(100dvh - 108px); border-radius: 0; }
+  .pv-arrow { width: 40px; height: 40px; font-size: 26px; background: rgba(0,0,0,.35); }
+  .pv-prev { left: 6px; } .pv-next { right: 6px; }
+}
+
 /* ---------------------------------------------------------------- the staff view (one app: ui/staff.js)
    Staff see this app's own design. Only the few pieces this app had no style for, and only inside the staff view
    (.layout.staff), so the owner's screens never change. */

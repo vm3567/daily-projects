@@ -86,21 +86,25 @@ export function chipsFor(t, td, { who = false } = {}) {
  */
 export function makePics(photo, render) {
   const pics = new Map(); // kind:id -> address, '' (missing), or 'loading'
-  return (kind, id) => {
+  const fn = (kind, id) => {
     const k = kind + ':' + id, v = pics.get(k);
     if (v !== undefined) return v === 'loading' ? null : v;
     pics.set(k, 'loading');
     photo(kind, id).then((u) => { pics.set(k, u); render(); }, () => { pics.set(k, ''); render(); });
     return null;
   };
+  fn.load = (kind, id) => photo(kind, id); // the photo viewer fetches the ones next to it when it moves to them
+  return fn;
 }
+/** What the photo viewer moves through: the photos of one row (‹ › and "2 / 5"). */
+const galleryOf = (pic, kind, ids, index) => ({ items: ids.map((id) => () => (pic.load ? pic.load(kind, id) : pic(kind, id))), index });
 
 /** A row of small photos (tap = the viewer). */
 export function photosRow(pic, viewer, kind, list) {
   if (!list || !list.length) return null;
-  return h('div', { class: 'row' }, list.map((id) => {
+  return h('div', { class: 'row' }, list.map((id, i) => {
     const src = pic(kind, id);
-    return h('img', { key: kind + id, alt: src === '' ? 'Photo missing' : 'Photo', class: 'diary-photo', src: src || undefined, onClick: () => { if (src) viewer(src, 'Photo', true); } });
+    return h('img', { key: kind + id, alt: src === '' ? 'Photo missing' : 'Photo', class: 'diary-photo', src: src || undefined, onClick: () => { if (src) viewer(src, 'Photo', true, galleryOf(pic, kind, list, i)); } });
   }));
 }
 
@@ -298,10 +302,10 @@ export function stepsBlock({ t, steps = [], meId = 0, manager = false, draft = {
   const files = draft.files || [];
   const pickPhotos = (label, onPick, key) => h('label', { class: 'btn small', key, title: label, 'aria-label': label }, '📷',
     h('input', { type: 'file', accept: 'image/*', multiple: true, class: 'visually-hidden', onChange: (e, el) => { const f = [...el.files]; el.value = ''; if (f.length) onPick(f); } }));
-  const photoBox = (s, p) => {
+  const photoBox = (s, p, i) => {
     const src = pic('tstep.photo', p.id);
     return h('span', { class: 'tstep-photo', key: 'sp-' + p.id },
-      h('img', { class: 'diary-photo', alt: src === '' ? 'Photo missing' : 'Photo', src: src || undefined, onClick: () => { if (src) viewer(src, 'Photo', true); } }),
+      h('img', { class: 'diary-photo', alt: src === '' ? 'Photo missing' : 'Photo', src: src || undefined, onClick: () => { if (src) viewer(src, s.title, true, galleryOf(pic, 'tstep.photo', s.photos.map((x) => x.id), i)); } }),
       canRemoveStepPhoto(p, meId, manager) ? h('button', { class: 'link small danger', type: 'button', title: 'Remove this photo', 'aria-label': 'Remove this photo', onClick: () => onRemovePhoto(s, p) }, '✕') : null);
   };
   return block(`☑ Steps${steps.length ? ` · ${done} of ${steps.length} done` : ''}`, h('div', { class: 'stack tsteps', key: 'tsteps-' + t.id },
@@ -315,7 +319,7 @@ export function stepsBlock({ t, steps = [], meId = 0, manager = false, draft = {
             a.edit ? h('button', { class: 'link small', type: 'button', title: 'Change the words', 'aria-label': 'Change this step', onClick: () => onEdit(s) }, '✎') : null,
             a.photo ? pickPhotos('Add photos to this step', (f) => onPhotos(s, f).then((m) => err.say(m)), 'pp-' + s.id) : null,
             a.del ? h('button', { class: 'link small danger', type: 'button', title: 'Delete', 'aria-label': 'Delete this step', onClick: () => onDelete(s) }, '✕') : null)),
-        s.photos && s.photos.length ? h('div', { class: 'row' }, s.photos.map((p) => photoBox(s, p))) : null);
+        s.photos && s.photos.length ? h('div', { class: 'row' }, s.photos.map((p, i) => photoBox(s, p, i))) : null);
     }) : h('p', { class: 'muted small' }, open ? 'No steps yet. Add the steps of this work — each can have photos.' : 'No steps.'),
     open ? h('form', { class: 'row add-step', onSubmit: (e) => { e.preventDefault(); onAdd().then((m) => err.say(m)); } },
       h('input', { key: 'tsadd-' + t.id, placeholder: '+ Add a step…', 'aria-label': 'Add a step', maxlength: '300', enterkeyhint: 'enter', autocomplete: 'off', value: draft.title || '',
