@@ -1400,7 +1400,7 @@ button.stage-chip.tap { cursor: pointer; font-size: 12.5px; padding: 3px 10px; }
 body { background: var(--canvas); letter-spacing: -.003em; }
 input, select, textarea { border-color: #dfe3eb; border-radius: 10px; transition: border-color .15s, box-shadow .15s; }
 input:focus, select:focus, textarea:focus { outline: none; border-color: var(--brand); box-shadow: 0 0 0 3px rgba(47, 92, 232, .14); }
-input[type=checkbox] { accent-color: var(--brand); }
+input[type=checkbox], input[type=radio] { accent-color: var(--brand); flex: none; } /* (never squeezed thin next to long words) */
 .btn { border-color: #e0e4ec; border-radius: 10px; box-shadow: var(--shadow-sm); font-weight: 500; transition: background .15s, box-shadow .15s, border-color .15s; }
 .btn:hover { background: #f7f8fb; border-color: #d3d9e4; }
 .btn.primary { background: var(--brand); border-color: var(--brand); box-shadow: 0 1px 2px rgba(47, 92, 232, .25), 0 2px 8px rgba(47, 92, 232, .18); }
@@ -1436,6 +1436,7 @@ input[type=checkbox] { accent-color: var(--brand); }
   #list, #detail { background: var(--bg); border: 1px solid var(--line); border-radius: 16px; box-shadow: var(--shadow-md); }
   #list { border-right: 1px solid var(--line); }
   .list-head { border-radius: 16px 16px 0 0; }
+  .bell-wrap { top: calc(18px + env(safe-area-inset-top)); right: 24px; } /* (inside the card's corner, not on its edge) */
 }
 @media (max-width: 760px) { body { background: var(--bg); } } /* a phone: one white page, as before */
 .diary-time .link { margin-left: 6px; } /* (the manager's ✕ on an update: a little space from its time) */

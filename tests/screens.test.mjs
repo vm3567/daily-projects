@@ -1060,7 +1060,7 @@ test('📂 Projects page: a click on a project row selects it and stays on the p
   assert.match(mainsSrc, /ctx\.ui\.view === 'mains' && ctx\.showHere \? ctx\.showHere\(c\.id\)/, 'a task in the TASKS table while on the Projects page');
   const here = app.slice(app.indexOf('  showHere: (id) => {'), app.indexOf('  openProject: (id) => {'));
   assert.match(here, /select\(id\);/);
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-64'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-65'/, 'phones get the new copy');
 });
 
 test('📂 project page: "✕ Remove" on a task row takes it out of this project only — the task is kept (and stays in its other projects)', () => {
@@ -1846,7 +1846,7 @@ test('🔌 app wiring (app.js): "🔌 From apps" after ✉ Replies with the wait
   assert.match(app, /function go\(view\) \{\n\s*if \(view !== 'settings'\) forgetOnce\(\);/);
   assert.match(app, /if \(onServer\) loadApps\(appsCtx, force \|\| ui\.view === 'apps'\);/);
   assert.match(app, /replies: '✉ Replies', apps: '🔌 From apps', mains: '📂 Projects' \}\[ui\.view\]/, 'its page title');
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-64'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-65'/, 'phones get the new copy');
 });
 
 test('🔌 the PHP connector (team/connector/worktask-connector.php): the same text the app downloads, placeholders only (no real key), valid PHP 7.4+ (php -l), with wt_push / wt_withdraw / wt_decisions / wt_receive_decision', async () => {
@@ -5260,4 +5260,12 @@ test('🎨 a fresh look (owner, 3 Nov: "only give the app a fresh look"): soft g
   assert.match(part, /@media \(max-width: 760px\) \{ body \{ background: var\(--bg\); \} \}/, 'a phone: one white page');
   assert.match(part, /\.menu-item\.current \{ background: #fff; color: var\(--brand\);/);
   assert.doesNotMatch(part, /display: none|content:/, 'only the look: nothing hidden or added');
+});
+
+test('fresh look, second check (owner, 3 Nov "check again with screenshots"): the 🔔 sits inside the card\'s corner on a computer; a tick box or round button is never squeezed thin next to long words', () => {
+  const css = readFileSync(new URL('../docs/styles.css', import.meta.url), 'utf8');
+  const part = css.slice(css.indexOf('🎨 a fresh look'), css.indexOf('the staff view (one app: ui/staff.js)'));
+  assert.match(part, /@media \(min-width: 761px\) \{[\s\S]*?\.bell-wrap \{ top: calc\(18px \+ env\(safe-area-inset-top\)\); right: 24px; \}[\s\S]*?\n\}/, 'the bell in the card corner (computer only)');
+  assert.ok(css.indexOf('.bell-wrap { top: calc(18px') > css.indexOf('.bell-wrap { position: fixed;'), 'after the bell\'s own rule, so it wins');
+  assert.match(part, /input\[type=checkbox\], input\[type=radio\] \{ accent-color: var\(--brand\); flex: none; \}/, 'was 7px wide in Settings on a phone');
 });
