@@ -1060,7 +1060,7 @@ test('📂 Projects page: a click on a project row selects it and stays on the p
   assert.match(mainsSrc, /ctx\.ui\.view === 'mains' && ctx\.showHere \? ctx\.showHere\(c\.id\)/, 'a task in the TASKS table while on the Projects page');
   const here = app.slice(app.indexOf('  showHere: (id) => {'), app.indexOf('  openProject: (id) => {'));
   assert.match(here, /select\(id\);/);
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-63'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-64'/, 'phones get the new copy');
 });
 
 test('📂 project page: "✕ Remove" on a task row takes it out of this project only — the task is kept (and stays in its other projects)', () => {
@@ -1846,7 +1846,7 @@ test('🔌 app wiring (app.js): "🔌 From apps" after ✉ Replies with the wait
   assert.match(app, /function go\(view\) \{\n\s*if \(view !== 'settings'\) forgetOnce\(\);/);
   assert.match(app, /if \(onServer\) loadApps\(appsCtx, force \|\| ui\.view === 'apps'\);/);
   assert.match(app, /replies: '✉ Replies', apps: '🔌 From apps', mains: '📂 Projects' \}\[ui\.view\]/, 'its page title');
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-63'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-64'/, 'phones get the new copy');
 });
 
 test('🔌 the PHP connector (team/connector/worktask-connector.php): the same text the app downloads, placeholders only (no real key), valid PHP 7.4+ (php -l), with wt_push / wt_withdraw / wt_decisions / wt_receive_decision', async () => {
@@ -5246,4 +5246,18 @@ test('🖼 the photo viewer, like Facebook photos (owner, 30 Oct): black page, r
   assert.doesNotMatch(det, /window\.open\(src, '_blank', 'noopener'\) \}\)/, 'no team photo opens a new browser tab any more');
   assert.match(readFileSync(new URL('../docs/styles.css', import.meta.url), 'utf8'), /#viewer:has\(> \.pv\) \{ padding: 0; background: #000; \}/, 'a black page');
   assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /'ui\/photoview\.js'/, 'kept for offline');
+});
+
+test('🎨 a fresh look (owner, 3 Nov: "only give the app a fresh look"): soft grey page with white rounded cards on a computer, one white page on a phone; only the look (before the staff view rules)', () => {
+  const css = readFileSync(new URL('../docs/styles.css', import.meta.url), 'utf8');
+  const look = css.indexOf('🎨 a fresh look'), staff = css.indexOf('the staff view (one app: ui/staff.js)');
+  assert.ok(look > 0 && look < staff, 'the fresh look sits with the other global rules');
+  const part = css.slice(look, staff);
+  assert.match(part, /--canvas: #f3f5f9;/);
+  assert.match(part, /body \{ background: var\(--canvas\);/);
+  assert.match(part, /@media \(min-width: 761px\) \{\n\s*\.layout \{ gap: 12px; padding: 12px 12px 12px 0; background: var\(--canvas\); \}/, 'a computer: cards with space between');
+  assert.match(part, /#list, #detail \{ background: var\(--bg\); border: 1px solid var\(--line\); border-radius: 16px;/);
+  assert.match(part, /@media \(max-width: 760px\) \{ body \{ background: var\(--bg\); \} \}/, 'a phone: one white page');
+  assert.match(part, /\.menu-item\.current \{ background: #fff; color: var\(--brand\);/);
+  assert.doesNotMatch(part, /display: none|content:/, 'only the look: nothing hidden or added');
 });
