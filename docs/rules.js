@@ -179,12 +179,19 @@ export function isSnoozed(project, today = todayIndia()) {
 export function dotColour(project, today = todayIndia()) {
   if (project.state !== 'active' || isSnoozed(project, today)) return 'grey';
   if (datePassed(project, today)) return 'red';
+  if (plannedAhead(project, today)) return dateSoon(project, today) ? 'yellow' : 'green';
   const every = moveEveryOf(project);
   const days = daysWithoutWork(project, today);
   if (days >= every * 2) return 'red';
   if (days >= every || dateSoon(project, today)) return 'yellow';
   return 'green';
 }
+
+/**
+ * It has a 📅 calendar time today or later (owner, 25 Nov: "i fixed a calendar time for a task it still shows red"):
+ * it is planned, so "no update for N days" waits until that day; once the day passes with no update, it counts again.
+ */
+export const plannedAhead = (p, today = todayIndia()) => !!(p && p.slot && p.slot.day >= today);
 
 /** "Move every N days": how often a task or project should have a real update (owner sets it; 3 when not set). */
 export const MOVE_EVERY_DEFAULT = 3;
@@ -225,6 +232,7 @@ export function colourWhy(p, today = todayIndia()) {
   if (isSnoozed(p, today)) return 'Snoozed';
   if (ownTarget(p) && p.deadline < today) return `Overdue · ${shortDay(p.deadline)}`; // (the same words as the list's tag, owner 24 Oct)
   if (datePassed(p, today)) return 'A step\'s due date has passed';
+  if (plannedAhead(p, today)) return `📅 Planned ${p.slot.day === today ? 'today' : shortDay(p.slot.day)} ${p.slot.start}${dateSoon(p, today) ? ' · ' + soonText(p, today) : ''}`;
   const days = daysWithoutWork(p, today);
   const last = days === 0 ? 'Updated today' : `No update for ${days} day${days === 1 ? '' : 's'}`;
   return `${last} · should move ${everyText(moveEveryOf(p))}${dateSoon(p, today) && days < moveEveryOf(p) ? ' · ' + soonText(p, today) : ''}`;

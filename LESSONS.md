@@ -70,3 +70,6 @@ Each lesson: what went wrong, then what to do next time.
 22. **A drop area that is only one line high is missed by a real mouse.** The calendar's "all day" row passed every
     check (they send the drop straight to it) but a real drag in the browser landed outside it.
     → Give every drop area a sensible minimum size, and try one real mouse drag in the browser before calling it done.
+23. **A new kind of plan must count in the colour rule.** The calendar added a planned time, but `dotColour` only
+    looked at days since the last update, so a task planned for Saturday still showed red.
+    → When a feature adds a new way to "deal with" a task (plan, snooze, give), check `dotColour` / `colourWhy` use it.

@@ -3425,3 +3425,22 @@ test('📅 Calendar rules: the Monday of a week, the weeks of a month, slot end;
   applyOp(s, op('setSlot', { projectId: 'x', day: '2026-11-20', start: '09:00', mins: 30 }, '2026-11-24'));
   assert.ok(unplannedTasks(s.data, '2026-11-24').some((p) => p.id === 'x'), 'a time in the past: to plan again');
 });
+
+test('a task with a 📅 calendar time today or later is not red for "no update" (owner, 25 Nov: "i fixed a calendar time for a task it still shows red"); once the day passes with no update it counts again; a passed target date still makes it red', async () => {
+  const { colourWhy, colourShort, plannedAhead } = await import('../docs/rules.js');
+  const s = withProject('2026-10-01');
+  const p = s.data.projects[0];
+  assert.equal(dotColour(p, '2026-10-24'), 'red', '23 days without an update');
+  assert.ok(applyOp(s, op('setSlot', { projectId: 'p1', day: '2026-10-28', start: '10:00', mins: 60 }, '2026-10-24')));
+  assert.equal(plannedAhead(p, '2026-10-24'), true);
+  assert.equal(dotColour(p, '2026-10-24'), 'green', 'planned for Wednesday: waits for that day');
+  assert.equal(colourWhy(p, '2026-10-24'), '📅 Planned 28 Oct 10:00');
+  assert.equal(colourShort(p, '2026-10-24'), '', 'no "No update for 23 days" chip');
+  assert.equal(dotColour(p, '2026-10-28'), 'green', 'on the day itself too');
+  assert.equal(colourWhy(p, '2026-10-28'), '📅 Planned today 10:00');
+  assert.equal(dotColour(p, '2026-10-29'), 'red', 'the day passed with no update: red again');
+  // a target date: near makes it yellow, passed makes it red, even when planned
+  assert.ok(applyOp(s, op('setProjectField', { projectId: 'p1', field: 'deadline', value: '2026-10-25' }, '2026-10-24')));
+  assert.equal(dotColour(p, '2026-10-24'), 'yellow', 'target tomorrow');
+  assert.equal(dotColour(p, '2026-10-26'), 'red', 'target passed');
+});
