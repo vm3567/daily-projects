@@ -4,7 +4,7 @@ import { h, fmtDay, fmtTime, fmtSize, HAS_KEYBOARD } from './dom.js';
 import { isPhoto } from './heic.js';
 
 const MOD = /Mac|iPhone|iPad/.test(globalThis.navigator ? navigator.platform || navigator.userAgent || '' : '') ? '⌘' : 'Ctrl';
-import { dotColour, isSnoozed, restUntil, restReason, onlyDaysOf, onlyDaysLabel, onlyDaysChip, remindOnceChip, indiaDateTime, WEEKDAYS, weekdayOf, stepWaitsForReminder, daysBetween, addDays, todayIndia, isOverdue, indiaDate, waitingDays, lastWorkDate, nextStep, stepLinkedTo, personStatus, minutesBetween, fmtMinutes, weekStart, seenUpTo, deleteQuestion, parseDuration } from '../rules.js';
+import { dotColour, isSnoozed, restUntil, restReason, onlyDaysOf, onlyDaysLabel, onlyDaysChip, remindOnceChip, indiaDateTime, WEEKDAYS, weekdayOf, stepWaitsForReminder, daysBetween, addDays, todayIndia, isOverdue, indiaDate, waitingDays, lastWorkDate, nextStep, stepLinkedTo, personStatus, minutesBetween, fmtMinutes, weekStart, seenUpTo, deleteQuestion, parseDuration, slotEnd, timeToMin, minToTime } from '../rules.js';
 import { WAIT_RED_DAYS } from '../config.js';
 import { newId, PRIORITIES, cleanUrl, MAX_SNOOZE_DAYS, ABOUT_MAX } from '../ops.js';
 
@@ -1058,6 +1058,11 @@ function infoChips(ctx, p, today) {
   }
   // 🔁 how often it should move (its dot follows it); a 📂 project's choice goes to everything inside it
   if (!p.misc && p.state !== 'finished') out.push(chip(`🔁 ${everyText(moveEveryOf(p))}`, `${colourWhy(p, today)} — tap to change how often it should move`, () => { ui.everyOpen = ui.everyOpen === p.id ? null : p.id; ctx.render(); }));
+  // 📅 its time on the calendar (owner, 25 Nov); tap to plan or change it (phones too: no dragging needed)
+  if (!p.misc && !isMainProject(data, p) && p.state !== 'finished') {
+    out.push(chip(p.slot ? `📅 ${slotLabel(p.slot)}` : '📅 Plan', p.slot ? 'Its time on the calendar — tap to change' : 'Give it a day and a time on the calendar',
+      () => { ui.planOpen = ui.planOpen === p.id ? null : p.id; ctx.render(); }, p.slot ? ' on' : ''));
+  }
   if (tagName(data, p)) out.push(chip(`🏷 ${tagName(data, p)}`, 'Tag — tap to change', editMeta));
   out.push(chip(p.priority[0].toUpperCase() + p.priority.slice(1), 'Priority — tap to change', editMeta, p.priority === 'high' ? ' bad' : ''));
   // finished: the day it ended, not a target any more (owner, 24 Oct)
@@ -1072,7 +1077,36 @@ function infoChips(ctx, p, today) {
     out.push(total ? chip(`⏱ ${fmtMinutes(total)}`, `Time on this ${kindWord(ctx, p)} — tap for details`, () => { ui.showTime = ui.showTime === p.id ? null : p.id; ctx.render(); })
       : chip('⏱ Add time', 'Add time worked (not timed)', () => addTimePrompt(ctx, p)));
   }
-  return h('div', { class: 'info-chips', key: 'ic-' + p.id }, out, peopleChips(ctx, p), everyPicker(ctx, p));
+  return h('div', { class: 'info-chips', key: 'ic-' + p.id }, out, peopleChips(ctx, p), everyPicker(ctx, p), planBox(ctx, p, today));
+}
+
+const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+/** "Wed 25 Nov · 10:00–11:30" */
+export function slotLabel(slot) {
+  return `${DOW[new Date(slot.day + 'T00:00:00Z').getUTCDay()]} ${fmtDay(slot.day)} · ${slot.start}–${slotEnd(slot.start, slot.mins)}`;
+}
+export const SLOT_LENGTHS = [15, 30, 45, 60, 90, 120, 180, 240, 360, 480];
+const lengthWord = (m) => (m < 60 ? `${m} min` : `${m / 60} hour${m === 60 ? '' : 's'}`.replace('.5 hours', '½ hours'));
+
+/** 📅 Plan: a day, a start time and how long; Save puts it on the calendar, "Off the calendar" takes it away. */
+function planBox(ctx, p, today) {
+  const { ui } = ctx;
+  if (ui.planOpen !== p.id) return null;
+  const f = (ui.planForm && ui.planForm.id === p.id) ? ui.planForm : (ui.planForm = { id: p.id, day: p.slot ? p.slot.day : today, start: p.slot ? p.slot.start : '10:00', mins: p.slot ? p.slot.mins : 60 });
+  const save = () => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(f.day) || !/^([01]\d|2[0-3]):[0-5]\d$/.test(f.start)) { ctx.toast('Pick a day and a time'); return; }
+    const start = minToTime(Math.round(timeToMin(f.start) / 15) * 15 % (24 * 60)); // (on the quarter hour)
+    ctx.act('setSlot', { projectId: p.id, day: f.day, start, mins: f.mins }, `📅 ${p.name}: ${slotLabel({ day: f.day, start, mins: f.mins })}`);
+    ui.planOpen = null; ui.planForm = null; ctx.render();
+  };
+  return h('div', { class: 'plan-box row', key: 'plan-' + p.id, role: 'group', 'aria-label': 'Plan on the calendar' },
+    h('label', null, 'Day ', h('input', { type: 'date', key: 'plan-day-' + p.id, value: f.day, onChange: (e, el) => { f.day = el.value; } })),
+    h('label', null, 'At ', h('input', { type: 'time', step: '900', key: 'plan-start-' + p.id, value: f.start, onChange: (e, el) => { f.start = el.value; } })),
+    h('label', null, 'For ', h('select', { key: 'plan-mins-' + p.id, value: String(f.mins), onChange: (e, el) => { f.mins = Number(el.value); } },
+      SLOT_LENGTHS.map((m) => h('option', { value: String(m) }, lengthWord(m))))),
+    h('button', { class: 'btn primary small', type: 'button', onClick: save }, 'Save'),
+    p.slot ? h('button', { class: 'btn small', type: 'button', onClick: () => { ctx.act('setSlot', { projectId: p.id, day: null }, `📅 ${p.name}: off the calendar`); ui.planOpen = null; ui.planForm = null; ctx.render(); } }, 'Off the calendar') : null,
+    h('button', { class: 'link small', type: 'button', onClick: () => { ui.planOpen = null; ui.planForm = null; ctx.render(); } }, 'Cancel'));
 }
 
 /** "Move every…": 1, 2, 3, 5, 7, 14, 30 days (the one now is marked). On a 📂 project it says it goes to its tasks too. */

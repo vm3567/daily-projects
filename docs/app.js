@@ -25,7 +25,8 @@ import { DATA_OWNER, DATA_REPO, DATA_BRANCH, MOVED_TO, REFRESH_MS, AI_DAILY_LIMI
 import { dotColour, greenByTeamOnly, isSnoozed, restUntil, restReason, onlyDaysLabel, openIdFromHash, awakeProjects, activeProjects, nextStep, todayIndia, isSundayIndia, colourCounts, isOverdue, indiaDate, waitingDays, daysWithoutWork, dayScore, greenStreak, addDays, monthOf, fmtMinutes, takeBackWaits, staffStepAction, pasteGoesToProject, emptyPaste, EMPTY_PASTE, ownerTaskMatches, stepPhotosToSend, singleStepClose, versionRequest, askDiaryAgain, pasteInForm, diaryLoadedAt, photoNeedsFetch, teamUndoKey, teamActionUndone, teamProgressOf, projectKeyIgnored, teamMovedTo, serverHolder, keepMovedStep, teamMemberFor, repliesOf, mailThreads, replyMailto, MAILTO_BODY_MAX, emailPath, pasteReason } from './rules.js';
 import { stageOf, stageCounts, byStage, STAGES, STAGE_LABELS, moveEveryOf, everyText, MOVE_EVERY_PICKS, MOVE_EVERY_DEFAULT, everyDefaultOf, useEveryDefault, colourShort, colourWhy } from './rules.js';
 import { stageChip, stageFilterBar } from './ui/stage.js';
-import { whoFromUser, signInTag, timerOn, projectGiveChanges, UNDO_GRACE_MS, MISC_ID, nestedGroups } from './rules.js';
+import { whoFromUser, signInTag, timerOn, projectGiveChanges, UNDO_GRACE_MS, MISC_ID, nestedGroups, calendarItems, unplannedTasks } from './rules.js';
+import { calendarView, calendarDays } from './ui/calendar.js';
 import { signInCard, firstPasswordCard } from './ui/signin.js';
 import { createBell } from './ui/bell.js';
 import { parentIdsOf, isMainProject, mainProjects, activeTasks, todayWithoutEmptyMains, todayList, stepTargets, mainSummary, childrenOf, deleteQuestion, pickEnterTarget, projectLine, projectTasks, inboxMatches } from './rules.js';
@@ -991,11 +992,12 @@ function visibleProjects({ stage = true } = {}) {
 
 function viewTitle() {
   if (ui.search.trim()) return `Search: "${ui.search.trim()}"`;
-  return { today: 'Today', inbox: 'Inbox', all: '✅ Tasks', paused: 'Paused', finished: 'Finished', diary: 'Diary', settings: 'Settings', people: 'People', dashboard: 'Dashboard', time: 'Time report', replies: '✉ Replies', apps: '🔌 From apps', mains: '📂 Groups' }[ui.view];
+  return { today: 'Today', calendar: '📅 Calendar', inbox: 'Inbox', all: '✅ Tasks', paused: 'Paused', finished: 'Finished', diary: 'Diary', settings: 'Settings', people: 'People', dashboard: 'Dashboard', time: 'Time report', replies: '✉ Replies', apps: '🔌 From apps', mains: '📂 Groups' }[ui.view];
 }
 
 function go(view) {
   if (view !== 'settings') forgetOnce(); // a new key shown once: gone when you leave Settings
+  ui.calBack = false; // ("← Back to 📅 Calendar" only right after a block was opened)
   if (view === 'apps' && onServer) loadApps(appsCtx, true); // 🔌 From apps: always fresh when you open it (a new job shows at once)
   ui.view = view;
   ui.rowMenu = null;
@@ -1144,6 +1146,7 @@ function renderMenu() {
       // order the owner chose (22 Oct): Today, Tasks, Projects, Replies, Inbox, Paused, Finished, People, Settings, More (no groups, 23 Oct)
       item('all', '✅ Tasks', activeTasks(data).length),
       item('mains', '📂 Groups', mainProjects(data).filter((m) => m.state !== 'finished' && !m.misc).length), // (the page's own count: "In no project" is not a project, owner 24 Oct)
+      item('calendar', '📅 Calendar', calendarItems(data, today, today, today).timed.length), // (owner, 25 Nov: what is planned today)
       item('replies', '✉ Replies', readyCount(data, today)), // replies ready to send
       onServer ? item('apps', '🔌 From apps', appsPending()) : null, // approvals your apps sent, waiting for ✓ / ✕
       item('inbox', '📥 Inbox', (data.inbox || []).length),
@@ -1716,6 +1719,68 @@ async function openReplyDraft(m) {
   }
 }
 
+/**
+ * 📅 Calendar (owner, 25 Nov): Day / Week / Month (a phone opens on Day). Drag a block to move it; drag a task from
+ * "Not on the calendar" onto a time to plan it; click an empty time to add a task there. A block opens its task.
+ */
+function renderCalendar() {
+  const today = todayIndia();
+  const data = store.view.data;
+  const narrow = typeof matchMedia === 'function' && matchMedia('(max-width: 760px)').matches;
+  const mode = ui.calMode || (narrow ? 'day' : 'week');
+  const day = ui.calDay || today;
+  const days = calendarDays(mode, day);
+  const { timed, allDay } = calendarItems(data, days[0], days[days.length - 1], today);
+  const find = (id) => data.projects.find((p) => p.id === id);
+  const un = unplannedTasks(data, today);
+  const side = h('aside', { class: 'pcal-side' },
+    h('h3', null, `Not on the calendar (${un.length})`),
+    un.length ? h('ul', { class: 'pcal-unplanned-list' }, un.slice(0, 60).map((p) => h('li', {
+      class: 'pcal-unplanned', key: 'un-' + p.id, draggable: 'true', title: 'Drag onto a time to plan it (or open it and tap 📅 Plan)',
+      onDragstart: (e) => { if (e.dataTransfer) { e.dataTransfer.setData('text/plain', p.id); e.dataTransfer.effectAllowed = 'move'; } },
+      onClick: () => openFromCalendar(p.id),
+    }, h('span', { class: 'dot ' + dotColour(p, today) }), ' ', p.name))) : h('p', { class: 'muted small' }, 'Every open task has a time.'));
+  return calendarView({
+    mode, day, today, items: timed, allDay, side, box: ui.calAdd ? calendarAddBox(un) : null,
+    onNav: (d) => { ui.calDay = d; render(); },
+    onMode: (m) => { ui.calMode = m; render(); },
+    onOpen: (id) => openFromCalendar(id),
+    onMove: (id, d, start) => {
+      const p = find(id);
+      if (!p) return;
+      const mins = p.slot ? p.slot.mins : 60;
+      act('setSlot', { projectId: id, day: d, start, mins }, `📅 ${p.name}: ${fmtDay(d)} ${start}`);
+    },
+    onAdd: (d, start) => { ui.calAdd = { day: d, start, mins: 60, name: '' }; render(); focusKey('cal-add-name'); },
+  });
+}
+/** From the calendar to a task's page, with "← Back to 📅 Calendar" on it. */
+function openFromCalendar(id) { ui.calBack = true; ui.view = 'all'; select(id); render(); }
+/** Click on an empty time: a new task there (its name), or a task not on the calendar yet put there. */
+function calendarAddBox(un) {
+  const a = ui.calAdd;
+  const close = () => { ui.calAdd = null; render(); };
+  const plan = (id, name) => { act('setSlot', { projectId: id, day: a.day, start: a.start, mins: a.mins }, `📅 ${name}: ${fmtDay(a.day)} ${a.start}`); close(); };
+  const add = () => {
+    const name = String(a.name || '').trim();
+    if (!name) { toast('Write the task first'); return; }
+    const projectId = newId();
+    if (!store.dispatch('createProject', { projectId, name })) return;
+    store.dispatch('setSlot', { projectId, day: a.day, start: a.start, mins: a.mins });
+    toast(`📅 New task: ${name} · ${fmtDay(a.day)} ${a.start}`);
+    close();
+  };
+  return h('form', { class: 'pcal-addbox row', key: 'cal-add', onSubmit: (e) => { e.preventDefault(); add(); } },
+    h('strong', null, `📅 ${fmtDay(a.day)} at ${a.start}`),
+    h('input', { name: 'name', key: 'cal-add-name', placeholder: 'New task…', autocomplete: 'off', value: a.name, onInput: (e, el) => { a.name = el.value; } }),
+    h('select', { key: 'cal-add-mins', 'aria-label': 'How long', value: String(a.mins), onChange: (e, el) => { a.mins = Number(el.value); } },
+      [15, 30, 45, 60, 90, 120, 180, 240].map((m) => h('option', { value: String(m) }, m < 60 ? `${m} min` : `${m / 60} h`))),
+    h('button', { class: 'btn primary small', type: 'submit' }, 'Add'),
+    un.length ? h('select', { key: 'cal-add-pick', 'aria-label': 'Or plan a task', onChange: (e, el) => { const p = un.find((x) => x.id === el.value); if (p) plan(p.id, p.name); } },
+      h('option', { value: '' }, 'or plan a task…'), un.slice(0, 60).map((p) => h('option', { value: p.id }, p.name))) : null,
+    h('button', { class: 'link small', type: 'button', onClick: close }, 'Cancel'));
+}
+
 function renderInbox() {
   const { data } = store.view;
   const items = data.inbox || [];
@@ -2261,6 +2326,7 @@ function renderListColumn() {
   if (ui.view === 'apps' && !ui.search) return h('div', { class: 'col-inner' }, head, timerStrip(), onServer ? renderFromApps(appsCtx) : h('p', { class: 'muted' }, 'Connections work on worktask.in.'));
   if (ui.view === 'settings' && !ui.search) return h('div', { class: 'col-inner' }, head, timerStrip(), renderSettings());
   if (ui.view === 'dashboard' && !ui.search) return h('div', { class: 'col-inner' }, head, timerStrip(), renderDashboard(ctx));
+  if (ui.view === 'calendar' && !ui.search) return h('div', { class: 'col-inner' }, head, timerStrip(), renderCalendar());
   if (ui.view === 'time' && !ui.search) return h('div', { class: 'col-inner' }, head, timerStrip(), renderTimeReport(ctx));
   if (ui.view === 'people' && !ui.search) return h('div', { class: 'col-inner' }, head, timerStrip(), renderPeopleList(ctx));
 
@@ -2674,14 +2740,15 @@ function render() {
   useEveryDefault(store.view.data); // 🔁 Settings: the owner's own "should move every N days" for tasks with no choice of their own
   if (ui.selected && !store.view.data.projects.some((p) => p.id === ui.selected)) ui.selected = null;
   if (!(ui.capture && typeof ui.capture === 'object')) { try { localStorage.removeItem(CLIP_KEY); } catch { /* blocked */ } } // added or closed
-  const wide = ['diary', 'settings', 'dashboard', 'time'].includes(ui.view) && !ui.search;
+  const wide = ['diary', 'settings', 'dashboard', 'calendar', 'time'].includes(ui.view) && !ui.search;
   const next = h('div', {
     class: ['layout', wide ? 'wide' : '', ui.mobile === 'detail' && !wide ? 'show-detail' : '', ui.menuOpen ? 'menu-open' : ''].join(' ').trim(),
   },
   h('aside', { id: 'menu' }, renderMenu()),
   h('div', { class: 'scrim', onClick: () => { ui.menuOpen = false; render(); } }),
   h('main', { id: 'list' }, renderListColumn()),
-  wide ? null : h('section', { id: 'detail' }, ui.round ? renderRound() : ui.view === 'people' && !ui.search ? renderPerson(ctx) : renderDetail(ctx)),
+  wide ? null : h('section', { id: 'detail' }, ui.calBack && ui.view === 'all' ? h('button', { class: 'link small pcal-back', type: 'button', onClick: () => { ui.calBack = false; go('calendar'); } }, '← Back to 📅 Calendar') : null,
+    ui.round ? renderRound() : ui.view === 'people' && !ui.search ? renderPerson(ctx) : renderDetail(ctx)),
   ui.showKeys ? keysHelp() : null,
   ui.capture ? captureBox() : null,
   rowMenu(), // right-click menu: over the list or the task's page
@@ -3040,7 +3107,7 @@ function goProject(step) {
 /** The next project after this one (in the tab you are in) that is not green yet — red first. */
 function nextOpenProject(id) {
   const today = todayIndia();
-  let list = ['diary', 'settings', 'dashboard', 'time', 'people', 'inbox', 'replies', 'apps'].includes(ui.view) || ui.search
+  let list = ['diary', 'settings', 'dashboard', 'calendar', 'time', 'people', 'inbox', 'replies', 'apps'].includes(ui.view) || ui.search
     ? store.view.data.projects.filter((p) => p.state === 'active') : sortForView(visibleProjects(), today);
   list = list.filter((p) => p.state === 'active' && (p.id === id || !isSnoozed(p, today)));
   const i = Math.max(0, list.findIndex((p) => p.id === id));
@@ -3191,7 +3258,7 @@ function keysHelp() {
 
 
 function currentList() {
-  if (!store || !store.view || ['diary', 'settings', 'dashboard', 'time'].includes(ui.view)) return [];
+  if (!store || !store.view || ['diary', 'settings', 'dashboard', 'calendar', 'time'].includes(ui.view)) return [];
   const today = todayIndia();
   const { open, done } = splitToday(sortForView(visibleProjects(), today), today);
   const showDone = ui.showDoneToday === undefined || ui.showDoneToday === null ? !open.length : !!ui.showDoneToday; // (as listParts: ↓ ↑ go through what is on screen)
@@ -3298,7 +3365,7 @@ function onKey(e) {
   if (e.repeat && !isArrow && e.key !== 'j' && e.key !== 'k') return; // holding x / o / r must not repeat
   const focused = document.activeElement;
   if (isArrow && focused && (focused.type === 'radio' || focused.nodeName === 'SUMMARY')) return;
-  if (isArrow && ['diary', 'settings', 'dashboard', 'time', 'inbox', 'replies', 'apps'].includes(ui.view) && !ui.search) return; // let the page scroll
+  if (isArrow && ['diary', 'settings', 'dashboard', 'calendar', 'time', 'inbox', 'replies', 'apps'].includes(ui.view) && !ui.search) return; // let the page scroll
   const k = e.key;
   if (ui.round) {
     const map = { x: 'done', s: 'add', w: 'note', o: 'ok', c: 'chase', n: 'skip', ArrowRight: 'skip' };
@@ -3317,7 +3384,7 @@ function onKey(e) {
   if (k === 'ArrowRight' || k === 'ArrowLeft') {
     const step = k === 'ArrowRight' ? 1 : -1;
     if (ui.view === 'people' && !ui.search) goPerson(step);
-    else if (ui.selected && !['diary', 'settings', 'dashboard', 'time', 'inbox', 'replies', 'apps'].includes(ui.view)) goProject(step);
+    else if (ui.selected && !['diary', 'settings', 'dashboard', 'calendar', 'time', 'inbox', 'replies', 'apps'].includes(ui.view)) goProject(step);
     else handled = false;
   } else if (k === 'Backspace') {
     if (ui.navStack && ui.navStack.length) goBack(); else handled = false;

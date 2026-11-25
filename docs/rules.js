@@ -1471,3 +1471,50 @@ export function stageCounts(list, stage) {
 export function byStage(list, want, stage) {
   return !want || want === 'all' ? list : list.filter((x) => stage(x) === want);
 }
+
+// ---------- 📅 Calendar (owner, 25 Nov: every task can have a day and a time) ----------
+
+/** 'HH:MM' → minutes after midnight; minutes → 'HH:MM'. */
+export const timeToMin = (t) => { const m = /^(\d{2}):(\d{2})$/.exec(String(t || '')); return m ? Number(m[1]) * 60 + Number(m[2]) : null; };
+export const minToTime = (n) => `${String(Math.floor(n / 60)).padStart(2, '0')}:${String(n % 60).padStart(2, '0')}`;
+/** The end of a slot ('10:00', 90 → '11:30'; never past midnight). */
+export const slotEnd = (start, mins) => minToTime(Math.min(24 * 60 - 1, timeToMin(start) + mins));
+/** The Monday of the week of `day` (weeks start on Monday). */
+export function mondayOf(day) {
+  const wd = new Date(day + 'T00:00:00Z').getUTCDay(); // 0 = Sunday
+  return addDays(day, wd === 0 ? -6 : 1 - wd);
+}
+/** The weeks (Monday first) that show the month of `day`: [[7 days], …], 4 to 6 rows. */
+export function monthWeeks(day) {
+  const first = day.slice(0, 8) + '01';
+  const weeks = [];
+  for (let d = mondayOf(first); weeks.length < 6 && (weeks.length < 4 || d.slice(0, 7) === first.slice(0, 7)); d = addDays(d, 7)) {
+    weeks.push(Array.from({ length: 7 }, (_, i) => addDays(d, i)));
+  }
+  return weeks;
+}
+
+/**
+ * What the calendar shows from `from` to `to` (both days kept): timed = the tasks planned in those days (day, start,
+ * mins, colour), allDay = the tasks with a target date in those days and no time on that day. Never a group, 📂 No
+ * group or a finished task. Each sorted by time, then name.
+ */
+export function calendarItems(data, from, to, today = todayIndia()) {
+  const tasks = data.projects.filter((p) => p.state !== 'finished' && !p.misc && !isMainProject(data, p));
+  const inRange = (d) => !!d && d >= from && d <= to;
+  const timed = tasks.filter((p) => p.slot && inRange(p.slot.day))
+    .map((p) => ({ id: p.id, title: p.name, day: p.slot.day, start: p.slot.start, mins: p.slot.mins, colour: dotColour(p, today) }))
+    .sort((a, b) => a.day.localeCompare(b.day) || a.start.localeCompare(b.start) || a.title.localeCompare(b.title));
+  const allDay = tasks.filter((p) => inRange(p.deadline) && !(p.slot && p.slot.day === p.deadline))
+    .map((p) => ({ id: p.id, title: p.name, day: p.deadline, colour: dotColour(p, today) }))
+    .sort((a, b) => a.day.localeCompare(b.day) || a.title.localeCompare(b.title));
+  return { timed, allDay };
+}
+
+/** The open tasks with no time on the calendar from `today` on (to plan them), red first, then yellow, then green. */
+export function unplannedTasks(data, today = todayIndia()) {
+  const RANK = { red: 0, yellow: 1, green: 2, grey: 3 };
+  return activeTasks(data).filter((p) => !p.misc && !(p.slot && p.slot.day >= today))
+    .map((p) => ({ p, c: dotColour(p, today) })).sort((a, b) => (RANK[a.c] ?? 4) - (RANK[b.c] ?? 4) || a.p.name.localeCompare(b.p.name)).map((x) => x.p);
+}
+

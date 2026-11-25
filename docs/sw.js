@@ -7,7 +7,7 @@ const CACHE = 'daily-projects-app-65'; // new name: drops the old copy (so phone
 const FILES = [
   './', 'index.html', 'styles.css', 'manifest.webmanifest',
   'app.js', 'ai.js', 'config.js', 'device.js', 'github.js', 'mockrepo.js', 'ops.js', 'reports.js', 'rich.js', 'rules.js', 'store.js', 'voice.js', 'serverrepo.js',
-  'ui/autocorrect.js', 'ui/bell.js', 'ui/connections.js', 'ui/dashboard.js', 'ui/detail.js', 'ui/dom.js', 'ui/files.js', 'ui/heic.js', 'ui/listkeys.js', 'ui/mains.js', 'ui/rowmenu.js', 'ui/mention.js', 'ui/people.js', 'ui/photoview.js', 'ui/replies.js', 'ui/richedit.js', 'ui/signin.js', 'ui/staff.js', 'ui/staffbox.js', 'ui/stage.js', 'ui/team.js', 'ui/timereport.js', 'ui/workparts.js',
+  'ui/autocorrect.js', 'ui/bell.js', 'ui/calendar.js', 'ui/connections.js', 'ui/dashboard.js', 'ui/detail.js', 'ui/dom.js', 'ui/files.js', 'ui/heic.js', 'ui/listkeys.js', 'ui/mains.js', 'ui/rowmenu.js', 'ui/mention.js', 'ui/people.js', 'ui/photoview.js', 'ui/replies.js', 'ui/richedit.js', 'ui/signin.js', 'ui/staff.js', 'ui/staffbox.js', 'ui/stage.js', 'ui/team.js', 'ui/timereport.js', 'ui/workparts.js',
   'vendor/sortable.min.js', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png',
 ];
 // Work Task's rules, used by the staff view (one app): kept here too, so a team member's phone opens it offline.

@@ -3375,3 +3375,53 @@ test('📂 Groups are one level (owner, 25 Nov): older data with a group inside 
   const { NOT_CARRIED } = await import('../docs/ops.js');
   assert.ok(NOT_CARRIED.has('flattenGroups'), 'never from a link');
 });
+
+test('📅 Calendar (owner, 25 Nov): setSlot gives a task a day, a start time and a length (15 min to 12 h, steps of 15), takes it off again; never a group or 📂 No group; never from a link', async () => {
+  const { NOT_CARRIED, CARRIED } = await import('../docs/ops.js');
+  const s = withMains(); // k1, k2, m, x
+  applyOp(s, op('addToProject', { projectId: 'k1', parentId: 'm' }, '2026-11-20')); // m is a group now
+  assert.equal(applyOp(s, op('setSlot', { projectId: 'k2', day: '2026-11-25', start: '10:00', mins: 90 }, '2026-11-24')), true);
+  assert.deepEqual(P(s, 'k2').slot, { day: '2026-11-25', start: '10:00', mins: 90 });
+  assert.equal(applyOp(s, op('setSlot', { projectId: 'k2', day: '2026-11-25', start: '10:00', mins: 90 }, '2026-11-24', '10:01')), false, 'the same again: no change');
+  for (const bad of [{ day: '25-11-2026', start: '10:00', mins: 60 }, { day: '2026-11-25', start: '24:00', mins: 60 }, { day: '2026-11-25', start: '9:00', mins: 60 },
+    { day: '2026-11-25', start: '10:00', mins: 10 }, { day: '2026-11-25', start: '10:00', mins: 50 }, { day: '2026-11-25', start: '10:00', mins: 735 }]) {
+    assert.equal(applyOp(s, op('setSlot', { projectId: 'x', ...bad }, '2026-11-24')), false, JSON.stringify(bad));
+  }
+  assert.equal(applyOp(s, op('setSlot', { projectId: 'm', day: '2026-11-25', start: '10:00', mins: 60 }, '2026-11-24')), false, 'a group is not planned (its tasks are)');
+  applyOp(s, op('makeMisc', {}, '2026-11-24'));
+  assert.equal(applyOp(s, op('setSlot', { projectId: 'misc', day: '2026-11-25', start: '10:00', mins: 60 }, '2026-11-24')), false);
+  assert.equal(applyOp(s, op('setSlot', { projectId: 'k2', day: null }, '2026-11-24', '11:00')), true, 'off the calendar');
+  assert.equal(P(s, 'k2').slot, undefined);
+  assert.equal(applyOp(s, op('setSlot', { projectId: 'k2', day: '' }, '2026-11-24', '11:01')), false, 'already off');
+  assert.ok(NOT_CARRIED.has('setSlot') && !CARRIED.has('setSlot'));
+});
+
+test('📅 Calendar rules: the Monday of a week, the weeks of a month, slot end; what a range shows (timed and all-day target dates, never groups / finished); the tasks not on the calendar, red first', async () => {
+  const { mondayOf, monthWeeks, slotEnd, timeToMin, minToTime, calendarItems, unplannedTasks } = await import('../docs/rules.js');
+  assert.equal(mondayOf('2026-11-25'), '2026-11-23', 'Wednesday → Monday');
+  assert.equal(mondayOf('2026-11-29'), '2026-11-23', 'Sunday → the Monday before');
+  assert.equal(mondayOf('2026-11-23'), '2026-11-23');
+  const weeks = monthWeeks('2026-11-25');
+  assert.equal(weeks[0][0], '2026-10-26', 'November 2026 starts on a Sunday: its first row starts Monday 26 Oct');
+  assert.ok(weeks.every((w) => w.length === 7));
+  assert.ok(weeks.flat().includes('2026-11-30') && weeks.length === 6);
+  assert.equal(monthWeeks('2027-02-10').length, 4, 'February 2027: exactly 4 rows');
+  assert.deepEqual([slotEnd('10:00', 90), slotEnd('23:30', 60), timeToMin('09:15'), minToTime(555)], ['11:30', '23:59', 555, '09:15']);
+  const s = withMains('2026-11-20');
+  applyOp(s, op('addToProject', { projectId: 'k1', parentId: 'm' }, '2026-11-20'));
+  applyOp(s, op('setSlot', { projectId: 'k1', day: '2026-11-25', start: '14:00', mins: 60 }, '2026-11-24'));
+  applyOp(s, op('setSlot', { projectId: 'k2', day: '2026-11-25', start: '09:00', mins: 30 }, '2026-11-24'));
+  applyOp(s, op('setProjectField', { projectId: 'x', field: 'deadline', value: '2026-11-26' }, '2026-11-24'));
+  const c = calendarItems(s.data, '2026-11-23', '2026-11-29', '2026-11-24');
+  assert.deepEqual(c.timed.map((t) => [t.id, t.start, t.mins]), [['k2', '09:00', 30], ['k1', '14:00', 60]], 'by time');
+  assert.ok(c.timed.every((t) => ['red', 'yellow', 'green', 'grey'].includes(t.colour)));
+  assert.deepEqual(c.allDay.map((t) => [t.id, t.day]), [['x', '2026-11-26']], 'a target date with no time that day: all day');
+  assert.ok(!c.allDay.some((t) => t.id === 'm') && !c.timed.some((t) => t.id === 'm'), 'never a group');
+  applyOp(s, op('finish', { projectId: 'k2' }, '2026-11-24'));
+  assert.ok(!calendarItems(s.data, '2026-11-23', '2026-11-29', '2026-11-24').timed.some((t) => t.id === 'k2'), 'never a finished task');
+  assert.deepEqual(calendarItems(s.data, '2026-11-30', '2026-12-06', '2026-11-24').timed, [], 'out of the range');
+  const un = unplannedTasks(s.data, '2026-11-24').map((p) => p.id);
+  assert.ok(un.includes('x') && !un.includes('k1') && !un.includes('k2') && !un.includes('m'), 'planned, finished and groups are not "not on the calendar"');
+  applyOp(s, op('setSlot', { projectId: 'x', day: '2026-11-20', start: '09:00', mins: 30 }, '2026-11-24'));
+  assert.ok(unplannedTasks(s.data, '2026-11-24').some((p) => p.id === 'x'), 'a time in the past: to plan again');
+});

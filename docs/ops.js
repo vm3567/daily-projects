@@ -792,6 +792,29 @@ const handlers = {
    * "Move every N days" (1–90; null = back to 3): how often it should have a real update; its dot follows it.
    * On a 📂 project: the project and everything inside it, every level (each can be changed after). Not work.
    */
+  /**
+   * 📅 A task's time on the calendar (owner, 25 Nov): a day, a start time and how long (15 minutes to 12 hours, in
+   * steps of 15). day null / '' takes it off the calendar. Only a task (never a group or 📂 No group).
+   */
+  setSlot(state, op, a) {
+    const p = findProject(state.data, a.projectId);
+    if (!p || p.misc || isMainProject(state.data, p)) return false;
+    if (a.day === null || a.day === undefined || a.day === '') {
+      if (!p.slot) return false;
+      delete p.slot;
+      p.updatedAt = op.at;
+      return true;
+    }
+    const day = cleanDate(a.day);
+    const start = typeof a.start === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(a.start) ? a.start : null;
+    const mins = Number.isInteger(a.mins) && a.mins >= 15 && a.mins <= 720 && a.mins % 15 === 0 ? a.mins : null;
+    if (!day || !start || !mins) return false;
+    if (p.slot && p.slot.day === day && p.slot.start === start && p.slot.mins === mins) return false;
+    p.slot = { day, start, mins };
+    p.updatedAt = op.at;
+    return true;
+  },
+
   setMoveEvery(state, op, a) {
     const { data } = state;
     const p = findProject(data, a.projectId);
@@ -1737,7 +1760,7 @@ export const CARRIED = new Set(['createProject', 'createMainProject', 'addToProj
 export const NOT_CARRIED = new Set(['deleteProject', 'restoreProject', 'deleteStep', 'setProjectTeam', 'addFile', 'setAiKey', 'setAiProvider',
   'removeFromProject', 'setParent', 'removeLink', 'editLink', 'finish', 'teamWorked', 'deleteWorkNote', 'editWorkNote', 'setNoteStep', 'linkFollow', 'setProjectField', 'setStepField',
   'removeFile', 'setTimer', 'setEveryDefault', 'deleteTag', 'clearReply', 'markReplySent', 'undoReplySent', 'mailReplied', 'removeInbox', 'inboxUndo', 'deletePerson',
-  'recordScores', 'removeTime', 'incrementAiUsage', 'claimBrief', 'setBriefReady', 'addEvent', 'makeMisc', 'flattenGroups']);
+  'recordScores', 'removeTime', 'incrementAiUsage', 'claimBrief', 'setBriefReady', 'addEvent', 'makeMisc', 'flattenGroups', 'setSlot']);
 
 /** Changes carried from the old address (#ops=): keeps only known, harmless ones. Returns { ok, files, dropped }. */
 export function carriedOps(list) {

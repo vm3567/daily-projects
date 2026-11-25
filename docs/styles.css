@@ -1441,6 +1441,56 @@ input[type=checkbox], input[type=radio] { accent-color: var(--brand); flex: none
 @media (max-width: 760px) { body { background: var(--bg); } } /* a phone: one white page, as before */
 .diary-time .link { margin-left: 6px; } /* (the manager's ✕ on an update: a little space from its time) */
 
+/* 📅 Calendar (ui/calendar.js): Day / Week / Month, the hours, a block per planned task (owner, 25 Nov) */
+.pcal { padding: 8px 14px 30px; }
+.pcal-bar { gap: 6px; align-items: center; margin: 4px 0 10px; flex-wrap: wrap; }
+.pcal-title { font-size: 16px; margin: 0 8px; flex: 1 1 auto; }
+.pcal-main { display: flex; gap: 14px; align-items: flex-start; }
+.pcal-main > .pcal-week, .pcal-main > .pcal-month { flex: 1 1 auto; min-width: 0; }
+.pcal-side { flex: 0 0 220px; border: 1px solid var(--line); border-radius: var(--radius); padding: 8px 10px; max-height: 70vh; overflow-y: auto; }
+.pcal-side h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 0 0 6px; }
+.pcal-unplanned-list { list-style: none; margin: 0; padding: 0; }
+.pcal-unplanned { padding: 5px 6px; border-radius: 6px; cursor: grab; font-size: 13.5px; }
+.pcal-unplanned:hover { background: var(--panel); }
+.pcal-head, .pcal-allday, .pcal-body { display: grid; }
+.pcal-dayhead { text-align: center; font-size: 12.5px; font-weight: 600; color: var(--muted); padding: 4px 0; border-bottom: 1px solid var(--line); }
+.pcal-dayhead.today { color: var(--brand); }
+.pcal-allday { border-bottom: 1px solid var(--line); }
+.pcal-alldaycell { padding: 2px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.pcal-body { max-height: 70vh; overflow-y: auto; position: relative; padding-top: 8px; } /* (room for the first hour's label) */
+.pcal-gutter { position: relative; font-size: 11px; color: var(--muted); }
+.pcal-hour { position: absolute; right: 6px; transform: translateY(-6px); }
+.pcal-col { position: relative; border-left: 1px solid var(--line); background-image: linear-gradient(var(--line) 1px, transparent 1px); background-size: 100% 48px; }
+.pcal-col.today { background-color: var(--brand-soft); }
+.pcal-col.can-add { cursor: copy; }
+.pcal-block { position: absolute; box-sizing: border-box; padding: 2px 6px; border-radius: 6px; font-size: 12px; overflow: hidden; cursor: pointer;
+  background: var(--panel); border: 1px solid var(--line); border-left: 4px solid var(--grey); display: flex; flex-direction: column; }
+.pcal-block.red { border-left-color: var(--red); } .pcal-block.yellow { border-left-color: var(--orange); } .pcal-block.green { border-left-color: var(--green); }
+.pcal-block .pcal-time { color: var(--muted); font-size: 11px; }
+.pcal-block .pcal-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
+.pcal-block .pcal-sub { color: var(--muted); font-size: 11px; }
+.pcal-chip { display: block; width: 100%; text-align: left; font: inherit; font-size: 12px; padding: 1px 5px; border: 1px solid var(--line); border-left: 3px solid var(--grey);
+  border-radius: 4px; background: var(--bg); color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.pcal-chip.red { border-left-color: var(--red); } .pcal-chip.yellow { border-left-color: var(--orange); } .pcal-chip.green { border-left-color: var(--green); }
+.pcal-chip .pcal-time { color: var(--muted); }
+.pcal-month { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); border-left: 1px solid var(--line); border-top: 1px solid var(--line); }
+.pcal-dow { font-size: 12px; font-weight: 600; color: var(--muted); padding: 4px 6px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.pcal-cell { min-height: 92px; padding: 3px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.pcal-cell.other { background: var(--panel); color: var(--muted); }
+.pcal-cell.today .pcal-daynum { color: var(--brand); font-weight: 700; }
+.pcal-daynum { align-self: flex-start; font-size: 12px; }
+.pcal-addbox { gap: 8px; align-items: center; margin: 0 0 10px; padding: 8px 10px; border: 1px solid var(--brand); border-radius: var(--radius); background: var(--brand-soft); flex-wrap: wrap; }
+.pcal-addbox input[name=name] { flex: 1 1 200px; }
+.pcal-back { margin: 10px 0 0 2px; }
+.plan-box { gap: 8px; align-items: center; margin: 8px 0; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--radius); flex-wrap: wrap; }
+@media (max-width: 760px) {
+  .pcal { padding: 8px 8px 30px; }
+  .pcal-main { flex-direction: column; align-items: stretch; } /* (the day fills the phone's width) */
+  .pcal-side { flex: 0 0 auto; width: 100%; box-sizing: border-box; max-height: none; }
+  .pcal-cell { min-height: 64px; }
+  .pcal-chip { font-size: 11px; }
+}
+
 /* ---------------------------------------------------------------- the staff view (one app: ui/staff.js)
    Staff see this app's own design. Only the few pieces this app had no style for, and only inside the staff view
    (.layout.staff), so the owner's screens never change. */

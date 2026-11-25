@@ -57,3 +57,10 @@ Each lesson: what went wrong, then what to do next time.
 17. **"Text A comes before text B" passes when A is missing** (`indexOf` gives -1). An email check compared with a
     heading that no longer existed, so it tested nothing.
     → Check that the text is there (`> -1`) before comparing positions.
+18. **A new style name can clash with an old one.** The new calendar used `.cal`, which the Dashboard's streak
+    calendar already used, and the layout broke.
+    → Before naming new styles, search styles.css for the name. Give a new part its own prefix (e.g. `pcal-`).
+19. **The page's safety rules (CSP) block `style="…"` attributes.**
+    → Set sizes and places through the element's style object (`el.style.cssText = …`), as the rest of the app does.
+20. **A browser try re-run on the same data makes doubles** (two tasks with the same name).
+    → Start fresh throwaway data (stop, up, seed) before each run.

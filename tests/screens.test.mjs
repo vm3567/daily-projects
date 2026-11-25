@@ -5288,3 +5288,101 @@ test('team pages 📂 Groups (owner, 25 Nov): the given tasks under their group\
   assert.ok(!text.includes('📁'), 'no 📁: a task, not a project');
   assert.match(text, /📂 Groups/);
 });
+
+test('📅 Calendar pieces (owner, 25 Nov): the days of Day / Week / Month, ‹ › by a day, week or month, the title, the hours shown, blocks side by side when they overlap, a click height → a quarter hour', async () => {
+  const cal = await import('../docs/ui/calendar.js');
+  assert.deepEqual(cal.calendarDays('day', '2026-11-25'), ['2026-11-25']);
+  assert.deepEqual(cal.calendarDays('week', '2026-11-25'), ['2026-11-23', '2026-11-24', '2026-11-25', '2026-11-26', '2026-11-27', '2026-11-28', '2026-11-29']);
+  assert.equal(cal.calendarDays('month', '2026-11-25').length % 7, 0);
+  assert.deepEqual(['day', 'week', 'month'].map((m) => cal.calendarStep(m, '2026-11-25', 1)), ['2026-11-26', '2026-12-02', '2026-12-01']);
+  assert.equal(cal.calendarStep('month', '2026-01-31', -1), '2025-12-01');
+  assert.equal(cal.calendarTitle('week', '2026-11-25'), '23 Nov – 29 Nov 2026');
+  assert.equal(cal.calendarTitle('month', '2026-11-25'), 'November 2026');
+  assert.match(cal.calendarTitle('day', '2026-11-25'), /^Wed 25 Nov 2026$/);
+  assert.deepEqual(cal.hourRange([]), { from: 420, to: 1260 }, '7:00 to 21:00');
+  assert.deepEqual(cal.hourRange([{ start: '05:30', mins: 60 }, { start: '21:30', mins: 60 }]), { from: 300, to: 1380 }, 'wider for an early or late task');
+  const lanes = cal.laneBlocks([{ id: 'a', start: '10:00', mins: 60 }, { id: 'b', start: '10:30', mins: 60 }, { id: 'c', start: '12:00', mins: 30 }]);
+  assert.deepEqual(lanes.map((b) => [b.id, b.lane, b.lanes]), [['a', 0, 2], ['b', 1, 2], ['c', 0, 1]], 'a and b overlap: side by side; c alone');
+  assert.equal(cal.timeAt(0, 420), '07:00');
+  assert.equal(cal.timeAt(cal.HOUR_PX * 2.5, 420), '09:30');
+  assert.equal(cal.timeAt(cal.HOUR_PX * 1.1, 420), '08:00', 'snapped to the nearest quarter hour');
+  assert.equal(cal.timeIn(cal.HOUR_PX * 2.4, 420), '09:15', 'a click at 9:24: the quarter hour it is in');
+});
+
+test('📅 Calendar drawn: Week has the days, an all-day row, each block at its time (opens its task; drag = move; a click on an empty time = add); Month shows each day\'s first tasks and "+n more"', async () => {
+  const cal = await import('../docs/ui/calendar.js');
+  const calls = [];
+  const o = {
+    mode: 'week', day: '2026-11-25', today: '2026-11-25',
+    items: [{ id: 'k1', title: 'Fire the kiln', day: '2026-11-25', start: '10:00', mins: 90, colour: 'red' }],
+    allDay: [{ id: 'x', title: 'Order clay', day: '2026-11-26', colour: 'yellow' }],
+    onNav: (d) => calls.push(['nav', d]), onMode: (m) => calls.push(['mode', m]), onOpen: (id) => calls.push(['open', id]),
+    onMove: (id, d, t) => calls.push(['move', id, d, t]), onAdd: (d, t) => calls.push(['add', d, t]),
+  };
+  const el = cal.calendarView(o);
+  const text = el.textContent;
+  for (const bit of ['23 Nov – 29 Nov 2026', 'Mon 23', 'Sun 29', 'all day', 'Order clay', '10:00–11:30', 'Fire the kiln', 'Day', 'Week', 'Month']) assert.ok(text.includes(bit), bit);
+  const find = (n, f) => (f(n) ? n : (n.childNodes || []).map((c) => find(c, f)).find(Boolean));
+  const block = find(el, (n) => / pcal-block /.test(' ' + (n.className || '') + ' '));
+  assert.match(block.style.cssText, /top:144px;height:70px/, 'at 10:00 (3 hours below 7:00), 1½ hours tall');
+  assert.equal(block.getAttribute('draggable'), 'true');
+  block.__on.click();
+  assert.deepEqual(calls.at(-1), ['open', 'k1']);
+  const col = find(el, (n) => n.getAttribute && n.getAttribute('data-day') === '2026-11-27');
+  const rect = () => ({ top: 100 });
+  col.__on.drop({ preventDefault() {}, clientY: 100 + cal.HOUR_PX * 7, dataTransfer: { getData: () => 'k1' } }, { getBoundingClientRect: rect });
+  assert.deepEqual(calls.at(-1), ['move', 'k1', '2026-11-27', '14:00'], 'dropped on Friday 14:00');
+  col.__on.click({ clientY: 100 + cal.HOUR_PX * 2 + 20 }, { getBoundingClientRect: rect });
+  assert.deepEqual(calls.at(-1), ['add', '2026-11-27', '09:15'], 'a click at 9:25: the quarter hour it is in');
+  find(el, (n) => n.nodeName === 'BUTTON' && n.textContent === 'Month').__on.click();
+  assert.deepEqual(calls.at(-1), ['mode', 'month']);
+  find(el, (n) => n.nodeName === 'BUTTON' && n.getAttribute && n.getAttribute('aria-label') === 'After').__on.click();
+  assert.deepEqual(calls.at(-1), ['nav', '2026-12-02']);
+  // without onMove / onAdd (a page that only looks): nothing to drag, no add
+  const still = cal.calendarView({ ...o, onMove: null, onAdd: null });
+  assert.equal(find(still, (n) => / pcal-block /.test(' ' + (n.className || '') + ' ')).getAttribute('draggable'), null);
+  const month = cal.calendarView({ ...o, mode: 'month', items: Array.from({ length: 5 }, (_, i) => ({ id: 't' + i, title: 'Task ' + i, day: '2026-11-25', start: `1${i}:00`, mins: 30, colour: 'green' })) });
+  assert.ok(month.textContent.includes('November 2026') && month.textContent.includes('+2 more'), 'up to 3 a day, then "+n more"');
+});
+
+test('📅 Calendar on the owner\'s pages: the menu item with today\'s count, the page (wide, Day on a phone), drag / add / open wired; a task page has "📅 Plan" — Save puts it on the calendar, "Off the calendar" takes it off', async () => {
+  const { readFileSync } = await import('node:fs');
+  const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
+  assert.match(app, /item\('calendar', '📅 Calendar', calendarItems\(data, today, today, today\)\.timed\.length\)/);
+  assert.match(app, /if \(ui\.view === 'calendar' && !ui\.search\) return h\('div', \{ class: 'col-inner' \}, head, timerStrip\(\), renderCalendar\(\)\);/);
+  assert.match(app, /const wide = \['diary', 'settings', 'dashboard', 'calendar', 'time'\]\.includes\(ui\.view\)/, 'it fills the screen');
+  assert.match(app, /const mode = ui\.calMode \|\| \(narrow \? 'day' : 'week'\);/, 'a phone opens on Day');
+  assert.match(app, /act\('setSlot', \{ projectId: id, day: d, start, mins \}/, 'drag = move (one Undo)');
+  assert.match(app, /store\.dispatch\('setSlot', \{ projectId, day: a\.day, start: a\.start, mins: a\.mins \}\);/, 'click = a new task at that time');
+  assert.match(app, /'← Back to 📅 Calendar'/);
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /'ui\/calendar\.js'/, 'kept for offline');
+  assert.match(readFileSync(new URL('../docs/ui/dom.js', import.meta.url), 'utf8'), /'dragstart'\]/, 'the page hears a drag start');
+  // the task page: 📅 Plan
+  const s = mainsState();
+  const ctx = liveCtx(s, { selected: 'p1', update: {} });
+  ctx.toast = () => {};
+  const find = (n, f) => (f(n) ? n : (n.childNodes || []).map((c) => find(c, f)).find(Boolean));
+  find(renderDetail(ctx), (n) => n.nodeName === 'BUTTON' && n.textContent === '📅 Plan').__on.click();
+  renderDetail(ctx); // (the box opens: its form is made)
+  ctx.ui.planForm.day = '2026-11-25'; ctx.ui.planForm.start = '10:07'; ctx.ui.planForm.mins = 90;
+  find(renderDetail(ctx), (n) => n.nodeName === 'BUTTON' && n.textContent === 'Save').__on.click();
+  const done = ctx.calls.find((c) => c[0] === 'act:setSlot');
+  assert.deepEqual(done[1], { projectId: 'p1', day: '2026-11-25', start: '10:00', mins: 90 }, 'on the quarter hour');
+  assert.ok(renderDetail(ctx).textContent.includes('📅 Wed 25 Nov · 10:00–11:30'), 'the chip says when');
+  ctx.ui.planOpen = 'p1';
+  find(renderDetail(ctx), (n) => n.nodeName === 'BUTTON' && n.textContent === 'Off the calendar').__on.click();
+  assert.equal(s.data.projects.find((p) => p.id === 'p1').slot, undefined);
+  const groupPage = renderDetail(liveCtx(s, { selected: 'm', update: {} })).textContent;
+  assert.ok(!groupPage.includes('📅 Plan'), 'a group is not planned (its tasks are)');
+});
+
+test('📅 Calendar keeps its own style names (pcal-…): the Dashboard\'s streak calendar already uses .cal / .cal-head / .cal-cell, and sharing them broke the layout once', async () => {
+  const { readFileSync } = await import('node:fs');
+  const js = readFileSync(new URL('../docs/ui/calendar.js', import.meta.url), 'utf8');
+  assert.ok(!/class: '(cal|cal-[a-z]+)\b/.test(js) && !/class: `cal-/.test(js), 'no Dashboard class names in the calendar');
+  assert.match(js, /class: 'pcal'/);
+  const css = readFileSync(new URL('../docs/styles.css', import.meta.url), 'utf8');
+  const block = css.slice(css.indexOf('/* 📅 Calendar (ui/calendar.js)'), css.indexOf('/* ---------------------------------------------------------------- the staff view'));
+  assert.ok(block.length > 100 && !/(^|\s|,)\.cal[-\s{.,:]/m.test(block), 'the calendar\'s styles never touch .cal / .cal-*');
+  assert.match(css, /\.pcal-main \{ flex-direction: column; align-items: stretch; \}/, 'a phone\'s day fills its width');
+});
