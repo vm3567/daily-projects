@@ -19,7 +19,7 @@ if (!$ok) http_response_code(400);
 $e = fn(string $s) => htmlspecialchars($s, ENT_QUOTES);
 ?><!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Outlook · Work Task</title><link rel="stylesheet" href="styles.css"></head>
+<title>Outlook · Task List</title><link rel="stylesheet" href="styles.css"></head>
 <body><main class="card stack">
 <h1><?= $ok ? '📧 Outlook connected ✓' : '📧 Outlook not connected' ?></h1>
 <p><?= $e($words) ?></p>

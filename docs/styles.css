@@ -114,6 +114,8 @@ label.late { color: var(--red); }
 .menu-item:hover { background: #eceef2; }
 .menu-item.current { background: var(--brand-soft); color: #1e40af; font-weight: 600; }
 .menu-item.add { color: var(--muted); }
+a.menu-item { color: inherit; text-decoration: none; } /* (👥 Team opens a page: it looks like the other items, never a blue link) */
+.menu-list .menu-item.more-toggle { padding: 7px 10px; font-size: inherit; font-weight: inherit; color: var(--muted); } /* (in line with the others) */
 .count { font-size: 12.5px; color: var(--muted); }
 .menu-head { font-size: 11.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); padding: 14px 10px 4px; }
 .menu-sep { border-top: 1px solid var(--line); margin: 10px 6px; }
@@ -172,6 +174,7 @@ label.late { color: var(--red); }
 .back { display: none; font-size: 20px; }
 .title-input { flex: 1; font-size: 20px; font-weight: 700; border-color: transparent; padding: 4px 6px; }
 .title-input:hover { border-color: var(--line); }
+.misc-title { flex: 1; font-size: 20px; font-weight: 700; margin: 0; padding: 4px 6px; }
 .state-buttons { display: flex; gap: 6px; }
 .banner { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; margin: 12px 0 0; color: var(--muted); }
 .fields { display: flex; flex-wrap: wrap; gap: 14px; padding: 12px 0; color: var(--muted); font-size: 13.5px; }
@@ -212,6 +215,7 @@ label.late { color: var(--red); }
 
 /* ---------- diary & settings ---------- */
 .diary, .settings { padding: 6px 22px 40px; max-width: 820px; }
+.layout.wide .diary { max-width: none; } /* the Diary uses the whole page (owner, 24 Oct) */
 .diary-day { padding: 12px 0; border-bottom: 1px solid var(--line); }
 .diary-day h3 { font-size: 15px; margin-bottom: 6px; }
 .diary-day li { padding: 3px 0; }
@@ -231,11 +235,15 @@ label.late { color: var(--red); }
 .key-card p { margin: 0; }
 .key-card .sign-field { width: 100%; display: flex; flex-direction: column; gap: 4px; text-align: left; font-size: 14px; } /* signing in on worktask.in */
 
+/* a photo / file in a framed box over the page (owner, 29 Oct: "make the frame smaller ... so it is easy to close it");
+   a tap outside the box or Escape closes it, and the 🔔 is hidden while it is open (it covered Close) */
 #viewer {
-  position: fixed; inset: 0; z-index: 50; background: rgba(15, 20, 30, .92);
-  display: flex; flex-direction: column;
+  position: fixed; inset: 0; z-index: 50; background: rgba(15, 20, 30, .7);
+  display: flex; flex-direction: column; padding: max(16px, 5vh) max(12px, 6vw);
 }
-.viewer-bar { display: flex; gap: 8px; align-items: center; padding: 10px 14px; background: #fff; }
+.viewer-bar { display: flex; gap: 8px; align-items: center; padding: 10px 14px; background: #fff; border-radius: 12px 12px 0 0; }
+#viewer:not(.sheet-mode) .viewer-body { background: rgba(15, 20, 30, .96); border-radius: 0 0 12px 12px; min-height: 0; }
+body:has(#viewer:not([hidden])) .bell-wrap { display: none; }
 .viewer-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .viewer-body { flex: 1; display: grid; place-items: center; overflow: auto; padding: 10px; color: #fff; }
 .viewer-body img { max-width: 100%; max-height: 100%; object-fit: contain; }
@@ -345,6 +353,7 @@ label.late { color: var(--red); }
   position: fixed; right: 20px; bottom: 76px; z-index: 40; width: min(380px, calc(100vw - 32px));
   background: #fff; border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px;
   box-shadow: 0 12px 36px rgba(0,0,0,.14);
+  max-height: calc(100vh - 100px); overflow-y: auto; /* (a long list scrolls: never cut off at the top, owner 24 Oct) */
 }
 .keys-head { display: flex; justify-content: space-between; align-items: center; }
 .keys-help p { margin: 4px 0 8px; }
@@ -431,8 +440,8 @@ kbd {
 .done-toggle:hover { color: var(--brand); }
 .plist-done { padding: 0 8px; opacity: .85; }
 .all-green { margin: 10px 16px; color: var(--green); font-weight: 600; }
-.progress-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 5px; }
-.progress-row .progress-text { margin: 0; }
+.progress-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; margin-bottom: 5px; }
+.progress-row .progress-text { margin: 0; white-space: nowrap; } /* ("9 of 11 on track" stays on one line; the buttons go under it when there is no room, owner 24 Oct) */
 .round-top { position: sticky; top: 0; z-index: 2; background: var(--bg); display: flex; align-items: center; gap: 10px; padding: 14px 0 10px; border-bottom: 1px solid var(--line); }
 .round-top strong { font-size: 16px; }
 .round-top .muted { flex: 1; }
@@ -742,6 +751,10 @@ kbd.hint {
 .inbox-note { white-space: pre-wrap; margin: -4px 0 8px; overflow-wrap: anywhere; }
 .inbox-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .inbox-pick { max-width: 220px; }
+/* 🗑 in the item's top-right corner, never alone on its own line (owner, 24 Oct) */
+.inbox-list > li { position: relative; }
+.inbox-list > li > .inbox-text { padding-right: 34px; }
+.inbox-actions .inbox-del { position: absolute; top: 6px; right: 6px; }
 .chip.sugg { border-style: solid; background: var(--brand-soft); color: #1e40af; }
 .inbox-reminder { display: block; width: calc(100% - 16px); margin: 4px 8px 8px; text-align: left; border: 1px solid #c7d7fb; background: var(--brand-soft); color: #1e40af; border-radius: 8px; padding: 8px 12px; font: inherit; font-size: 14px; cursor: pointer; }
 @media (max-width: 760px) { .update-form.in-step { margin-left: 12px; } }
@@ -791,6 +804,7 @@ input:not([type=checkbox]):not([type=radio]):not([type=range]), select, textarea
   animation: toast-in .18s ease;
 }
 #toast > span { overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+#toast.full > span { display: block; -webkit-line-clamp: unset; } /* (a help message: all of it, owner 29 Oct) */
 @keyframes toast-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { #toast { animation: none; } }
 
@@ -890,7 +904,7 @@ a.team-btn { position: relative; text-decoration: none; }
 /* giving a 📂 project: its tasks, ticked = they go too */
 .give-tasks { display: flex; flex-direction: column; gap: 4px; width: 100%; }
 .give-tasks .give-task { display: flex; gap: 6px; align-items: center; }
-a.team-line { display: block; margin: 6px 0 4px; padding: 6px 10px; border-radius: 8px; background: var(--brand-soft); border: 1px solid var(--line); color: var(--text); text-decoration: none; font-size: 14px; }
+a.team-line { display: block; margin: 6px 8px 4px; padding: 6px 12px; border-radius: 8px; background: var(--brand-soft); border: 1px solid var(--line); color: var(--text); text-decoration: none; font-size: 14px; }
 a.team-line.late { border-color: var(--red); color: var(--red); }
 a.team-line.ok { border-color: var(--green); }
 .offline-bar { display: block; width: 100%; text-align: left; margin: 0; padding: 8px 14px; border: 0; border-bottom: 1px solid var(--orange); background: #fff7e6; color: #7a4b00; font: inherit; font-size: 14px; cursor: pointer; }
@@ -935,7 +949,7 @@ a.tag.me:hover { color: var(--brand); border-color: var(--brand); }
 .row-menu-stages { display: flex; flex-wrap: wrap; gap: 4px; padding: 4px 6px 8px; border-bottom: 1px solid #f1f5f9; margin-bottom: 4px; }
 .row-menu-stages .stage-chip { font-size: 12px; padding: 2px 8px; }
 .every-picker { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; width: 100%; margin-top: 6px; }
-.every-picker .chip.on, .row-menu-every .chip.on { background: var(--brand-soft); border-color: var(--brand); font-weight: 600; }
+.every-picker .chip.on, .row-menu-every .chip.on, .every-picks .chip.on { background: var(--brand-soft); border-color: var(--brand); font-weight: 600; }
 .row-menu-every { align-items: center; }
 .row-menu-every .chip { font-size: 12px; padding: 2px 7px; }
 .row-menu-stages .stage-chip.on { outline: 2px solid currentColor; outline-offset: 1px; }
@@ -1069,7 +1083,7 @@ a.team-line.msg { background: #eef4ff; border-color: #93b4f8; color: #1e40af; fo
 .sub-name { font-weight: 600; text-align: left; }
 .sub-buttons { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
 .mains-page { padding: 4px 8px 20px; display: flex; flex-direction: column; gap: 10px; }
-.mains-line { margin: 0; }
+.mains-line { margin: 0 0 8px; }
 .new-main { align-self: flex-start; }
 .main-card { border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 12px; background: #fff; }
 .main-card-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
@@ -1083,7 +1097,9 @@ a.team-line.msg { background: #eef4ff; border-color: #93b4f8; color: #1e40af; fo
 .add-tasks-list { list-style: none; margin: 6px 0; padding: 0; max-height: 260px; overflow-y: auto; }
 .add-tasks-row { display: flex; align-items: center; gap: 8px; padding: 6px 2px; cursor: pointer; font-size: 14px; }
 .add-tasks-row input { margin: 0; }
-.sub-remove { color: var(--muted); white-space: nowrap; }
+.sub-remove { color: var(--muted); white-space: nowrap; opacity: .45; text-decoration: none; padding: 2px 6px; }
+tr:hover .sub-remove, .sub-remove:focus-visible { opacity: 1; }
+th.nowrap { white-space: nowrap; }
 .sub-remove:hover { color: var(--red, #c62828); }
 .old-steps { list-style: none; margin: 4px 0 0; padding: 0; }
 .old-step { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 6px 0; border-top: 1px solid var(--line); font-size: 14px; }
@@ -1191,6 +1207,20 @@ body.has-bell .detail-top { padding-right: 56px; }
 /* Team today as one table (ui/team.js board): counts on top, By person | By 📂 project, a row per task */
 .board-counts { margin: 10px 14px 8px; gap: 6px; }
 .board-table { width: calc(100% - 28px); margin: 6px 14px 20px; }
+@media (max-width: 760px) { kbd.hint, .key-tip, .keys-hint { display: none; } } /* (a phone has no keyboard: no key letters or Enter tips, owner 24 Oct) */
+.bell-wrap { transition: opacity .15s, transform .15s; }
+.bell-wrap.away { opacity: 0; transform: translateY(-56px); pointer-events: none; }
+.task-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0 0 6px; }
+.task-meta > .stage-line, .task-meta > .info-chips { margin: 0; }
+.board-today-inline { display: none; }
+@media (max-width: 760px) { .board-today-inline { display: block; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 62vw; } }
+.today-glance { text-align: left; max-width: 460px; margin: 40px auto; padding: 0 20px; }
+.today-glance h3 { margin: 0 0 8px; }
+.glance-counts { display: flex; align-items: center; gap: 4px; margin: 0 0 12px; }
+.glance-list { list-style: none; margin: 0 0 14px; padding: 0; display: grid; gap: 8px; }
+.glance-list .link { font-weight: 600; text-align: left; }
+body.has-bell .round-top { padding-right: 56px; } /* (the Daily round's End is never under the 🔔, owner 24 Oct) */
+body:has(.keys-help) .bell-wrap { display: none; } /* (the shortcuts list is open: the 🔔 does not cover it) */
 body.has-bell .layout.wide .list-head { padding-right: 60px; } /* (the 🔔 sits on the right of a page that fills the screen) */
 .board-count.on { background: var(--brand-soft); border-color: var(--brand); color: var(--brand); }
 .board-group-by { margin: 0 14px 8px; }
@@ -1226,10 +1256,190 @@ button.stage-chip.tap { cursor: pointer; font-size: 12.5px; padding: 3px 10px; }
 .stage-wait input { flex: 1; min-width: 0; }
 .stage-picks { display: flex; flex-wrap: wrap; gap: 6px; }
 .stage-picks .chip.on { background: var(--brand-soft); border-color: var(--brand); }
-.stage-filters { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
-.stage-filter { font-size: 12.5px; padding: 3px 10px; border-radius: 99px; border: 1px solid var(--line); background: var(--bg); color: var(--text); cursor: pointer; }
+.stage-filters { display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 0; } /* (a computer: they wrap, so "Done 0" can be clicked with a mouse: owner, 24 Oct) */
+@media (max-width: 760px) { .stage-filters { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; } } /* (a phone: one line, swiped sideways) */
+.stage-filters::-webkit-scrollbar { display: none; }
+.stage-filters > * { flex: none; white-space: nowrap; }
+.stage-filter { font-size: 12px; padding: 3px 6px; border-radius: 99px; border: 1px solid var(--line); background: var(--bg); color: var(--text); cursor: pointer; }
 .stage-filter.on { background: var(--brand); border-color: var(--brand); color: #fff; }
 /* (no dark colours: the app's pages are light only, so the chips stay light too) */
+
+/* 📒 record tasks: the entry box and the logbook (staff app, team pages); 📷 photos under a staff step (owner's task page) */
+.entry-form textarea { min-height: 3.2em; }
+.logbook { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
+.log-day { display: flex; flex-direction: column; gap: 6px; }
+.log-day-head { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; border-bottom: 1px solid var(--line); padding-bottom: 2px; }
+.log-entry { display: flex; flex-direction: column; gap: 4px; padding: 6px 8px; border-radius: 8px; background: var(--brand-soft); }
+.log-entry.waiting { background: transparent; border: 1px dashed var(--line); }
+.log-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; }
+.log-time { min-width: 58px; }
+.step-photos { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 2px 34px; }
+.step-photos .diary-photo { width: 64px; height: 64px; object-fit: cover; }
+.step-notes .step-photos { margin-left: 0; }
+.step-photos .rich-photo { width: 64px; height: 64px; object-fit: cover; border-radius: 6px; cursor: pointer; }
+
+.stage-chip.stage-cancelled { background: #f1f5f9; color: var(--muted); border-color: var(--line); text-decoration: line-through; }
+.team-join { margin: 14px 4px; display: flex; flex-direction: column; gap: 6px; }
+.team-email { display: flex; align-items: center; gap: 6px; }
+.wide-input { width: min(340px, 100%); }
+/* the top icons: a small word under each on a computer; on a phone the title gets the room (owner, 24 Oct) */
+.head-icon { display: inline-flex; flex-direction: column; align-items: center; line-height: 1.1; }
+.icon-cap { font-size: 9.5px; color: var(--muted); font-weight: 500; margin-top: 2px; letter-spacing: .01em; }
+.list-head h2 { min-width: 64px; }
+@media (min-width: 761px) { /* a computer: the page name on its own line, the labelled icons under it — nothing cut */
+  .list-head.owner-head { flex-wrap: wrap; row-gap: 4px; }
+  .list-head.owner-head h2 { flex: 1 1 calc(100% - 48px); } /* (beside ☰ when the menu is folded) */
+}
+@media (max-width: 760px) {
+  .icon-cap { display: none; }
+  .list-head .status.sync.ok, .list-head .capture-btn { display: none; }
+}
+/* a task on a phone: the step's name and its 📝 ⏰ ⋯ on one line (Give and History are in ⋯ / the right-click menu);
+   the title never under the 🔔 (owner, 24 Oct) */
+@media (max-width: 760px) {
+  .step-main .tag.me, .step-main .days-link { display: none; }
+  .step-main > .icon:not(.step-more), .step-main > .grip { display: none; } /* 📝 ⏰: tap the step, or ⋯ (the name gets the room) */
+  .step-main .step-text { flex: 1 1 120px; min-width: 0; }
+  body.has-bell .detail-top { padding-right: 56px; }
+  .detail-top .title-input { min-width: 0; flex: 1 1 auto; }
+}
+.why-line { margin: 2px 0 6px; padding: 5px 10px; border-radius: 8px; font-size: 13px; }
+.why-line.red { background: #fdecec; color: #b42318; }
+.why-line.yellow { background: #fff4e0; color: #8a5a00; }
+/* (owner, 24 Oct) staff / team rows: no empty space on the left (there is no tick box on them) */
+.layout.staff .prow > .quick-tick-space { display: none; }
+@media (max-width: 760px) {
+  /* Team today's filter chips: one line that scrolls sideways, never 3 rows */
+  .layout.staff .board-counts { flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; margin: 8px 0; padding: 0 14px 4px; }
+  .layout.staff .board-counts .chip { flex: none; white-space: nowrap; padding: 4px 10px; min-height: 34px; }
+}
+/* Review 5 (owner, 24 Oct): no line above a page's first block (Team Settings); the person page's account box closer to
+   the note under it; "Remove" kept apart from "Send pending list"; the Give-a-task file picker as the app's own button */
+.report > .block:first-child { border-top: 0; padding-top: 4px; }
+.team-account.block { padding-bottom: 4px; }
+.meta-line.linked-note { padding: 0 0 8px; }
+.state-buttons .person-remove { margin-left: 28px; background: none; }
+.file-pick { gap: 6px; }
+.file-pick .btn { cursor: pointer; }
+
+/* Which step an update is about (owner, 24 Oct: "I do not clearly know for what step I am writing") */
+.about-row .about-label { font-size: 13px; font-weight: 600; color: var(--text); }
+.about-row .chip.on { background: var(--brand-soft); border-color: var(--brand); color: var(--brand); font-weight: 600; } /* (the chosen step stands out, not only while clicked) */
+.step.writing-about { background: var(--brand-soft); box-shadow: inset 3px 0 0 var(--brand); }
+.step.writing-about .step-text { flex-basis: 120px; } /* (room for the tag: the row stays one line) */
+.tag.writing-tag { background: var(--brand-soft); color: var(--brand); border-color: var(--brand); }
+
+/* Review 6 (owner, 24 Oct): Follow-up's one-line box has a heading; a 📒 record is marked on Team today; "+N more" photos */
+.quick-head { padding: 8px 16px 0; font-weight: 600; }
+.tag.record-tag { background: #fef9c3; border-color: #fde68a; color: #854d0e; }
+.step-photos .more-photos { align-self: center; white-space: nowrap; }
+
+/* 📷 photos pasted on a step (owner, 29 Oct): under the step, and waiting under "+ Add the next step" */
+.step-own-photos { padding-left: 34px; }
+.step-wait-photos { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 6px 0 2px; }
+.step-wait-photo { display: inline-flex; align-items: center; gap: 4px; }
+
+/* ↩ / ➜ a task and the next task made from it (owner, 29 Oct) */
+.follow-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 8px; }
+.tag.follow-chip { cursor: pointer; background: var(--brand-soft); border-color: var(--brand); color: var(--brand); }
+
+/* 📋 Give a task: the owner's own tasks that match the words (owner, 29 Oct) */
+.pick-list { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.pick-list > .muted { flex-basis: 100%; }
+.chip.pick-task { text-align: left; }
+
+/* ☑ steps inside a single task, each with photos (owner, 29 Oct) */
+.tsteps .tstep { border-bottom: 1px solid var(--line, #e5e7eb); padding: 6px 0; }
+.tsteps .tstep-line { align-items: center; flex-wrap: nowrap; }
+.tsteps .tstep-title { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.tsteps .tstep.done .tstep-title { text-decoration: line-through; color: var(--muted, #6b7280); }
+.tsteps .tstep-photo { display: inline-flex; align-items: flex-start; gap: 2px; }
+.tsteps .add-step input { flex: 1; min-width: 0; }
+
+/* 🖼 the photo viewer, like Facebook photos (owner, 30 Oct): black page, photo big in the middle, round ✕ / ⬇ at the
+   top, ‹ › at the sides and "2 / 5" when there are more, the name under it (ui/photoview.js) */
+#viewer:has(> .pv) { padding: 0; background: #000; }
+.pv { position: relative; flex: 1; display: flex; flex-direction: column; min-height: 0; color: #fff; user-select: none; }
+.pv-top { position: absolute; top: 0; left: 0; right: 0; z-index: 2; display: flex; align-items: center; gap: 10px;
+  padding: calc(12px + env(safe-area-inset-top)) 14px 12px; background: linear-gradient(rgba(0,0,0,.55), rgba(0,0,0,0)); }
+.pv-gap { flex: 1; }
+.pv-count { font-size: 14px; font-weight: 600; opacity: .9; }
+.pv-btn { width: 42px; height: 42px; border-radius: 50%; border: 0; display: inline-grid; place-items: center; cursor: pointer;
+  background: rgba(255,255,255,.16); color: #fff; font-size: 20px; line-height: 1; text-decoration: none; transition: background .15s; }
+.pv-btn:hover, .pv-btn:focus-visible { background: rgba(255,255,255,.3); outline: none; }
+.pv-stage { flex: 1; min-height: 0; display: grid; place-items: center; padding: 64px 64px 48px; }
+.pv-img { max-width: 100%; max-height: calc(100dvh - 116px); object-fit: contain; border-radius: 4px; box-shadow: 0 8px 40px rgba(0,0,0,.6); transition: opacity .15s; }
+.pv-img.loading { opacity: .35; }
+.pv-arrow { position: absolute; top: 50%; transform: translateY(-50%); z-index: 2; width: 48px; height: 48px; font-size: 30px; }
+.pv-prev { left: 14px; }
+.pv-next { right: 14px; }
+.pv-name { position: absolute; bottom: 0; left: 0; right: 0; padding: 10px 16px calc(14px + env(safe-area-inset-bottom)); text-align: center;
+  font-size: 14px; background: linear-gradient(rgba(0,0,0,0), rgba(0,0,0,.6)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 760px) {
+  .pv-stage { padding: 60px 0 44px; }
+  .pv-img { max-height: calc(100dvh - 108px); border-radius: 0; }
+  .pv-arrow { width: 40px; height: 40px; font-size: 26px; background: rgba(0,0,0,.35); }
+  .pv-prev { left: 6px; } .pv-next { right: 6px; }
+}
+
+/* ---------------------------------------------------------------- 🎨 a fresh look (owner, 3 Nov: "only give the app a fresh look")
+   A clean dashboard style: a soft grey page with white rounded cards (computer), quieter lines, pill tags,
+   softer buttons and rows. Only the look: no page, button or rule changes. */
+:root {
+  --canvas: #f3f5f9;
+  --panel: #f6f7fb;
+  --line: #e6e9f0;
+  --text: #182033;
+  --muted: #6a7385;
+  --brand: #2f5ce8;
+  --brand-soft: #edf2ff;
+  --radius: 12px;
+  --shadow-sm: 0 1px 2px rgba(16, 24, 40, .05);
+  --shadow-md: 0 1px 3px rgba(16, 24, 40, .06), 0 4px 14px rgba(16, 24, 40, .05);
+}
+body { background: var(--canvas); letter-spacing: -.003em; }
+input, select, textarea { border-color: #dfe3eb; border-radius: 10px; transition: border-color .15s, box-shadow .15s; }
+input:focus, select:focus, textarea:focus { outline: none; border-color: var(--brand); box-shadow: 0 0 0 3px rgba(47, 92, 232, .14); }
+input[type=checkbox], input[type=radio] { accent-color: var(--brand); flex: none; } /* (never squeezed thin next to long words) */
+.btn { border-color: #e0e4ec; border-radius: 10px; box-shadow: var(--shadow-sm); font-weight: 500; transition: background .15s, box-shadow .15s, border-color .15s; }
+.btn:hover { background: #f7f8fb; border-color: #d3d9e4; }
+.btn.primary { background: var(--brand); border-color: var(--brand); box-shadow: 0 1px 2px rgba(47, 92, 232, .25), 0 2px 8px rgba(47, 92, 232, .18); }
+.btn.primary:hover { background: #2549c9; border-color: #2549c9; }
+.icon { border-radius: 10px; }
+.icon:hover { background: #eef1f6; }
+.dot.green { box-shadow: 0 0 0 3px rgba(22, 163, 74, .14); }
+.dot.orange { box-shadow: 0 0 0 3px rgba(245, 158, 11, .16); }
+.dot.red { box-shadow: 0 0 0 3px rgba(220, 38, 38, .13); }
+.tag { border-color: transparent; background: #eef0f5; color: #586174; font-weight: 500; padding: 2px 9px; }
+.tag.late, .late .tag { color: #c92a2a; border-color: transparent; background: #fdeeee; }
+.tag.high { color: #a14a10; border-color: transparent; background: #fff1e4; }
+.chip { border: 1px solid #e0e4ec; background: #fff; box-shadow: var(--shadow-sm); }
+.chip:hover { border-color: #c4d2fb; color: var(--brand); background: var(--brand-soft); }
+.banner { border-radius: var(--radius); border-color: var(--line); background: #f8f9fc; }
+.block { border-top-color: #eef0f5; }
+.block h3 { font-size: 12px; letter-spacing: .07em; color: #8a92a3; font-weight: 700; }
+.seg { transition: background .15s; }
+.seg.on { background: var(--brand-soft); color: var(--brand); }
+.prow { border-radius: var(--radius); margin: 2px 0; transition: background .12s; }
+.prow:hover { background: #f5f7fb; }
+.prow.current { background: var(--brand-soft); outline: 0; box-shadow: inset 0 0 0 1.5px #c9d6fb; }
+.prow-name { letter-spacing: -.01em; }
+.menu-item { border-radius: 10px; color: #3a4357; transition: background .12s; }
+.menu-item:hover { background: rgba(255, 255, 255, .8); }
+.menu-item.current { background: #fff; color: var(--brand); box-shadow: var(--shadow-md); }
+.menu-sep { border-top-color: #e3e7ee; }
+.list-head h2, .title-input, .misc-title { letter-spacing: -.02em; }
+/* a computer: the list and the task are white cards on the grey page; the menu sits on the page itself */
+@media (min-width: 761px) {
+  .layout { gap: 12px; padding: 12px 12px 12px 0; background: var(--canvas); }
+  #menu { background: transparent; border-right: 0; }
+  #list, #detail { background: var(--bg); border: 1px solid var(--line); border-radius: 16px; box-shadow: var(--shadow-md); }
+  #list { border-right: 1px solid var(--line); }
+  .list-head { border-radius: 16px 16px 0 0; }
+  .bell-wrap { top: calc(18px + env(safe-area-inset-top)); right: 24px; } /* (inside the card's corner, not on its edge) */
+}
+@media (max-width: 760px) { body { background: var(--bg); } } /* a phone: one white page, as before */
+.diary-time .link { margin-left: 6px; } /* (the manager's ✕ on an update: a little space from its time) */
 
 /* ---------------------------------------------------------------- the staff view (one app: ui/staff.js)
    Staff see this app's own design. Only the few pieces this app had no style for, and only inside the staff view
@@ -1239,6 +1449,13 @@ button.stage-chip.tap { cursor: pointer; font-size: 12.5px; padding: 3px 10px; }
 .layout.staff .pre { white-space: pre-wrap; word-break: break-word; }
 .layout.staff .stack { display: flex; flex-direction: column; gap: 10px; }
 .layout.staff .banner.stack { gap: 6px; margin: 10px 14px 0; color: var(--text); }
+/* forms (Give a task, Suggest a task, team Settings, Outlook): the words above the box, the box full width, buttons their own size (owner, 24 Oct) */
+.layout.staff .stack > label:not(.row):not(.check) { display: flex; flex-direction: column; gap: 4px; }
+.layout.staff .stack > label:not(.row):not(.check) > input:not([type="checkbox"]):not([type="radio"]):not([type="time"]):not([type="date"]):not([type="file"]),
+.layout.staff .stack > label:not(.row):not(.check) > select, .layout.staff .stack > label:not(.row):not(.check) > textarea { width: 100%; max-width: 100%; box-sizing: border-box; }
+.layout.staff .stack > label:not(.row):not(.check) > input[type="time"], .layout.staff .stack > label:not(.row):not(.check) > input[type="date"] { align-self: flex-start; }
+.layout.staff .stack > .btn { align-self: flex-start; }
+.layout.staff .stack > label > code { display: block; padding: 2px 0; overflow-wrap: anywhere; }
 .layout.staff .team-msg.mine { background: var(--brand-soft); border-color: #c7d7fb; }
 .layout.staff .msg-acts { margin-left: auto; display: inline-flex; gap: 6px; }
 .layout.staff .search-box { margin: 12px 14px 4px; }
@@ -1253,5 +1470,6 @@ button.stage-chip.tap { cursor: pointer; font-size: 12.5px; padding: 3px 10px; }
 .layout.staff .wt-table.morning .m-no { width: 2.2em; }
 .layout.staff .wt-table.morning .m-last { width: 38%; }
 .layout.staff .wt-table tr.wt-open { cursor: pointer; }
+
 
 

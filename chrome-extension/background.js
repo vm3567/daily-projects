@@ -4,7 +4,7 @@
 const APP = 'https://worktask.in/projects/'; // moved from vm3567.github.io/daily-projects (the old address forwards here)
 
 chrome.runtime.onInstalled.addListener(() => {
-  chrome.contextMenus.create({ id: 'dp-add', title: 'Add to Daily Projects', contexts: ['page', 'selection', 'link'] });
+  chrome.contextMenus.create({ id: 'dp-add', title: 'Add to Task List', contexts: ['page', 'selection', 'link'] });
 });
 
 chrome.action.onClicked.addListener((tab) => send(tab, {}));

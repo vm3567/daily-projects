@@ -1,6 +1,6 @@
 {
-  "name": "Daily Projects",
-  "short_name": "Daily Projects",
+  "name": "Task List",
+  "short_name": "Task List",
   "description": "My projects and their next steps, every day.",
   "start_url": "./",
   "scope": "./",

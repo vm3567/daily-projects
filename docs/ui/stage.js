@@ -14,7 +14,7 @@ export function stageChip(info, { you = false, onClick = null, key = null } = {}
   const text = stageText({ ...info, stage }, { you });
   const since = stage === 'waiting' && info.since ? `Waiting since ${fmtDay(info.since)}` : '';
   const title = [since, info && info.auto ? 'Stage (worked out by itself)' : 'Stage'].filter(Boolean).join(' · ');
-  const cls = 'stage-chip stage-' + stage;
+  const cls = 'stage-chip stage-' + stage + (info && info.cancelled ? ' stage-cancelled' : '');
   return onClick
     ? h('button', { class: cls + ' tap', type: 'button', key, title: title + ' — tap to change', 'aria-label': `${text} — tap to change the stage`, onClick }, text)
     : h('span', { class: cls, key, title }, text);

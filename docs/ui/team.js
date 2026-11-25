@@ -6,13 +6,14 @@
 // The owner opens it from "👥 Team" in Daily Projects (and goes back with "📋 My projects"); another manager gets only this.
 
 import { h, morph, errLine } from './dom.js';
+import { isPhoto } from './heic.js';
 import { createOutbox } from './staffbox.js';
-import { stageChip } from './stage.js';
+import { stageChip, stageFilterBar } from './stage.js';
 import { openMenuAt, menuBox, focusLater } from './rowmenu.js';
-import { fmtDay, fmtTime, LONG_DAYS, stateTag, newClientId, istDay, daysBetween, repeatLabel, block, sec, taskRow, chipsFor, makePics, photosRow, filesBlock, diaryBlock, messagesBlock, phoneBack } from './workparts.js';
+import { fmtDay, fmtTime, LONG_DAYS, stateTag, newClientId, istDay, daysBetween, repeatLabel, block, sec, taskRow, chipsFor, makePics, photosRow, filesBlock, diaryBlock, messagesBlock, phoneBack, logbookBlock, bottomBar, hitLines, HERE, blockedSteps, quickExample, stepsBlock, makeStepActs, takesSteps } from './workparts.js';
 
 const KEEP_FAIL = 'Could not keep this on the phone. Try again when online.';
-const OFFLINE_KEPT = '📴 Saved on this phone — it will be sent when you are online';
+const OFFLINE_KEPT = `📴 Saved on ${HERE} — it will be sent when you are online`;
 const WIDE = ['report', 'people', 'settings']; // pages that fill the screen (no page on the right)
 /** Work Task's colours as the owner's dots (red, yellow, green, grey). */
 const dotOf = (c) => (c === 'orange' ? 'yellow' : c);
@@ -68,6 +69,10 @@ export function createTeam(opts) {
 
   const pic = makePics(photo, () => render());
   const photos = (kind, list) => photosRow(pic, viewer, kind, list);
+  const tsteps = makeStepActs({ api, state, render: () => render(), toast, shrink, ask, fail });
+  // ☑ a single task's steps, each with photos (owner, 29 Oct): the manager adds, changes and deletes them too
+  const stepsBox = (t) => stepsBlock({ t, steps: state.detail.steps || [], meId: state.user.id, manager: true, draft: tsteps.draftFor(t.id), adding: !!state.addingStep, pic, viewer,
+    onDraft: (d) => tsteps.setDraft(t.id, d), onAdd: () => tsteps.add(t.id), onTick: tsteps.tick, onEdit: tsteps.edit, onDelete: tsteps.remove, onPhotos: tsteps.photos, onRemovePhoto: tsteps.removePhoto });
 
   const ob = createOutbox({
     box: opts.box, api, rules, lock: opts.lock, toast,
@@ -174,8 +179,9 @@ export function createTeam(opts) {
   }
   const toProjects = () => { if (!opts.toProjects) return false; state.fromProjects = false; opts.toProjects(); return true; };
 
-  async function start({ sel = null, prefill = null, fromProjects = false } = {}) {
+  async function start({ sel = null, prefill = null, fromProjects = false, view = null } = {}) {
     state.prefill = prefill; state.fromProjects = fromProjects;
+    if (view === 'settings') { state.view = 'settings'; state.sel = null; } // (the owner's Settings → "Outlook and the team's settings")
     render();
     await refreshOutbox();
     if (state.outbox.length) flush();
@@ -212,7 +218,7 @@ export function createTeam(opts) {
   async function addFiles(taskId, files) {
     for (const f of files) {
       const fd = new FormData();
-      const img = String(f.type || '').startsWith('image/');
+      const img = isPhoto(f);
       fd.append('taskId', String(taskId)); fd.append('file', img ? await shrink(f) : f, img ? 'photo.jpg' : f.name);
       try { await api('task.file.add', fd, true); } catch (e) { toast(`${f.name}: ${e.message}`, 5000); }
     }
@@ -273,8 +279,14 @@ export function createTeam(opts) {
     if (text === null || text === undefined || text.trim() === String(c.text || '').trim()) return;
     try { const tid = openTaskId(); const out = await api('comment.edit', { id: c.id, text }); if (openTaskId() === tid && tid) state.detail.comments = out.comments; render(); toast('Changed ✓'); } catch (e) { say(e); }
   }
+  /** The manager deletes a day's update and its photos (owner, 29 Oct: "delete this info only"). */
+  async function deleteUpdate(u) {
+    const n = (u.photos || []).length;
+    if (!ask.confirm(`Delete ${u.by}'s update of ${fmtDay(u.day)}${n ? ` and its ${n} photo${n > 1 ? 's' : ''}` : ''}? It goes for everyone.`)) return;
+    try { await api('update.delete', { id: u.id }); toast('Deleted'); await loadDetail(); load(); } catch (e) { say(e); }
+  }
   async function deleteMessage(c) {
-    if (!ask.confirm('Delete this message?')) return;
+    if (!ask.confirm(c.mine ? 'Delete this message?' : `Delete ${c.by}'s message? It goes for everyone.`)) return;
     try { const tid = openTaskId(); const out = await api('comment.delete', { id: c.id }); if (openTaskId() === tid && tid) state.detail.comments = out.comments; render(); toast('Deleted'); } catch (e) { say(e); }
   }
 
@@ -471,7 +483,7 @@ export function createTeam(opts) {
   function paste({ files = [], text = '', inMessageBox = false }) {
     if (!state.sel || !state.sel.startsWith('task:') || !state.detail || !state.detail.task || !files.length || String(text).trim()) return false;
     const t = state.detail.task;
-    const images = files.filter((f) => String(f.type || '').startsWith('image/'));
+    const images = files.filter(isPhoto);
     if (inMessageBox) {
       if (!images.length) { toast('Only photos can go in a message.', 5000); return true; }
       sendMessagePhoto(t.id, images[0]).then((m) => { if (m) toast(m, 5000); });
@@ -484,12 +496,13 @@ export function createTeam(opts) {
 
   async function notifyOn() {
     if (!push) return;
-    try { if ((await push.turnOn()) === 'on') news('🔔 Notifications are on', 'Your team\'s updates, Stuck, Finished, messages and suggestions come to this phone.', null); render(); }
+    try { if ((await push.turnOn()) === 'on') news('🔔 Notifications are on', `Your team's updates, Stuck, Finished, messages and suggestions come to ${HERE}.`, null); render(); }
     catch (e) { toast('Could not turn on notifications: ' + e.message, 6000); }
   }
 
-  const act = { go, open, back, reload, setStatus, answerSuggestion, move, addFiles, removeFile, openFile, sendMessage, sendMessagePhoto, editMessage, deleteMessage,
+  const act = { go, open, back, reload, setStatus, answerSuggestion, move, addFiles, removeFile, openFile, sendMessage, sendMessagePhoto, editMessage, deleteMessage, deleteUpdate,
     saveTask, giveQuick, chase, closeFollow, takeBack, startRound, morningEmail, addPerson, resetPassword, switchPerson, editPerson, moveAll, changePassword, search, liveCheck, paste, flush, notifyOn, outlookConnected };
+  act.tsteps = tsteps; // ☑ a task's steps (for the checks)
 
   // ---------------------------------------------------------------- screens
 
@@ -507,7 +520,7 @@ export function createTeam(opts) {
     const dots = { red: 0, yellow: 0, green: 0 };
     for (const x of today) dots[x.today ? 'green' : t.late ? 'red' : 'yellow']++;
     return h('nav', { class: 'menu-inner' },
-      h('div', { class: 'brand' }, h('img', { src: 'icons/icon-192.png', alt: '', width: 28, height: 28 }), h('span', null, owner ? 'Daily Projects' : 'Work Task')),
+      h('div', { class: 'brand' }, h('img', { src: 'icons/icon-192.png', alt: '', width: 28, height: 28 }), h('span', null, 'Task List')),
       h('input', { class: 'search', type: 'search', placeholder: 'Search…', key: 'team-menu-search', 'aria-label': 'Search', value: state.searchQ || '',
         onInput: (e, el) => { if (state.view !== 'search') go('search'); search(el.value); } }),
       h('ul', { class: 'menu-list' },
@@ -521,7 +534,7 @@ export function createTeam(opts) {
         h('li', { class: 'menu-sep' }),
         item('Done / cancelled', listOn('tasks') && state.closed, () => { state.closed = true; go('tasks'); }),
         item('📊 Weekly report', listOn('report'), () => go('report')),
-        item('People', listOn('people'), () => (opts.openPeople ? opts.openPeople() : go('people'))),
+        item(opts.openPeople ? 'People ↗ (in My projects)' : 'People', listOn('people'), () => (opts.openPeople ? opts.openPeople() : go('people'))), // (the owner: one People page, in My projects — said, so the jump is expected)
         item('Settings', listOn('settings'), () => go('settings')),
         t && t.people && t.people.length ? [h('li', { class: 'menu-head' }, 'Team'), t.people.map((p) => {
           const tasks = t.tasks.filter((x) => x.assignee.id === p.id);
@@ -538,10 +551,16 @@ export function createTeam(opts) {
         item('Sign out', false, signOut)));
   }
 
-  const rowOf = (t, sub, dot, warn = false) => taskRow({
+  /** 📒 a record's line in a list: "📒 Record · 3 entries today" / "· last entry 22 Oct". */
+  const recordLine = (t) => `📒 Record · ${t.entriesToday ? `${t.entriesToday} entr${t.entriesToday === 1 ? 'y' : 'ies'} today` : t.last ? `last entry ${fmtDay(t.last.day)}` : 'no entries yet'}`;
+  const photoCount = (t) => ((t.today && t.today.photos) || []).length + ((t.last && t.last.photos) || []).length;
+  // the tasks in the list on screen, in order: ‹ › on a task's page go through them (owner, 24 Oct; as the owner's and staff pages)
+  let shownIds = [];
+  const shown = (id) => { if (id && !shownIds.includes(id)) shownIds.push(id); };
+  const rowOf = (t, sub, dot, warn = false) => (shown(t.id), taskRow({
     key: 't-' + t.id, title: t.title, sub, dot: dotOf(dot), warn, current: state.sel === 'task:' + t.id, onOpen: () => open('task:' + t.id), onMenu: (e) => openMenuAt(state, render, { t }, e),
     tags: [state.newIds.has(t.id) ? h('span', { class: 'tag high' }, 'New') : null, t.unread ? h('span', { class: 'tag on-step', title: `${t.unread} new message(s)` }, '💬 New') : null],
-  });
+  }));
 
   /** Once at the top: "turn on notifications" (until done, or Later), as on the staff view. */
   function pushBanner() {
@@ -549,7 +568,7 @@ export function createTeam(opts) {
     if ((s !== 'default' && s !== 'granted') || state.pushLater) return null;
     try { if (Number(localStorage.getItem('wt.pushLater') || 0) > Date.now() || localStorage.getItem('wt.pushOff.' + state.user.id)) return null; } catch { /* blocked */ }
     return h('div', { class: 'banner stack', key: 'push-banner' },
-      h('span', null, '🔔 Get a message on this phone when your team sends an update or a message — like email.'),
+      h('span', null, `🔔 Get a message on ${HERE} when your team sends an update or a message — like email.`),
       h('div', { class: 'row' },
         h('button', { class: 'btn primary small', onClick: notifyOn }, 'Turn on'),
         h('button', { class: 'link', onClick: () => { try { localStorage.setItem('wt.pushLater', String(Date.now() + 3 * 86400000)); } catch { /* blocked */ } state.pushLater = true; render(); } }, 'Later')));
@@ -561,7 +580,7 @@ export function createTeam(opts) {
     return [
       pushBanner(),
       state.offline || n ? h('div', { class: 'offline-bar', key: 'offline' },
-        state.offline ? '📴 Offline — showing the last saved copy. What you send is kept on this phone and goes out when you are online.' : '',
+        state.offline ? `📴 Offline — showing the last saved copy. What you send is kept on ${HERE} and goes out when you are online.` : '',
         n ? h('strong', null, ` ⏳ ${n} waiting to send`) : null,
         n && !state.offline ? [' ', h('button', { class: 'link', onClick: () => flush() }, 'Send now')] : null) : null,
       state.notices.map((x, i) => h('div', { class: 'banner stack', key: 'n-' + i },
@@ -631,14 +650,19 @@ export function createTeam(opts) {
     const cell = (cls, ...c) => h('td', { class: cls }, ...c);
     const line = (r) => {
       const t = r.t, u = t.today, m = t.lastMessage;
+      shown(t.id);
       return h('tr', { key: 'b-' + t.id, class: 'sub-row board-row' + (state.sel === 'task:' + t.id ? ' current' : ''), onClick: () => open('task:' + t.id),
         onContextmenu: (e) => openMenuAt(state, render, { t }, e) }, // right-click: message, finish, edit, move, cancel
         cell('', h('span', { class: 'dot ' + dotOf(r.colour) })),
-        cell('board-task', h('button', { class: 'link sub-name', type: 'button' }, t.title), ' ', state.boardGroup === 'project' ? null : h('span', { class: 'tag main-tag' }, '📂 ' + r.project), // (by 📂 project: its line says it)
+        cell('board-task', h('button', { class: 'link sub-name', type: 'button' }, t.title), ' ', state.boardGroup === 'project' || r.project === 'Misc' ? null : h('span', { class: 'tag main-tag' }, '📂 ' + r.project), // (by 📂 project: its line says it; in no project: no "📂 Misc", owner 24 Oct)
           state.newIds.has(t.id) ? h('span', { class: 'tag high' }, 'New') : null,
-          r.stage ? [' ', stageChip(r.stage, { you: r.you })] : null), // its Stage; stuck waiting for "Manager": "Waiting: you"
+          t.kind === 'log' ? [' ', h('span', { class: 'tag record-tag' }, '📒 Record')] : null, // (marked as on ✅ Tasks and the staff app: owner, 24 Oct)
+          r.stage && t.kind !== 'log' ? [' ', stageChip(r.stage, { you: r.you })] : null, // its Stage; stuck waiting for "Manager": "Waiting: you"
+          // on a phone the Today column is hidden: today's words under the name instead (newest line of a record; owner, 24 Oct)
+          u ? h('span', { class: 'board-today-inline muted small' }, `“${hitLines(String(u.note || '').split('\n').pop(), '')}”`) : null),
         cell('board-who', t.assignee.name),
-        cell('board-today col-extra' + (u ? '' : ' muted'), u ? [h('span', { class: 'muted small' }, fmtTime(u.at) + ' '), u.note, (u.photos || []).length ? ` 📷${u.photos.length}` : ''] : '—'),
+        // (📒 a record's lines carry their own times: never two, owner 24 Oct)
+        cell('board-today col-extra' + (u ? '' : ' muted'), u ? [t.kind === 'log' ? null : h('span', { class: 'muted small' }, fmtTime(u.at) + ' '), u.note, (u.photos || []).length ? ` 📷${u.photos.length}` : ''] : '—'),
         cell('board-status', h('span', { class: 'tag ' + STATUS[r.status][1] }, r.status === 'late' ? `⏰ Late (by ${fmtDay(t.dueDate)})` : STATUS[r.status][0])),
         cell('board-msg col-extra' + (m ? '' : ' muted'), m ? [r.msg ? h('span', { class: 'tag on-step' }, '💬 New') : null, ` ${m.mine ? 'You' : m.by}: ${m.text || '📷'}`] : '—'));
     };
@@ -660,6 +684,7 @@ export function createTeam(opts) {
 
   function followRow(r) {
     const sel = r.kind === 'project' ? 'project:' + r.projectRef : 'task:' + r.taskId;
+    if (r.kind !== 'project') shown(r.taskId);
     return h('li', { key: 'fu-' + r.kind + (r.taskId || r.projectRef), class: 'prow' + (state.sel === sel ? ' current' : '') },
       h('span', { class: 'quick-tick-space', 'aria-hidden': 'true' }),
       h('div', { class: 'prow-text' },
@@ -699,7 +724,7 @@ export function createTeam(opts) {
     if (r && !r.error) { const sig = JSON.stringify([r.person.id, r.title, r.dueDate]); if (q.sig !== sig) { q.sig = sig; q.cid = newClientId(); } } // one id per preview: a second tap gives it once
     return h('div', { class: 'stack staff-pad', key: 'quick' },
       h('div', { class: 'row quick-line' },
-        h('input', { key: 'quick-in', class: 'search', placeholder: 'Valar: send kiln photos by Friday', 'aria-label': 'Hand out work in one line', enterkeyhint: 'done', value: q.text, onInput: (e, el) => { q.text = el.value; render(); } }),
+        h('input', { key: 'quick-in', class: 'search', placeholder: quickExample(people, state.user.id), 'aria-label': 'Hand out work in one line', enterkeyhint: 'done', value: q.text, onInput: (e, el) => { q.text = el.value; render(); } }),
         listen() ? h('button', { class: 'chip' + (state.listening ? ' on' : ''), title: 'Say it', 'aria-label': 'Say it', onClick: sayIt }, '🎤') : null),
       !r ? null : r.error ? h('p', { class: 'warn', key: 'qerr2' }, r.error) : h('div', { class: 'banner stack', key: 'qcard' },
         h('div', null, h('span', { class: 'muted small' }, 'Task: '), h('strong', null, r.title)),
@@ -750,6 +775,7 @@ export function createTeam(opts) {
     if (state.round) return roundScreen(d);
     const rows = rules.followupRows(d.rows, d.today);
     return [
+      h('div', { class: 'quick-head muted small', key: 'qh' }, '✍ Give work in one line'), // (the box said nothing about what it is for: owner, 24 Oct)
       quickBox(d.people || []),
       h('div', { class: 'progress' }, h('div', { class: 'progress-row' },
         h('div', { class: 'progress-text' }, rules.followupSummary(rows, d.today)),
@@ -762,15 +788,26 @@ export function createTeam(opts) {
   function tasksList() {
     const d = state.data;
     const groups = new Map();
-    for (const t of d.tasks) { if (!groups.has(t.assignee.name)) groups.set(t.assignee.name, []); groups.get(t.assignee.name).push(t); }
+    // the Stage buttons, as on the owner's ✅ Tasks and the staff app (owner, 24 Oct); open tasks only
+    const stageOf = (t) => rules.teamStage(t).stage;
+    const counts = { all: d.tasks.length, notstarted: 0, inprogress: 0, waiting: 0, done: 0 };
+    if (!state.closed) for (const t of d.tasks) counts[stageOf(t)]++;
+    const sf = state.closed ? 'all' : state.teamStage || 'all';
+    const shownTasks = sf === 'all' ? d.tasks : d.tasks.filter((t) => stageOf(t) === sf);
+    for (const t of shownTasks) { if (!groups.has(t.assignee.name)) groups.set(t.assignee.name, []); groups.get(t.assignee.name).push(t); }
     const seg = (on, label, closed) => h('button', { class: 'seg' + (on ? ' on' : ''), 'aria-pressed': String(on), onClick: () => { state.closed = closed; go('tasks'); } }, label);
     return [
       h('div', { class: 'list-tools' }, h('div', { class: 'segmented', role: 'group', 'aria-label': 'Which tasks' }, seg(!state.closed, 'Open', false), seg(state.closed, 'Done / cancelled', true))),
+      state.closed || !d.tasks.length ? null : stageFilterBar(counts, sf, (k) => { state.teamStage = k === 'all' ? '' : k; render(); }),
       d.tasks.length ? null : h('p', { class: 'empty-list' }, state.closed ? 'Nothing closed yet.' : 'No open tasks. Give one with “+ Give a task”.'),
-      [...groups].map(([name, tasks]) => [sec(name, h('span', { class: 'tag waiting' }, String(tasks.length))),
+      // Done / cancelled: newest closed first, each with the day it was closed (owner, 24 Oct)
+      state.closed ? h('ul', { class: 'plist' }, [...d.tasks].sort((a, b) => String(b.doneAt || '').localeCompare(String(a.doneAt || ''))).map((t) => rowOf(t,
+        [`${t.status === 'done' ? '✓ Done' : '✖ Cancelled'}${t.doneAt ? ' ' + fmtDay(String(t.doneAt).slice(0, 10)) : ''}`, t.assignee.name, t.project && t.project !== 'Misc' ? t.project : null,
+          t.kind === 'log' ? recordLine(t) : t.today || t.last ? `last update ${fmtDay((t.today || t.last).day)}` : t.status === 'cancelled' ? 'taken back before any update' : null].filter(Boolean).join(' · '), 'grey')))
+      : [...groups].map(([name, tasks]) => [sec(name, h('span', { class: 'tag waiting' }, String(tasks.length))),
         h('ul', { class: 'plist' }, tasks.map((t) => rowOf(t,
-          [t.status !== 'open' ? (t.status === 'done' ? 'Done' : 'Cancelled') : null, t.project, repeatLabel(t), t.today ? 'sent today' : t.last ? `last ${fmtDay(t.last.day)}` : 'no update yet'].filter(Boolean).join(' · '),
-          t.status !== 'open' ? 'grey' : t.stuck ? 'red' : t.today ? 'green' : 'yellow')))]),
+          [t.status !== 'open' ? (t.status === 'done' ? 'Done' : 'Cancelled') : null, t.project, t.kind === 'log' ? recordLine(t) : repeatLabel(t), t.kind === 'log' ? null : t.today ? 'sent today' : t.last ? `last ${fmtDay(t.last.day)}` : 'no update yet'].filter(Boolean).join(' · '),
+          t.status !== 'open' ? 'grey' : t.stuck ? 'red' : t.today ? 'green' : t.kind === 'log' ? 'grey' : 'yellow')))]),
     ];
   }
 
@@ -796,6 +833,7 @@ export function createTeam(opts) {
     const days = all.map((t) => (t.today || t.last || {}).day).filter(Boolean).sort();
     const last = days[days.length - 1];
     const who = (t) => (t.createdBy === t.assignee.id ? ` · added by ${t.assignee.name}` : '');
+    const pics = (t) => { const n = photoCount(t); return n ? ` · 📷 ${n}` : ''; }; // the step's photos (e.g. each test step)
     const total = done.length + openSteps.filter((t) => !String(t.stepRef).endsWith(':whole')).length;
     const stuck = openSteps.some((t) => t.stuck);
     const bar = progressBar(total ? done.length / total : 0, 'pp');
@@ -805,9 +843,9 @@ export function createTeam(opts) {
           h('span', { class: 'tag ' + (stuck ? 'late' : 'waiting') }, stuck ? 'Stuck' : total ? `${done.length} of ${total} done` : 'No steps yet')),
         total ? bar : null,
         h('div', { class: 'progress-text' }, last ? (last === state.detail.today ? 'Last update: today' : `Last update: ${fmtDay(last)} (${daysBetween(last, state.detail.today)} days ago)`) : 'No update yet')),
-      done.length ? block(`✓ ${done.length} done`, h('ul', { class: 'plist' }, done.map((t, i) => rowOf(t, `Step ${i + 1} · done ${t.doneAt ? fmtDay(t.doneAt) : ''}${who(t)}`, 'green')))) : null,
+      done.length ? block(`✓ ${done.length} done`, h('ul', { class: 'plist' }, done.map((t, i) => rowOf(t, `Step ${i + 1} · done ${t.doneAt ? fmtDay(t.doneAt) : ''}${who(t)}${pics(t)}`, 'green')))) : null,
       openSteps.length ? block('To do', h('ul', { class: 'plist' }, openSteps.map((t, i) => rowOf(t,
-        (String(t.stepRef).endsWith(':whole') ? 'The whole project (no steps yet)' : `Step ${done.length + i + 1}`) + (t === cur ? ` · current · ${t.today ? '✓ sent today' : 'no update today'}` : ' · next') + who(t) + (t.dueDate ? ` · by ${fmtDay(t.dueDate)}` : ''),
+        (String(t.stepRef).endsWith(':whole') ? 'The whole project (no steps yet)' : `Step ${done.length + i + 1}`) + (t === cur ? ` · current · ${t.today ? '✓ sent today' : 'no update today'}` : ' · next') + who(t) + (t.dueDate ? ` · by ${fmtDay(t.dueDate)}` : '') + pics(t),
         t.stuck ? 'red' : t === cur ? (t.today ? 'green' : 'yellow') : 'grey', t.stuck)))) : h('p', { class: 'muted' }, 'Nothing open on this project.'),
       h('p', { class: 'muted small' }, owner ? 'Add, tick or change steps on your projects page; the person’s list follows by itself.' : 'Steps are added and changed on the owner’s projects page; the person’s list follows by itself.'),
     ];
@@ -818,7 +856,7 @@ export function createTeam(opts) {
     const icon = { task: '📋', message: '💬', update: '📝' };
     return [h('div', { class: 'search-box' }, h('input', { class: 'search', type: 'search', key: 'team-search', placeholder: 'Search tasks, messages, updates…', 'aria-label': 'Search', value: state.searchQ, onInput: (e, el) => search(el.value) })),
       !r ? h('p', { class: 'empty-list' }, 'Type 2 or more letters.') : r.error ? h('p', { class: 'empty-list' }, r.error) : !r.length ? h('p', { class: 'empty-list' }, 'Nothing found.')
-        : h('ul', { class: 'plist' }, r.map((x, i) => taskRow({ key: 'sr-' + i, title: `${icon[x.kind] || ''} ${x.title}`, sub: `${x.who} · ${fmtDay(x.at)} — ${x.text}`, onOpen: () => open('task:' + x.taskId) })))];
+        : h('ul', { class: 'plist' }, r.map((x, i) => taskRow({ key: 'sr-' + i, title: `${icon[x.kind] || ''} ${x.title}`, sub: `${x.who} · ${fmtDay(x.at)} — ${hitLines(x.text, state.searchQ)}`, onOpen: () => open('task:' + x.taskId) })))];
   }
 
   function reportPage() {
@@ -851,7 +889,7 @@ export function createTeam(opts) {
     const err = errLine('perr');
     const share = state.newPerson ? (() => {
       const p = state.newPerson;
-      const text = `Work Task (daily updates)\nLink: ${opts.appLink || location.origin + '/'}\nUsername: ${p.username}\nPassword: ${p.password}\nAfter signing in, choose your own password.`;
+      const text = `Task List (daily updates)\nLink: ${opts.appLink || location.origin + '/'}\nUsername: ${p.username}\nPassword: ${p.password}\nAfter signing in, choose your own password.`;
       return block(`Send this to ${p.name}`, h('div', { class: 'pre small' }, text), h('div', { class: 'row' },
         h('button', { class: 'btn small', onClick: () => copy(text).then(() => toast('Copied ✓'), () => toast('Select the text and copy it')) }, '📋 Copy'),
         h('a', { class: 'btn small', href: 'https://wa.me/?text=' + encodeURIComponent(text), target: '_blank', rel: 'noopener noreferrer' }, 'WhatsApp'),
@@ -924,7 +962,7 @@ export function createTeam(opts) {
       try { const out = await api(a, body); o.status = out.outlook || o.status; state.outlook = !!(o.status && o.status.connected); if (after) after(out); } catch (e) { toast(e.message, 6000); } finally { o.busy = ''; render(); }
     };
     return block('📧 Outlook', h('div', { class: 'stack' },
-      h('p', { class: 'muted small' }, 'Every new email in your Outlook Inbox comes to your Daily Projects 📥 Inbox (replies join the same item). Set up once in Azure (App registrations): register this Redirect URI (type Web), add the delegated permissions offline_access, User.Read and Mail.ReadWrite (it only reads your emails; it never sends any), make a client secret.'),
+      h('p', { class: 'muted small' }, 'Every new email in your Outlook Inbox comes to your Task List 📥 Inbox (replies join the same item). Set up once in Azure (App registrations): register this Redirect URI (type Web), add the delegated permissions offline_access, User.Read and Mail.ReadWrite (it only reads your emails; it never sends any), make a client secret.'),
       h('label', null, 'Redirect URI to register', h('code', null, st ? st.redirectUri || '' : '')),
       h('label', null, 'Application (client) ID', h('input', { key: 'ol-client', autocomplete: 'off', spellcheck: 'false', placeholder: 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx', value: o.clientId, onInput: (e, el) => { o.clientId = el.value; } })),
       h('label', null, 'Directory (tenant) ID', h('input', { key: 'ol-tenant', autocomplete: 'off', spellcheck: 'false', placeholder: 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx', value: o.tenantId, onInput: (e, el) => { o.tenantId = el.value; } })),
@@ -944,7 +982,17 @@ export function createTeam(opts) {
     if (t.status === 'suggested') return null;
     if (t.status !== 'open') return h('button', { class: 'btn', onClick: () => setStatus(t, 'open') }, 'Open again');
     return [h('button', { class: 'btn', onClick: () => setStatus(t, 'done') }, 'Finish task'),
-      h('button', { class: 'btn icon-btn' + (state.taskMenu === t.id ? ' on' : ''), 'aria-label': 'More actions', title: 'Edit, move, instructions, cancel', onClick: () => { state.taskMenu = state.taskMenu === t.id ? 0 : t.id; render(); } }, '⋯')];
+      h('button', { class: 'btn icon-btn' + (state.taskMenu === t.id ? ' on' : ''), 'aria-label': 'More actions', title: 'Edit, move, instructions, cancel', onClick: () => { state.taskMenu = state.taskMenu === t.id ? 0 : t.id; render(); } }, '⋯'),
+      ...navButtons(t)];
+  }
+
+  /** ‹ › the previous / next task in the list on screen. */
+  function navButtons(t) {
+    const i = shownIds.indexOf(t.id);
+    if (i < 0) return [];
+    const go = (k) => (k >= 0 && k < shownIds.length ? () => open('task:' + shownIds[k]) : undefined);
+    return [h('button', { class: 'btn icon-btn', title: 'Previous task', 'aria-label': 'Previous task', disabled: i > 0 ? undefined : true, onClick: go(i - 1) }, '‹'),
+      h('button', { class: 'btn icon-btn', title: 'Next task', 'aria-label': 'Next task', disabled: i < shownIds.length - 1 ? undefined : true, onClick: go(i + 1) }, '›')];
   }
 
   function taskMenu(t) {
@@ -985,10 +1033,13 @@ export function createTeam(opts) {
     const whole = t.seq !== null && t.seq !== undefined;
     return [
       taskMenu(t),
-      t.status === 'suggested' ? null : h('div', { class: 'stage-line' }, stageChip(rules.teamStage(t), { you: rules.teamStage(t).you })), // Stuck for "Manager": "Waiting: you"
-      chipsFor(t, td, { who: true }),
+      // its Stage and chips on one wrapping line, as on the staff page (owner, 24 Oct)
+      h('div', { class: 'task-meta' },
+        t.status === 'suggested' || t.kind === 'log' ? null : h('div', { class: 'stage-line' }, stageChip(rules.teamStage(t), { you: rules.teamStage(t).you })), // Stuck for "Manager": "Waiting: you"
+        chipsFor(t, td, { who: true })),
       t.details ? h('p', { class: 'pre muted' }, t.details) : null,
       filesBlock(t, { pic, openFile, onRemove: removeFile }),
+      takesSteps(t) ? stepsBox(t) : null,
       t.status === 'suggested' ? h('div', { class: 'banner stack' },
         h('span', null, h('span', { class: 'tag' }, `💡 Suggested by ${t.assignee.name}`)),
         h('div', { class: 'row' },
@@ -1005,8 +1056,10 @@ export function createTeam(opts) {
         draft: state.msgDrafts[t.id], sending: !!state.sending['m' + t.id],
         onInput: (v) => { state.msgDrafts[t.id] = v; },
         onSend: () => sendMessage(t.id), onPhoto: (f) => sendMessagePhoto(t.id, f), onEdit: editMessage, onDelete: deleteMessage,
+        manager: !!(state.user && state.user.role === 'admin'),
       }),
-      t.status === 'suggested' || t.declined ? null : diaryBlock({ rules, t, updates, td, staff: false, meId: state.user.id, n: state.diaryDays,
+      t.kind === 'log' ? block('📒 Record', logbookBlock({ entries: state.detail.entries || [], photos, meId: state.user.id, td })) // its entries, newest first
+        : t.status === 'suggested' || t.declined ? null : diaryBlock({ rules, t, updates, td, staff: false, meId: state.user.id, n: state.diaryDays, onDeleteUpdate: deleteUpdate,
         fillBy: (state.data && state.data.fillBy) || state.fillBy || '18:00', photos, onMore: () => { state.diaryDays += 14; render(); } }),
     ];
   }
@@ -1026,6 +1079,7 @@ export function createTeam(opts) {
         how: t ? (t.repeat === 'daily' ? (t.skipSunday ? 'daily' : 'daily7') : t.repeat) : pre.repeat === 'once' ? 'once' : 'daily',
         weekday: t && t.weekday !== null && t.weekday !== undefined ? t.weekday : 1, dueDate: t ? t.dueDate || '' : pre.dueDate || '',
         startDate: t && t.startDate && t.startDate > today() ? t.startDate : '', needsPhoto: t ? !!t.needsPhoto : false, files: [],
+        record: t ? t.kind === 'log' : false, // 📒 a record (many entries a day) or a daily update
         projectRef: t ? t.projectRef : pre.projectRef, stepRef: t ? t.stepRef : pre.stepRef,
       };
     }
@@ -1035,30 +1089,58 @@ export function createTeam(opts) {
     const people = [...state.people];
     if (t && !people.some((p) => p.id === t.assignee.id)) people.push({ id: t.assignee.id, name: t.assignee.name + ' (switched off)' }); // kept, so a small change does not force someone else
     const td = today();
+    const mine = !editing && opts.ownerTasks && !f.picked && f.title.trim().length >= 2 ? opts.ownerTasks(f.title).slice(0, 6) : [];
     return [
       !editing ? block('Work in one line', quickBox(state.people)) : null,
       block(editing ? 'Change the task' : 'Give a task', h('div', { class: 'stack' },
         h('label', null, 'Who', h('select', { key: 'g-who', value: String(f.assigneeId || ''), onChange: (e, el) => { f.assigneeId = Number(el.value); } },
           h('option', { value: '' }, 'Choose a person…'), people.map((p) => h('option', { value: String(p.id) }, p.name + (p.role === 'admin' ? ' (manager)' : ''))))),
-        h('label', null, 'Task', h('input', { key: 'g-title', placeholder: 'Record kiln 3 temperature', value: f.title, onInput: set('title') })),
-        h('label', null, 'Details', h('textarea', { key: 'g-details', placeholder: 'Anything they need to know (optional)', value: f.details, onInput: set('details') })),
-        h('label', null, 'Project', h('input', { key: 'g-project', placeholder: 'Kiln trial (optional)', value: f.project, onInput: set('project') })),
-        h('label', null, 'How often', h('select', { key: 'g-how', value: f.how, onChange: set('how') },
+        h('label', null, 'Task', h('input', { key: 'g-title', placeholder: opts.ownerTasks && !editing ? 'Type to find one of your tasks, or a new one' : 'Record kiln 3 temperature', value: f.title, readonly: f.picked ? true : undefined,
+          onInput: (e, el) => { f.title = el.value; if (opts.ownerTasks && !editing) render(); } })),
+        // 📋 the owner's own tasks that match the words: tap one to give it as it is (owner, 29 Oct)
+        mine.length ? h('div', { class: 'pick-list', key: 'g-pick' }, h('span', { class: 'muted small' }, '📋 Your tasks — tap one to give it as it is:'),
+          mine.map((x) => h('button', { class: 'chip pick-task', type: 'button', key: 'pk-' + x.id, onClick: () => { f.picked = x; f.title = x.name; f.project = x.project || ''; render(); } },
+            x.name, x.project ? h('span', { class: 'muted small' }, ` · 📂 ${x.project}`) : null, x.steps ? h('span', { class: 'muted small' }, ` · ${x.steps} step${x.steps === 1 ? '' : 's'}`) : null))) : null,
+        f.picked ? h('p', { class: 'banner picked-task', key: 'g-picked' }, `📋 Your task “${f.picked.name}” goes as it is: its steps come along, and their updates show on its page.`, ' ',
+          h('button', { class: 'link small', type: 'button', onClick: () => { f.picked = null; f.title = ''; f.project = ''; render(); } }, '✕ Not this one')) : null,
+        h('div', { class: 'segmented', role: 'group', 'aria-label': 'Kind of task' },
+          h('button', { class: 'seg' + (f.record ? '' : ' on'), type: 'button', key: 'g-kind-task', 'aria-pressed': String(!f.record), onClick: () => { f.record = false; render(); } }, '📅 Daily update'),
+          h('button', { class: 'seg' + (f.record ? ' on' : ''), type: 'button', key: 'g-kind-log', 'aria-pressed': String(!!f.record), onClick: () => { f.record = true; render(); } }, '📒 Record (entries)')),
+        f.record ? h('p', { class: 'muted small' }, 'They add an entry (a line + photos) whenever something happens — e.g. a material order follow-up. Never "not sent" or late.') : null,
+        f.picked ? null : h('label', null, 'Details', h('textarea', { key: 'g-details', placeholder: 'Anything they need to know (optional)', value: f.details, onInput: set('details') })),
+        f.picked ? null : h('label', null, 'Project', h('input', { key: 'g-project', placeholder: 'Kiln trial (optional)', value: f.project, onInput: set('project') })),
+        f.record || f.picked ? null : h('label', null, 'How often', h('select', { key: 'g-how', value: f.how, onChange: set('how') }, // (a 📒 record has no "how often": entries come when something happens)
           h('option', { value: 'daily' }, 'Every day (Mon–Sat)'), h('option', { value: 'daily7' }, 'Every day, Sunday too'), h('option', { value: 'weekly' }, 'Once a week'), h('option', { value: 'once' }, 'One time'))),
-        f.how === 'weekly' ? h('label', null, 'On', h('select', { key: 'g-wd', value: String(f.weekday), onChange: (e, el) => { f.weekday = Number(el.value); } }, LONG_DAYS.map((n, i) => h('option', { value: String(i) }, n)))) : null,
-        f.how === 'once' ? h('label', null, 'By (date, optional)', h('input', { key: 'g-due', type: 'date', value: f.dueDate, onInput: set('dueDate') })) : null,
-        h('label', null, 'Start on (optional — empty = today)', h('input', { key: 'g-start', type: 'date', min: td, value: f.startDate, onInput: set('startDate') })),
+        !f.record && !f.picked && f.how === 'weekly' ? h('label', null, 'On', h('select', { key: 'g-wd', value: String(f.weekday), onChange: (e, el) => { f.weekday = Number(el.value); } }, LONG_DAYS.map((n, i) => h('option', { value: String(i) }, n)))) : null,
+        f.how === 'once' && !f.picked ? h('label', null, 'By (date, optional)', h('input', { key: 'g-due', type: 'date', value: f.dueDate, onInput: set('dueDate') })) : null,
+        f.picked ? null : h('label', null, 'Start on (optional — empty = today)', h('input', { key: 'g-start', type: 'date', min: td, value: f.startDate, onInput: set('startDate') })),
         h('label', { class: 'row' }, h('input', { key: 'g-photo', type: 'checkbox', checked: f.needsPhoto ? true : undefined, onChange: set('needsPhoto') }), ' 📷 Photo needed to finish'),
-        h('label', null, '📎 Instruction photos / PDF (optional)', h('input', { key: 'g-files', type: 'file', accept: 'image/*,application/pdf', multiple: true, onChange: (e, el) => { f.files = [...el.files]; } })),
+        f.picked ? null : h('div', { class: 'stack file-pick' }, h('span', null, '📎 Instruction photos / PDF (optional)'),
+          h('div', { class: 'row' }, // (the app's own button, not the browser's grey "Choose files": owner, 24 Oct)
+            h('label', { class: 'btn small' }, (f.files || []).length ? '📎 Change files' : '📎 Add files',
+              h('input', { key: 'g-files', type: 'file', accept: 'image/*,application/pdf', multiple: true, class: 'visually-hidden', onChange: (e, el) => { f.files = [...el.files]; render(); } })),
+            h('span', { class: 'muted small' }, (f.files || []).length ? (f.files || []).map((x) => x.name).join(', ') : 'None chosen'))),
         err,
         h('div', { class: 'row' },
-          h('button', { class: 'btn primary small', onClick: () => saveTask({
+          h('button', { class: 'btn primary small', onClick: () => (f.picked ? giveMine(f, people).then((m) => { err.say(m); }) : saveTask({
             id: t ? t.id : 0, assigneeId: Number(f.assigneeId), title: f.title, details: f.details, project: f.project,
             repeat: f.how === 'daily7' ? 'daily' : f.how, skipSunday: f.how === 'daily' || (f.how === 'once' && (!t || t.skipSunday)), weekday: Number(f.weekday), dueDate: f.dueDate,
             projectRef: f.projectRef, stepRef: f.stepRef, needsPhoto: !!f.needsPhoto, startDate: f.startDate || (t && t.startDate && t.startDate > td ? td : ''),
-          }, f.files).then((m) => { err.say(m); }) }, editing ? 'Save' : 'Give task'),
+            kind: f.record ? 'log' : '',
+          }, f.files).then((m) => { err.say(m); })) }, editing ? 'Save' : 'Give task'),
           h('button', { class: 'btn small', onClick: () => { state.prefill = null; state.giveForm = null; if (editing) open('task:' + t.id); else if (!(state.fromProjects && toProjects())) back(); } }, 'Cancel')))),
     ];
+  }
+
+  /** 📋 Give one of the owner's own tasks as it is (the same as 👥 Give on its page): '' when given, else why not. */
+  async function giveMine(f, people) {
+    const person = people.find((p) => p.id === Number(f.assigneeId));
+    if (!person) return 'Choose a person first.';
+    const ok = await opts.giveOwnerTask(f.picked.id, { id: person.id, name: person.name }, { needsPhoto: !!f.needsPhoto, record: !!f.record });
+    if (!ok) return 'It could not be given. Try again.';
+    state.giveForm = null; state.prefill = null;
+    go('tasks');
+    return '';
   }
 
   function passwordPage() {
@@ -1074,16 +1156,16 @@ export function createTeam(opts) {
 
   function notifyPage() {
     const s = push ? push.state() : 'no';
-    const parts = [h('p', null, 'You get a message on this phone, like new email, for:'),
+    const parts = [h('p', null, `You get a message on ${HERE}, like new email, for:`),
       h('ul', null, ['An update from your team (and when someone is Stuck or Finished)', 'A message or a suggestion from your team'].map((w) => h('li', null, w)))];
     if (s === 'on') {
-      parts.push(h('p', { class: 'ok' }, '✓ On for this phone.'), h('div', { class: 'row' },
+      parts.push(h('p', { class: 'ok' }, `✓ On for ${HERE}.`), h('div', { class: 'row' },
         h('button', { class: 'btn small', onClick: () => push.test().then(() => toast('🔔 Test sent. It comes in a few seconds.'), (e) => toast(e.message, 5000)) }, 'Send me a test'),
-        h('button', { class: 'btn small', onClick: async () => { await push.turnOff(); toast('Notifications are off for this phone.'); render(); } }, 'Turn off')));
+        h('button', { class: 'btn small', onClick: async () => { await push.turnOff(); toast(`Notifications are off for ${HERE}.`); render(); } }, 'Turn off')));
     } else if (s === 'default' || s === 'granted') parts.push(h('button', { class: 'btn primary small', onClick: notifyOn }, '🔔 Turn on notifications'));
     else if (s === 'denied') {
-      parts.push(h('p', { class: 'warn' }, 'Notifications are blocked for Work Task on this phone. To allow them:'),
-        h('ol', null, h('li', null, 'Installed app: press and hold the app icon → App info → Notifications → turn on.'), h('li', null, 'In Chrome: tap ⋮ → Settings → Site settings → Notifications → worktask.in → Allow.'), h('li', null, 'Come back here and open this page again.')));
+      parts.push(h('p', { class: 'warn' }, `Notifications are blocked for Task List on ${HERE}. To allow them:`),
+        h('ol', null, blockedSteps().map((w) => h('li', null, w))));
     } else if (s === 'ios') {
       parts.push(h('p', { class: 'warn' }, 'On iPhone, notifications work only from the Home Screen app:'),
         h('ol', null, h('li', null, 'Open worktask.in in Safari.'), h('li', null, 'Tap Share → Add to Home Screen.'), h('li', null, 'Open it from the Home Screen and turn notifications on here.')));
@@ -1092,15 +1174,16 @@ export function createTeam(opts) {
   }
 
   function list() {
+    shownIds = [];
     const titles = { today: 'Team today', followup: '🔁 Follow-up', tasks: state.closed ? 'Done / cancelled' : '✅ Tasks', projects: '📂 Projects', report: '📊 Weekly report', search: '🔍 Search', people: 'People', settings: 'Settings' };
     let title = titles[state.view];
     if (state.view === 'today' && state.personFilter && state.team) { const p = state.team.people.find((x) => x.id === state.personFilter); if (p) title = p.name; }
     const head = h('div', { class: 'list-head' },
       h('button', { class: 'icon menu-btn', 'aria-label': 'Menu', onClick: () => { state.menuOpen = true; render(); } }, '☰'),
       h('h2', null, title),
-      state.view === 'search' ? null : h('button', { class: 'icon', title: 'Search', 'aria-label': 'Search', onClick: () => go('search') }, '🔍'), // (as on the owner's list; on a phone the menu has no search box)
-      state.view === 'settings' ? null : h('button', { class: 'icon', title: 'Get latest', 'aria-label': 'Refresh', onClick: reload }, '↻'));
-    if (!state.data) return h('div', { class: 'col-inner' }, head, bars(), h('p', { class: 'empty-list' }, state.loadFailed ? [state.loadFailed === 'You are offline. Try again when the internet is back.' ? 'No saved copy on this phone yet.' : state.loadFailed, ' ', h('button', { class: 'link', onClick: reload }, 'Try again')] : 'Loading…'));
+      state.view === 'search' ? null : h('button', { class: 'icon head-icon', title: 'Search', 'aria-label': 'Search', onClick: () => { go('search'); focusLater('team-search'); } }, '🔍', h('span', { class: 'icon-cap', 'aria-hidden': 'true' }, 'Find')), // (as on the owner's list; on a phone the menu has no search box)
+      state.view === 'settings' ? null : h('button', { class: 'icon head-icon', title: 'Get latest', 'aria-label': 'Refresh', onClick: reload }, '↻', h('span', { class: 'icon-cap', 'aria-hidden': 'true' }, 'Refresh')));
+    if (!state.data) return h('div', { class: 'col-inner' }, head, bars(), h('p', { class: 'empty-list' }, state.loadFailed ? [state.loadFailed === 'You are offline. Try again when the internet is back.' ? `No saved copy on ${HERE} yet.` : state.loadFailed, ' ', h('button', { class: 'link', onClick: reload }, 'Try again')] : 'Loading…'));
     const body = state.view === 'followup' ? followupList() : state.view === 'tasks' ? tasksList() : state.view === 'projects' ? projectsList()
       : state.view === 'search' ? searchList() : state.view === 'report' ? reportPage() : state.view === 'people' ? peoplePage() : state.view === 'settings' ? settingsPage() : teamList();
     // "+ Give a task" at the top of the list, as the owner's "+ New task"
@@ -1108,9 +1191,21 @@ export function createTeam(opts) {
     return h('div', { class: 'col-inner' }, head, bars(), give, body);
   }
 
+  /** Nothing open on the right: today's team at a glance (owner, 24 Oct) — sent / not yet / stuck, who is still to send (tap to open). */
+  function teamGlance() {
+    const t = state.team, rows = (t && t.tasks) || [];
+    const notYet = rows.filter((x) => !x.today && !x.stuck), stuck = rows.filter((x) => x.stuck);
+    const line = (x) => h('li', { key: 'tg-' + x.id }, h('button', { class: 'link', type: 'button', onClick: () => open('task:' + x.id) }, x.title), h('span', { class: 'muted small' }, ` · ${x.assignee.name}`));
+    return h('div', { class: 'empty today-glance' },
+      t ? [h('h3', { key: 'h' }, '👥 Team today at a glance'),
+        h('p', { class: 'glance-counts', key: 'c' }, `✓ ${rows.length - notYet.length - stuck.length} sent · ⏳ ${notYet.length} not yet · ⚠️ ${stuck.length} stuck`),
+        stuck.length || notYet.length ? h('ul', { class: 'glance-list', key: 'l' }, [...stuck, ...notYet].slice(0, 6).map(line)) : h('p', { class: 'muted', key: 'ok' }, 'Every update is in 🎉')] : null,
+      h('p', { class: 'muted small' }, 'Pick a task on the left, or ', h('button', { class: 'link', type: 'button', onClick: () => open('give') }, '+ Give a task'), '.'));
+  }
+
   function detail() {
     const sel = state.sel;
-    if (!sel) return h('div', { class: 'empty' }, h('p', null, 'Pick a task on the left.'), h('p', null, h('button', { class: 'link', onClick: () => open('give') }, '+ Give a task')));
+    if (!sel) return teamGlance();
     let title = '', body, dot = '', actions = null;
     if (sel === 'give' || sel.startsWith('edit:')) { title = sel === 'give' ? 'Give a task' : 'Edit task'; body = state.people.length ? taskForm() : h('p', { class: 'muted' }, state.detailFailed || 'Loading…'); }
     else if (sel === 'password') { title = 'Change password'; body = passwordPage(); }
@@ -1132,6 +1227,7 @@ export function createTeam(opts) {
       body);
   }
 
+  const onList = (v) => !state.sel && state.view === v; // (the bottom bar: this page is on screen)
   function view() {
     const wide = WIDE.includes(state.view) || (state.view === 'today' && !state.sel && !!state.data); // Team today's table fills the screen until a task is open
     return h('div', { class: ['layout', 'staff', 'team', wide ? 'wide' : '', state.mobile === 'detail' && !wide ? 'show-detail' : '', state.menuOpen ? 'menu-open' : ''].join(' ').replace(/\s+/g, ' ').trim() },
@@ -1139,7 +1235,14 @@ export function createTeam(opts) {
       h('div', { class: 'scrim', onClick: () => { state.menuOpen = false; render(); } }),
       h('main', { id: 'list' }, list()),
       wide ? null : h('section', { id: 'detail' }, detail()),
-      rowMenu());
+      rowMenu(),
+      // 📱 the bottom bar (owner, 24 Oct): Team today, Tasks, Projects, Follow-up, More
+      bottomBar([
+        ['👥', 'Today', onList('today') && !state.menuOpen, () => { state.personFilter = 0; go('today'); }],
+        ['✅', 'Tasks', onList('tasks') && !state.closed && !state.menuOpen, () => { state.closed = false; go('tasks'); }],
+        ['📂', 'Projects', onList('projects') && !state.menuOpen, () => go('projects')],
+        ['🔁', 'Follow-up', onList('followup') && !state.menuOpen, () => go('followup')],
+      ], () => { state.menuOpen = true; render(); }, state.menuOpen));
   }
 
   // the phone's Back button closes the menu, then the page on the right (never leaves the app)

@@ -6,7 +6,7 @@
 import { h, fmtDay } from './dom.js';
 import { dotColour, nextStep, todayIndia, indiaDate, childrenOf, parentsOf, isMainProject, mainProjects, mainColour, mainSummary, projectTasks, projectLine, subProjectsOf, projectParts, mainChoices, moveChoices, moveSteps, addHereChoices, orderedTasks, movedOrder, dropSlot, droppedOrder } from '../rules.js';
 import { newId } from '../ops.js';
-import { stageCounts, byStage } from '../rules.js';
+import { stageCounts, byStage, activeTasks } from '../rules.js';
 import { stageChip, stageFilterBar, ownerStage } from './stage.js';
 import { newTaskBox, createTaskWithNote, findEditor } from './richedit.js';
 
@@ -224,7 +224,7 @@ export function openAddTasks(ctx, m) {
 
 /** On a task that is in projects: "📂 Kilns ›" for each (opens that project). */
 export function mainChip(ctx, p) {
-  const mains = parentsOf(ctx.store.view.data, p);
+  const mains = parentsOf(ctx.store.view.data, p).filter((m) => !m.misc); // (in no project: no "📂 Misc ›", owner 24 Oct)
   if (!mains.length) return null;
   return h('div', { class: 'main-chips', key: 'mainchips-' + p.id }, mains.map((m) => h('button', {
     class: 'main-chip', key: 'mainchip-' + p.id + '-' + m.id, title: `Open the project ${m.name}`, onClick: () => ctx.openProject(m.id),
@@ -233,7 +233,7 @@ export function mainChip(ctx, p) {
 
 /** Small chips under a task's row in a list: "📂 Kilns" "📂 Supplier approval" (the projects it is in). */
 export function projectChips(data, p) {
-  const mains = parentsOf(data, p);
+  const mains = parentsOf(data, p).filter((m) => !m.misc); // (📂 Misc = in no project: no chip, the row stays short — owner, 24 Oct)
   if (!mains.length) return null;
   return h('span', { class: 'prow-chips' }, mains.map((m) => h('span', { class: 'tag main-tag', key: 'pc-' + m.id, title: `In the project ${m.name}` }, `📂 ${m.name}`)));
 }
@@ -339,11 +339,12 @@ export function subProjectsBlock(ctx, p, today = todayIndia()) {
   };
   return h('section', { class: 'block sub-projects', key: 'subs-' + p.id },
     innerProjects(ctx, p, today),
-    h('h3', null, `TASKS (${all.length})`),
+    // the same count as its row in 📂 Projects (open ones); paused / finished ones say so (owner, 24 Oct: "6 tasks" vs "TASKS (8)")
+    h('h3', null, (() => { const open = all.filter((c) => c.state === 'active').length, rest = all.length - open; return `TASKS (${open})${rest ? ` + ${rest} paused / finished` : ''}`; })()),
     all.length ? stageFilterBar(stageCounts(all, stageOfKid), sf, (k) => { (ctx.ui.subStage ||= {})[p.id] = k; ctx.render(); }) : null,
     !kids.length && all.length ? h('p', { class: 'muted small' }, 'None in this stage.') : null,
     kids.length ? h('table', { class: 'sub-table' },
-      h('thead', null, h('tr', null, h('th', null, ''), h('th', null, ''), h('th', null, 'Task'), h('th', null, 'Now'), h('th', null, 'Last update'), h('th', null, ''), h('th', null, ''))),
+      h('thead', null, h('tr', null, h('th', null, ''), h('th', null, ''), h('th', null, 'Task'), h('th', null, 'Now'), h('th', { class: 'nowrap' }, 'Last update'), h('th', null, ''), h('th', null, ''))),
       h('tbody', null, kids.map((c) => {
         const ns = c.state === 'active' ? nextStep(c, today) : null;
         const lu = lastUpdate(c);
@@ -367,10 +368,13 @@ export function subProjectsBlock(ctx, p, today = todayIndia()) {
           h('td', { class: 'muted small' }, lu ? `${fmtDay(lu.day)} · ${short(lu.text, 50)}` : '—'),
           // takes the task out of this project only (the task itself stays, with Undo)
           h('td', null, p.misc ? null : h('button', { // (📂 Misc: a task leaves it by going into another project)
-            class: 'link small sub-remove', type: 'button', title: `Take ${c.name} out of this project (the task is kept)`,
+            class: 'link small sub-remove', type: 'button', title: `Take out of project — ${c.name} is kept`, 'aria-label': `Take ${c.name} out of this project`, // (a quiet ✕, not "Remove": it never deletes, owner 24 Oct)
             onClick: (e) => { if (e && e.stopPropagation) e.stopPropagation(); ctx.act('removeFromProject', { projectId: c.id, parentId: p.id }, `${c.name} taken out of 📂 ${p.name} (the task is kept)`); },
-          }, '✕ Remove')));
-      }))) : h('p', { class: 'muted small' }, 'No tasks in it yet.'),
+          }, '✕')));
+      }))) : h('p', { class: 'muted small' }, (() => { // a project that only holds projects: say where its tasks are
+        const n = projectParts(data, p.id).tasks.filter((c) => c.state !== 'finished').length;
+        return n ? `No tasks right in it — the projects above hold ${n} task${n === 1 ? '' : 's'}.` : 'No tasks in it yet.';
+      })()),
     h('div', { class: 'sub-buttons' },
       p.misc ? null : h('button', { class: 'btn small', type: 'button', onClick: () => openAddTasks(ctx, p) }, '+ Add tasks'),
       h('button', { class: 'btn small', type: 'button', onClick: () => newProjectHere(ctx, p) }, '+ New task here'),
@@ -436,8 +440,11 @@ function newHereBox(ctx, p) {
 export function renderProjectsHead(ctx) {
   const { store } = ctx;
   const data = store.view.data;
-  const mains = mainProjects(data).filter((m) => m.state !== 'finished');
-  const inside = new Set(mains.flatMap((m) => projectTasks(data, m.id).filter((c) => c.state !== 'finished').map((c) => c.id))).size; // each task once
+  // the same tasks as ✅ Tasks (active ones), each once; 📂 Misc is not counted as a project: its tasks are "in no project" (owner, 24 Oct)
+  const mains = mainProjects(data).filter((m) => m.state !== 'finished' && !m.misc);
+  const inSet = new Set(mains.flatMap((m) => projectTasks(data, m.id).filter((c) => c.state === 'active').map((c) => c.id)));
+  const inside = inSet.size;
+  const loose = activeTasks(data).filter((c) => !inSet.has(c.id)).length;
   const newMain = () => {
     const name = globalThis.prompt ? prompt('Name of the new project (it holds a few tasks):') : null;
     if (!name || !name.trim()) return;
@@ -448,7 +455,7 @@ export function renderProjectsHead(ctx) {
     }
   };
   return h('div', { class: 'mains-head', key: 'mains-head' },
-    h('p', { class: 'muted mains-line' }, `${mains.length} project${mains.length === 1 ? '' : 's'} · ${inside} task${inside === 1 ? '' : 's'} in them · red first`),
+    h('p', { class: 'muted mains-line' }, `${mains.length} project${mains.length === 1 ? '' : 's'} · ${inside} task${inside === 1 ? '' : 's'} in them${loose ? ` · ${loose} in no project` : ''} · red first`),
     h('button', { class: 'btn primary new-main', type: 'button', onClick: newMain }, '+ New project'),
     mains.length ? null : h('p', { class: 'empty-list' }, 'No projects yet. Make one here, or open a task and use ⋯ → 📂 Add to a project.'));
 }

@@ -9,12 +9,12 @@
 // applyOp(state, op) changes the state in place and returns true, or returns false
 // when the operation must be skipped (for example, its item no longer exists).
 
-import { WORK, indiaDate, monthOf, laterDate, addDays, REPEATS, nextRepeatDate, waitingAgain, WEEKDAYS, indiaDateTime, validRemindOnce, remindOnceText, canPutUnder, parentIdsOf, normalizeParents, isMainProject, descendantIds, MOVE_EVERY_DEFAULT, THREAD_MAX, timerOn, MISC_ID, STAGES, STAGE_LABELS, cleanWaitingFor } from './rules.js';
+import { WORK, indiaDate, monthOf, laterDate, addDays, REPEATS, nextRepeatDate, waitingAgain, WEEKDAYS, indiaDateTime, validRemindOnce, remindOnceText, canPutUnder, parentIdsOf, normalizeParents, isMainProject, descendantIds, MOVE_EVERY_DEFAULT, DEFAULT_TARGET_DAYS, THREAD_MAX, timerOn, MISC_ID, STAGES, STAGE_LABELS, cleanWaitingFor } from './rules.js';
 import { AI_DAILY_LIMIT, BRIEF_CLAIM_MINUTES } from './config.js';
 import { sanitizeRich, htmlToText, isRich, RICH_MAX } from './rich.js';
 
 export const PRIORITIES = ['high', 'medium', 'low'];
-export const DEFAULT_TARGET_DAYS = 30; // new projects get a target date 30 days ahead
+export { DEFAULT_TARGET_DAYS } from './rules.js'; // new projects get a target date 30 days ahead (marked autoTarget: it does not colour the dot)
 const PROJECT_FIELDS = ['name', 'priority', 'deadline', 'notes', 'tagId', 'status', 'about'];
 export const ABOUT_MAX = 1000; // the project's description (owner asked for 1000 letters, 22 Oct)
 export const MAX_SNOOZE_DAYS = 365;
@@ -368,6 +368,7 @@ const handlers = {
       name: cleanText(a.name, 200) || 'New project',
       priority: PRIORITIES.includes(a.priority) ? a.priority : 'medium',
       deadline: a.deadline === undefined ? addDays(indiaDate(op.at), DEFAULT_TARGET_DAYS) : cleanDate(a.deadline),
+      ...(a.deadline === undefined ? { autoTarget: true } : {}),
       notes: '',
       links: [],
       state: 'active',
@@ -516,7 +517,12 @@ const handlers = {
       p.statusAt = op.at;
     }
     if (a.field === 'priority' && !PRIORITIES.includes(value)) return false;
-    if (a.field === 'deadline') value = cleanDate(value);
+    if (a.field === 'deadline') { // chosen by you now (even the same date as the automatic one): it counts for the colour
+      value = cleanDate(value);
+      const chosen = !!p.targetSet;
+      delete p.autoTarget; p.targetSet = true;
+      if (p.deadline === value) return !chosen;
+    }
     if (a.field === 'tagId') {
       if (!value) value = null;
       if ((p.tagId || null) === value) return false;
@@ -716,6 +722,26 @@ const handlers = {
     clearStage(p); // finished = ✅ Done (the stage worked out from it)
     return true;
   },
+  /**
+   * ➜ The next task, made from this one (owner, 29 Oct: "get the 400# sample" passed → "get 20 kg"): the two are linked
+   * (old.nextId ↔ new.prevId), and the new one sits where the old one was — its 📂 projects, tag, priority and "move every".
+   * Finishing the old one is its own change (sent with it as one action, one Undo).
+   */
+  linkFollow(state, op, a) {
+    const old = findProject(state.data, a.projectId);
+    const nw = findProject(state.data, a.nextId);
+    if (!old || !nw || old.id === nw.id || nw.prevId || old.nextId || isMainProject(state.data, old) || old.misc) return false;
+    old.nextId = nw.id;
+    nw.prevId = old.id;
+    setParents(nw, parentIdsOf(old));
+    nw.priority = old.priority;
+    if (old.tagId) nw.tagId = old.tagId;
+    if (Number.isInteger(old.moveEvery)) nw.moveEvery = old.moveEvery;
+    touch(old, op); touch(nw, op);
+    addEvent(state, op, old, 'followed', `➜ Next task: ${nw.name}`);
+    addEvent(state, { ...op, id: op.id + 'n' }, nw, 'followed', `↩ Came from: ${old.name}`);
+    return true;
+  },
   reopen(state, op, a) {
     const p = findProject(state.data, a.projectId);
     if (!setState(state, op, a, 'finished', 'active', 'reopened')) return false;
@@ -890,6 +916,7 @@ const handlers = {
     const userId = Number.isInteger(a.userId) && a.userId > 0 ? a.userId : null;
     const name = cleanText(a.name || '', 80).trim();
     const needsPhoto = !!a.needsPhoto;
+    const record = !!a.record; // 📒 the person adds entries (a record), not one update a day
     // given through a 📂 project (its tasks go with it): which one (rules.js projectGiveChanges)
     const via = userId && typeof a.viaProject === 'string' && findProject(state.data, a.viaProject) ? a.viaProject : null;
     const main = isMainProject(state.data, p);
@@ -898,10 +925,10 @@ const handlers = {
       p.teamOff = true; touch(p, op);
       return true;
     }
-    if (userId && p.team && p.team.userId === userId && p.team.name === name && !!p.team.needsPhoto === needsPhoto && (p.team.viaProject || null) === via && !(main && a.giveTasks)) return false;
+    if (userId && p.team && p.team.userId === userId && p.team.name === name && !!p.team.needsPhoto === needsPhoto && !!p.team.record === record && (p.team.viaProject || null) === via && !(main && a.giveTasks)) return false;
     const old = p.team;
     if (userId) {
-      p.team = { userId, name, since: old && old.userId === userId ? old.since : indiaDate(op.at), ...(needsPhoto ? { needsPhoto: true } : {}), ...(via ? { viaProject: via } : {}) };
+      p.team = { userId, name, since: old && old.userId === userId ? old.since : indiaDate(op.at), ...(needsPhoto ? { needsPhoto: true } : {}), ...(record ? { record: true } : {}), ...(via ? { viaProject: via } : {}) };
       delete p.teamOff;
       // giving a 📂 project gives all its tasks again, also one taken back on its own before
       if (main && a.giveTasks) { // (at every depth: a task in a project inside it goes with it too, rules.js projectGiveChanges)
@@ -1085,6 +1112,18 @@ const handlers = {
     return true;
   },
 
+  /** ✎ an update saved under the wrong step: move it to another step of the same task, or to the whole task (stepId null). */
+  setNoteStep(state, op, a) {
+    const p = findProject(state.data, a.projectId);
+    const n = p && p.workNotes.find((x) => x.id === a.noteId);
+    const stepId = a.stepId && p && p.steps.some((x) => x.id === a.stepId) ? a.stepId : null;
+    if (!n || (a.stepId && !stepId) || (n.stepId || null) === stepId) return false;
+    n.stepId = stepId;
+    n.updatedAt = op.at;
+    touch(p, op);
+    return true;
+  },
+
   deleteWorkNote(state, op, a) {
     const p = findProject(state.data, a.projectId);
     const i = p ? p.workNotes.findIndex((x) => x.id === a.noteId) : -1;
@@ -1104,6 +1143,7 @@ const handlers = {
       id: a.fileId, name, path: filePath(p.id, a.fileId, name), sha: a.sha,
       size: Number(a.size) || 0, type: cleanText(a.type, 100), createdAt: op.at,
       noteId: a.noteId || null, // photo added with a work note
+      ...(a.stepId && p.steps.some((s) => s.id === a.stepId) ? { stepId: a.stepId } : {}), // a photo pasted on a step: it belongs to the step (owner, 29 Oct)
     });
     touch(p, op);
     addEvent(state, op, p, 'file_added', name);
@@ -1576,6 +1616,16 @@ const handlers = {
   },
 
   // ---------- Settings and AI ----------
+  /** Settings: how often a task with no choice of its own should move (1–90 days; null = back to 3). Not work. */
+  setEveryDefault(state, op, a) {
+    const settings = (state.data.settings ||= {});
+    const days = a.days === null || a.days === undefined ? null : a.days;
+    if (days !== null && !(Number.isInteger(days) && days >= 1 && days <= 90)) return false;
+    if ((settings.moveEvery ?? null) === days) return false;
+    if (days === null) delete settings.moveEvery; else settings.moveEvery = days;
+    return true;
+  },
+
   setAiProvider(state, op, a) {
     if (a.provider !== 'claude' && a.provider !== 'gemini') return false;
     state.data.settings.aiProvider = a.provider;
@@ -1668,8 +1718,8 @@ export const CARRIED = new Set(['createProject', 'createMainProject', 'addToProj
   'setReply', 'replyLater', 'inboxToStep', 'stepToProject', 'inboxToProject', 'addPerson', 'renamePerson', 'setPersonContact', 'markPersonSent',
   'startTimer', 'stopTimer', 'addTime', 'setStage', 'setMoveEvery']);
 export const NOT_CARRIED = new Set(['deleteProject', 'restoreProject', 'deleteStep', 'setProjectTeam', 'addFile', 'setAiKey', 'setAiProvider',
-  'removeFromProject', 'setParent', 'removeLink', 'editLink', 'finish', 'teamWorked', 'deleteWorkNote', 'editWorkNote', 'setProjectField', 'setStepField',
-  'removeFile', 'setTimer', 'deleteTag', 'clearReply', 'markReplySent', 'undoReplySent', 'mailReplied', 'removeInbox', 'inboxUndo', 'deletePerson',
+  'removeFromProject', 'setParent', 'removeLink', 'editLink', 'finish', 'teamWorked', 'deleteWorkNote', 'editWorkNote', 'setNoteStep', 'linkFollow', 'setProjectField', 'setStepField',
+  'removeFile', 'setTimer', 'setEveryDefault', 'deleteTag', 'clearReply', 'markReplySent', 'undoReplySent', 'mailReplied', 'removeInbox', 'inboxUndo', 'deletePerson',
   'recordScores', 'removeTime', 'incrementAiUsage', 'claimBrief', 'setBriefReady', 'addEvent', 'makeMisc']);
 
 /** Changes carried from the old address (#ops=): keeps only known, harmless ones. Returns { ok, files, dropped }. */

@@ -99,6 +99,8 @@ function tasks_out(array $tasks, string $day): array {
   $lasts = [];
   foreach (all("SELECT u.* FROM updates u JOIN (SELECT task_id, MAX(day) AS d FROM updates WHERE task_id IN ($in) AND day < ? GROUP BY task_id) m ON m.task_id = u.task_id AND m.d = u.day", [...$ids, $day]) as $u) $lasts[$u['task_id']] = $u;
   $photos = photos_of(array_map(fn($u) => (int)$u['id'], [...array_values($todays), ...array_values($lasts)]));
+  $entriesToday = []; // 📒 records: today's entries
+  foreach (all("SELECT task_id, COUNT(*) AS n FROM entries WHERE task_id IN ($in) AND at >= ? AND at < ? GROUP BY task_id", [...$ids, $day . ' 00:00:00', date('Y-m-d', strtotime($day . ' +1 day')) . ' 00:00:00']) as $r) $entriesToday[$r['task_id']] = (int)$r['n'];
   // messages on each task: how many, how many I have not read, and the newest one
   $meId = (int)($GLOBALS['me']['id'] ?? 0);
   $count = []; $unread = []; $lastMsg = [];
@@ -141,10 +143,12 @@ function tasks_out(array $tasks, string $day): array {
     'projectAbout' => $t['seq'] !== null && $t['project_ref'] ? ($about[$t['project_ref']] ?? '') : '',
     'folder' => $t['seq'] !== null && $t['project_ref'] ? ($folder[$t['project_ref']] ?? '') : '',
     'status' => $t['status'], 'createdAt' => $t['created_at'], 'doneAt' => $t['done_at'],
-    'dueToday' => $t['status'] === 'open' && due_on($t, $day) && !$queued($t),
+    // 📒 a record (kind 'log') is never due or late: entries come when there is something to record
+    'kind' => ($t['kind'] ?? '') === 'log' ? 'log' : 'task', 'entriesToday' => $entriesToday[$t['id']] ?? 0,
+    'dueToday' => $t['status'] === 'open' && due_on($t, $day) && !$queued($t) && ($t['kind'] ?? '') !== 'log',
     // late: open and past its by-date — never a step still waiting its turn (it cannot be worked on yet); a Sunday or
     // a later start does not stop it being late. The one rule for every screen and the morning email.
-    'late' => $t['status'] === 'open' && !empty($t['due_date']) && $t['due_date'] < $day && !$queued($t),
+    'late' => $t['status'] === 'open' && !empty($t['due_date']) && $t['due_date'] < $day && !$queued($t) && ($t['kind'] ?? '') !== 'log',
     'today' => update_out($todays[$t['id']] ?? null, $photos), 'last' => update_out($lasts[$t['id']] ?? null, $photos),
     'createdBy' => (int)$t['created_by'], 'createdByName' => user_name((int)$t['created_by']), 'declined' => (int)($t['closed_by'] ?? 0) === -2,
     'closedByPerson' => $t['status'] === 'done' && (int)($t['closed_by'] ?? 0) > 0, // their own Finished (not the manager's Mark done)
@@ -186,6 +190,12 @@ function comments_of(int $taskId): array {
 }
 
 /** What needs the manager: stuck, new messages from staff, suggestions waiting for a yes. */
+/** Team today's rows: open tasks due today, and any task with an update today (closed today too); never a replaced whole-project task. */
+function team_today_rows(string $day): array {
+  $tasks = all(TASK_SELECT . " WHERE (t.status = 'open' OR t.done_at >= ?) ORDER BY t.id", [$day . ' 00:00:00']);
+  return array_values(array_filter(tasks_out($tasks, $day), fn($t) => ($t['dueToday'] || $t['today'] !== null) && $t['status'] !== 'cancelled')); // (taken back or cancelled: off today's list and its counts, owner 24 Oct)
+}
+
 function team_attention(): array {
   $open = tasks_out(all(TASK_SELECT . " WHERE t.status = 'open' ORDER BY t.id"), today());
   return [
@@ -242,8 +252,9 @@ function handle(string $a, array $in): array {
     case 'my.today': {
       $tasks = all(TASK_SELECT . " WHERE t.assignee_id = ? AND (t.status = 'open' OR t.done_at >= ?) ORDER BY t.repeat_kind = 'once', t.due_date IS NULL, t.due_date, t.project_ref, t.seq, t.id", [$me['id'], $day . ' 00:00:00']);
       $out = array_values(array_filter(tasks_out($tasks, $day), fn($t) => !($t['status'] === 'cancelled' && str_ends_with((string)$t['stepRef'], ':whole')))); // a replaced whole-project task: its words are on the step
-      $due = array_values(array_filter($out, fn($t) => $t['dueToday'] || ($t['today'] !== null)));
-      $other = array_values(array_filter($out, fn($t) => !$t['dueToday'] && $t['today'] === null && $t['status'] === 'open'));
+      $onList = fn($t) => $t['status'] !== 'cancelled' && ($t['dueToday'] || $t['today'] !== null || ($t['kind'] === 'log' && $t['status'] === 'open')); // (taken back: off the list, owner 24 Oct) 📒 a record is always on the list (never "due")
+      $due = array_values(array_filter($out, $onList));
+      $other = array_values(array_filter($out, fn($t) => !$onList($t) && $t['status'] === 'open'));
       // my suggestions: waiting for a yes, or said no this week (with the reason in the messages)
       $sugg = tasks_out(all(TASK_SELECT . " WHERE t.created_by = ? AND t.assignee_id = ? AND (t.status = 'suggested' OR (t.status = 'cancelled' AND t.closed_by = -2 AND t.updated_at >= ?)) ORDER BY t.id DESC",
         [$me['id'], $me['id'], date('Y-m-d H:i:s', time() - 7 * 86400)]), $day);
@@ -323,6 +334,7 @@ function handle(string $a, array $in): array {
         return ['update' => update_out($u, photos_of([(int)$u['id']])), 'history' => 'own'];
       }
       $t = own_task($me, (int)($in['taskId'] ?? 0));
+      if (($t['kind'] ?? '') === 'log') throw new ApiError('This task is a record: add an entry instead.'); // (its day's update is made from the entries)
       if ($uday < $day && $notYetTheirs($t)) throw new ApiError('That day was before this task was yours, so the update was not saved.');
       $cur = one('SELECT id, user_id, COALESCE(written_at, updated_at) AS written_at, client_id FROM updates WHERE task_id = ? AND day = ?', [$t['id'], $uday]);
       if ($cur && $ucid && (int)$cur['user_id'] === $me['id'] && $cur['client_id'] === $ucid) { // sent before, the answer was lost: the same save
@@ -373,6 +385,81 @@ function handle(string $a, array $in): array {
     }
     case 'photo.add':
       return ['photoId' => add_photo($me, (int)($in['updateId'] ?? 0))];
+    // ---------- ☑ steps inside a single task (each with photos): the person doing it and the manager ----------
+    case 'tstep.add': {
+      $t = own_task($me, (int)($in['taskId'] ?? 0));
+      if ($t['seq'] !== null) throw new ApiError('This task is a step of a project: add steps in the project.');
+      if (($t['kind'] ?? '') === 'log') throw new ApiError('A record takes entries, not steps.');
+      $cid = client_id($in['clientId'] ?? null);
+      if ($cid && ($dup = one('SELECT id FROM task_steps WHERE created_by = ? AND client_id = ?', [$me['id'], $cid]))) return ['stepId' => (int)$dup['id'], 'steps' => steps_of((int)$t['id'])]; // sent twice: kept once
+      if ($t['status'] !== 'open') throw new ApiError('This task is closed, so the step was not added.');
+      $title = txt($in['title'] ?? '', 300, true, 'The step');
+      if ((int)one('SELECT COUNT(*) AS n FROM task_steps WHERE task_id = ?', [$t['id']])['n'] >= MAX_TASK_STEPS) throw new ApiError('Up to ' . MAX_TASK_STEPS . ' steps in one task.');
+      if (!insert_once('INSERT INTO task_steps (task_id, title, created_by, created_at, updated_at, client_id) VALUES (?, ?, ?, ?, ?, ?)', [$t['id'], $title, $me['id'], now(), now(), $cid])) {
+        $dup = one('SELECT id FROM task_steps WHERE created_by = ? AND client_id = ?', [$me['id'], $cid]);
+        return ['stepId' => (int)$dup['id'], 'steps' => steps_of((int)$t['id'])];
+      }
+      $sid = (int)db()->lastInsertId();
+      $to = (int)$t['assignee_id'] === $me['id'] ? admin_ids() : [(int)$t['assignee_id']]; // the person adds: the managers hear; the manager adds: the person hears
+      notify($to, 'update', "➕ {$me['name']} added a step", $t['title'] . ': ' . $title, '/projects/#team-task=' . $t['id'], 's' . $t['id']);
+      return ['stepId' => $sid, 'steps' => steps_of((int)$t['id'])];
+    }
+    case 'tstep.edit': { // change its words, or tick it done / not done
+      $st = task_step_for($me, (int)($in['id'] ?? 0));
+      if (array_key_exists('title', $in)) q('UPDATE task_steps SET title = ?, updated_at = ? WHERE id = ?', [txt($in['title'], 300, true, 'The step'), now(), $st['id']]);
+      if (array_key_exists('done', $in)) {
+        if ($in['done']) q('UPDATE task_steps SET done_at = COALESCE(done_at, ?), done_by = COALESCE(done_by, ?), updated_at = ? WHERE id = ?', [now(), $me['id'], now(), $st['id']]);
+        else q('UPDATE task_steps SET done_at = NULL, done_by = NULL, updated_at = ? WHERE id = ?', [now(), $st['id']]);
+      }
+      return ['steps' => steps_of((int)$st['task_id'])];
+    }
+    case 'tstep.delete': { // who added it, or the manager; its photos go with it
+      $st = task_step_for($me, (int)($in['id'] ?? 0));
+      if ((int)$st['created_by'] !== $me['id'] && $me['role'] !== 'admin') throw new ApiError('Only who added this step (or the manager) can delete it.', 403);
+      foreach (all('SELECT file FROM step_photos WHERE step_id = ?', [$st['id']]) as $p) @unlink(UPLOAD_DIR . '/' . $p['file']);
+      q('DELETE FROM step_photos WHERE step_id = ?', [$st['id']]);
+      q('DELETE FROM task_steps WHERE id = ?', [$st['id']]);
+      return ['steps' => steps_of((int)$st['task_id'])];
+    }
+    case 'tstep.photo': { // a photo on a step (multipart: stepId, clientId, file)
+      $st = task_step_for($me, (int)($in['stepId'] ?? 0));
+      $cid = client_id($in['clientId'] ?? null);
+      if ($cid && one('SELECT id FROM step_photos WHERE step_id = ? AND client_id = ?', [$st['id'], $cid])) return ['steps' => steps_of((int)$st['task_id'])]; // sent before
+      $full = fn(): bool => (int)one('SELECT COUNT(*) AS n FROM step_photos WHERE step_id = ?', [$st['id']])['n'] >= MAX_STEP_PHOTOS;
+      if ($full()) throw new ApiError('Up to ' . MAX_STEP_PHOTOS . ' photos per step.');
+      [$file, $size] = save_uploaded_photo();
+      in_tx_with_alerts(function () use ($st, $me, $full, $file, $size, $cid) {
+        one('SELECT id FROM task_steps WHERE id = ? FOR UPDATE', [$st['id']]); // photos sent at the same moment are counted one after the other
+        if ($full()) { @unlink(UPLOAD_DIR . '/' . $file); throw new ApiError('Up to ' . MAX_STEP_PHOTOS . ' photos per step.'); }
+        insert_once('INSERT INTO step_photos (step_id, user_id, file, size, created_at, client_id) VALUES (?, ?, ?, ?, ?, ?)', [$st['id'], $me['id'], $file, $size, now(), $cid], $file);
+      });
+      return ['steps' => steps_of((int)$st['task_id'])];
+    }
+    case 'tstep.photo.delete': { // who took it, or the manager
+      $p = one('SELECT * FROM step_photos WHERE id = ?', [(int)($in['id'] ?? 0)]);
+      if (!$p) throw new ApiError('Photo not found.', 404);
+      $st = task_step_for($me, (int)$p['step_id']);
+      if ((int)$p['user_id'] !== $me['id'] && $me['role'] !== 'admin') throw new ApiError('Only who added this photo (or the manager) can remove it.', 403);
+      @unlink(UPLOAD_DIR . '/' . $p['file']);
+      q('DELETE FROM step_photos WHERE id = ?', [$p['id']]);
+      return ['steps' => steps_of((int)$st['task_id'])];
+    }
+    // ---------- 📒 a record task: many short entries a day (each with up to 5 photos) ----------
+    case 'entry.add':
+      return ['entry' => add_entry($me, $in, $day)];
+    case 'entry.photo':
+      return ['photoId' => add_photo($me, 0, (int)($in['entryId'] ?? 0))];
+    case 'entry.delete': {
+      $e = one('SELECT * FROM entries WHERE id = ?', [(int)($in['id'] ?? 0)]);
+      // their own, from the last 2 days (the same days photos can be changed on)
+      if (!$e || (int)$e['user_id'] !== $me['id'] || substr($e['at'], 0, 10) < date('Y-m-d', strtotime($day . ' -2 days'))) throw new ApiError('You can only remove your own entries from the last 2 days.', 403);
+      in_tx_with_alerts(function () use ($e) {
+        foreach (all('SELECT * FROM photos WHERE entry_id = ?', [$e['id']]) as $p) { @unlink(UPLOAD_DIR . '/' . $p['file']); q('DELETE FROM photos WHERE id = ?', [$p['id']]); }
+        q('DELETE FROM entries WHERE id = ?', [$e['id']]);
+        entry_note((int)$e['update_id']);
+      });
+      return [];
+    }
     case 'photo.delete': {
       $p = one('SELECT p.*, u.user_id, u.day, u.state, u.created_at AS u_at, t.needs_photo FROM photos p JOIN updates u ON u.id = p.update_id JOIN tasks t ON t.id = u.task_id WHERE p.id = ?', [(int)($in['id'] ?? 0)]);
       // the same days a photo can be added on (today's update, or one written offline in the last 2 days): never stuck for good
@@ -390,6 +477,8 @@ function handle(string $a, array $in): array {
       $ups = all('SELECT * FROM updates WHERE task_id = ? ORDER BY day DESC LIMIT 60', [$t['id']]);
       $photos = photos_of(array_map(fn($u) => (int)$u['id'], $ups));
       $out = ['task' => tasks_out([$t], $day)[0], 'updates' => array_map(fn($u) => update_out($u, $photos), $ups), 'comments' => comments_of((int)$t['id'])];
+      if (($t['kind'] ?? '') === 'log') $out['entries'] = entries_of((int)$t['id']); // 📒 the record's entries, newest first
+      elseif ($t['seq'] === null) $out['steps'] = steps_of((int)$t['id']); // ☑ a single task's steps, with their photos
       mark_read([(int)$t['id']], $me['id']);
       notifs_read_task($me['id'], (int)$t['id']); // its 🔔 notifications are seen too
       return $out;
@@ -449,9 +538,10 @@ function handle(string $a, array $in): array {
       return ['comments' => comments_of((int)$t['id'])];
     }
     case 'comment.edit':
-    case 'comment.delete': { // only your own message
+    case 'comment.delete': { // your own message; a manager may also delete a staff member's message (never change it)
       $c = one('SELECT * FROM comments WHERE id = ?', [(int)($in['id'] ?? 0)]);
-      if (!$c || (int)$c['user_id'] !== $me['id']) throw new ApiError('You can change only your own messages.', 403);
+      $mgrDelete = $c && $a === 'comment.delete' && $me['role'] === 'admin';
+      if (!$c || ((int)$c['user_id'] !== $me['id'] && !$mgrDelete)) throw new ApiError('You can change only your own messages.', 403);
       own_task($me, (int)$c['task_id']);
       // the server's own notes (a move, a chase) are the task's record: never changed or deleted (the chase limit and
       // Follow-up's "chased" read them)
@@ -514,10 +604,26 @@ function handle(string $a, array $in): array {
   // ---------- manager only ----------
   require_admin($me);
   switch ($a) {
+    case 'update.delete': { // the manager deletes a day's update and its photos (owner, 29 Oct: "delete this info only")
+      $u = one('SELECT * FROM updates WHERE id = ?', [(int)($in['id'] ?? 0)]);
+      if (!$u) throw new ApiError('That update was not found.', 404);
+      $t = own_task($me, (int)$u['task_id']);
+      in_tx_with_alerts(function () use ($u, $t) {
+        foreach (all('SELECT * FROM photos WHERE update_id = ?', [$u['id']]) as $p) { @unlink(UPLOAD_DIR . '/' . $p['file']); q('DELETE FROM photos WHERE id = ?', [$p['id']]); }
+        q('DELETE FROM entries WHERE update_id = ?', [$u['id']]); // 📒 a record's entries of that day go with it
+        q('DELETE FROM updates WHERE id = ?', [$u['id']]);
+        // its Finished closed a one-time task, and nothing came after it: the task is open again
+        if ($u['state'] === 'finished' && $t['status'] === 'done' && $t['repeat_kind'] === 'once' && (int)$t['closed_by'] === (int)$u['user_id']
+          && !one('SELECT id FROM updates WHERE task_id = ? AND day > ?', [$t['id'], $u['day']])) {
+          q("UPDATE tasks SET status = 'open', closed_from = done_at, done_at = NULL, closed_by = NULL, reopened_at = ?, updated_at = ? WHERE id = ?", [now(), now(), $t['id']]);
+        }
+      });
+      audit($me['id'], 'update_deleted', "{$t['title']}: {$u['day']} by " . user_name((int)$u['user_id']));
+      return [];
+    }
     case 'team.today': {
       $people = all("SELECT * FROM users WHERE active = 1 AND role = 'staff' ORDER BY name");
-      $tasks = all(TASK_SELECT . " WHERE (t.status = 'open' OR t.done_at >= ?) ORDER BY t.id", [$day . ' 00:00:00']);
-      $out = array_values(array_filter(tasks_out($tasks, $day), fn($t) => ($t['dueToday'] || $t['today'] !== null) && !($t['status'] === 'cancelled' && str_ends_with((string)$t['stepRef'], ':whole'))));
+      $out = team_today_rows($day);
       $fillBy = setting('fill_by', '18:00');
       $att = team_attention();
       unset($att['open']);
@@ -758,10 +864,13 @@ function handle(string $a, array $in): array {
              LEFT JOIN task_reads r ON r.task_id = c.task_id AND r.user_id = ? WHERE c.user_id <> ? AND c.id > COALESCE(r.last_id, 0) AND c.kind IS NULL ORDER BY c.id DESC LIMIT 10", [$me['id'], $me['id']]));
       return ['today' => $day, 'fillBy' => $fillBy, 'late' => date('H:i') >= $fillBy, 'tasks' => tasks_out($tasks, $day), 'teamDays' => (object)$teamDays, 'messages' => $msgs,
         'alerts' => ['stuck' => count($att['stuck']), 'unread' => count($att['unread']), 'suggestions' => count($att['suggestions'])],
-        'summary' => (function () use ($att) { // one line for the manager's Today page
-          $due = array_values(array_filter($att['open'], fn($t) => $t['dueToday']));
-          $missing = array_values(array_unique(array_map(fn($t) => $t['assignee']['name'], array_filter($due, fn($t) => !$t['today']))));
-          return ['due' => count($due), 'sent' => count(array_filter($due, fn($t) => (bool)$t['today'])), 'notFilled' => $missing];
+        'summary' => (function () use ($day) { // one line for the manager's Today page: the same rows and count as Team today
+          $rows = team_today_rows($day);
+          $missing = array_values(array_unique(array_map(fn($t) => $t['assignee']['name'], array_filter($rows, fn($t) => !$t['today']))));
+          // today's words for the 📋 summary: every row sent today, a 📒 record and a task given from the team pages too (owner, 24 Oct)
+          $ups = array_map(fn($t) => ['name' => $t['assignee']['name'], 'projectRef' => $t['projectRef'], 'project' => $t['project'], 'title' => $t['title'], 'note' => $t['today']['note'], 'state' => $t['today']['state']],
+            array_values(array_filter($rows, fn($t) => (bool)$t['today'])));
+          return ['due' => count($rows), 'sent' => count($ups), 'notFilled' => $missing, 'updates' => $ups];
         })()];
     }
     case 'tasks.adopted': { // Daily Projects added these steps (written by the person) to the project: from now on they are normal steps
@@ -797,6 +906,7 @@ function handle(string $a, array $in): array {
         if ((int)$old['assignee_id'] !== (int)$assignee['id']) move_tasks($me, [$old], (int)$assignee['id']);
         q('UPDATE tasks SET title=?, details=?, assignee_id=?, repeat_kind=?, skip_sunday=?, weekday=?, due_date=?, project=?, project_ref=?, step_ref=?, updated_at=? WHERE id=?', [...$vals, $id]);
         q('UPDATE tasks SET needs_photo = ? WHERE id = ?', [empty($in['needsPhoto']) ? 0 : 1, $id]);
+        if (array_key_exists('kind', $in)) q('UPDATE tasks SET kind = ? WHERE id = ?', [($in['kind'] ?? '') === 'log' ? 'log' : null, $id]); // 📒 record or daily update
         if ($start = date_or_null($in['startDate'] ?? null)) q('UPDATE tasks SET start_date = ? WHERE id = ?', [$start, $id]);
         audit($me['id'], 'task_edit', "#$id $title");
       } else {
@@ -807,7 +917,7 @@ function handle(string $a, array $in): array {
           return ['task' => tasks_out([own_task($me, (int)one('SELECT id FROM tasks WHERE created_by = ? AND client_id = ?', [$me['id'], $cid])['id'])], $day)[0]]; // a double tap at the same moment: one task
         }
         $id = (int)db()->lastInsertId();
-        q('UPDATE tasks SET needs_photo = ? WHERE id = ?', [empty($in['needsPhoto']) ? 0 : 1, $id]);
+        q('UPDATE tasks SET needs_photo = ?, kind = ? WHERE id = ?', [empty($in['needsPhoto']) ? 0 : 1, ($in['kind'] ?? '') === 'log' ? 'log' : null, $id]);
         audit($me['id'], 'task_new', "#$id $title");
         $start = date_or_null($in['startDate'] ?? null);
         if ($start && $start > $day) q('UPDATE tasks SET start_date = ? WHERE id = ?', [$start, $id]); // starts on a later day
@@ -913,11 +1023,11 @@ function morning_items(int $who, string $day): array {
   $projects = []; $plain = [];
   foreach ($tasks as $t) {
     if ($t['seq'] !== null && $t['projectRef']) $projects[$t['projectRef']][] = $t;
-    elseif ($t['dueToday'] || $late($t) || $t['stuck']) $plain[] = $t;
+    elseif ($t['dueToday'] || $late($t) || $t['stuck'] || $t['kind'] === 'log') $plain[] = $t; // (a 📒 record is never "due", but it is still their work: owner, 24 Oct)
   }
   $ups = last_updates(array_map(fn($t) => $t['id'], $plain), array_keys($projects));
   $last = fn(string $key): ?array => $ups[$key] ?? null;
-  $repeat = fn($t) => $t['repeat'] === 'daily' ? 'Daily' : ($t['repeat'] === 'weekly' ? 'Weekly (' . substr(WEEKDAYS[$t['weekday'] ?? 1], 0, 3) . ')' : '');
+  $repeat = fn($t) => $t['kind'] === 'log' ? '📒 Record' : ($t['repeat'] === 'daily' ? 'Daily' : ($t['repeat'] === 'weekly' ? 'Weekly (' . substr(WEEKDAYS[$t['weekday'] ?? 1], 0, 3) . ')' : ''));
   $out = [];
   foreach ($projects as $ref => $list) {
     $cur = null;
@@ -958,7 +1068,10 @@ function last_updates(array $taskIds, array $refs): array {
   }
   $out = [];
   foreach ($newest as $key => $u) {
-    $note = trim(preg_replace('/\s+/u', ' ', $u['note']) ?? '');
+    // a 📒 record's day has many lines (oldest first): its newest line and how many more, never all run together (owner, 24 Oct)
+    $lines = array_values(array_filter(array_map('trim', preg_split('/\R/u', (string)$u['note']) ?: []), 'strlen'));
+    $note = count($lines) > 1 ? end($lines) . ' (+' . (count($lines) - 1) . ' more)' : ($lines[0] ?? '');
+    $note = trim(preg_replace('/\s+/u', ' ', $note) ?? '');
     $out[$key] = ['day' => $u['day'], 'note' => mb_strlen($note) > 80 ? rtrim(mb_substr($note, 0, 79)) . '…' : $note];
   }
   return $out;
@@ -1050,6 +1163,7 @@ function add_staff_step(array $me, string $ref, string $title, array $mine, stri
      VALUES (?, '', ?, ?, 'once', 1, NULL, NULL, ?, ?, ?, ?, 'open', ?, ?, 1, ?, ?)",
     [$title, $me['id'], $me['id'], $day, $mine[0]['project'], $ref, $stepRef, $seq, $photo, now(), now()]);
   $id = (int)db()->lastInsertId();
+  if (setting('pk:' . md5($ref), '') === 'log') q("UPDATE tasks SET kind = 'log' WHERE id = ?", [$id]); // 📒 the project is a record: its new step too
   // the project had no steps (it was one task with its name): the steps take its place
   q("UPDATE tasks SET status = 'cancelled', done_at = ?, updated_at = ? WHERE project_ref = ? AND step_ref = ? AND status = 'open'", [now(), now(), $ref, $ref . ':whole']);
   carry_whole_update($ref, $me['id']);
@@ -1193,18 +1307,128 @@ function project_sync(array $me, array $in, string $ref, string $day): array {
     notify([$who], 'task', $hadSome ? ($n === 1 ? "➕ New step in $name" : "➕ $n new steps in $name") : "📁 New project for you: $name",
       $hadSome ? implode(' · ', array_slice($news, 0, 3)) : "$n step" . ($n > 1 ? 's' : '') . '. First: ' . $news[0], '/', 'p' . md5($ref));
   }
+  // 📒 "record" for the whole given project (owner asked 24 Oct): every open step, and steps the person adds later
+  if (array_key_exists('kind', $in)) {
+    $k = ($in['kind'] ?? '') === 'log' ? 'log' : '';
+    if ($k === '') q('DELETE FROM settings WHERE k = ?', ['pk:' . md5($ref)]); else set_setting('pk:' . md5($ref), $k);
+    q("UPDATE tasks SET kind = ? WHERE project_ref = ? AND seq IS NOT NULL AND status = 'open'", [$k ?: null, $ref]);
+  }
   return ['tasks' => tasks_out(all(TASK_SELECT . " WHERE t.project_ref = ? AND t.seq IS NOT NULL AND t.status = 'open' ORDER BY t.seq", [$ref]), $day), 'skipped' => $skipped, 'assigneeId' => $who]; // assigneeId: who has the project now
 }
 
+/**
+ * 📒 One entry on a record task (kind 'log'): a short line, written now or offline up to 2 days back (writtenAt).
+ * The day's update is made from that day's entries (entry_note), so the lists, Team today, the owner's colours and the
+ * diary all see it as that day's update. A resend with the same clientId gives back the same entry.
+ */
+function add_entry(array $me, array $in, string $day): array {
+  $t = own_task($me, (int)($in['taskId'] ?? 0));
+  if (($t['kind'] ?? '') !== 'log') throw new ApiError('This task takes a daily update, not entries.');
+  $cid = client_id($in['clientId'] ?? null);
+  if ($cid && ($dup = one('SELECT * FROM entries WHERE user_id = ? AND client_id = ?', [$me['id'], $cid]))) return entry_out($dup, [], $me['name']);
+  if ($t['status'] !== 'open') throw new ApiError('This task is closed, so the entry was not saved.');
+  $text = txt($in['text'] ?? '', 1000, true, 'The entry');
+  $at = now();
+  if (is_string($in['writtenAt'] ?? null) && ($w = strtotime($in['writtenAt']))) { // written offline: when it was written (on the server's clock)
+    $sent = is_string($in['sentAt'] ?? null) ? strtotime($in['sentAt']) : false;
+    $w = min(time(), $w + ($sent ? max(-86400, min(86400, time() - $sent)) : 0));
+    if (date('Y-m-d', $w) < date('Y-m-d', strtotime($day . ' -2 days'))) throw new ApiError('This entry was written more than 2 days ago, so it was not saved. Please write it again.');
+    $at = date('Y-m-d H:i:s', $w);
+  }
+  $eday = substr($at, 0, 10);
+  $id = in_tx_with_alerts(function () use ($t, $me, $eday, $text, $at, $cid) {
+    q("INSERT INTO updates (task_id, user_id, day, note, state, created_at, updated_at, written_at) VALUES (?, ?, ?, '', 'progress', ?, ?, ?)
+       ON DUPLICATE KEY UPDATE updated_at = VALUES(updated_at)", [$t['id'], $me['id'], $eday, now(), now(), $at]);
+    $u = one('SELECT id FROM updates WHERE task_id = ? AND day = ? FOR UPDATE', [$t['id'], $eday]);
+    if ((int)one('SELECT COUNT(*) AS n FROM entries WHERE update_id = ?', [$u['id']])['n'] >= 200) throw new ApiError('Up to 200 entries a day.');
+    if (!insert_once('INSERT INTO entries (task_id, user_id, update_id, text, at, client_id) VALUES (?, ?, ?, ?, ?, ?)', [$t['id'], $me['id'], $u['id'], $text, $at, $cid])) return 0;
+    $id = (int)db()->lastInsertId();
+    entry_note((int)$u['id']);
+    return $id;
+  });
+  $e = $id ? one('SELECT * FROM entries WHERE id = ?', [$id]) : one('SELECT * FROM entries WHERE user_id = ? AND client_id = ?', [$me['id'], $cid]); // (a double send at the same moment: one entry)
+  if (!$e) throw new ApiError('Something went wrong. Try again.');
+  if ($id && (int)$t['assignee_id'] === $me['id']) notify(admin_ids(), 'update', "📒 {$me['name']}: {$t['title']}", mb_substr($text, 0, 140), '/projects/#team-task=' . $t['id'], 'e' . $t['id']);
+  return entry_out($e, [], $me['name']);
+}
+
+/** The day's update of a record, made from its entries: "10:42 PO sent to the supplier" a line each (the name too when two people wrote). */
+function entry_note(int $updateId): void {
+  $rows = all('SELECT e.text, e.at, e.user_id, u.name FROM entries e JOIN users u ON u.id = e.user_id WHERE e.update_id = ? ORDER BY e.at, e.id', [$updateId]);
+  if (!$rows) { // the last entry of that day was removed: the day has no update any more (its photos went with the entries)
+    if (!one('SELECT id FROM photos WHERE update_id = ? LIMIT 1', [$updateId])) q('DELETE FROM updates WHERE id = ?', [$updateId]);
+    return;
+  }
+  $many = count(array_unique(array_map(fn($r) => (int)$r['user_id'], $rows))) > 1;
+  $lines = array_map(fn($r) => date('g:i a', strtotime($r['at'])) . ' ' . ($many ? $r['name'] . ': ' : '') . $r['text'], $rows); // "8:53 am", as every time on screen
+  q('UPDATE updates SET note = ?, updated_at = ? WHERE id = ?', [mb_substr(implode("\n", $lines), 0, 60000), now(), $updateId]);
+}
+
+function entry_out(array $e, array $photos, string $by = ''): array {
+  return ['id' => (int)$e['id'], 'taskId' => (int)$e['task_id'], 'text' => $e['text'], 'at' => $e['at'], 'day' => substr($e['at'], 0, 10),
+    'byId' => (int)$e['user_id'], 'by' => $by ?: user_name((int)$e['user_id']), 'photos' => $photos[(int)$e['id']] ?? []];
+}
+
+/** A record's entries, newest first (the last 300), each with its photos. */
+function entries_of(int $taskId): array {
+  $rows = all('SELECT * FROM entries WHERE task_id = ? ORDER BY at DESC, id DESC LIMIT 300', [$taskId]);
+  if (!$rows) return [];
+  $ids = array_map(fn($e) => (int)$e['id'], $rows);
+  $photos = [];
+  foreach (all('SELECT id, entry_id FROM photos WHERE entry_id IN (' . implode(',', array_fill(0, count($ids), '?')) . ') ORDER BY id', $ids) as $p) $photos[(int)$p['entry_id']][] = (int)$p['id'];
+  return array_map(fn($e) => entry_out($e, $photos), $rows);
+}
+
+/** A ☑ step of a task this person may see (theirs, or any for the manager): 404 otherwise. */
+function task_step_for(array $me, int $id): array {
+  $st = one('SELECT * FROM task_steps WHERE id = ?', [$id]);
+  if (!$st) throw new ApiError('That step was not found.', 404);
+  own_task($me, (int)$st['task_id']);
+  return $st;
+}
+
+/** A single task's ☑ steps, in the order added, each with its photos ({id, byId}) and who added it. */
+function steps_of(int $taskId): array {
+  $meId = (int)($GLOBALS['me']['id'] ?? 0);
+  $rows = all('SELECT s.*, u.name FROM task_steps s JOIN users u ON u.id = s.created_by WHERE s.task_id = ? ORDER BY s.id', [$taskId]);
+  if (!$rows) return [];
+  $ids = array_map(fn($r) => (int)$r['id'], $rows);
+  $photos = [];
+  foreach (all('SELECT id, step_id, user_id FROM step_photos WHERE step_id IN (' . implode(',', array_fill(0, count($ids), '?')) . ') ORDER BY id', $ids) as $p) $photos[(int)$p['step_id']][] = ['id' => (int)$p['id'], 'byId' => (int)$p['user_id']];
+  return array_map(fn($r) => ['id' => (int)$r['id'], 'title' => $r['title'], 'done' => $r['done_at'] !== null, 'doneAt' => $r['done_at'],
+    'byId' => (int)$r['created_by'], 'by' => $r['name'], 'mine' => (int)$r['created_by'] === $meId, 'photos' => $photos[(int)$r['id']] ?? []], $rows);
+}
+
+/** The photo just sent ($_FILES['file']): checked, made smaller, saved as JPEG. Returns [file, size]. */
+function save_uploaded_photo(): array {
+  $f = $_FILES['file'] ?? null;
+  if (!$f || $f['error'] !== UPLOAD_ERR_OK || !is_uploaded_file($f['tmp_name'])) throw new ApiError('The photo did not arrive. Try again.');
+  if ($f['size'] > MAX_UPLOAD_BYTES) throw new ApiError('That photo is too big.');
+  $mime = (new finfo(FILEINFO_MIME_TYPE))->file($f['tmp_name']);
+  if (!in_array($mime, ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif'], true)) throw new ApiError('Only photos can be added.');
+  $jpeg = shrink_photo($f['tmp_name'], $mime);
+  $dir = date('Y-m');
+  make_dir(UPLOAD_DIR . "/$dir");
+  $file = "$dir/" . bin2hex(random_bytes(12)) . '.jpg';
+  file_put_contents(UPLOAD_DIR . "/$file", $jpeg);
+  return [$file, strlen($jpeg)];
+}
+
 /** A photo for today's update: made smaller (max 1600 px), turned the right way up, saved as JPEG. */
-function add_photo(array $me, int $updateId): int {
+function add_photo(array $me, int $updateId, int $entryId = 0): int {
+  // 📒 a record's entry: the photo goes on its entry (and so on that day's update); only the entry's writer adds them
+  $e = $entryId ? one('SELECT * FROM entries WHERE id = ?', [$entryId]) : null;
+  if ($entryId && (!$e || (int)$e['user_id'] !== $me['id'])) throw new ApiError('Add the entry first, then the photo.', 403);
+  if ($e) $updateId = (int)$e['update_id'];
   $u = one('SELECT * FROM updates WHERE id = ?', [$updateId]);
   // today's update, or one written offline in the last 2 days and sent now
-  if (!$u || (int)$u['user_id'] !== $me['id'] || $u['day'] > today() || $u['day'] < date('Y-m-d', strtotime(today() . ' -2 days'))) throw new ApiError('Send the update first, then add the photo.', 403);
+  if (!$u || (!$e && (int)$u['user_id'] !== $me['id']) || $u['day'] > today() || $u['day'] < date('Y-m-d', strtotime(today() . ' -2 days'))) throw new ApiError('Send the update first, then add the photo.', 403);
   $cid = client_id($_POST['clientId'] ?? null);
   if ($cid && ($dup = one('SELECT id FROM photos WHERE update_id = ? AND client_id = ?', [$updateId, $cid]))) return (int)$dup['id']; // sent before
-  // only this person's photos count (the ones from before a move stay on the row, but are older than the take-over)
-  if ((int)one('SELECT COUNT(*) AS n FROM photos WHERE update_id = ? AND created_at >= ?', [$updateId, $u['created_at']])['n'] >= MAX_PHOTOS) throw new ApiError('Up to ' . MAX_PHOTOS . ' photos per update.');
+  // only this person's photos count (the ones from before a move stay on the row, but are older than the take-over); an entry: its own
+  $full = fn(): bool => $e ? (int)one('SELECT COUNT(*) AS n FROM photos WHERE entry_id = ?', [$e['id']])['n'] >= MAX_PHOTOS
+    : (int)one('SELECT COUNT(*) AS n FROM photos WHERE update_id = ? AND created_at >= ?', [$updateId, $u['created_at']])['n'] >= MAX_PHOTOS;
+  if ($full()) throw new ApiError('Up to ' . MAX_PHOTOS . ($e ? ' photos per entry.' : ' photos per update.'));
   $f = $_FILES['file'] ?? null;
   if (!$f || $f['error'] !== UPLOAD_ERR_OK || !is_uploaded_file($f['tmp_name'])) throw new ApiError('The photo did not arrive. Try again.');
   if ($f['size'] > MAX_UPLOAD_BYTES) throw new ApiError('That photo is too big.');
@@ -1216,13 +1440,13 @@ function add_photo(array $me, int $updateId): int {
   $file = "$dir/" . bin2hex(random_bytes(12)) . '.jpg';
   file_put_contents(UPLOAD_DIR . "/$file", $jpeg);
   // the limit, again under a lock on the update: photos sent at the same moment are counted one after the other
-  $saved = in_tx_with_alerts(function () use ($updateId, $u, $file, $jpeg, $cid) {
+  $saved = in_tx_with_alerts(function () use ($updateId, $e, $full, $file, $jpeg, $cid) {
     one('SELECT id FROM updates WHERE id = ? FOR UPDATE', [$updateId]);
-    if ((int)one('SELECT COUNT(*) AS n FROM photos WHERE update_id = ? AND created_at >= ?', [$updateId, $u['created_at']])['n'] >= MAX_PHOTOS) {
+    if ($full()) {
       @unlink(UPLOAD_DIR . '/' . $file);
-      throw new ApiError('Up to ' . MAX_PHOTOS . ' photos per update.');
+      throw new ApiError('Up to ' . MAX_PHOTOS . ($e ? ' photos per entry.' : ' photos per update.'));
     }
-    return insert_once('INSERT INTO photos (update_id, file, size, created_at, client_id) VALUES (?, ?, ?, ?, ?)', [$updateId, $file, strlen($jpeg), now(), $cid], $file) ? (int)db()->lastInsertId() : 0;
+    return insert_once('INSERT INTO photos (update_id, file, size, created_at, client_id, entry_id) VALUES (?, ?, ?, ?, ?, ?)', [$updateId, $file, strlen($jpeg), now(), $cid, $e ? (int)$e['id'] : null], $file) ? (int)db()->lastInsertId() : 0;
   });
   if (!$saved) {
     $dup = one('SELECT id FROM photos WHERE update_id = ? AND client_id = ?', [$updateId, $cid]); // the same send arrived twice at once: kept once
@@ -1338,6 +1562,21 @@ function send_comment_photo(int $id): void {
   if (!is_file($path)) throw new ApiError('Photo not found.', 404);
   header('Content-Type: image/jpeg');
   header('Cache-Control: private, max-age=86400'); header('Vary: Authorization', false); // kept only for the same sign-in (address bar / next person: asked again)
+  header('Content-Length: ' . filesize($path));
+  readfile($path);
+}
+
+/** A ☑ step's photo: to whoever may see its task (the person doing it, the manager). */
+function send_step_photo(int $id): void {
+  $me = current_user();
+  $GLOBALS['me'] = $me;
+  $p = one('SELECT * FROM step_photos WHERE id = ?', [$id]);
+  if (!$p) throw new ApiError('Photo not found.', 404);
+  task_step_for($me, (int)$p['step_id']); // 404 for anyone else
+  $path = UPLOAD_DIR . '/' . $p['file'];
+  if (!is_file($path)) throw new ApiError('Photo not found.', 404);
+  header('Content-Type: image/jpeg');
+  header('Cache-Control: private, max-age=86400'); header('Vary: Authorization', false);
   header('Content-Length: ' . filesize($path));
   readfile($path);
 }

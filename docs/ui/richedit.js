@@ -2,6 +2,7 @@
 // Saved HTML is cleaned again (rich.js) and drawn with h() — never innerHTML — so nothing in it can run.
 
 import { h, HAS_KEYBOARD } from './dom.js';
+import { isPhoto } from './heic.js';
 import { richTree, sanitizeRich, isRich, htmlToText, richFileIds, remapPhotos, TABLE_HTML, RICH_MAX, RAW_MAX } from '../rich.js';
 import { uploadBlob, thumbUrl } from './files.js';
 import { newId } from '../ops.js';
@@ -138,8 +139,8 @@ export function pasteRich(ctx, d, e, el, key, changed, otherFiles = null, ownFil
   const html = cd.getData('text/html') || '';
   if (files.length && !plain.trim()) {
     e.preventDefault();
-    const images = files.filter((f) => (f.type || '').startsWith('image/'));
-    const others = files.filter((f) => !(f.type || '').startsWith('image/'));
+    const images = files.filter(isPhoto);
+    const others = files.filter((f) => !isPhoto(f));
     if (images.length) addDraftPhotos(ctx, d, namePasted(images), key, { inline: true });
     if (others.length) { if (otherFiles) otherFiles(others); else ctx.toast('Only photos can be pasted here', 2500); }
     return;

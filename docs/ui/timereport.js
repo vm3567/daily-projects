@@ -91,7 +91,7 @@ export async function reportPng({ title, period, rows, pcts, mode }) {
   });
   if (rows.length > shown.length) { g.fillStyle = '#64748b'; g.font = '26px sans-serif'; g.fillText(`+ ${rows.length - shown.length} more`, 876, y); }
   g.fillStyle = '#94a3b8'; g.font = '24px -apple-system, Segoe UI, Roboto, Arial, sans-serif';
-  g.fillText('Daily Projects', 80, H - 50);
+  g.fillText('Task List', 80, H - 50);
   return new Promise((res) => c.toBlob(res, 'image/png'));
 }
 
@@ -180,7 +180,7 @@ export async function fullReportPng({ title, period, rows, pcts, work, tagColour
     }
     if (standMore) { g.fillStyle = '#64748b'; g.font = `22px ${FONT}`; g.fillText(`+ ${standMore} more tasks (see the Time report page)`, x, sy); }
   }
-  g.fillStyle = '#94a3b8'; g.font = `22px ${FONT}`; g.fillText('Daily Projects', 70, H - 30);
+  g.fillStyle = '#94a3b8'; g.font = `22px ${FONT}`; g.fillText('Task List', 70, H - 30);
   return new Promise((res) => c.toBlob(res, 'image/png'));
 }
 

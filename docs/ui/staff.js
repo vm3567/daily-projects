@@ -7,18 +7,20 @@
 // Sending while offline: ui/staffbox.js (Work Task's own outbox on this site, shared by both apps).
 
 import { h, morph, errLine } from './dom.js';
+import { IN_NO_PROJECT } from './workparts.js';
 import { createOutbox } from './staffbox.js';
+import { isHeic, heicToJpeg, isPhoto } from './heic.js';
 import { stageChip, stageFilterBar } from './stage.js';
 import { openMenuAt, menuBox, focusLater } from './rowmenu.js';
-import { fmtDay, fmtTime, STATES, stateTag, newClientId, istDay, repeatLabel, block, chipsFor, makePics, photosRow, filesBlock, diaryBlock, messagesBlock } from './workparts.js';
+import { fmtDay, fmtTime, STATES, stateTag, newClientId, istDay, repeatLabel, block, chipsFor, makePics, photosRow, filesBlock, diaryBlock, messagesBlock, logbookBlock, bottomBar, hitLines, staffDot, nowHm, HERE, blockedSteps, stepsBlock, makeStepActs, takesSteps } from './workparts.js';
 
 export { STATES, repeatLabel }; // (the pieces of a task page are shared with the team pages: ui/workparts.js)
 const KEEP_FAIL = 'Could not keep this on the phone. Try again when online.';
-const OFFLINE_KEPT = '📴 Saved on this phone — it will be sent when you are online';
+const OFFLINE_KEPT = `📴 Saved on ${HERE} — it will be sent when you are online`;
 
 /** The only server calls the staff view makes (a check in tests/screens.test.mjs holds it to this list). */
 export const STAFF_CALLS = ['me', 'my.today', 'task.get', 'project.mine', 'update.save', 'photo.add', 'comment.add', 'comment.edit', 'comment.delete',
-  'comment.photo', 'project.addStep', 'suggest', 'search', 'password', 'logout', 'push.key', 'push.subscribe', 'push.unsubscribe', 'push.test'];
+  'comment.photo', 'project.addStep', 'tstep.add', 'tstep.edit', 'tstep.delete', 'tstep.photo', 'tstep.photo.delete', 'entry.add', 'entry.photo', 'entry.delete', 'suggest', 'search', 'password', 'logout', 'push.key', 'push.subscribe', 'push.unsubscribe', 'push.test'];
 /** Lists kept on the phone (the last copy), so the app opens without internet — the same saved copies Work Task keeps. */
 const READS = new Set(['me', 'my.today', 'task.get', 'project.mine', // (and the team pages' lists: ui/team.js)
   'team.today', 'tasks.list', 'users.list', 'projects.overview', 'project.team', 'report.week', 'followup.list', 'people.morning']);
@@ -65,6 +67,7 @@ export function staffApi(token, base = '../api/', opts = {}) {
 
 /** A phone photo made smaller before it goes (saves mobile data); see-through parts become white, not black. */
 export async function shrinkPhoto(file) {
+  if (isHeic(file.name, file.type)) { try { return await heicToJpeg(file, 1600); } catch { return file; } } // an iPhone photo: a JPEG every browser shows
   try {
     const bmp = await createImageBitmap(file);
     const s = Math.min(1, 1600 / Math.max(bmp.width, bmp.height));
@@ -178,10 +181,10 @@ export function staffFolders(d, waiting = () => false) {
     if (t.folder) return { key: 'f:' + t.folder, name: t.folder };
     const pr = t.projectRef && t.seq !== null && t.seq !== undefined ? projs.get(t.projectRef) : null;
     if (pr && pr.real.length >= 2) return { key: 'p:' + pr.ref, name: pr.name, ref: pr.ref };
-    return { key: 'misc', name: 'Misc' };
+    return { key: 'misc', name: IN_NO_PROJECT }; // (the owner's 📂 Misc: the same name everywhere, owner 24 Oct)
   };
   const RANK = { red: 0, yellow: 1, green: 2, grey: 3 };
-  const dotOf = (t) => (t.today ? 'green' : waiting(t.id) ? 'yellow' : t.dueToday ? 'red' : 'grey');
+  const dotOf = (t) => staffDot(t, { waiting: !!waiting(t.id), pastFillBy: nowHm() >= (d.fillBy || '18:00') });
   const tasks = all.map((t, i) => ({ t, dot: dotOf(t), folder: folderOf(t), i })).sort((a, b) => RANK[a.dot] - RANK[b.dot] || a.i - b.i);
   const by = new Map();
   for (const x of tasks) { if (!by.has(x.folder.key)) by.set(x.folder.key, { ...x.folder, tasks: [] }); by.get(x.folder.key).tasks.push(x); }
@@ -215,7 +218,7 @@ export function createStaff(opts) {
   const copy = opts.copy || ((text) => (typeof navigator !== 'undefined' && navigator.clipboard ? navigator.clipboard.writeText(text) : Promise.reject(new Error('copy'))));
   const state = {
     user: opts.user, data: null, loadFailed: '', section: 'today', sel: null, detail: null, detailFailed: '',
-    menuOpen: false, mobile: 'list', drafts: {}, editing: {}, files: {}, sending: {}, msgDrafts: {}, stepDrafts: {}, diaryDays: 14,
+    menuOpen: false, mobile: 'list', drafts: {}, editing: {}, files: {}, sending: {}, msgDrafts: {}, stepDrafts: {}, diaryDays: 14, entryDrafts: {}, entryFiles: {},
     offline: false, outbox: [], notices: [], news: [], signedOut: false, pushLater: false,
     searchQ: '', searchResults: null, newIds: new Set(), knownIds: new Set(),
   };
@@ -284,7 +287,7 @@ export function createStaff(opts) {
       // a saved copy from an earlier day: today's updates are not in it yet
       state.data = d.fromCache && d.today !== istDay() ? { ...d, stale: true } : d;
       state.loadFailed = '';
-    } catch (e) { const m = fail(e); if (!m) return; state.loadFailed = e.offline ? 'No saved copy on this phone yet.' : m; }
+    } catch (e) { const m = fail(e); if (!m) return; state.loadFailed = e.offline ? `No saved copy on ${HERE} yet.` : m; }
     render();
   }
   async function loadDetail() {
@@ -303,6 +306,8 @@ export function createStaff(opts) {
   }
   // ✅ Tasks and 📂 Projects, as on the owner's pages (staffFolders)
   const folders = () => staffFolders(state.data, (id) => !!waitingFor(id));
+  // one dot rule everywhere in the staff app (owner, 24 Oct): green sent · yellow not yet / waiting to send · red after the due time, late or stuck
+  const dotFor = (t) => staffDot(t, { waiting: !!waitingFor(t.id), pastFillBy: nowHm() >= ((state.data && state.data.fillBy) || '18:00') });
   /** A 📂 project: a given project with its steps opens its own page (steps in order, add a step); the others list their tasks. */
   function openFolder(f) { state.navFolder = f.key; open(f.ref ? 'project:' + f.ref : 'folder:' + f.key); }
   /** ‹ › on a task: the list it was opened from (a 📂 project, ✅ Tasks, Coming next, else Today), one by one. */
@@ -320,6 +325,7 @@ export function createStaff(opts) {
     render(); loadDetail();
   }
   function show(section) { state.section = section; state.navFolder = null; state.sel = null; state.mobile = 'list'; state.menuOpen = false; render(); }
+  function openSearch() { show('search'); focusLater('staff-search'); } // the cursor is in the box when Search opens (owner, 24 Oct)
   function back() { state.sel = null; state.mobile = 'list'; render(); }
   function reload() { load(); if (state.sel) loadDetail(); }
 
@@ -382,6 +388,44 @@ export function createStaff(opts) {
       delete state.sending[t.id];
       reload();
     }
+  }
+
+  /** 📒 A record task: one entry (a line + up to 5 photos). Offline: kept on the phone and sent later (the same clientIds). */
+  async function sendEntry(t) {
+    const text = (state.entryDrafts[t.id] || '').trim();
+    const files = state.entryFiles[t.id] || [];
+    if (!text) return 'Write the entry first.';
+    const key = 'e' + t.id;
+    if (state.sending[key]) return '';
+    state.sending[key] = true; render();
+    const cid = newClientId();
+    let entryId = 0, left = files;
+    const clear = () => { if ((state.entryDrafts[t.id] || '').trim() === text) delete state.entryDrafts[t.id]; delete state.entryFiles[t.id]; };
+    try {
+      entryId = (await api('entry.add', { taskId: t.id, text, clientId: cid })).entry.id;
+      for (let i = 0; i < files.length; i++) {
+        left = files.slice(i);
+        const fd = new FormData();
+        fd.append('entryId', String(entryId)); fd.append('file', await shrink(files[i]), 'photo.jpg'); fd.append('clientId', `${cid}-p${i}`);
+        try { await api('entry.photo', fd, true); } catch (e) { if (e.offline || e.retry) throw Object.assign(e, { offline: true, photoNo: i }); toast(`A photo was not sent: ${e.message}`, 6000); }
+      }
+      clear();
+      toast('📒 Added ✓');
+      return '';
+    } catch (e) {
+      if (e.offline) {
+        const blobs = [];
+        for (const f of entryId ? left : files) blobs.push(await shrink(f));
+        if (!(await keep({ kind: 'entry', taskId: t.id, text, files: blobs, clientId: cid, ...(entryId ? { entryId, photoNo: e.photoNo || 0 } : {}) }))) return KEEP_FAIL;
+        clear();
+        return '';
+      }
+      return fail(e); // the words stay in the box
+    } finally { delete state.sending[key]; reload(); }
+  }
+  async function deleteEntry(e) {
+    if (!ask.confirm('Remove this entry (and its photos)?')) return;
+    try { await api('entry.delete', { id: e.id }); toast('Removed'); reload(); } catch (ex) { const m = fail(ex); if (m) toast(m, 5000); }
   }
 
   async function sendMessage(taskId) {
@@ -457,8 +501,9 @@ export function createStaff(opts) {
       const out = await api('project.addStep', { projectRef: ref, title, clientId });
       if (out && out.task) state.knownIds.add(out.task.id); // my own step: never told to me as news
       delete ids.step[ref]; typedOn();
-      toast('➕ Step added. Your manager sees it in the project too.');
+      toast('➕ Step added — add its photos here. Your manager sees it in the project too.');
       reload();
+      if (out && out.task) open('task:' + out.task.id); // the new step opens: its photos (e.g. each test step) go on at once
       return '';
     } catch (e) {
       if (e.offline) {
@@ -484,7 +529,8 @@ export function createStaff(opts) {
     }
   }
 
-  async function changePassword(oldPw, newPw) {
+  async function changePassword(oldPw, newPw, again) {
+    if (newPw !== again) return 'The two new passwords are not the same.'; // (a typo in a hidden box would lock them out: owner, 24 Oct)
     try { await api('password', { old: oldPw, new: newPw }); toast('Password changed ✓'); back(); return ''; } catch (e) { return e.message; }
   }
 
@@ -497,12 +543,12 @@ export function createStaff(opts) {
     if (!push) return '';
     try {
       const s = await push.turnOn();
-      if (s === 'on') notice('🔔 Notifications are on', 'New tasks, new project steps and messages will come to this phone, like email.');
+      if (s === 'on') notice('🔔 Notifications are on', `New tasks, new project steps and messages will come to ${HERE}, like email.`);
       render();
       return '';
     } catch (e) { toast('Could not turn on notifications: ' + e.message, 6000); return e.message; }
   }
-  async function notifyOff() { if (push) { await push.turnOff(); toast('Notifications are off for this phone.'); render(); } }
+  async function notifyOff() { if (push) { await push.turnOff(); toast(`Notifications are off for ${HERE}.`); render(); } }
 
   /** 📷 more photos on today's update that was already sent (up to 5 in all). Kept on the phone when offline. */
   async function addPhotos(t, list) {
@@ -536,7 +582,7 @@ export function createStaff(opts) {
     if (!state.sel || !state.sel.startsWith('task:') || !state.detail || !state.detail.task || !files.length) return false;
     if (String(text).trim()) return false; // text with a picture of it (cells from Excel, Word): the text
     const t = state.detail.task;
-    const images = files.filter((f) => String(f.type || '').startsWith('image/'));
+    const images = files.filter(isPhoto);
     if (inMessageBox) {
       if (!images.length) { toast('Only photos can go in a message. Ask your manager to add other files to the task.', 5000); return true; }
       sendMessagePhoto(t.id, images[0]).then((m) => { if (m) toast(m, 5000); });
@@ -599,7 +645,7 @@ export function createStaff(opts) {
     } catch { /* try again next time */ } finally { liveBusy = false; }
   }
 
-  const act = { sendUpdate, addPhotos, paste, search, liveCheck, sendMessage, sendMessagePhoto, editMessage, deleteMessage, addStep, suggest, changePassword, openFile, notifyOn, notifyOff, flush, open, show, back, reload };
+  const act = { sendUpdate, sendEntry, deleteEntry, addPhotos, paste, search, liveCheck, sendMessage, sendMessagePhoto, editMessage, deleteMessage, addStep, suggest, changePassword, openFile, notifyOn, notifyOff, flush, open, show, back, reload };
 
   // ---------------------------------------------------------------- screens
 
@@ -615,9 +661,9 @@ export function createStaff(opts) {
     // the same menu as the owner's projects page (owner, 23 Oct): the search box on top, Today with its count and the
     // red / yellow / green count under it (the same dots as the list), the other lists, a line, the rest
     const dots = { red: 0, yellow: 0, green: 0 };
-    if (d) for (const x of d.tasks) dots[x.today ? 'green' : waitingFor(x.id) ? 'yellow' : 'red']++;
+    if (d) for (const x of d.tasks) { const c = dotFor(x); if (c in dots) dots[c]++; } // (the list's own rule: yellow until updates are due)
     return h('nav', { class: 'menu-inner' },
-      h('div', { class: 'brand' }, h('img', { src: 'icons/icon-192.png', alt: '', width: 28, height: 28 }), h('span', null, 'Work Task')),
+      h('div', { class: 'brand' }, h('img', { src: 'icons/icon-192.png', alt: '', width: 28, height: 28 }), h('span', null, 'Task List')),
       h('input', { class: 'search', type: 'search', placeholder: 'Search…', key: 'staff-menu-search', 'aria-label': 'Search', value: state.searchQ || '',
         onInput: (e, el) => { if (state.section !== 'search' || state.sel) show('search'); search(el.value); } }),
       h('ul', { class: 'menu-list' },
@@ -625,7 +671,7 @@ export function createStaff(opts) {
         d ? h('li', { class: 'menu-dots', key: 'dots', title: due ? `${due} still to send today` : 'All sent today' },
           h('span', { class: 'dot red' }), String(dots.red), ' ', h('span', { class: 'dot yellow' }), String(dots.yellow), ' ', h('span', { class: 'dot green' }), String(dots.green)) : null,
         item('✅ Tasks', !state.sel && state.section === 'tasks', () => show('tasks'), d ? String(sf.tasks.length) : null),
-        item('📂 Projects', !state.sel && state.section === 'projects', () => show('projects'), d ? String(sf.folders.length) : null),
+        item('📂 Projects', !state.sel && state.section === 'projects', () => show('projects'), d ? String(sf.folders.filter((f) => f.key !== 'misc').length) : null),
         h('li', { class: 'menu-sep' }),
         item('📅 Coming next', !state.sel && state.section === 'next', () => show('next'), d ? String(d.other.length) : null),
         item('💡 My suggestions', !state.sel && state.section === 'sugg', () => show('sugg'), d ? String((d.suggestions || []).length) : null),
@@ -642,7 +688,7 @@ export function createStaff(opts) {
         h('span', { class: 'dot ' + dot, 'aria-label': dot }),
         h('span', { class: 'prow-text' },
           h('span', { class: 'prow-name' }, t.title, state.newIds.has(t.id) ? h('span', { class: 'tag high' }, 'New') : null, t.unread ? h('span', { class: 'tag on-step', title: `${t.unread} new message(s)` }, '💬 New') : null,
-            t.status === 'suggested' ? null : stageChip(rules.teamStage(t))),
+            t.status === 'suggested' || t.kind === 'log' ? null : stageChip(rules.teamStage(t))), // (📒 a record has no stages, owner 24 Oct)
           h('span', { class: 'prow-next' + (warn ? ' warn' : '') }, sub))));
   }
 
@@ -658,7 +704,8 @@ export function createStaff(opts) {
   function chipRow(x) {
     const t = x.t, waiting = !!waitingFor(t.id), td = state.data.today;
     const work = t.project && t.project !== x.folder.name && t.project !== t.title ? t.project : ''; // the work it is a step of (not said twice)
-    const sub = waiting ? '⏳ Waiting to send' : t.today ? `✓ Sent ${fmtTime(t.today.at)}` : t.dueToday ? (work ? `${work} · ` : '') + 'Send today\'s update'
+    const sub = t.kind === 'log' ? [work, recordSub(t)].filter(Boolean).join(' · ') // 📒 a record: its entries, not "sent"
+      : waiting ? '⏳ Waiting to send' : t.today ? `✓ Sent ${fmtTime(t.today.at)}` : t.dueToday ? (work ? `${work} · ` : '') + 'Send today\'s update'
       : [work, repeatLabel(t, td)].filter(Boolean).join(' · ') || 'Not today';
     return h('li', { key: 't-' + t.id, class: 'prow' + (state.sel === 'task:' + t.id ? ' current' : ''), onContextmenu: (e) => openMenuAt(state, render, { t }, e) },
       h('span', { class: 'quick-tick-space', 'aria-hidden': 'true' }),
@@ -666,7 +713,7 @@ export function createStaff(opts) {
         h('span', { class: 'dot ' + x.dot, 'aria-label': x.dot }),
         h('span', { class: 'prow-text' },
           h('span', { class: 'prow-name' }, t.title, t.unread ? h('span', { class: 'tag on-step', title: `${t.unread} new message(s)` }, '💬 New') : null),
-          h('span', { class: 'prow-chips' }, h('span', { class: 'tag main-tag' }, `📂 ${x.folder.name}`), stageChip(rules.teamStage(t))),
+          h('span', { class: 'prow-chips' }, x.folder.key === 'misc' ? null : h('span', { class: 'tag main-tag' }, `📂 ${x.folder.name}`), t.kind === 'log' ? null : stageChip(rules.teamStage(t))), // (in no project: no "📂 Other tasks" chip, owner 24 Oct)
           h('span', { class: 'prow-next' + (t.dueDate && t.repeat === 'once' && t.dueDate < td && !t.today ? ' warn' : '') }, sub))));
   }
 
@@ -691,7 +738,7 @@ export function createStaff(opts) {
     return h('li', { key: 'p-' + pr.ref, class: 'prow' + (state.sel === 'project:' + pr.ref ? ' current' : '') },
       h('span', { class: 'quick-tick-space', 'aria-hidden': 'true' }),
       h('button', { class: 'prow-btn', onClick: () => open('project:' + pr.ref) },
-        h('span', { class: 'dot ' + (pr.current && pr.current.today ? 'green' : 'red') }),
+        h('span', { class: 'dot ' + (pr.current ? dotFor(pr.current) : 'grey') }),
         h('span', { class: 'prow-text' }, h('span', { class: 'prow-name' }, '📂 ', pr.name), h('span', { class: 'prow-next' }, now))));
   }
 
@@ -702,7 +749,7 @@ export function createStaff(opts) {
     const n = state.outbox.length;
     if (!state.offline && !n) return null;
     return h('div', { class: 'offline-bar', key: 'offline' },
-      state.offline ? '📴 Offline — showing the last saved copy. What you send is kept on this phone and goes out when you are online.' : '',
+      state.offline ? `📴 Offline — showing the last saved copy. What you send is kept on ${HERE} and goes out when you are online.` : '',
       n ? h('strong', null, ` ⏳ ${n} waiting to send`) : null,
       n && !state.offline ? [' ', h('button', { class: 'link', onClick: () => flush() }, 'Send now')] : null);
   }
@@ -731,7 +778,7 @@ export function createStaff(opts) {
     if ((s !== 'default' && s !== 'granted') || state.pushLater) return null;
     try { if (Number(localStorage.getItem('wt.pushLater') || 0) > Date.now() || localStorage.getItem('wt.pushOff.' + state.user.id)) return null; } catch { /* blocked */ }
     return h('div', { class: 'banner stack', key: 'push-banner' },
-      h('span', null, '🔔 Get a message on this phone when a new task or update comes — like email.'),
+      h('span', null, `🔔 Get a message on ${HERE} when a new task or update comes — like email.`),
       h('div', { class: 'row' },
         h('button', { class: 'btn primary small', onClick: notifyOn }, 'Turn on'),
         h('button', { class: 'link', onClick: () => { try { localStorage.setItem('wt.pushLater', String(Date.now() + 3 * 86400000)); } catch { /* blocked */ } state.pushLater = true; render(); } }, 'Later')));
@@ -743,8 +790,8 @@ export function createStaff(opts) {
     const head = h('div', { class: 'list-head' },
       h('button', { class: 'icon menu-btn', 'aria-label': 'Menu', onClick: () => { state.menuOpen = true; render(); } }, '☰'),
       h('h2', null, title),
-      state.section === 'search' ? null : h('button', { class: 'icon', title: 'Search', 'aria-label': 'Search', onClick: () => show('search') }, '🔍'), // (as on the owner's list; on a phone the menu has no search box)
-      h('button', { class: 'icon', title: 'Get latest', 'aria-label': 'Refresh', onClick: reload }, '↻'));
+      state.section === 'search' ? null : h('button', { class: 'icon head-icon', title: 'Search', 'aria-label': 'Search', onClick: openSearch }, '🔍', h('span', { class: 'icon-cap', 'aria-hidden': 'true' }, 'Find')), // (as on the owner's list; on a phone the menu has no search box)
+      h('button', { class: 'icon head-icon', title: 'Get latest', 'aria-label': 'Refresh', onClick: reload }, '↻', h('span', { class: 'icon-cap', 'aria-hidden': 'true' }, 'Refresh')));
     // "💡 Suggest a task" at the top of the list, as the owner's "+ New task"
     const top = [offlineBar(), notices(), newsBar(), pushBanner(), ['today', 'sugg'].includes(state.section) ? h('button', { class: 'btn primary new-project', onClick: () => open('suggest') }, '💡 Suggest a task') : null];
     if (!d) return h('div', { class: 'col-inner' }, head, top, h('p', { class: 'empty-list' }, state.loadFailed ? [state.loadFailed, ' ', h('button', { class: 'link', onClick: reload }, 'Try again')] : 'Loading…'));
@@ -759,7 +806,7 @@ export function createStaff(opts) {
             h('span', { class: 'quick-tick-space' }),
             h('button', { class: 'prow-btn', onClick: () => open('task:' + x.taskId) },
               h('span', { class: 'prow-text' }, h('span', { class: 'prow-name' }, `${icon[x.kind] || ''} ${x.title}`),
-                h('span', { class: 'prow-next' }, `${x.who} · ${fmtDay(x.at)} — ${x.text}`))))))];
+                h('span', { class: 'prow-next' }, `${x.who} · ${fmtDay(x.at)} — ${hitLines(x.text, state.searchQ)}`))))))];
     } else if (state.section === 'tasks') {
       const { tasks } = folders();
       const cut = stageCut(tasks, (x) => x.t);
@@ -768,8 +815,10 @@ export function createStaff(opts) {
         tasks.length ? null : h('p', { class: 'empty-list' }, 'No open tasks. 🎉')];
     } else if (state.section === 'projects') {
       const { folders: fs } = folders();
-      const n = fs.reduce((k, f) => k + f.tasks.length, 0);
-      body = [sec(`${fs.length} project${fs.length === 1 ? '' : 's'} · ${n} task${n === 1 ? '' : 's'} in them · red first`),
+      // real projects only: the tasks in no project are their own line (owner, 24 Oct: "1 project" was only "In no project")
+      const real = fs.filter((f) => f.key !== 'misc'), loose = fs.filter((f) => f.key === 'misc').reduce((k, f) => k + f.tasks.length, 0);
+      const n = real.reduce((k, f) => k + f.tasks.length, 0);
+      body = [sec([real.length ? `${real.length} project${real.length === 1 ? '' : 's'} · ${n} task${n === 1 ? '' : 's'} in them` : 'No projects yet', loose ? `${loose} in no project` : '', 'red first'].filter(Boolean).join(' · ')),
         h('ul', { class: 'plist' }, fs.map((f) => h('li', { key: 'f-' + f.key, class: 'prow' + (state.navFolder === f.key && state.sel ? ' current' : '') },
           h('span', { class: 'quick-tick-space', 'aria-hidden': 'true' }),
           h('button', { class: 'prow-btn', onClick: () => openFolder(f) }, h('span', { class: 'dot ' + f.dot }),
@@ -777,29 +826,32 @@ export function createStaff(opts) {
               h('span', { class: 'prow-next' }, `${f.tasks.length} task${f.tasks.length === 1 ? '' : 's'}${f.red ? ` · ${f.red} red` : ''}`)))))),
         fs.length ? null : h('p', { class: 'empty-list' }, 'No projects yet.')];
     } else if (state.section === 'next') {
-      body = [sec(`${d.other.length} coming next`), h('ul', { class: 'plist' }, d.other.map((t) => row(t, [t.project, repeatLabel(t, td)].filter(Boolean).join(' · '), 'grey'))),
+      body = [sec(d.other.length ? `${d.other.length} coming next` : 'Coming next'), // (not "0 coming next" and then "Nothing coming next": owner, 24 Oct) h('ul', { class: 'plist' }, d.other.map((t) => row(t, [t.project, repeatLabel(t, td)].filter(Boolean).join(' · '), 'grey'))),
         d.other.length ? null : h('p', { class: 'empty-list' }, 'Nothing coming next.')];
     } else if (state.section === 'sugg') {
       const s = d.suggestions || [];
       const waiting = state.outbox.filter((x) => x.kind === 'suggest');
-      body = [sec(`${s.length + waiting.length} suggestion${s.length + waiting.length === 1 ? '' : 's'}`),
+      body = [sec(s.length + waiting.length ? `${s.length + waiting.length} suggestion${s.length + waiting.length === 1 ? '' : 's'}` : 'Suggestions'), // (not "0 suggestions" and then "No suggestions yet")
         h('ul', { class: 'plist' }, s.map((t) => row(t, t.status === 'suggested' ? 'Waiting for a yes' : 'Not now' + (t.lastMessage ? ` — ${t.lastMessage.text}` : ''), t.status === 'suggested' ? 'yellow' : 'grey')),
           waiting.map((x) => h('li', { class: 'prow', key: 'ws-' + x.id }, h('span', { class: 'quick-tick-space' }), h('div', { class: 'prow-btn' }, h('span', { class: 'dot grey' }),
             h('span', { class: 'prow-text' }, h('span', { class: 'prow-name' }, x.title), h('span', { class: 'prow-next' }, '⏳ Waiting to send')))))),
-        s.length || waiting.length ? null : h('p', { class: 'empty-list' }, 'No suggestions yet. Tap 💡 Suggest a task in the menu.')];
+        s.length || waiting.length ? null : h('p', { class: 'empty-list' }, 'No suggestions yet. Tap 💡 Suggest a task above.')];
     } else {
-      const sent = d.tasks.filter((t) => t.today).length;
+      // the same count as Team today (owner, 24 Oct): a 📒 record counts once it has entries today (as sent), never as "to send"
+      const due = d.tasks.filter((t) => t.kind !== 'log' || t.today);
+      const sent = due.filter((t) => t.today).length;
       body = [
         d.stale ? h('p', { class: 'empty-list' }, `📴 Saved copy from ${fmtDay(d.today)} — today's updates are not shown yet.`) : null,
-        sec(`${fmtDay(td)} · ${sent} of ${d.tasks.length} sent`, h('span', { class: 'tag' }, `by ${d.fillBy}`)),
+        sec(`${fmtDay(td)} · ${sent} of ${due.length} sent`, h('span', { class: 'tag' }, `by ${d.fillBy}`)),
         d.tasks.length ? stageCut(d.tasks).bar : null,
         h('ul', { class: 'plist' }, stageCut(d.tasks).list.map((t) => {
           const waiting = !!waitingFor(t.id);
           const late = t.repeat === 'once' && t.dueDate && t.dueDate < td;
+          if (t.kind === 'log') return row(t, [t.project, recordSub(t)].filter(Boolean).join(' · '), (t.entriesToday || 0) || entriesWaiting(t) ? 'green' : 'grey'); // 📒 a record: never red
           const sub = waiting ? '⏳ Waiting to send' : t.today ? `✓ Sent ${fmtTime(t.today.at)}${t.today.state === 'stuck' ? ' · stuck' : t.today.state === 'finished' ? ' · finished' : ''}`
             : [t.project, repeatLabel(t, td)].filter(Boolean).join(' · ') || 'Send today\'s update';
           // the same dots as the owner's Today: green = sent today, yellow = written (waits to send), red = not yet
-          return row(t, sub, t.today ? 'green' : waiting ? 'yellow' : 'red', late && !t.today && !waiting);
+          return row(t, sub, dotFor(t), late && !t.today && !waiting); // (yellow until updates are due, then red: as Team today, owner 24 Oct)
         })),
         d.tasks.length ? null : h('p', { class: 'empty-list' }, 'No tasks for today. 🎉'),
       ];
@@ -808,17 +860,39 @@ export function createStaff(opts) {
   }
 
   const pic = makePics(photo, () => render());
+  const tsteps = makeStepActs({ api, state, render: () => render(), toast, shrink, ask, fail });
+  act.tsteps = tsteps; // ☑ a task's steps (for the checks)
+  // ☑ a single task's steps, each with photos (owner, 29 Oct)
+  const stepsBox = (t) => stepsBlock({ t, steps: state.detail.steps || [], meId: state.user.id, manager: false, draft: tsteps.draftFor(t.id), adding: !!state.addingStep, pic, viewer,
+    onDraft: (d) => tsteps.setDraft(t.id, d), onAdd: () => tsteps.add(t.id), onTick: tsteps.tick, onEdit: tsteps.edit, onDelete: tsteps.remove, onPhotos: tsteps.photos, onRemovePhoto: tsteps.removePhoto });
   const photos = (kind, list) => photosRow(pic, viewer, kind, list);
   const chips = (t, td) => chipsFor(t, td);
   const files = (t) => filesBlock(t, { pic, openFile });
 
+  /** 📒 A record: "Add an entry" — a line, up to 5 photos, Add (as many as needed in a day). */
+  function entryCard(t) {
+    if (t.status !== 'open') return null;
+    const picked = state.entryFiles[t.id] || [];
+    const err = errLine('err-e' + t.id);
+    const pick = h('input', { type: 'file', accept: 'image/*', multiple: true, class: 'visually-hidden', onChange: (e, el) => { state.entryFiles[t.id] = [...picked, ...el.files].slice(0, 5); el.value = ''; render(); } });
+    return todayBox(h('div', { class: 'update-form loose entry-form' },
+      h('span', { class: 'small muted' }, '📒 Add an entry whenever something happens (as many as you need).'),
+      h('textarea', { key: 'up-' + t.id, rows: 2, placeholder: 'What happened? e.g. PO sent · dispatch Monday · 200 kg received', value: state.entryDrafts[t.id] || '', onInput: (e, el) => { state.entryDrafts[t.id] = el.value; err.clear(); } }),
+      picked.length ? h('span', { class: 'small muted' }, `📷 ${picked.length} photo${picked.length === 1 ? '' : 's'} ready `, h('button', { class: 'link small', onClick: () => { delete state.entryFiles[t.id]; render(); } }, 'Remove')) : null,
+      err,
+      h('div', { class: 'row' },
+        h('button', { class: 'btn primary small', disabled: state.sending['e' + t.id] ? true : undefined, onClick: () => sendEntry(t).then((m) => err.say(m)) }, state.sending['e' + t.id] ? 'Adding…' : '+ Add entry'),
+        picked.length < 5 ? h('label', { class: 'btn small' }, '📷 Add photo', pick) : null)));
+  }
+
   function updateCard(t) {
+    if (t.kind === 'log') return entryCard(t); // 📒 a record: entries, not one update a day
     const waiting = waitingFor(t.id);
     if (waiting && !state.editing[t.id]) { // (the owner's box with the orange "being changed" border)
       return todayBox(h('div', { class: 'update-form loose editing' },
         h('div', { class: 'row' }, stateTag(waiting.state), h('span', { class: 'tag remind' }, '⏳ Waiting to send'), (waiting.files || []).length ? h('span', { class: 'muted small' }, `📷 ${waiting.files.length}`) : null),
         h('div', { class: 'pre' }, waiting.note),
-        h('span', { class: 'muted small' }, 'Kept on this phone. It is sent by itself when the internet is back.')));
+        h('span', { class: 'muted small' }, `Kept on ${HERE}. It is sent by itself when the internet is back.`)));
     }
     if (t.status !== 'open' && !t.today) return null;
     const done = t.today && !state.editing[t.id];
@@ -837,7 +911,8 @@ export function createStaff(opts) {
     const pick = h('input', { type: 'file', accept: 'image/*', multiple: true, class: 'visually-hidden', onChange: (e, el) => { state.files[t.id] = [...picked, ...el.files].slice(0, 5); el.value = ''; render(); } });
     return todayBox(h('div', { class: 'update-form loose' + (state.editing[t.id] ? ' editing' : '') },
       t.last ? h('span', { class: 'small muted' }, `Last time (${fmtDay(t.last.day)}): `, h('span', { class: 'pre' }, t.last.note)) : null,
-      h('textarea', { key: 'up-' + t.id, placeholder: 'What happened today? (you can tap 🎤 on the keyboard to speak)', value: d.note, onInput: (e, el) => { d.note = el.value; err.clear(); } }),
+      // (the 🎤 hint only on a phone: a computer has no 🎤 key, owner 24 Oct)
+      h('textarea', { key: 'up-' + t.id, placeholder: HERE === 'this phone' ? 'What happened today? (you can tap 🎤 on the keyboard to speak)' : 'What happened today?', value: d.note, onInput: (e, el) => { d.note = el.value; err.clear(); } }),
       h('div', { class: 'segmented', role: 'group', 'aria-label': 'How is it going' }, STATES.map(([k, label]) =>
         h('button', { class: 'seg' + (d.state === k ? ' on' : ''), type: 'button', 'aria-pressed': String(d.state === k), onClick: () => { d.state = k; render(); } }, label))),
       d.state === 'stuck' ? waitForBox(t, d) : null,
@@ -883,17 +958,32 @@ export function createStaff(opts) {
     const td = today();
     const f = folders().tasks.find((x) => x.t.id === t.id);
     return [
-      t.status === 'suggested' ? null : h('div', { class: 'stage-line' }, stageChip(rules.teamStage(t))), // its Stage (from your updates)
-      chips(t, td),
+      // its Stage, its chips and its 📂 on one wrapping line (owner, 24 Oct: the phone showed each on its own line)
+      h('div', { class: 'task-meta' },
+        t.status === 'suggested' || t.kind === 'log' ? null : h('div', { class: 'stage-line' }, stageChip(rules.teamStage(t))), // its Stage (from your updates; 📒 a record has none)
+        chips(t, td)),
       // its 📂 project, as on the owner's task: opens it (a given project: its steps, where a step can be added)
-      f ? h('div', { class: 'main-chips' }, h('button', { class: 'main-chip', title: `Open the project ${f.folder.name}`, onClick: () => openFolder(f.folder) }, `📂 ${f.folder.name} ›`),
+      f && f.folder.key !== 'misc' ? h('div', { class: 'main-chips' }, h('button', { class: 'main-chip', title: `Open the project ${f.folder.name}`, onClick: () => openFolder(f.folder) }, `📂 ${f.folder.name} ›`),
         !f.folder.ref && t.projectRef && t.seq !== null && t.seq !== undefined ? h('button', { class: 'main-chip', title: 'Its steps (add the steps you will do)', onClick: () => open('project:' + t.projectRef) }, `Steps of ${t.project || 'this work'} ›`) : null) : null,
       t.details ? h('p', { class: 'pre muted' }, t.details) : null,
       files(t),
+      takesSteps(t) ? stepsBox(t) : null,
+      // today's update (or the record's entry box) first, then 💬 Messages (owner, 24 Oct: on a phone the box was far down)
+      t.kind === 'log' ? [entryCard(t), logbookBlock({ entries: state.detail.entries || [], waiting: state.outbox.filter((x) => x.kind === 'entry' && x.taskId === t.id), photos, meId: state.user.id, td, onDelete: deleteEntry })] // 📒 the logbook
+        : t.status === 'suggested' || (t.status !== 'open' && !updates.length) ? updateCard(t) : diary(t, updates, td, updateCard(t)),
       messages(t.id, comments),
-      t.status === 'suggested' || (t.status !== 'open' && !updates.length) ? updateCard(t) : diary(t, updates, td, updateCard(t)),
     ];
   }
+
+  /** 📒 a record's line in a list: "📒 3 entries today" / "⏳ 1 waiting to send" / "📒 Record · add entries when something happens". */
+  const entriesWaiting = (t) => state.outbox.filter((x) => x.kind === 'entry' && x.taskId === t.id).length;
+  function recordSub(t) {
+    const n = t.entriesToday || 0, wait = entriesWaiting(t);
+    return wait ? `⏳ ${wait} waiting to send` : n ? `📒 ${n} entr${n === 1 ? 'y' : 'ies'} today` : '📒 Record · add entries when something happens';
+  }
+
+  /** " · 📷 3": the photos on a step (its newest updates), e.g. each step of a test. */
+  const pics = (t) => { const n = ((t.today && t.today.photos) || []).length + ((t.last && t.last.photos) || []).length; return n ? ` · 📷 ${n}` : ''; };
 
   function projectPage() {
     const pr = myProjects(state.data).find((x) => x.ref === state.sel.slice(8));
@@ -904,13 +994,13 @@ export function createStaff(opts) {
     const ref = state.sel.slice(8);
     const waiting = state.outbox.filter((x) => x.kind === 'step' && x.projectRef === ref);
     return [
-      done.length ? [sec(`✓ ${done.length} done`), h('ul', { class: 'plist' }, done.map((t, i) => row(t, `Step ${i + 1} · done ${t.doneAt ? fmtDay(t.doneAt) : ''}`, 'green')))] : null,
+      done.length ? [sec(`✓ ${done.length} done`), h('ul', { class: 'plist' }, done.map((t, i) => row(t, `Step ${i + 1} · done ${t.doneAt ? fmtDay(t.doneAt) : ''}${pics(t)}`, 'green')))] : null,
       !pr ? h('p', { class: 'muted' }, done.length ? 'All your steps are done ✓. Your manager decides what comes next.' : 'This project is not on your list any more.')
         : [h('p', { class: 'muted' }, pr.real.length ? 'Do the steps in order. Every day, open the current step and send what you did. Found more work? Add a step below.'
           : 'No steps yet. Add the steps you will do, in order. Until then, send your daily update on the whole project.'),
         block('Steps', h('ul', { class: 'plist' }, (pr.real.length ? pr.real : pr.steps).map((t, i) => row(t,
-          !pr.real.length ? sentSub(t) : t === pr.current ? `Step ${k + i + 1} · current · ${sentSub(t)}` : `Step ${k + i + 1} · next${t.fromStaff ? ' · added by you' : ''}`,
-          t === pr.current || !pr.real.length ? (t.today ? 'green' : 'red') : 'grey')),
+          (!pr.real.length ? sentSub(t) : t === pr.current ? `Step ${k + i + 1} · current · ${sentSub(t)}` : `Step ${k + i + 1} · next${t.fromStaff ? ' · added by you' : ''}`) + pics(t),
+          t === pr.current || !pr.real.length ? dotFor(t) : 'grey')),
           waiting.map((x) => h('li', { class: 'prow', key: 'wstep-' + x.id }, h('span', { class: 'quick-tick-space' }), h('div', { class: 'prow-btn' }, h('span', { class: 'dot grey' }),
             h('span', { class: 'prow-text' }, h('span', { class: 'prow-name' }, x.title), h('span', { class: 'prow-next' }, '⏳ Waiting to send')))))),
         h('form', { class: 'row add-step', onSubmit: (e) => { e.preventDefault(); addStep(ref).then((m) => { err.say(m); }); } }, // (the owner's "Steps" box)
@@ -937,51 +1027,55 @@ export function createStaff(opts) {
   }
 
   function passwordPage() {
-    const f = (state.pwForm ||= { old: '', nw: '' });
+    const f = (state.pwForm ||= { old: '', nw: '', again: '' });
     const err = errLine('pwerr');
     return h('div', { class: 'block stack' },
       h('label', null, 'Current password', h('input', { key: 'pw-old', type: 'password', autocomplete: 'current-password', value: f.old, onInput: (e, el) => { f.old = el.value; } })),
       h('label', null, 'New password (8 letters or more)', h('input', { key: 'pw-new', type: 'password', autocomplete: 'new-password', value: f.nw, onInput: (e, el) => { f.nw = el.value; } })),
+      h('label', null, 'New password again', h('input', { key: 'pw-again', type: 'password', autocomplete: 'new-password', value: f.again, onInput: (e, el) => { f.again = el.value; } })),
       err,
-      h('button', { class: 'btn primary small', onClick: () => changePassword(f.old, f.nw).then((m) => { err.say(m); if (!m) state.pwForm = null; }) }, 'Change password'));
+      h('button', { class: 'btn primary small', onClick: () => changePassword(f.old, f.nw, f.again).then((m) => { err.say(m); if (!m) state.pwForm = null; }) }, 'Change password'));
   }
 
   function notifyPage() {
     const s = push ? push.state() : 'no';
-    const parts = [h('p', null, 'You get a message on this phone, like new email, for:'),
+    const parts = [h('p', null, `You get a message on ${HERE}, like new email, for:`),
       h('ul', null, ['A new task, or a whole project given to you', 'A new step added to your project', 'A message from your manager'].map((w) => h('li', null, w)))];
     if (s === 'on') {
-      parts.push(h('p', { class: 'ok' }, '✓ On for this phone.'), h('div', { class: 'row' },
+      parts.push(h('p', { class: 'ok' }, `✓ On for ${HERE}.`), h('div', { class: 'row' },
         h('button', { class: 'btn small', onClick: () => push.test().then(() => toast('🔔 Test sent. It comes in a few seconds.'), (e) => toast(e.message, 5000)) }, 'Send me a test'),
         h('button', { class: 'btn small', onClick: notifyOff }, 'Turn off')));
     } else if (s === 'default' || s === 'granted') {
       parts.push(h('button', { class: 'btn primary small', onClick: notifyOn }, '🔔 Turn on notifications'));
     } else if (s === 'denied') {
-      parts.push(h('p', { class: 'warn' }, 'Notifications are blocked for Work Task on this phone. To allow them:'),
-        h('ol', null,
-          h('li', null, 'Installed app: press and hold the Work Task icon → App info → Notifications → turn on.'),
-          h('li', null, 'In Chrome: tap ⋮ → Settings → Site settings → Notifications → worktask.in → Allow.'),
-          h('li', null, 'Come back here and open this page again.')));
+      parts.push(h('p', { class: 'warn' }, `Notifications are blocked for Task List on ${HERE}. To allow them:`),
+        h('ol', null, blockedSteps().map((w) => h('li', null, w))));
     } else if (s === 'ios') {
       parts.push(h('p', { class: 'warn' }, 'On iPhone, notifications work only from the Home Screen app:'),
-        h('ol', null, h('li', null, 'Open worktask.in in Safari.'), h('li', null, 'Tap Share → Add to Home Screen.'), h('li', null, 'Open Work Task from the Home Screen and turn notifications on here.')));
+        h('ol', null, h('li', null, 'Open worktask.in in Safari.'), h('li', null, 'Tap Share → Add to Home Screen.'), h('li', null, 'Open Task List from the Home Screen and turn notifications on here.')));
     } else parts.push(h('p', { class: 'muted' }, 'This browser cannot show notifications.'));
     return h('div', { class: 'block stack' }, parts);
   }
 
   function detail() {
     const sel = state.sel;
-    if (!sel) return h('div', { class: 'empty' }, h('p', null, 'Pick a task on the left.'));
+    if (!sel) { // today at a glance (owner, 24 Oct): what is still to send, tap to open it
+      const d = state.data, todo = d ? (d.tasks || []).filter((t) => !t.today && t.kind !== 'log' && t.status === 'open') : [];
+      return h('div', { class: 'empty today-glance' },
+        d ? h('h3', null, todo.length ? `📝 ${todo.length} update${todo.length === 1 ? '' : 's'} still to send today` : '✓ All of today\'s updates are sent') : null,
+        todo.length ? h('ul', { class: 'glance-list' }, todo.slice(0, 6).map((t) => h('li', { key: 'g-' + t.id }, h('button', { class: 'link', type: 'button', onClick: () => open('task:' + t.id) }, t.title)))) : null,
+        h('p', { class: 'muted small' }, 'Pick a task on the left.'));
+    }
     let title = '', body, dot = '', actions = null; // the dot before the title, as on the owner's task page
     if (sel === 'suggest') { title = '💡 Suggest a task'; body = suggestPage(); }
     else if (sel === 'password') { title = 'Change password'; body = passwordPage(); }
     else if (sel === 'notify') { title = '🔔 Notifications'; body = notifyPage(); }
     else if (sel.startsWith('folder:')) { const f = folders().folders.find((x) => x.key === sel.slice(7)); title = '📂 ' + (f ? f.name : 'Project'); body = folderPage(f); }
-    else if (!state.detail) body = h('p', { class: 'muted' }, state.detailFailed ? [state.detailFailed, ' ', h('button', { class: 'link', onClick: loadDetail }, 'Try again')] : 'Loading…');
+    else if (!state.detail || (sel.startsWith('task:') && !state.detail.task)) body = h('p', { class: 'muted' }, state.detailFailed ? [state.detailFailed, ' ', h('button', { class: 'link', onClick: loadDetail }, 'Try again')] : 'Loading…');
     else if (sel.startsWith('task:')) {
       const t = state.detail.task;
       title = t.title; body = taskPage();
-      dot = t.status !== 'open' ? 'grey' : t.today ? 'green' : waitingFor(t.id) ? 'yellow' : 'red';
+      dot = dotFor(t); // (the same rule as the list and Team today)
       const ids = navIds(), i = ids.indexOf(t.id); // ‹ › one by one, as on the owner's task page
       const go = (k) => (k >= 0 && k < ids.length ? () => open('task:' + ids[k]) : undefined);
       actions = i < 0 ? null : [
@@ -1002,7 +1096,7 @@ export function createStaff(opts) {
     const go2 = (key) => () => { open('task:' + t.id); if (key) focusLater(key); };
     return menuBox(state, render, t.title, [
       ['↗', 'Open', go2()],
-      t.status === 'suggested' ? null : ['📝', t.today ? 'Add to today\'s update' : 'Write today\'s update', go2('up-' + t.id)],
+      t.status === 'suggested' ? null : ['📝', t.kind === 'log' ? 'Add an entry' : t.today ? 'Add to today\'s update' : 'Write today\'s update', go2('up-' + t.id)],
       ['💬', 'Send a message', go2('msg-' + t.id)],
     ]);
   }
@@ -1013,13 +1107,20 @@ export function createStaff(opts) {
       h('div', { class: 'scrim', onClick: () => { state.menuOpen = false; render(); } }),
       h('main', { id: 'list' }, list()),
       h('section', { id: 'detail' }, detail()),
-      rowMenu());
+      rowMenu(),
+      // 📱 the bottom bar (owner, 24 Oct): Today, Tasks, Projects, Search, More
+      bottomBar([
+        ['☀︎', 'Today', !state.sel && state.section === 'today' && !state.menuOpen, () => show('today'), state.data ? (state.data.tasks || []).filter((t) => !t.today && t.kind !== 'log').length : 0],
+        ['✅', 'Tasks', !state.sel && state.section === 'tasks' && !state.menuOpen, () => show('tasks')],
+        ['📂', 'Projects', !state.sel && state.section === 'projects' && !state.menuOpen, () => show('projects')],
+        ['🔍', 'Search', !state.sel && state.section === 'search' && !state.menuOpen, openSearch],
+      ], () => { state.menuOpen = true; render(); }, state.menuOpen));
   }
 
   /** The number on the app icon (installed app): tasks still to send today. */
   function setBadge() {
     if (!state.data || typeof navigator === 'undefined' || !navigator.setAppBadge) return;
-    const n = (state.data.tasks || []).filter((t) => !t.today).length;
+    const n = (state.data.tasks || []).filter((t) => !t.today && t.kind !== 'log').length; // (📒 a record is never "to send")
     if (n === badge) return;
     badge = n;
     (n ? navigator.setAppBadge(n) : navigator.clearAppBadge()).catch(() => {});

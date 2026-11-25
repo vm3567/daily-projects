@@ -24,6 +24,9 @@ export function bellWhen(at, today) {
   return day === today ? time : `${fmtDay(day)} ${time}`;
 }
 
+/** Hide the 🔔 while scrolled: only on a phone-size screen, after the first 60 px. */
+export const bellAway = (scrollTop, width) => width <= 760 && scrollTop > 60;
+
 /**
  * post(action, body) → the server's answer (throws when it fails); every: ms between checks; today(): India's date.
  * Returns { el, refresh, state } — el is added to the page once (document.body: the page's own taps reach it, installEvents).
@@ -86,5 +89,12 @@ export function createBell({ post, every = 30000, today = todayIndia, win = wind
   if (every) setInterval(() => { if (win.document.visibilityState === 'visible') refresh(); }, every);
   draw();
   refresh();
+  // on a phone the 🔔 steps out of the way once the page is scrolled down (it covered boxes, owner 24 Oct), back at the top
+  const onScroll = (e) => {
+    const t = e && e.target && e.target.nodeType === 1 ? e.target : (win.document && win.document.scrollingElement);
+    el.classList.toggle('away', !state.open && bellAway(t ? t.scrollTop : 0, win.innerWidth));
+  };
+  try { win.addEventListener('scroll', onScroll, true); } catch { /* not a page */ }
+
   return { el, refresh, state };
 }

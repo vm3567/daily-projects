@@ -112,7 +112,8 @@ export const waitsForManager = (wf) => /^manager\b/i.test(String(wf || '').trim(
 export function teamStage(t) {
   if (!t) return { stage: 'notstarted', waitingFor: '', since: null, you: false };
   const u = t.today || t.last || null;
-  if (t.status === 'done' || t.status === 'cancelled') return { stage: 'done', waitingFor: '', since: null, you: false };
+  if (t.status === 'cancelled') return { stage: 'done', cancelled: true, waitingFor: '', since: null, you: false }; // (counted with Done; it says Cancelled)
+  if (t.status === 'done') return { stage: 'done', waitingFor: '', since: null, you: false };
   if (!u) return { stage: 'notstarted', waitingFor: '', since: null, you: false };
   if (u.state === 'finished') return { stage: 'done', waitingFor: '', since: u.day || null, you: false };
   if (u.state === 'stuck') { const wf = u.waitingFor || t.waitingFor || ''; return { stage: 'waiting', waitingFor: wf, since: u.day || null, you: waitsForManager(wf) }; }
@@ -175,7 +176,7 @@ export function giveBackShow(it, why, boxThere) {
   const reason = String(why).replace(/\.$/, '');
   const words = it.note || it.text || it.title || '';
   const full = it.kind === 'suggest' && it.details ? `${words}\n${it.details}` : words;
-  if ((['comment', 'step', 'suggest'].includes(it.kind) || (it.kind === 'update' && !it.updateId)) && full) {
+  if ((['comment', 'step', 'suggest'].includes(it.kind) || (it.kind === 'update' && !it.updateId) || (it.kind === 'entry' && !it.entryId)) && full) {
     const tail = boxThere ? (it.kind === 'step' ? 'It is also back in the Add a step box.' : 'They are also back in the box.') : 'Copy them if you need them.';
     return { sticky: true, title: `Could not send: ${reason}.`, body: `Your words:\n${full}\n\n${tail}` };
   }
@@ -339,11 +340,13 @@ export const daysBetweenDays = (a, b) => Math.round((Date.parse(b + 'T00:00:00Z'
  *  red    — stuck, past its by-date, or silent for 2+ due days
  *  orange — by-date within the next 2 days, or 1 due day with no update
  *  green  — updated today
- *  grey   — nothing to chase yet (on track)
+ *  grey   — nothing to chase yet
  */
 export function followupRule(r, today) {
   const last = r.lastUpdate || null;
-  const note = last ? String(last.note || '').trim() : '';
+  // a 📒 record's day has many lines (oldest first): the newest line, and how many more (owner, 24 Oct: not run together)
+  const lines = last ? String(last.note || '').split('\n').map((l) => l.trim()).filter(Boolean) : [];
+  const note = lines.length > 1 ? `${lines[lines.length - 1]} (+${lines.length - 1} more)` : lines[0] || '';
   const lastText = last ? `last: ${last.day === today ? 'today' : mailDate(last.day)}${note ? ' ' + note : ''}` : 'no update yet';
   const silent = Number(r.silentDays) || 0;
   const was = r.dueDate ? `was due ${mailDate(r.dueDate)}` : '';
@@ -358,7 +361,7 @@ export function followupRule(r, today) {
   else if (daysLeft !== null && daysLeft <= 2) { colour = 'orange'; reason = `${daysLeft === 0 ? 'Due today' : daysLeft === 1 ? 'Due tomorrow' : `Due in ${daysLeft} days`} · ${lastText}`; }
   else if (silent === 1) { colour = 'orange'; reason = `${sd(1)} · ${lastText}`; }
   else if (last && last.day === today) { colour = 'green'; reason = `Updated today${note ? ' · ' + note : ''}`; }
-  else { colour = 'grey'; reason = `On track · ${lastText}`; }
+  else { colour = 'grey'; reason = `Nothing to chase yet · ${lastText}`; } // (never "On track" beside a grey dot, owner 24 Oct)
   if (r.chasedAt && String(r.chasedAt).slice(0, 10) === today) reason += ` · 🔔 chased ${String(r.chasedAt).slice(11, 16)}`;
   return { colour, reason, rank: { red: 0, orange: 1, grey: 2, green: 3 }[colour] };
 }

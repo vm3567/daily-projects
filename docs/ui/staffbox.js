@@ -77,6 +77,27 @@ export function createOutbox(opts) {
     if (it.kind === 'comment') { await api('comment.add', { taskId: it.taskId, text: it.text, day, clientId: it.clientId }); return; }
     if (it.kind === 'step') { await api('project.addStep', { projectRef: it.projectRef, title: it.title, clientId: it.clientId }); return; }
     if (it.kind === 'suggest') { await api('suggest', { title: it.title, details: it.details, repeat: it.repeat, clientId: it.clientId }); return; }
+    if (it.kind === 'entry') { // 📒 a record's entry, then its photos (each sent once: the same clientIds as online)
+      if (!it.entryId) {
+        if (daysBetween(day, istDay(now())) > 2) throw new Error(`This entry was written on ${day}, too long ago to send. Please write it again`);
+        const out = await api('entry.add', { taskId: it.taskId, text: it.text, writtenAt: it.at, sentAt: now().toISOString(), clientId: it.clientId });
+        it.entryId = out.entry.id;
+        await box.put(it);
+      }
+      while ((it.files || []).length) {
+        mine();
+        const fd = new FormData(); fd.append('entryId', String(it.entryId)); fd.append('file', it.files[0], 'photo.jpg');
+        fd.append('clientId', `${it.clientId}-p${it.photoNo || 0}`);
+        try { await api('entry.photo', fd, true); it.files.shift(); it.photoNo = (it.photoNo || 0) + 1; }
+        catch (ex) {
+          if (ex.offline || ex.auth || ex.retry) throw ex;
+          if (/^Up to \d+ photos/.test(ex.message)) it.files = []; // already full: the photos went before
+          else { it.files.shift(); toast(`A photo was not sent: ${ex.message}`, 8000); }
+        }
+        await box.put(it);
+      }
+      return;
+    }
     if (it.kind === 'update' && !it.updateId) {
       const twoSteps = it.state === 'finished' && it.needsPhoto && it.files && it.files.length && !it.hadPhoto;
       const out = await api('update.save', rules.updateSaveBody({ taskId: it.taskId, note: it.note, state: twoSteps ? 'progress' : it.state, day, writtenAt: it.at, clientId: it.clientId, waitingFor: it.waitingFor || '' }));

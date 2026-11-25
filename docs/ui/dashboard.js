@@ -1,9 +1,8 @@
 // Dashboard (one screen): numbers strip, green days calendar, time, what needs attention.
 
 import { h, fmtDay } from './dom.js';
-import { dotColour, isSnoozed, dayScore, todayIndia, addDays, monthOf, daysWithoutWork, isOverdue, indiaDate, initials, minutesBetween, fmtMinutes, weekStart as mondayOf, todayWithoutEmptyMains } from '../rules.js';
+import { dotColour, isSnoozed, dayScore, todayIndia, addDays, monthOf, daysWithoutWork, indiaDate, initials, minutesBetween, fmtMinutes, weekStart as mondayOf, todayWithoutEmptyMains, WORK, colourShort } from '../rules.js';
 import { peopleByFollowUp } from './people.js';
-import { NO_WORK_NOTE_DAYS } from '../config.js';
 
 const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 const monthFmt = new Intl.DateTimeFormat('en-IN', { month: 'long', year: 'numeric', timeZone: 'UTC' });
@@ -99,7 +98,7 @@ export function renderDashboard(ctx) {
   const maxTime = timeRows.length ? timeRows[0].m : 1;
 
   // Most worked projects this month
-  const monthEvents = (history[monthOf(today)] || []).filter((e) => e.projectId && ['step_ticked', 'note_added', 'step_added'].includes(e.kind));
+  const monthEvents = (history[monthOf(today)] || []).filter((e) => e.projectId && WORK.has(e.kind)); // real work only (adding a step is not)
   const counts = new Map();
   for (const e of monthEvents) counts.set(e.projectId, (counts.get(e.projectId) || 0) + 1);
   const top = [...counts.entries()]
@@ -110,8 +109,10 @@ export function renderDashboard(ctx) {
   const maxTop = top.length ? top[0].n : 1;
 
   // Needs attention
-  const stale = active.map((p) => ({ p, d: daysWithoutWork(p, today) })).filter((x) => x.d >= NO_WORK_NOTE_DAYS).sort((a, b) => b.d - a.d).slice(0, 6);
-  const overdue = active.filter((p) => isOverdue(p, today));
+  // the red and yellow ones, red first, each with why (the same rule as the dots: "move every N days" and your dates)
+  const RANK = { red: 0, yellow: 1 };
+  const attention = active.map((p) => ({ p, c: dotColour(p, today), d: daysWithoutWork(p, today) })).filter((x) => x.c in RANK)
+    .sort((a, b) => RANK[a.c] - RANK[b.c] || b.d - a.d).slice(0, 6);
   const chase = peopleByFollowUp(data).filter((x) => x.st.colour === 'red').slice(0, 6);
 
   // Calendar grid (Monday first)
@@ -125,7 +126,7 @@ export function renderDashboard(ctx) {
     const cls = d > today ? 'future' : pct === null ? 'none' : pct === 1 ? 'full' : pct >= 0.5 ? 'half' : pct > 0 ? 'some' : 'zero';
     cells.push(h('div', {
       class: `cal-cell ${cls}${d === today ? ' today' : ''}`, key: d,
-      title: sc && sc.total ? `${fmtDay(d)}: ${sc.green} of ${sc.total} green` : fmtDay(d),
+      title: sc && sc.total ? `${fmtDay(d)}: ${sc.green} of ${sc.total} on track` : fmtDay(d),
     }, h('span', { class: 'cal-num' }, String(i)), sc && sc.total ? h('span', { class: 'cal-score' }, `${sc.green}/${sc.total}`) : null));
   }
   const shift = (n) => {
@@ -142,25 +143,25 @@ export function renderDashboard(ctx) {
   // One screen: a strip of numbers on top, then three columns.
   return h('div', { class: 'dashboard compact' },
     h('div', { class: 'dash-tiles' },
-      tile('Today', `${greenNow} of ${active.length}`, allGreen ? 'all green 🎉' : 'tasks green', allGreen ? 'good' : ''),
-      tile('Streak', `🔥 ${st.current}`, st.current === 1 ? 'day all green' : 'days in a row', st.current ? 'warm' : ''),
+      tile('Today', `${greenNow} of ${active.length}`, allGreen ? 'all on track 🎉' : 'on track', allGreen ? 'good' : ''),
+      tile('Streak', `🔥 ${st.current}`, st.current === 1 ? 'day all on track' : 'days in a row', st.current ? 'warm' : ''),
       tile('Best streak', String(st.best), st.best === 1 ? 'day' : 'days'),
-      tile('Green days', String(allGreenDays), `in ${monthName}`),
+      tile('All on track', String(allGreenDays), `days in ${monthName}`),
       tile('Steps done', String(totalSteps), 'all time'),
       tile('Finished', String(finishedIds.size), finishedIds.size === 1 ? 'task' : 'tasks')),
 
     h('div', { class: 'dash-cols' },
       h('div', { class: 'dash-col' },
-        card('Green days', h('div', null,
+        card('Days on track', h('div', null,
           h('div', { class: 'cal' }, WEEKDAYS.map((w) => h('div', { class: 'cal-head', key: 'w' + w }, w)), cells),
           h('div', { class: 'cal-legend' },
-            h('span', null, h('i', { class: 'cal-key full' }), 'all green'),
+            h('span', null, h('i', { class: 'cal-key full' }), 'all on track'),
             h('span', null, h('i', { class: 'cal-key half' }), 'half or more'),
             h('span', null, h('i', { class: 'cal-key some' }), 'a few'),
             h('span', null, h('i', { class: 'cal-key zero' }), 'none'))),
         h('div', { class: 'dash-card-head' },
           h('button', { class: 'icon', 'aria-label': 'Previous month', onClick: () => shift(-1) }, '‹'),
-          h('h3', null, `Green days — ${monthName}`),
+          h('h3', null, `Days on track — ${monthName}`),
           h('button', { class: 'icon', 'aria-label': 'Next month', onClick: () => shift(1), disabled: month >= monthOf(today) ? true : undefined }, '›')), 'cal')),
 
       h('div', { class: 'dash-col' },
@@ -179,11 +180,9 @@ export function renderDashboard(ctx) {
           : h('p', { class: 'muted small' }, 'Nothing yet this month.'))),
 
       h('div', { class: 'dash-col' },
-        card('Needs attention', stale.length || overdue.length ? h('ul', { class: 'dash-list' },
-          [...overdue.map((p) => h('li', { key: 'od-' + p.id }, h('span', { class: 'dot red' }),
-            h('button', { class: 'link', onClick: () => ctx.openProject(p.id) }, p.name), h('span', { class: 'tag late' }, `Overdue · ${fmtDay(p.deadline)}`))),
-          ...stale.filter((x) => !isOverdue(x.p, today)).map(({ p, d }) => h('li', { key: 'st-' + p.id }, h('span', { class: `dot ${dotColour(p, today)}` }),
-            h('button', { class: 'link', onClick: () => ctx.openProject(p.id) }, p.name), h('span', { class: 'tag stale' }, `No work ${d} days`)))].slice(0, 5))
+        card('Needs attention', attention.length ? h('ul', { class: 'dash-list' },
+          attention.slice(0, 5).map(({ p, c }) => h('li', { key: 'na-' + p.id }, h('span', { class: `dot ${c}` }),
+            h('button', { class: 'link', onClick: () => ctx.openProject(p.id) }, p.name), h('span', { class: 'tag ' + (c === 'red' ? 'late' : 'stale') }, colourShort(p, today)))))
           : h('p', { class: 'muted small' }, 'Nothing stuck. 👍')),
         card('People to contact', chase.length ? h('ul', { class: 'dash-list' }, chase.slice(0, 4).map(({ person, st: s }) => h('li', { key: 'pc-' + person.id },
           h('span', { class: 'avatar' }, initials(person.name)),

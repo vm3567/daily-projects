@@ -19,7 +19,7 @@ const DIARY_WORDS = {
  * Diary lines grouped by India day: Map(day -> [{ at, projectId, name, text, exists }]), newest first.
  * Work notes come from the projects (so edits and deletes show), and from history only for deleted projects.
  */
-export function diaryEntries(data, history) {
+export function diaryEntries(data, history, teamTasks = []) {
   const byDay = new Map();
   const add = (date, line) => { if (!byDay.has(date)) byDay.set(date, []); byDay.get(date).push(line); };
   const exists = new Set(data.projects.map((p) => p.id));
@@ -46,6 +46,16 @@ export function diaryEntries(data, history) {
       add(indiaDate(e.at), { at: e.at, projectId: e.projectId, name: nameOf(e), exists: false, text: `📝 ${e.detail}` });
     }
   }
+  // 👥 the team's newest updates on the tasks you gave (today's and the one before, each once) — owner, 24 Oct
+  const seen = new Set();
+  for (const t of teamTasks || []) {
+    for (const u of [t.today, t.last]) {
+      if (!u || !u.day || !u.note || seen.has(u.id)) continue;
+      seen.add(u.id);
+      const p = data.projects.find((x) => x.id === t.projectRef);
+      add(u.day, { at: u.at || u.day + 'T12:00:00', projectId: p ? p.id : '', name: p ? p.name : t.project || t.title, exists: !!p, text: `👥 ${(t.assignee && t.assignee.name) || 'Team'}${p && t.title !== p.name ? ` (${t.title})` : ''}: ${u.note}` });
+    }
+  }
   const sorted = new Map();
   for (const day of [...byDay.keys()].sort().reverse()) sorted.set(day, byDay.get(day).sort((a, b) => (a.at < b.at ? 1 : -1)));
   return sorted;
@@ -55,6 +65,19 @@ export function diaryEntries(data, history) {
 export function backupPayload(data, history, madeAt = new Date().toISOString()) {
   const { secrets, ...dataWithoutKeys } = data;
   return { app: 'daily-projects', madeAt, data: dataWithoutKeys, history };
+}
+
+/**
+ * "Team updates:" for the 📋 summary: the server's rows sent today (the same as Team today: 📒 records and tasks
+ * given from the team pages too, never a taken-back one); before it answers, the linked tasks (open or done).
+ */
+export function teamUpdatesText(data, summary, linked, today) {
+  const rows = summary && Array.isArray(summary.updates) ? summary.updates
+    : (linked || []).filter((t) => t.today && t.today.day === today && t.status !== 'cancelled')
+      .map((t) => ({ name: t.assignee.name, projectRef: t.projectRef, project: t.project, title: t.title, note: t.today.note, state: t.today.state }));
+  if (!rows.length) return '';
+  const names = new Map(data.projects.map((p) => [p.id, p.name]));
+  return `\n\nTeam updates:\n${rows.map((t) => `- ${t.name} — ${names.get(t.projectRef) || t.project || ''}: ${t.title}: ${t.note}${t.state === 'stuck' ? ' (stuck)' : t.state === 'finished' ? ' (finished)' : ''}`).join('\n')}`;
 }
 
 /** Today's summary text: done steps and notes per project, next steps, and who you are waiting on. */
@@ -185,7 +208,7 @@ export function personMessageText(data, person, today, serverItems = null) {
     r.lateSince ? `— late since ${mailDate(r.lateSince)}` : '', r.stuck ? '— stuck' : ''].filter(Boolean).join(' ');
   if (!team.length && !waiting.length && !discuss.length) return `Hi ${first},\n\nNothing is pending between us right now. Thank you!`;
   const lines = [`Hi ${first},`, '', 'Here are the open items between us:'];
-  if (team.length) lines.push('', serverItems ? 'Projects and tasks (Work Task):' : 'Projects given:', ...team.map(teamLine));
+  if (team.length) lines.push('', serverItems ? 'Projects and tasks (team):' : 'Projects given:', ...team.map(teamLine));
   if (waiting.length) lines.push('', 'Waiting on you:', ...waiting.map((it, i) => line(it, i, true)));
   if (discuss.length) lines.push('', 'To discuss:', ...discuss.map((it, i) => line(it, i, false)));
   lines.push('', 'Could you please share an update on these? Thank you.');

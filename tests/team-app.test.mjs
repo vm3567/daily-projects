@@ -247,7 +247,9 @@ test('team: a finished send never redraws over a form opened and typed in meanwh
   assert.match(STAFF, /draft: state\.msgDrafts\[taskId\],[^\n]*\n\s*onInput: \(v\) => \{ state\.msgDrafts\[taskId\] = v; \},/, 'the staff view keeps the message words');
   assert.match(TEAM, /draft: state\.msgDrafts\[t\.id\], [^\n]*\n\s*onInput: \(v\) => \{ state\.msgDrafts\[t\.id\] = v; \},/, 'the team pages keep the message words');
   assert.match(STAFF, /value: state\.stepDrafts\[ref\] \|\| '', onInput: \(e, el\) => \{ state\.stepDrafts\[ref\] = el\.value;/, 'the Add a step box');
-  for (const k of ['title', 'details', 'project']) assert.match(TEAM, new RegExp(`value: f\\.${k}, onInput: set\\('${k}'\\)`), 'Give a task: ' + k);
+  for (const k of ['details', 'project']) assert.match(TEAM, new RegExp(`value: f\\.${k}, onInput: set\\('${k}'\\)`), 'Give a task: ' + k);
+  // (owner, 29 Oct: the Task box also looks up your own tasks as you type — each keystroke is still kept in the form)
+  assert.match(TEAM, /key: 'g-title',[^\n]*value: f\.title,[^\n]*\n\s*onInput: \(e, el\) => \{ f\.title = el\.value;/, 'Give a task: title');
 });
 
 test('team: Ctrl+V of a photo while the update waits on the phone is refused (it would go nowhere)', () => {
@@ -332,7 +334,7 @@ test('project description: taken from the project\'s tasks (the first one that h
   // (one app: the team pages)
   assert.match(TEAM, /p\.projectAbout \? rules\.aboutShort\(p\.projectAbout\) \+ ' · ' : ''/, 'the Projects list row');
   assert.match(TEAM, /const about = state\.detail && sel\.startsWith\('task:'\) \? rules\.projectAboutOf\(\[state\.detail\.task\]\) : state\.detail && sel\.startsWith\('project:'\) \? rules\.projectAboutOf\(/, 'under the title of the project and task pages');
-  assert.match(readFileSync(new URL('../team/public_html/sw.js', import.meta.url), 'utf8'), /const CACHE = 'worktask-v31'/, 'new files reach the phones');
+  assert.match(readFileSync(new URL('../team/public_html/sw.js', import.meta.url), 'utf8'), /const CACHE = 'worktask-v35'/, 'new files reach the phones');
 });
 
 // ---------------------------------------------------------------- 📧 morning email (one person's pending work as a table to fill in)
@@ -567,7 +569,7 @@ test('follow-up: the colour and the reason line for each case', () => {
   assert.equal(r({ dueDate: '2026-10-23' }).reason, 'Due tomorrow · no update yet');
   assert.deepEqual(r({ silentDays: 1, lastUpdate: { day: '2026-10-20', note: 'ok' } }), { colour: 'orange', reason: 'Silent 1 day · last: 20 Oct ok', rank: 1 });
   assert.deepEqual(r({ lastUpdate: { day: FT, note: '42 s, ok' } }), { colour: 'green', reason: 'Updated today · 42 s, ok', rank: 3 });
-  assert.deepEqual(r({ dueDate: '2026-10-30', lastUpdate: { day: '2026-10-21', note: 'ok' } }), { colour: 'grey', reason: 'On track · last: 21 Oct ok', rank: 2 }, 'nothing to chase yet');
+  assert.deepEqual(r({ dueDate: '2026-10-30', lastUpdate: { day: '2026-10-21', note: 'ok' } }), { colour: 'grey', reason: 'Nothing to chase yet · last: 21 Oct ok', rank: 2 }, 'nothing to chase yet (owner asked 24 Oct: was "On track", beside a grey dot)');
   assert.equal(r({ silentDays: 2, chasedAt: `${FT} 10:15:00` }).reason, 'Silent 2 days · no update yet · 🔔 chased 10:15', 'chased today shows');
   assert.equal(r({ silentDays: 2, chasedAt: '2026-10-21 10:15:00' }).reason, 'Silent 2 days · no update yet', 'an older chase does not');
 });
@@ -704,7 +706,7 @@ test('outlook: the Settings section (owner only) — three fields, the Redirect 
 
 test('one People page: Work Task\'s menu opens the People page on the projects page, which opens on People', async () => {
   // (one app: the owner's team pages open the projects' People page; another manager has the team pages' own)
-  assert.match(TEAM, /item\('People', listOn\('people'\), \(\) => \(opts\.openPeople \? opts\.openPeople\(\) : go\('people'\)\)\)/);
+  assert.match(TEAM, /item\(opts\.openPeople \? 'People ↗ \(in My projects\)' : 'People', listOn\('people'\), \(\) => \(opts\.openPeople \? opts\.openPeople\(\) : go\('people'\)\)\)/, 'the owner\'s item says where it goes (owner asked 24 Oct)');
   assert.match(DP, /openPeople: \(\) => \{ leaveTeam\(\); go\('people'\); \}/, 'the owner: the projects\' People page');
   assert.match(DP, /if \(location\.hash === '#people'\) \{ ui\.view = 'people';/, 'the projects page opens on People');
 });
@@ -1237,7 +1239,7 @@ test('one app: an old Work Task address goes to the same place in the one app (a
   const html = readFileSync(new URL('../team/public_html/index.html', import.meta.url), 'utf8');
   assert.match(html, /<script type="module" src="app\.js"><\/script>/);
   assert.ok(!/href="styles\.css"/.test(html), 'no old Work Task look');
-  assert.match(html, /<a href="projects\/">Open Work Task<\/a>/, 'without scripts: a plain link');
+  assert.match(html, /<a href="projects\/">Open Task List<\/a>/, 'without scripts: a plain link');
 });
 
 test('one app: a tapped notification opens the one app — an old "/#open=<id>" goes to that task there; an open window of the app takes it without loading again', async () => {
@@ -1346,13 +1348,14 @@ test('staff ✅ Tasks and 📂 Projects (owner, 23 Oct): every open task once, r
       T(5, { projectRef: 'w1', seq: 1, stepRef: 'w1:whole', project: 'Paint door', title: 'Paint door' }), // one task, no 📂: just a task (Misc)
     ],
     other: [T(6, { projectRef: 'k1', seq: 2, stepRef: 'k1b', project: 'Kiln trial', dueToday: false, queued: true }), T(7, { dueToday: false }), T(3)], // (3 again: once)
+    fillBy: '00:00', // (past the time updates are due: not sent = red; before it, yellow — owner asked 24 Oct)
   };
   const { tasks, folders } = staffFolders(d, (id) => id === 4);
   assert.deepEqual(tasks.map((x) => x.t.id), [2, 3, 5, 4, 1, 6, 7], 'each once; red, then yellow (waiting to send), green, grey');
   assert.deepEqual(tasks.map((x) => x.dot), ['red', 'red', 'red', 'yellow', 'green', 'grey', 'grey']);
   const where = Object.fromEntries(tasks.map((x) => [x.t.id, x.folder.name]));
-  assert.deepEqual(where, { 1: 'Misc', 2: 'Ceramic Media', 3: 'Ceramic Media', 4: 'Kiln trial', 5: 'Misc', 6: 'Kiln trial', 7: 'Misc' });
-  assert.deepEqual(folders.map((f) => [f.name, f.tasks.length, f.dot, f.red]), [['Ceramic Media', 2, 'red', 2], ['Kiln trial', 2, 'yellow', 0], ['Misc', 3, 'red', 1]], 'worst first; 📂 Misc last');
+  assert.deepEqual(where, { 1: 'In no project', 2: 'Ceramic Media', 3: 'Ceramic Media', 4: 'Kiln trial', 5: 'In no project', 6: 'Kiln trial', 7: 'In no project' }, '📂 Misc is "In no project" for staff (owner asked 24 Oct, round 4: one name everywhere, was "Other tasks")');
+  assert.deepEqual(folders.map((f) => [f.name, f.tasks.length, f.dot, f.red]), [['Ceramic Media', 2, 'red', 2], ['Kiln trial', 2, 'yellow', 0], ['In no project', 3, 'red', 1]], 'worst first; 📂 Misc last (called "In no project", owner asked 24 Oct)');
   assert.equal(folders.find((f) => f.name === 'Kiln trial').ref, 'k1', 'a given project with steps opens its own page (steps in order, add a step)');
   assert.ok(!folders.some((f) => f.name === 'Feldspar' || f.name === 'Paint door'), 'one given task is never also a project');
 });
@@ -1523,4 +1526,82 @@ test('Team today table (review 2): Late is the server\'s rule (a Sunday does not
   // without the server's field (an older copy): past its by-date and not waiting its turn
   assert.equal(teamBoard({ today: '2026-10-23', tasks: [T(6, V, { dueDate: '2026-10-20' })], suggestions: [] }).groups[0].rows[0].status, 'late');
   assert.equal(teamBoard({ today: '2026-10-23', tasks: [T(7, V, { dueDate: '2026-10-20', queued: true })], suggestions: [] }).groups[0].rows[0].status, 'notyet');
+});
+
+test('Review3 4 + 15 (owner, 24 Oct): Follow-up says "Nothing to chase yet" (not "On track" beside a grey dot); a 📒 record shows its newest line and how many more', () => {
+  const today = '2026-10-24';
+  const r = followupRule({ lastUpdate: { day: today, note: '8:53 am PO sent\n8:53 am Supplier says Monday\n8:54 am Truck left' } }, today);
+  assert.equal(r.reason, 'Updated today · 8:54 am Truck left (+2 more)');
+  assert.match(followupRule({}, today).reason, /^Nothing to chase yet · no update yet$/);
+  const src = readFileSync(new URL('../docs/ui/team.js', import.meta.url), 'utf8');
+  assert.match(src, /u \? \[t\.kind === 'log' \? null : h\('span', \{ class: 'muted small' \}, fmtTime\(u\.at\) \+ ' '\)/, 'Team today: a record row has no second time');
+});
+
+test('a manager can delete a staff member\'s message, never change it; never a move or chase note (owner, 29 Oct)', async () => {
+  const { msgActs } = await import('../docs/ui/workparts.js');
+  assert.deepEqual(msgActs({ mine: false, text: 'x' }, true), { edit: false, del: true });
+  assert.deepEqual(msgActs({ mine: false, text: 'x' }, false), { edit: false, del: false });
+  assert.deepEqual(msgActs({ mine: true, text: 'x' }, false), { edit: true, del: true });
+  assert.deepEqual(msgActs({ mine: true, kind: 'chase', text: 'x' }, true), { edit: false, del: false });
+  assert.deepEqual(msgActs({ mine: false, kind: 'move', text: 'x' }, true), { edit: false, del: false });
+  assert.deepEqual(msgActs({ mine: true, text: '↔ Moved from A to B.' }, true), { edit: false, del: false });
+  const asked = [];
+  const { t, calls } = await teamPages({ 'comment.delete': () => ({ comments: [] }) }, { ask: { confirm: (q) => { asked.push(q); return true; } } });
+  t.state.detail = { task: { id: 5 }, comments: [{ id: 8, by: 'Ruturaj', mine: false, text: 'oops' }] };
+  await t.act.deleteMessage(t.state.detail.comments[0]);
+  assert.deepEqual(asked, ["Delete Ruturaj's message? It goes for everyone."]);
+  assert.deepEqual(calls.filter((c) => c.a === 'comment.delete').map((c) => c.body), [{ id: 8 }]);
+});
+
+test('☑ steps in a single task: a new step goes with its photos (one by one, after the step); a retry of the same words is the same step; offline says so; tick, change, delete (owner, 29 Oct)', async () => {
+  const steps = [{ id: 4, title: 'Weigh', done: false, byId: 1, photos: [] }];
+  const asked = [];
+  const { t, calls } = await teamPages({
+    'tstep.add': () => { if (calls.filter((c) => c.a === 'tstep.add').length === 1) throw new Error('Busy, try again in a moment.'); return { stepId: 4, steps }; },
+    'tstep.photo': () => ({ steps: [{ ...steps[0], photos: [{ id: 9, byId: 1 }] }] }),
+    'tstep.edit': (b) => ({ steps: [{ ...steps[0], ...(b.title ? { title: b.title } : {}), ...(b.done !== undefined ? { done: b.done } : {}) }] }),
+    'tstep.delete': () => ({ steps: [] }),
+  }, { ask: { prompt: () => 'Weigh 20 kg', confirm: (q) => { asked.push(q); return true; } } });
+  t.state.detail = { task: { id: 5, seq: null, status: 'open' }, steps: [] };
+  const a = t.act.tsteps;
+  assert.equal(await a.add(5), 'Write the step first.');
+  a.setDraft(5, { title: 'Weigh', files: [new Blob(['1']), new Blob(['2'])] });
+  assert.match(await a.add(5), /Busy/, 'the first try failed');
+  assert.equal(await a.add(5), '', 'tried again');
+  const adds = calls.filter((c) => c.a === 'tstep.add');
+  assert.equal(adds[0].body.clientId, adds[1].body.clientId, 'the same words: the same id (added once)');
+  const ph = calls.filter((c) => c.a === 'tstep.photo');
+  assert.equal(ph.length, 2, 'both photos, after the step');
+  assert.equal(ph[0].body.get('stepId'), '4');
+  assert.deepEqual(t.state.detail.steps[0].photos, [{ id: 9, byId: 1 }], 'the page shows the photo');
+  assert.deepEqual(a.draftFor(5), {}, 'the box is empty again');
+  await a.tick(steps[0], true);
+  assert.equal(t.state.detail.steps[0].done, true);
+  await a.edit(steps[0]);
+  assert.equal(t.state.detail.steps[0].title, 'Weigh 20 kg');
+  await a.remove({ ...steps[0], photos: [{ id: 9 }] });
+  assert.deepEqual(asked, ['Delete the step "Weigh" and its photos?']);
+  assert.deepEqual(t.state.detail.steps, []);
+  t.state.offline = true;
+  a.setDraft(5, { title: 'Later' });
+  assert.equal(await a.add(5), 'Adding a step needs the internet. Try again when online.');
+  // the answer for another task never lands on the page now open
+  t.state.offline = false;
+  const { t: t2 } = await teamPages({ 'tstep.edit': () => { t2.state.detail = { task: { id: 9 }, steps: ['other'] }; return { steps: ['for 5'] }; } });
+  t2.state.detail = { task: { id: 5 }, steps: [] };
+  await t2.act.tsteps.tick({ id: 1 }, true);
+  assert.deepEqual(t2.state.detail.steps, ['other']);
+});
+
+test('the manager deletes a staff update: asks first (with the photo count), then the task page is looked at again (owner, 29 Oct)', async () => {
+  const asked = [];
+  const { t, calls } = await teamPages({ 'task.get': () => ({ task: { id: 5, title: 'X' }, updates: [], comments: [] }) }, { ask: { confirm: (q) => { asked.push(q); return asked.length > 1; } } });
+  t.state.sel = 'task:5'; t.state.detail = { task: { id: 5 }, updates: [], comments: [] };
+  const u = { id: 77, day: '2026-10-29', by: 'Ruturaj', photos: [1, 2] };
+  await t.act.deleteUpdate(u);
+  assert.equal(calls.filter((c) => c.a === 'update.delete').length, 0, 'Cancel: nothing deleted');
+  await t.act.deleteUpdate(u);
+  assert.match(asked[1], /^Delete Ruturaj's update of .+ and its 2 photos\? It goes for everyone\.$/);
+  assert.deepEqual(calls.filter((c) => c.a === 'update.delete').map((c) => c.body), [{ id: 77 }]);
+  assert.ok(calls.some((c) => c.a === 'task.get'), 'the page is fetched again');
 });

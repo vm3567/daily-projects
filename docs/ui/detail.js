@@ -1,6 +1,7 @@
 // The right column: everything about one task (or 📂 project), all editable in place.
 
 import { h, fmtDay, fmtTime, fmtSize, HAS_KEYBOARD } from './dom.js';
+import { isPhoto } from './heic.js';
 
 const MOD = /Mac|iPhone|iPad/.test(globalThis.navigator ? navigator.platform || navigator.userAgent || '' : '') ? '⌘' : 'Ctrl';
 import { dotColour, isSnoozed, restUntil, restReason, onlyDaysOf, onlyDaysLabel, onlyDaysChip, remindOnceChip, indiaDateTime, WEEKDAYS, weekdayOf, stepWaitsForReminder, daysBetween, addDays, todayIndia, isOverdue, indiaDate, waitingDays, lastWorkDate, nextStep, stepLinkedTo, personStatus, minutesBetween, fmtMinutes, weekStart, seenUpTo, deleteQuestion, parseDuration } from '../rules.js';
@@ -8,13 +9,14 @@ import { WAIT_RED_DAYS } from '../config.js';
 import { newId, PRIORITIES, cleanUrl, MAX_SNOOZE_DAYS, ABOUT_MAX } from '../ops.js';
 
 const STATUS_OLD_DAYS = 7; // a status older than this turns grey and asks for an update
-import { uploadFiles, openFile, photoThumb } from './files.js';
+import { uploadFiles, uploadBlob, openFile, photoThumb } from './files.js';
 import { richArea, richView, addDraftPhotos, readDraft, clearDraft, photoArgs, findEditor, fillEditor, editorPhoto, cursorInBlock, editorIsRich, namePasted } from './richedit.js';
 import { enterAction, richFileIds, textToHtml } from '../rich.js';
 import { projectEmailCards, emailThreadBlock } from './replies.js';
 import { mainBox, mainChip, subProjectsBlock, openMainBox } from './mains.js';
-import { isMainProject, timerOn, childrenOf, projectTasks, moveEveryOf, everyText, colourWhy, MOVE_EVERY_PICKS } from '../rules.js';
+import { isMainProject, timerOn, childrenOf, projectTasks, openTasksInside, moveEveryOf, everyText, colourWhy, colourShort, todayList, MOVE_EVERY_PICKS } from '../rules.js';
 import { stageLine } from './stage.js';
+import { IN_NO_PROJECT } from './workparts.js';
 
 /** 'project' for a 📂 project, 'task' for everything else (what the app once called a project). */
 const kindWord = (ctx, p) => (isMainProject(ctx.store.view.data, p) ? 'project' : 'task');
@@ -29,7 +31,7 @@ const HISTORY_WORDS = {
   snoozed: 'Snoozed', woke: 'Woken up', step_remind: 'Remind me', time_added: 'Time added', time_logged: 'Time logged',
   group_added: 'Group added', group_renamed: 'Group renamed', group_deleted: 'Group deleted',
   team_ticked: 'Done by the team', team_note: 'Team note', team_step_added: 'Step added by the team', team_step_unticked: 'Opened again by the team',
-  team_note_deleted: 'Team note removed', team_moved: 'Moved in Work Task', mail_note: 'Email reply', mail_task: 'Task made from an email', app_task: '🔌 Task from an app', app_note: '🔌 Update from an app',
+  team_note_deleted: 'Team note removed', team_moved: 'Moved by the team', mail_note: 'Email reply', mail_task: 'Task made from an email', app_task: '🔌 Task from an app', app_note: '🔌 Update from an app',
   reply_prepared: 'Reply prepared', reply_sent: 'Reply sent', mail_replied: 'Reply sent (seen in Outlook)',
   step_to_project: 'Step made a task', main_changed: '📂 Project',
 };
@@ -59,14 +61,83 @@ function addUpdatePhotos(ctx, p, files, opts = {}) {
 
 /** Ctrl+V on a project: screenshots become photos inside today's update (write a line and Save); other files go to its files. */
 export function pasteIntoProject(ctx, p, files) {
-  const images = files.filter((f) => f.type.startsWith('image/'));
-  const others = files.filter((f) => !f.type.startsWith('image/'));
+  const images = files.filter(isPhoto);
+  const others = files.filter((f) => !isPhoto(f));
   if (images.length && p.state === 'active') {
     addUpdatePhotos(ctx, p, namePasted(images), { inline: true });
     ctx.toast('📷 Pasted — write a line in "What happened today?" and Save', 4000);
     focusUpdate(p);
   } else if (images.length) others.push(...images);
   if (others.length) uploadFiles(ctx, p.id, others);
+}
+
+/**
+ * A photo pasted while in a step's box (owner, 29 Oct: "I am trying to add it in the step"): on a step that is
+ * there, it is added to that step at once; in "+ Add the next step" it waits under the box and goes with the step
+ * when Enter adds it. Other files go to the task's Files, as before.
+ */
+export async function pasteIntoStep(ctx, p, files, stepId = null) {
+  const photos = files.filter(isPhoto);
+  const others = files.filter((f) => !isPhoto(f));
+  if (others.length) uploadFiles(ctx, p.id, others);
+  const step = stepId ? p.steps.find((s) => s.id === stepId) : null;
+  for (const f of photos) {
+    const url = typeof URL !== 'undefined' && URL.createObjectURL ? URL.createObjectURL(f) : '';
+    const wait = step ? null : { url, args: null };
+    if (wait) { ((ctx.ui.stepPhotos ||= {})[p.id] ||= []).push(wait); ctx.render(); }
+    const args = await uploadBlob(ctx, f);
+    if (!args) { if (wait) { ctx.ui.stepPhotos[p.id] = ctx.ui.stepPhotos[p.id].filter((x) => x !== wait); ctx.render(); } continue; }
+    if (step) ctx.act('addFile', { projectId: p.id, ...args, stepId: step.id }, `📷 Added to the step “${step.text}”`);
+    else { wait.args = args; ctx.render(); }
+  }
+  if (!step && photos.length) ctx.toast('📷 Now type the step and press Enter: the photo goes with it', 4000);
+}
+
+/**
+ * ➜ Finish this task and start the next one from it (owner, 29 Oct): one action, one Undo. The new task is linked
+ * both ways and opens. A finished task (no next one yet) can start its next one too.
+ */
+export function startNextTask(ctx, p) {
+  if (!p || p.misc || p.nextId) return false;
+  const name = globalThis.prompt ? prompt(`What is the next task?\n\n“${p.name}” is finished, and the new task is linked to it (same project, tag and priority).`, '') : null;
+  if (!name || !name.trim()) return false;
+  const nextId = newId();
+  const steps = [['createProject', { projectId: nextId, name: name.trim() }], ['linkFollow', { projectId: p.id, nextId }]];
+  if (p.state !== 'finished') steps.push(['finish', { projectId: p.id }]);
+  const done = ctx.actMany(p.id, steps, `✓ ${p.name} finished · ➜ next: ${name.trim()}`);
+  if (done && ctx.openProject) ctx.openProject(nextId);
+  return !!done;
+}
+
+/**
+ * 🏁 Finish: a 📂 project with open tasks inside asks first — OK finishes them too (one action, one Undo), Cancel
+ * finishes only the project and the tasks stay open (owner, 29 Oct).
+ */
+export function finishProject(ctx, p) {
+  const open = openTasksInside(ctx.store.view.data, p);
+  const n = open.length, s = n === 1 ? '' : 's';
+  const list = open.slice(0, 8).map((t) => `• ${t.name}`).join('\n') + (n > 8 ? `\n… and ${n - 8} more` : '');
+  const all = n && globalThis.confirm ? confirm(`${n} task${s} still open inside 📂 ${p.name}:\n${list}\n\nFinish ${n === 1 ? 'it' : 'them'} too?\nOK = finish the project and ${n === 1 ? 'this task' : 'these tasks'}\nCancel = finish only the project (the task${s} stay${n === 1 ? 's' : ''} open)`) : false;
+  if (!all) return ctx.act('finish', { projectId: p.id }, `Finished: ${p.name} (moved to Finished)`);
+  return ctx.actMany(p.id, [...open.map((t) => ['finish', { projectId: t.id }]), ['finish', { projectId: p.id }]], `Finished: ${p.name} and its ${n} open task${s}`);
+}
+
+/** ↩ the task this one came from, ➜ the next task made from it: tap to open. */
+function followChips(ctx, p) {
+  const all = ctx.store.view.data.projects;
+  const prev = p.prevId ? all.find((x) => x.id === p.prevId) : null;
+  const next = p.nextId ? all.find((x) => x.id === p.nextId) : null;
+  if (!prev && !next) return null;
+  const chip = (x, words) => h('button', { class: 'tag follow-chip', type: 'button', title: 'Open it', onClick: () => ctx.openProject(x.id) }, words);
+  return h('div', { class: 'follow-chips', key: 'follow-' + p.id },
+    prev ? chip(prev, `↩ Came from: ${prev.name}${prev.state === 'finished' ? ' ✓' : ''}`) : null,
+    next ? chip(next, `➜ Next task: ${next.name}`) : null);
+}
+
+/** The photos that belong to a step (pasted on it), small; a tap opens one. */
+function stepOwnPhotos(ctx, p, s) {
+  const mine = (p.files || []).filter((f) => f.stepId === s.id);
+  return mine.length ? h('div', { class: 'step-photos step-own-photos' }, mine.map((f) => photoThumb(ctx, f))) : null;
 }
 
 /** A work note's words: a rich one (table, list, photos) drawn from its html, else its plain text. */
@@ -111,6 +182,17 @@ function promptEditNote(ctx, p, n) {
 }
 
 /** New messages from the team on this project: read them and answer here (or mark them seen). */
+/**
+ * ✕ on a team message in the projects (owner, 29 Oct: "allow me to delete a msg added by the staff"): the new-messages
+ * box and the 💬 lines in What's happening. Never on the server's own notes (a move, a chase).
+ */
+function teamMsgDelete(ctx, p, c) {
+  if (!ctx.teamDeleteMsg || c.kind === 'move' || c.kind === 'chase') return null;
+  const who = c.mine ? 'your' : `${c.by}'s`;
+  return h('button', { class: 'link small', title: 'Delete', 'aria-label': `Delete ${who} message`, key: 'del-' + c.id,
+    onClick: () => { if (confirm(`Delete ${who} message? It goes for everyone.`)) ctx.teamDeleteMsg(p, c.id).catch((e) => ctx.toast(e.message, 5000)); } }, ' ✕');
+}
+
 function teamMessages(ctx, p) {
   const t = ctx.onServer && ctx.teamDaily ? ctx.teamDaily(p) : null;
   const list = t && t.data ? (t.data.comments || []).filter((c) => c.unread).slice().reverse() : [];
@@ -136,9 +218,10 @@ function teamMessages(ctx, p) {
     list.map((c) => {
       const src = c.photo && ctx.teamMsgPhoto ? ctx.teamMsgPhoto(c.id) : null;
       return h('div', { class: 'team-msg', key: 'tm-' + c.id },
-        h('span', { class: 'muted small' }, `${c.by} · ${fmtDay(c.at.slice(0, 10))} ${fmtTime(c.at.replace(' ', 'T') + '+05:30')}`),
+        h('span', { class: 'muted small' }, `${c.by} · ${fmtDay(c.at.slice(0, 10))} ${fmtTime(c.at.replace(' ', 'T') + '+05:30')}`,
+          teamMsgDelete(ctx, p, c)),
         c.text ? h('div', null, `“${c.text}”`) : null,
-        c.photo ? (src ? h('img', { class: 'diary-photo', src, alt: 'Photo', onClick: () => window.open(src, '_blank', 'noopener') }) : h('span', { class: 'muted small' }, '📷 photo')) : null);
+        c.photo ? (src ? h('img', { class: 'diary-photo', src, alt: 'Photo', onClick: () => viewTeam(ctx, 'comment.photo', [c.id], 0, c.by, src) }) : h('span', { class: 'muted small' }, '📷 photo')) : null);
     }),
     h('form', { class: 'row', onSubmit: (e) => { e.preventDefault(); send(e.target); } },
       h('input', { name: 'reply', key: 'reply-' + p.id, placeholder: 'Answer…', autocomplete: 'off', value: (ui.teamReply || {})[p.id] || '', onInput: (e, el) => { (ui.teamReply = typeof ui.teamReply === 'object' && ui.teamReply ? ui.teamReply : {})[p.id] = el.value; } }),
@@ -169,11 +252,19 @@ function remindRow(ctx, p, s, today) {
     waiting ? h('button', { class: 'chip', type: 'button', onClick: () => set(null) }, 'Show it now') : null);
 }
 
-/** Notes written about this step (newest 2), shown under it. */
-function stepNotes(p, s) {
+/** Notes written about this step (newest 2), shown under it, with their photos (owner, 24 Oct: 📷 under the step too). */
+function stepNotes(ctx, p, s) {
   const notes = p.workNotes.filter((n) => n.stepId === s.id).slice(0, 2);
   if (!notes.length) return null;
-  return h('div', { class: 'step-notes' }, notes.map((n) => h('div', { key: 'sn-' + n.id }, `📝 ${fmtDay(indiaDate(n.createdAt))}: ${n.text}`)));
+  const isImage = (f) => /\.(png|jpe?g|gif|webp|heic|heif)$/i.test(f.name || '');
+  const pics = (n) => {
+    const ids = new Set(n.html ? richFileIds(n.html) : []); // a photo put inside the words, and one added under them
+    return (p.files || []).filter((f) => (f.noteId === n.id || ids.has(f.id)) && isImage(f));
+  };
+  // up to 5 small photos, then "+N more" (it opens this step's days, where all of them are: owner, 24 Oct — a 6th was hidden)
+  const more = (n) => h('button', { class: 'link small more-photos', type: 'button', title: 'See all the photos in What\'s happening', onClick: () => { ctx.ui.diaryTask = { projectId: p.id, stepId: s.id }; ctx.render(); } }, `+${pics(n).length - 5} more`);
+  return h('div', { class: 'step-notes' }, notes.map((n) => h('div', { key: 'sn-' + n.id }, `📝 ${fmtDay(indiaDate(n.createdAt))}: ${n.text}`,
+    pics(n).length ? h('div', { class: 'step-photos' }, pics(n).slice(0, 5).map((f) => photoThumb(ctx, f)), pics(n).length > 5 ? more(n) : null) : null)));
 }
 
 /**
@@ -188,6 +279,23 @@ export function makeItAProject(ctx, p, s, tt) {
   ctx.ui.openStep = null;
   ctx.openProject(newProjectId);
   setTimeout(() => { const f = document.querySelector('.title-input'); if (f) { f.focus(); f.select(); } }, 30);
+}
+
+/** The photos on a staff step (its newest updates: today's and the one before), small; a tap opens one. */
+/** A team photo opens in the photo viewer, with ‹ › through the ones next to it (owner, 30 Oct: "like a facebook photos"). */
+function viewTeam(ctx, kind, ids, index, name, src) {
+  if (ctx.viewTeamPhotos) ctx.viewTeamPhotos(kind, ids, index, name);
+  else window.open(src, '_blank', 'noopener');
+}
+
+export function stepPhotos(ctx, tt) {
+  if (!tt || !ctx.teamPhoto) return null;
+  const ids = [...new Set([...((tt.today && tt.today.photos) || []), ...((tt.last && tt.last.photos) || [])])];
+  if (!ids.length) return null;
+  return h('div', { class: 'step-photos', key: 'sp-' + tt.id }, ids.map((pid, i) => {
+    const src = ctx.teamPhoto(pid);
+    return src ? h('img', { class: 'diary-photo', src, alt: 'Photo', key: 'spp-' + pid, onClick: () => viewTeam(ctx, 'photo', ids, i, '', src) }) : h('span', { class: 'muted small', key: 'spp-' + pid }, ' 📷');
+  }));
 }
 
 /** A step made into its own project: "→ moved to project: <name>", a link that opens it. */
@@ -211,7 +319,7 @@ function teamChip(t, info) {
   return h('a', { class: cls, href: `#team-task=${t.id}`, title: note ? `${note.slice(0, 300)}\n\nClick to see all updates and photos.` : 'Click to see the team task.' }, text);
 }
 
-function stepRow(ctx, p, s, box = null) {
+function stepRow(ctx, p, s, box = null, writing = false) {
   const { store, ui } = ctx;
   const open = ui.openStep === s.id;
   const today = todayIndia();
@@ -232,15 +340,16 @@ function stepRow(ctx, p, s, box = null) {
   const live = !!tt && tt.status === 'open'; // a finished or cancelled task: the step can be given again
   if (tt && (tt.status === 'open' || s.done)) tags.push(teamChip(tt, ctx.teamInfo())); // an old closed task on an open step: nothing to show
   if (!live && ctx.onServer && !s.done && p.state === 'active') { // you do it yourself: tap to give it to someone
-    tags.push(h('a', { class: 'tag me', href: '#team-new=' + encodeURIComponent(JSON.stringify({ title: s.text, project: p.name, projectRef: p.id, stepRef: s.id })), title: 'You do this task. Tap to give it to someone.' }, 'Me'));
+    tags.push(h('a', { class: 'tag me', href: '#team-new=' + encodeURIComponent(JSON.stringify({ title: s.text, project: p.name, projectRef: p.id, stepRef: s.id })), title: 'You do this step now. Tap to give it to someone in your team.' }, '👥 Give'));
   }
-  if (!s.done) tags.push(h('button', { class: 'link small days-link', type: 'button', title: 'Show only this task in the diary', onClick: () => { ui.diaryTask = { projectId: p.id, stepId: s.id }; ctx.render(); setTimeout(() => { const d = document.querySelector('.diary'); if (d) d.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 30); } }, 'its days →'));
+  if (!s.done) tags.push(h('button', { class: 'link small days-link', type: 'button', title: 'Show only this step\'s days in What\'s happening', onClick: () => { ui.diaryTask = { projectId: p.id, stepId: s.id }; ctx.render(); setTimeout(() => { const d = document.querySelector('.diary'); if (d) d.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 30); } }, '📅 History'));
   if (s.repeat && !s.done) tags.push(h('span', { class: 'tag repeat', title: 'Repeats' }, `↻ ${REPEAT_WORD[s.repeat]}`));
   if (stepWaitsForReminder(s, today)) tags.push(h('span', { class: 'tag remind', title: 'Comes back on this day' }, `⏰ ${fmtDay(s.snoozedUntil)}`));
   else if (s.snoozedUntil && s.snoozedUntil > today && !s.done) tags.push(h('span', { class: 'tag' }, `from ${fmtDay(s.snoozedUntil)}`));
   else if (!s.done && s.remindUntil && s.remindUntil <= today) tags.push(h('span', { class: 'tag remind due', title: 'Your reminder for this step' }, '⏰ Reminder'));
   const aboutThis = () => { const u = updateState(ui, p); if (u.about !== s.id) { u.about = s.id; ctx.render(); } };
-  return h('li', { class: 'step' + (box ? ' has-update' : '') + (s.done ? ' done' : '') + (s.snoozedUntil && s.snoozedUntil > today && !s.done ? ' later' : ''), key: 's-' + s.id, 'data-id': s.id,
+  if (writing) tags.unshift(h('span', { class: 'tag writing-tag', title: 'What you write in What\'s happening goes on this step' }, '📝 writing'));
+  return h('li', { class: 'step' + (writing ? ' writing-about' : '') + (box ? ' has-update' : '') + (s.done ? ' done' : '') + (s.snoozedUntil && s.snoozedUntil > today && !s.done ? ' later' : ''), key: 's-' + s.id, 'data-id': s.id,
     onContextmenu: (e) => ctx.openStepMenu && ctx.openStepMenu(p.id, s.id, e) }, // right-click: tick, waiting, give, delete…
     h('div', { class: 'step-main' },
       s.done ? null : h('span', { class: 'grip', title: 'Drag to reorder', 'aria-hidden': 'true' }, '⋮⋮'),
@@ -273,11 +382,13 @@ function stepRow(ctx, p, s, box = null) {
         onClick: () => { ui.openStep = open ? null : s.id; ctx.render(); },
       }, '⏰'),
       h('button', {
-        class: 'icon', title: 'More', 'aria-label': 'More about this step',
+        class: 'icon step-more', title: 'More', 'aria-label': 'More about this step',
         onClick: () => { ui.openStep = open ? null : s.id; ctx.render(); },
       }, open ? '▴' : '⋯')),
-    stepNotes(p, s),
+    stepOwnPhotos(ctx, p, s),
+    stepNotes(ctx, p, s),
     live && !s.done && (tt.today || tt.last) ? h('div', { class: 'step-last muted small' }, `Last from ${tt.assignee.name} (${fmtDay((tt.today || tt.last).day)}): `, h('span', null, (tt.today || tt.last).note.slice(0, 160))) : null,
+    stepPhotos(ctx, tt), // 📷 the photos the person sent on this step (e.g. each test step), done steps too
     box,
     open ? h('div', { class: 'step-extra' },
       s.done ? null : remindRow(ctx, p, s, today),
@@ -483,14 +594,20 @@ function updateBox(ctx, p) {
   },
   editing ? h('div', { class: 'edit-banner' }, h('span', null, `✎ Changing your update of ${fmtDay(indiaDate(editing.createdAt))} ${fmtTime(editing.createdAt)}`),
     h('button', { class: 'link small', type: 'button', onClick: cancelEdit }, '✕ Cancel')) : null,
-  !editing && openSteps.length && !isMainProject(ctx.store.view.data, p) ? h('div', { class: 'about-row' }, h('span', { class: 'muted small' }, 'About:'), // (a 📂 project has no steps of its own)
+  editing && p.steps.length && !isMainProject(ctx.store.view.data, p) ? h('div', { class: 'about-row' }, h('span', { class: 'about-label' }, '📝 This update is about:'), // ✎ saved under the wrong step: move it (owner, 24 Oct)
+    p.steps.filter((st) => !st.done || st.id === editing.stepId || st.doneAt).slice(0, 10).map((st) => h('button', {
+      class: 'chip' + (editing.stepId === st.id ? ' on' : ''), type: 'button', key: 'mv-' + st.id, title: st.text,
+      onClick: () => { if (ctx.act('setNoteStep', { projectId: p.id, noteId: editing.id, stepId: st.id }, `Update moved to “${st.text}”`)) ctx.render(); },
+    }, (st.done ? '✓ ' : '') + (st.text.length > 28 ? st.text.slice(0, 26) + '…' : st.text))),
+    h('button', { class: 'chip' + (editing.stepId ? '' : ' on'), type: 'button', onClick: () => { if (ctx.act('setNoteStep', { projectId: p.id, noteId: editing.id, stepId: null }, 'Update moved to the whole task')) ctx.render(); } }, `Whole ${kindWord(ctx, p)}`)) : null,
+  !editing && openSteps.length && !isMainProject(ctx.store.view.data, p) ? h('div', { class: 'about-row' }, h('span', { class: 'about-label' }, '📝 Writing about:'), // (a 📂 project has no steps of its own; owner 24 Oct: "About:" was easy to miss)
     openSteps.slice(0, 8).map((st) => h('button', {
       class: 'chip' + (due && due.id === st.id ? ' on' : ''), type: 'button', key: 'ab-' + st.id, title: st.text,
       onClick: () => { u.about = st.id; ctx.render(); focusUpdate(p); },
     }, st.text.length > 28 ? st.text.slice(0, 26) + '…' : st.text)),
     h('button', { class: 'chip' + (due ? '' : ' on'), type: 'button', onClick: () => { u.about = 'project'; ctx.render(); focusUpdate(p); } }, `Whole ${kindWord(ctx, p)}`)) : null,
   ...richArea(ctx, u, {
-    key, placeholder: 'What happened today?', title: HAS_KEYBOARD ? 'Key: W' : null, files: p.files,
+    key, placeholder: editing ? 'What happened?' : due ? `What happened on “${due.text.length > 40 ? due.text.slice(0, 38) + '…' : due.text}”?` : 'What happened today?', title: HAS_KEYBOARD ? 'Key: W' : null, files: p.files,
     otherFiles: (others) => uploadFiles(ctx, p.id, others), // a copied file (not a photo) goes to the task's files
     onKey: (e, el) => {
       if (e.key === 'Escape' && editing) { e.preventDefault(); cancelEdit(); return; }
@@ -502,9 +619,9 @@ function updateBox(ctx, p) {
   }),
   h('div', { class: 'row' },
     h('button', { class: 'btn small', type: 'submit' }, editing ? 'Save change' : 'Save'),
-    due ? h('button', { class: 'btn primary small', type: 'button', title: `Save the note and tick "${due.text}" (${MOD}+Enter)`, onClick: () => save(findEditor(key), true) }, '✓ Save + done') : null,
+    due ? h('button', { class: 'btn primary small', type: 'button', title: `Save the note and tick "${due.text}" (${MOD}+Enter)`, onClick: () => save(findEditor(key), true) }, `✓ Save + tick “${due.text.length > 24 ? due.text.slice(0, 22) + '…' : due.text}”`) : null, // (says which step it ticks: owner, 24 Oct)
     editing ? h('button', { class: 'btn small', type: 'button', onClick: cancelEdit }, 'Cancel') : null,
-    h('span', { class: 'muted small' }, hint)));
+    h('span', { class: 'muted small key-tip' }, hint)));
   return { stepId: due ? due.id : null, box };
 }
 
@@ -687,11 +804,13 @@ function teamBar(ctx, p) {
     isMainProject(ctx.store.view.data, p) ? giveTaskList(ctx, p) : null,
     h('label', { class: 'check small', title: 'They must add a photo before tapping Finished on each step' },
       h('input', { type: 'checkbox', checked: !!ui.givePhoto, onChange: (e, el) => ctx.setGivePhoto(el.checked) }), ' 📷 Photo needed to finish'),
+    h('label', { class: 'check small', title: 'They add an entry (a line + photos) whenever something happens, e.g. a material order follow-up — no daily update, never late' },
+      h('input', { type: 'checkbox', checked: !!ui.giveRecord, onChange: (e, el) => ctx.setGiveRecord && ctx.setGiveRecord(el.checked) }), ' 📒 Record (entries, not a daily update)'),
     people === null ? h('span', { class: 'muted small' }, 'Loading…')
       : people.length ? people.map((u) => h('button', { class: 'chip', key: 'tp-' + u.id, disabled: busy ? true : undefined, onClick: () => ctx.giveProject(p, u) }, u.name))
         : h('a', { class: 'small', href: '#team' }, 'Add a person first (Team → People)'),
     p.team ? h('button', { class: 'btn small', onClick: () => { if (confirm(takeBackQuestion(ctx.store.view.data, p))) { ui.giveOpen = null; ctx.takeBackProject(p); } } }, 'Take back') : null,
-    h('button', { class: 'link small', onClick: () => { ui.giveOpen = null; ui.givePhoto = false; ui.giveKeep = null; ui.giveKeepFor = null; ctx.render(); } }, 'Cancel'));
+    h('button', { class: 'link small', onClick: () => { ui.giveOpen = null; ui.givePhoto = false; ui.giveRecord = false; ui.giveKeep = null; ui.giveKeepFor = null; ctx.render(); } }, 'Cancel'));
 }
 
 /** Take back: a 📂 project brings back the tasks that went with it (tasks given on their own stay). */
@@ -819,13 +938,13 @@ function stateButtons(ctx, p) {
     return [
       running
         ? h('button', { class: 'btn timer-on', title: 'Stop the timer', onClick: () => ctx.stopTimer() }, `⏸ ${ctx.clockText(t.start)}`)
-        : timed ? h('button', { class: 'btn', title: `Start timing your work on this ${kindWord(ctx, p)}`, onClick: () => ctx.startTimer(p) }, '▶ Start') : null,
+        : timed && !p.misc ? h('button', { class: 'btn', title: `Start timing your work on this ${kindWord(ctx, p)}`, onClick: () => ctx.startTimer(p) }, '▶ Start') : null,
       // 💤 Snooze on the page itself (the owner uses it daily; also in the ⋯ menu)
-      !isSnoozed(p, todayIndia()) || restReason(p, todayIndia()) === 'onlyDays' ? h('button', {
+      !p.misc && (!isSnoozed(p, todayIndia()) || restReason(p, todayIndia()) === 'onlyDays') ? h('button', {
         class: 'btn', title: 'Hide it from Today for some days',
         onClick: () => { ui.snoozeOpen = p.id; ctx.render(); setTimeout(() => { const n = document.querySelector(`[data-key="snooze-${p.id}"]`); if (n) { n.focus(); n.select(); } }, 30); },
       }, '💤 Snooze') : null,
-      p.misc ? null : h('button', { class: 'btn', onClick: () => ctx.act('finish', { projectId: p.id }, `Finished: ${p.name} (moved to Finished)`) }, `Finish ${kindWord(ctx, p)}`),
+      p.misc ? null : h('button', { class: 'btn', onClick: () => finishProject(ctx, p) }, `Finish ${kindWord(ctx, p)}`),
       menuButton(ctx, p),
       navButtons(ctx),
     ];
@@ -833,7 +952,7 @@ function stateButtons(ctx, p) {
   if (p.state === 'paused') {
     return [
       h('button', { class: 'btn primary', onClick: () => store.dispatch('unpause', { projectId: p.id }) }, 'Unpause'),
-      p.misc ? null : h('button', { class: 'btn', onClick: () => ctx.act('finish', { projectId: p.id }, `Finished: ${p.name} (moved to Finished)`) }, `Finish ${kindWord(ctx, p)}`),
+      p.misc ? null : h('button', { class: 'btn', onClick: () => finishProject(ctx, p) }, `Finish ${kindWord(ctx, p)}`),
       p.misc ? null : deleteButton(ctx, p),
       navButtons(ctx),
     ];
@@ -877,11 +996,12 @@ function projectMenu(ctx, p) {
   const item = (label, fn, cls = '') => h('button', { class: 'menu-row' + cls, onClick: go(fn) }, label);
   return h('div', { class: 'proj-menu', key: 'pm-' + p.id, role: 'menu' },
     p.state === 'active' && (!isSnoozed(p, today) || restReason(p, today) === 'onlyDays') ? item('💤 Snooze…', () => { ui.snoozeOpen = p.id; setTimeout(() => { const n = document.querySelector(`[data-key="snooze-${p.id}"]`); if (n) { n.focus(); n.select(); } }, 30); }) : null,
-    p.state === 'active' && ctx.onServer && !p.misc ? item(p.team ? `👥 Change person (now ${p.team.name})` : `👥 Give ${kindWord(ctx, p)} to…`, () => { ui.giveOpen = p.id; ui.givePhoto = p.team ? !!p.team.needsPhoto : false; }) : null,
+    p.state === 'active' && ctx.onServer && !p.misc ? item(p.team ? `👥 Change person (now ${p.team.name})` : `👥 Give ${kindWord(ctx, p)} to…`, () => { ui.giveOpen = p.id; ui.givePhoto = p.team ? !!p.team.needsPhoto : false; ui.giveRecord = p.team ? !!p.team.record : false; }) : null,
     p.state === 'active' && ctx.onServer && p.team ? item('↩ Take back from ' + p.team.name, () => { if (confirm(takeBackQuestion(ctx.store.view.data, p))) ctx.takeBackProject(p); }) : null,
     p.state === 'active' ? item('📅 Only on…', () => { ui.onlyDaysOpen = p.id; }) : null,
     p.state === 'active' ? item('🔔 Remind me once…', () => { ui.remindOnceOpen = p.id; }) : null,
     p.state === 'active' ? item('⏸ Pause', () => ctx.act('pause', { projectId: p.id }, `Paused: ${p.name}`)) : null,
+    !p.misc && !p.nextId && !isMainProject(store.view.data, p) ? item(p.state === 'finished' ? '➜ Start the next task from it…' : '➜ Finish + start the next task…', () => startNextTask(ctx, p)) : null, // (owner, 29 Oct)
     timed ? item('⏱ Add time', () => addTimePrompt(ctx, p)) : null,
     item('✎ Tag, priority, target date', () => { ui.editMeta = true; }),
     // 📂 a task can be in several projects; a project can be inside other projects too (never 📂 Misc)
@@ -924,7 +1044,7 @@ function infoChips(ctx, p, today) {
   if (p.team) {
     const via = p.team.viaProject && store.view.data.projects.find((x) => x.id === p.team.viaProject);
     out.push(chip(`👥 ${p.team.name}${via ? ` (with 📂 ${via.name})` : ''}`, p.state === 'active' ? (via ? `Went with 📂 ${via.name} — tap to change person or take back` : 'Given to the team — tap to change person or take back') : 'Given to the team (off their list while not active)',
-      p.state === 'active' ? () => { ui.giveOpen = ui.giveOpen === p.id ? null : p.id; ui.givePhoto = !!p.team.needsPhoto; ctx.render(); } : null, ' team'));
+      p.state === 'active' ? () => { ui.giveOpen = ui.giveOpen === p.id ? null : p.id; ui.givePhoto = !!p.team.needsPhoto; ui.giveRecord = !!p.team.record; ctx.render(); } : null, ' team'));
     const tp = ctx.teamProgress ? ctx.teamProgress(p.id) : null;
     if (tp && (tp.lastUpdate || tp.stuck)) {
       const when = !tp.lastUpdate ? 'no update yet' : tp.lastUpdate === today ? 'updated today' : `last update ${fmtDay(tp.lastUpdate)}`;
@@ -940,8 +1060,10 @@ function infoChips(ctx, p, today) {
   if (!p.misc && p.state !== 'finished') out.push(chip(`🔁 ${everyText(moveEveryOf(p))}`, `${colourWhy(p, today)} — tap to change how often it should move`, () => { ui.everyOpen = ui.everyOpen === p.id ? null : p.id; ctx.render(); }));
   if (tagName(data, p)) out.push(chip(`🏷 ${tagName(data, p)}`, 'Tag — tap to change', editMeta));
   out.push(chip(p.priority[0].toUpperCase() + p.priority.slice(1), 'Priority — tap to change', editMeta, p.priority === 'high' ? ' bad' : ''));
-  out.push(chip(p.deadline ? `${overdue ? 'Overdue' : 'Target'} ${fmtDay(p.deadline)}` : '+ Target date', 'Target date — tap to change', editMeta, overdue ? ' bad' : ''));
-  if (p.steps.length && !isMainProject(ctx.store.view.data, p)) out.push(chip(`✓ ${p.steps.filter((x) => x.done).length} of ${p.steps.length} steps done`, 'Steps done', null));
+  // finished: the day it ended, not a target any more (owner, 24 Oct)
+  if (p.state === 'finished') out.push(chip(`✓ Finished ${p.stateChangedAt ? fmtDay(indiaDate(p.stateChangedAt)) : ''}`.trim(), 'The day it was finished', null, ' good'));
+  else out.push(chip(p.deadline ? `${overdue ? 'Overdue' : 'Target'} ${fmtDay(p.deadline)}` : '+ Target date', 'Target date — tap to change', editMeta, overdue ? ' bad' : ''));
+  if (p.steps.length && !isMainProject(ctx.store.view.data, p)) out.push(chip(`✓ ${p.steps.filter((x) => x.done).length} of ${p.steps.length} step${p.steps.length === 1 ? '' : 's'} done`, 'Steps done', null));
   const timer = store.view.data.timer;
   const logs = p.timeLogs || [];
   const timed = timerOn(data);
@@ -1052,12 +1174,32 @@ export function linkChip(link, label = null) {
   return h('a', { class: 'tag link-chip', href: url, target: '_blank', rel: 'noopener noreferrer', title: link.title || url, key: 'lk' }, label || (isMailLink(link) ? '✉ Open mail' : '↗ Open page'));
 }
 
+/**
+ * Nothing open on the right (a computer): today at a glance instead of an empty side (owner, 24 Oct) —
+ * how many are on track, the red / yellow ones with why (tap to open), and how to open or add one.
+ */
+export function todayGlance(ctx) {
+  const data = ctx.store.view.data;
+  const today = todayIndia();
+  const list = todayList(data, today);
+  const by = (c) => list.filter((x) => dotColour(x, today) === c);
+  const red = by('red'), yellow = by('yellow'), green = by('green');
+  const need = [...red, ...yellow].slice(0, 6);
+  return h('div', { class: 'empty today-glance', key: 'glance' },
+    list.length ? [
+      h('h3', { key: 'gh' }, '☀︎ Today at a glance'),
+      h('p', { class: 'glance-counts', key: 'gc' }, h('span', { class: 'dot red' }), ` ${red.length}  `, h('span', { class: 'dot yellow' }), ` ${yellow.length}  `, h('span', { class: 'dot green' }), ` ${green.length} on track`), // (the menu's order: red first, owner 24 Oct)
+      need.length ? h('ul', { class: 'glance-list', key: 'gl' }, need.map((x) => h('li', { key: 'g-' + x.id },
+        h('button', { class: 'link', type: 'button', onClick: () => (ctx.openProject ? ctx.openProject(x.id) : null) }, x.name), ' ',
+        h('span', { class: 'tag ' + (dotColour(x, today) === 'red' ? 'late' : 'stale') }, colourShort(x, today))))) : h('p', { class: 'muted', key: 'ok' }, 'Everything is on track 🎉'),
+    ] : null,
+    h('p', { class: 'muted small', key: 'gp' }, 'Pick a task on the left, or add one with "+ New task".'));
+}
+
 export function renderDetail(ctx) {
   const { store, ui } = ctx;
   const p = store.view.data.projects.find((x) => x.id === ui.selected);
-  if (!p) {
-    return h('div', { class: 'empty' }, h('p', null, 'Pick a task on the left,'), h('p', null, 'or add one with "+ New task".'));
-  }
+  if (!p) return todayGlance(ctx);
   const today = todayIndia();
   const colour = dotColour(p, today);
   const openSteps = p.steps.filter((s) => !s.done);
@@ -1090,7 +1232,7 @@ export function renderDetail(ctx) {
       ui.dropOver = false;
       const files = [...e.dataTransfer.files];
       // the update box is only there on an active task: on a paused / finished one photos go to Files (as a paste does)
-      const photos = p.state === 'active' ? files.filter((f) => f.type.startsWith('image/')) : [];
+      const photos = p.state === 'active' ? files.filter(isPhoto) : []; // (an iPhone photo too)
       const others = files.filter((f) => !photos.includes(f));
       ctx.render();
       if (photos.length) {
@@ -1103,47 +1245,61 @@ export function renderDetail(ctx) {
     h('div', { class: 'detail-top' },
       h('button', { class: 'icon back', 'aria-label': 'Back to list', onClick: () => { ui.mobile = 'list'; ctx.render(); } }, '←'),
       h('span', { class: `dot ${colour}`, title: colourWhy(p, today) }), // why it has this colour
-      autoField('input', { class: 'title-input', value: p.name, 'aria-label': `${kindWord(ctx, p) === 'task' ? 'Task' : 'Project'} name`, title: `Click to change the ${kindWord(ctx, p)} name`, key: 'name-' + p.id },
+      p.misc ? h('h2', { class: 'misc-title' }, `📂 ${IN_NO_PROJECT}`) : autoField('input', { class: 'title-input', value: p.name, 'aria-label': `${kindWord(ctx, p) === 'task' ? 'Task' : 'Project'} name`, title: `Click to change the ${kindWord(ctx, p)} name`, key: 'name-' + p.id },
         (v) => store.dispatch('setProjectField', { projectId: p.id, field: 'name', value: v })),
-      h('button', {
+      p.misc ? null : h('button', {
         class: 'icon edit-title', title: `Change the ${kindWord(ctx, p)} name`, 'aria-label': `Change the ${kindWord(ctx, p)} name`,
         onClick: () => { const n = document.querySelector(`[data-key="name-${p.id}"]`); if (n) { n.focus(); n.select(); } },
       }, '✎'),
       h('div', { class: 'state-buttons' }, stateButtons(ctx, p))),
     aboutLine(ctx, p),
-    stageLine(ctx, p), // the Stage chip near the top: ⚪ Not started · 🔵 In progress · 🟠 Waiting: … · ✅ Done (tap to change)
+    colour === 'red' || colour === 'yellow' ? h('div', { class: 'why-line ' + colour, key: 'why-' + p.id }, `${colour === 'red' ? '🔴' : '🟡'} ${colourWhy(p, today)}`) : null, // why it is not green, in words (owner, 24 Oct)
+    p.misc ? null : stageLine(ctx, p), // (📂 In no project only holds tasks: no stage, priority, target, time or status — owner 24 Oct) the Stage chip near the top: ⚪ Not started · 🔵 In progress · 🟠 Waiting: … · ✅ Done (tap to change)
     projectMenu(ctx, p),
     mainBox(ctx, p, 'parent'),
     snoozeBar(ctx, p),
     onlyDaysBar(ctx, p),
     remindOnceBar(ctx, p),
     teamBar(ctx, p),
-    infoChips(ctx, p, today),
+    p.misc ? null : infoChips(ctx, p, today),
     quickLinks(ctx, p), // its links and files near the top: one click opens (owner asked, 22 Oct)
     projectEmailCards(ctx, p, today), // from an email: who wrote, the newest lines, and the reply (✉ Reply ready)
     ui.editMeta ? metaLine(ctx, p, today) : null,
     ui.showTime === p.id ? timeLine(ctx, p, today) : null,
     teamMessages(ctx, p),
-    statusLine(ctx, p),
-    p.state !== 'active' ? h('p', { class: 'banner' }, p.state === 'paused' ? `This ${kindWord(ctx, p)} is paused. It is hidden from Today.` : `This ${kindWord(ctx, p)} is finished.`) : null,
+    p.misc ? null : statusLine(ctx, p),
+    p.state !== 'active' ? h('p', { class: 'banner' }, p.state === 'paused' ? `This ${kindWord(ctx, p)} is paused. It is hidden from Today.` : `This ${kindWord(ctx, p)} is finished.`,
+      p.state === 'finished' && !p.nextId && !p.misc && !isMainProject(store.view.data, p) ? [' ', h('button', { class: 'link', type: 'button', onClick: () => startNextTask(ctx, p) }, '➜ Start the next task from it')] : null) : null,
+    followChips(ctx, p), // ↩ came from / ➜ next task (owner, 29 Oct)
     mainChip(ctx, p), // 📂 Kilns › 📂 Supplier approval › (the projects this task is in)
     subProjectsBlock(ctx, p, today), // a 📂 project: TASKS (N)
 
     isMainProject(store.view.data, p) ? oldStepsBlock(ctx, p, openSteps) : section(stepsTitle(),
       h('ul', { class: 'steps sortable-steps', key: 'steps-' + p.id, 'data-project': p.id },
-        openSteps.map((s) => stepRow(ctx, p, s))),
-      h('form', {
+        openSteps.map((s) => stepRow(ctx, p, s, null, !!upd.box && upd.stepId === s.id))),
+      p.state === 'finished' ? null : h('form', { // finished: no next step to add (owner, 24 Oct; Reopen first)
         class: 'row add-step',
         onSubmit: (e) => {
           e.preventDefault();
           const input = e.target.elements.text;
           const text = input.value.trim();
-          if (!text) return;
-          if (store.dispatch('addStep', { projectId: p.id, stepId: newId(), text })) input.value = '';
+          const waiting = (ui.stepPhotos || {})[p.id] || [];
+          if (!text) { if (waiting.length) ctx.toast('Type the step first, then press Enter', 2500); return; }
+          if (waiting.some((x) => !x.args)) { ctx.toast('A photo is still uploading — press Enter again in a moment', 2500); return; }
+          const stepId = newId();
+          const ok = waiting.length
+            ? ctx.actMany(p.id, [['addStep', { projectId: p.id, stepId, text }], ...waiting.map((x) => ['addFile', { projectId: p.id, ...x.args, stepId }])], `+ ${text} · 📷 ${waiting.length}`)
+            : store.dispatch('addStep', { projectId: p.id, stepId, text });
+          if (ok) { input.value = ''; if (ui.stepPhotos) delete ui.stepPhotos[p.id]; if (waiting.length) ctx.render(); }
           input.focus();
         },
       },
       h('input', { name: 'text', placeholder: openSteps.length ? '+ Add a step (type @ for a person)' : '+ Add the next step…', title: HAS_KEYBOARD ? 'Key: S' : null, key: 'add-step-' + p.id, enterkeyhint: 'enter', 'data-mention': '1', autocomplete: 'off' })),
+      ((ui.stepPhotos || {})[p.id] || []).length ? h('div', { class: 'step-photos step-wait-photos', key: 'swp-' + p.id }, // 📷 pasted here: they go with the step
+        ui.stepPhotos[p.id].map((x, i) => h('span', { class: 'step-wait-photo', key: 'sw-' + i },
+          x.url ? h('img', { class: 'rich-photo', src: x.url, alt: 'Photo for the new step' }) : '📷', x.args ? null : h('span', { class: 'muted small' }, ' uploading…'),
+          h('button', { class: 'link small', type: 'button', title: 'Leave this photo out', onClick: () => { ui.stepPhotos[p.id].splice(i, 1); ctx.render(); } }, '✕'))),
+        h('span', { class: 'muted small' }, 'goes with the step — type it and press Enter')) : null,
       doneSteps.length ? h('details', { class: 'done-steps', key: 'done-' + p.id, open: ui.showDone ? true : undefined },
         h('summary', { onClick: (e) => { e.preventDefault(); ui.showDone = !ui.showDone; if (ctx.rememberUi) ctx.rememberUi(); ctx.render(); } }, `Done (${doneSteps.length})`),
         ui.showDone ? h('ul', { class: 'steps' }, doneSteps.slice(0, ui.doneLimit || 10).map((s) => stepRow(ctx, p, s))) : null,
@@ -1193,13 +1349,13 @@ function projectDiary(ctx, p, upd) {
   const stepText = new Map(p.steps.map((x) => [x.id, x.text]));
   const taskStep = new Map((td ? td.tasks : []).map((x) => [x.id, x.stepRef]));
   const iso = (v) => (v.includes('T') ? v : v.replace(' ', 'T') + '+05:30'); // server times are India time
-  const about = (stepId) => (stepId && stepText.has(stepId) ? h('span', { class: 'muted small' }, ` · ${stepText.get(stepId)}`) : null);
+  const about = (stepId) => (stepId && stepText.has(stepId) ? h('span', { class: 'muted small' }, ` · step: ${stepText.get(stepId)}`) : null); // (owner, 24 Oct: say it is the step it was about)
   const entries = [];
   for (const n of p.workNotes) {
     const files = notePhotos(p, n);
     const team = n.text.startsWith('👥 ');
     entries.push({
-      day: indiaDate(n.createdAt), at: n.createdAt, work: !n.app && !String(n.text).startsWith('👥 Marked done in Work Task'), stepId: n.stepId,
+      day: indiaDate(n.createdAt), at: n.createdAt, work: !n.app && !/^👥 Marked done (in Work Task|by the team)/.test(String(n.text)), stepId: n.stepId,
       // a 🔌 note from an outside app (connect.php) is the app's words, not yours
       node: diaryLine(team ? '👥' : n.app ? '🔌' : '📝', team ? null : n.app ? (p.fromApp || 'App') : 'You', team ? n.text.slice(3) : noteBody(ctx, p, n), [
         about(n.stepId),
@@ -1220,9 +1376,11 @@ function projectDiary(ctx, p, upd) {
       day: u.day, at: iso(u.at), work: u.state !== 'stuck', stepId: taskStep.get(u.taskId),
       node: diaryLine('👥', u.by, `“${u.note}”${words}`, [
         about(taskStep.get(u.taskId)),
-        ...(u.photos || []).map((pid) => {
+        ctx.teamDeleteUpdate && u.id ? h('button', { class: 'link small', title: 'Delete', 'aria-label': `Delete ${u.by}'s update`, key: 'du-' + u.id, // (owner, 29 Oct: "delete this info only")
+          onClick: () => { const n = (u.photos || []).length; if (confirm(`Delete ${u.by}'s update${n ? ` and its ${n} photo${n > 1 ? 's' : ''}` : ''}? It goes for everyone.`)) ctx.teamDeleteUpdate(p, u.id).catch((e) => ctx.toast(e.message, 5000)); } }, ' ✕') : null,
+        ...(u.photos || []).map((pid, i) => {
           const src = ctx.teamPhoto ? ctx.teamPhoto(pid) : null;
-          return src ? h('img', { class: 'diary-photo', src, alt: 'Photo', key: 'tp-' + pid, onClick: () => window.open(src, '_blank', 'noopener') }) : h('span', { class: 'muted small', key: 'tp-' + pid }, ' 📷');
+          return src ? h('img', { class: 'diary-photo', src, alt: 'Photo', key: 'tp-' + pid, onClick: () => viewTeam(ctx, 'photo', u.photos, i, `${u.by} · ${fmtDay(u.day)}`, src) }) : h('span', { class: 'muted small', key: 'tp-' + pid }, ' 📷');
         }),
       ]),
     });
@@ -1231,8 +1389,8 @@ function projectDiary(ctx, p, upd) {
     if (c.unread) continue; // new ones are in the message box at the top (not twice)
     const src = c.photo && ctx.teamMsgPhoto ? ctx.teamMsgPhoto(c.id) : null;
     entries.push({ day: c.at.slice(0, 10), at: iso(c.at), work: false, stepId: taskStep.get(c.taskId), node: diaryLine('💬', c.mine ? 'You' : c.by, c.text ? `“${c.text}”` : '', [
-      c.photo ? (src ? h('img', { class: 'diary-photo', src, alt: 'Photo', key: 'mp-' + c.id, onClick: () => window.open(src, '_blank', 'noopener') }) : h('span', { class: 'muted small', key: 'mp-' + c.id }, ' 📷 Photo')) : null,
-      about(taskStep.get(c.taskId))]) });
+      c.photo ? (src ? h('img', { class: 'diary-photo', src, alt: 'Photo', key: 'mp-' + c.id, onClick: () => viewTeam(ctx, 'comment.photo', [c.id], 0, c.mine ? 'You' : c.by, src) }) : h('span', { class: 'muted small', key: 'mp-' + c.id }, ' 📷 Photo')) : null,
+      about(taskStep.get(c.taskId)), teamMsgDelete(ctx, p, c)]) });
   }
   const byDay = new Map();
   for (const e of entries) { if (!byDay.has(e.day)) byDay.set(e.day, []); byDay.get(e.day).push(e); }
@@ -1240,13 +1398,17 @@ function projectDiary(ctx, p, upd) {
   const weekday = (day) => new Date(day + 'T00:00:00Z').getUTCDay();
   const nowHm = new Date().toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' });
   const W = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-  const WHAT = { ok: 'work done', miss: 'no progress', off: 'Sunday — off', wait: 'waiting for today\'s update', none: 'before the project started' };
+  // paused or finished: no update is asked for from that day (owner, 24 Oct: never "Waiting for today's update")
+  const stoppedFrom = p.state !== 'active' ? (p.stateChangedAt ? indiaDate(p.stateChangedAt) : today) : null;
+  const stopWord = p.state === 'finished' ? '✓ Finished' : '⏸ Paused';
+  const WHAT = { ok: 'work done', miss: 'no progress', off: 'Sunday — off', wait: 'waiting for today\'s update', none: 'before the project started', stop: stopWord.slice(2).toLowerCase(), held: 'its tasks have the updates' };
+  const holder = isMainProject(ctx.store.view.data, p) && !p.steps.some((s) => !s.done); // its tasks have the updates (the strip says so too, owner 24 Oct)
   const LONG = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
   const week = [];
   for (let i = 6; i >= 0; i--) {
     const day = addDays(today, -i);
-    const state = day < created ? 'none' : workOn(day) ? 'ok' : weekday(day) === 0 ? 'off' : day === today && nowHm < fillBy ? 'wait' : 'miss';
-    week.push(h('span', { class: `wk ${state}`, key: 'wk-' + day, title: `${W[weekday(day)]} ${fmtDay(day)}: ${WHAT[state]}` }, W[weekday(day)][0]));
+    const state = day < created ? 'none' : workOn(day) ? 'ok' : stoppedFrom && day >= stoppedFrom ? 'stop' : holder ? 'held' : weekday(day) === 0 ? 'off' : day === today && nowHm < fillBy ? 'wait' : 'miss';
+    week.push(h('span', { class: `wk ${state === 'stop' || state === 'held' ? 'none' : state}`, key: 'wk-' + day, title: `${W[weekday(day)]} ${fmtDay(day)}: ${WHAT[state]}` }, W[weekday(day)][0]));
   }
   let start = addDays(today, -(shownDays - 1));
   if (created > start) start = created;
@@ -1266,7 +1428,9 @@ function projectDiary(ctx, p, upd) {
       const list = (byDay.get(day) || []).filter((e) => !filter || e.stepId === filter).sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
       let empty = null;
       if (!list.some((e) => e.work)) { // nothing that counts as work (maybe a Stuck or a message): the day's tag too
-        if ((p.teamDays || []).includes(day)) empty = h('span', { class: 'day-tag team' }, '👥 Team worked');
+        if (stoppedFrom && day >= stoppedFrom) empty = list.length ? null : day === today ? h('span', { class: 'day-tag off' }, stopWord) : h('span', { class: 'muted small' }, '—');
+        else if (holder) empty = list.length ? null : h('span', { class: 'muted small' }, '—'); // a 📂 project with no step of its own: no update of its own is asked for
+        else if ((p.teamDays || []).includes(day)) empty = h('span', { class: 'day-tag team' }, '👥 Team worked');
         else if (weekday(day) === 0) empty = h('span', { class: 'day-tag off' }, 'Off');
         else if (day === today && nowHm < fillBy) empty = h('span', { class: 'day-tag wait' }, 'Waiting for today\'s update');
         else if (p.team && !(td && td.from && day >= td.from)) empty = h('span', { class: 'muted small' }, t && t.days >= 120 && !t.loading ? '—' : '…'); // still loading (— older than the team history kept)

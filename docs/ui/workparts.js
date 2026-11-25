@@ -2,7 +2,25 @@
 // (ui/team.js): one task page, one message box, one day-by-day history — so a change here reaches everyone.
 // The rules behind them (the history rows, what is late) come from Work Task's logic.js, passed in as `rules`.
 
-import { h, fmtDay as dayOf, errLine } from './dom.js';
+import { h, fmtDay as dayOf, errLine, HAS_KEYBOARD } from './dom.js';
+
+/** 📂 Misc's name on every screen (owner, 24 Oct: it was "Misc", "Other tasks" and "in no project"). */
+export const IN_NO_PROJECT = 'In no project';
+
+/** The device in the words on screen: "this computer" with a mouse, else "this phone" (owner, 24 Oct: a computer was told "this phone"). */
+export const HERE = HAS_KEYBOARD ? 'this computer' : 'this phone';
+
+/** The "Work in one line" example, with a real person from the team (owner, 24 Oct: "Valar" is not on the team). */
+export function quickExample(people, meId = 0) {
+  const ok = (people || []).filter((x) => x && x.name && x.active !== false && x.id !== meId); // (not the person writing it)
+  const p = ok.find((x) => x.role !== 'admin') || ok[0];
+  return `${p ? p.name.trim().split(/\s+/)[0] : 'Name'}: send kiln photos by Friday`;
+}
+
+/** How to allow notifications again once they are blocked, for this device (a computer has no app icon to press and hold). */
+export const blockedSteps = (computer = HAS_KEYBOARD) => (computer
+  ? ['In the address bar, click the 🔒 (or ⓘ) next to worktask.in.', 'Set Notifications to Allow.', 'Reload this page and open it again.']
+  : ['Installed app: press and hold the Task List icon → App info → Notifications → turn on.', 'In Chrome: tap ⋮ → Settings → Site settings → Notifications → worktask.in → Allow.', 'Come back here and open this page again.']);
 
 // the server's times are India time as "2026-10-22 10:30:00"
 export const fmtDay = (d) => (d ? dayOf(String(d).slice(0, 10)) : '');
@@ -55,11 +73,11 @@ export function chipsFor(t, td, { who = false } = {}) {
   const late = t.status === 'open' && t.dueDate && t.dueDate < td;
   return h('div', { class: 'info-chips' },
     who && t.assignee ? c(`👤 ${t.assignee.name}`, ' team') : null,
-    t.project && t.project !== t.title ? c(`📁 ${t.project}`) : null, // (not when it only says the task's own name again)
-    c(repeatLabel({ ...t, dueDate: null }, td)),
+    t.project && t.project !== t.title && t.project !== 'Misc' ? c(`📁 ${t.project}`) : null, // (not when it only says the task's own name again, nor "Misc")
+    t.kind === 'log' ? c('📒 Record') : c(repeatLabel({ ...t, dueDate: null }, td)), // (a record has no "every day": entries come when something happens)
     t.dueDate ? c(late ? `⏰ Late — was by ${fmtDay(t.dueDate)}` : `By ${fmtDay(t.dueDate)}`, late ? ' bad' : '') : null,
     t.needsPhoto ? c('📷 Photo to finish') : null,
-    t.status === 'done' ? c('✓ Done', ' good') : t.status === 'cancelled' ? c('Cancelled', ' bad') : t.status === 'suggested' ? c('💡 Suggestion') : t.today ? c('✓ Sent today', ' good') : null);
+    t.status === 'done' ? c('✓ Done', ' good') : t.status === 'cancelled' ? c('Cancelled', ' bad') : t.status === 'suggested' ? c('💡 Suggestion') : t.kind === 'log' ? (t.entriesToday ? c(`✓ ${t.entriesToday} entr${t.entriesToday === 1 ? 'y' : 'ies'} today`, ' good') : null) : t.today ? c('✓ Sent today', ' good') : null);
 }
 
 /**
@@ -68,21 +86,25 @@ export function chipsFor(t, td, { who = false } = {}) {
  */
 export function makePics(photo, render) {
   const pics = new Map(); // kind:id -> address, '' (missing), or 'loading'
-  return (kind, id) => {
+  const fn = (kind, id) => {
     const k = kind + ':' + id, v = pics.get(k);
     if (v !== undefined) return v === 'loading' ? null : v;
     pics.set(k, 'loading');
     photo(kind, id).then((u) => { pics.set(k, u); render(); }, () => { pics.set(k, ''); render(); });
     return null;
   };
+  fn.load = (kind, id) => photo(kind, id); // the photo viewer fetches the ones next to it when it moves to them
+  return fn;
 }
+/** What the photo viewer moves through: the photos of one row (‹ › and "2 / 5"). */
+const galleryOf = (pic, kind, ids, index) => ({ items: ids.map((id) => () => (pic.load ? pic.load(kind, id) : pic(kind, id))), index });
 
 /** A row of small photos (tap = the viewer). */
 export function photosRow(pic, viewer, kind, list) {
   if (!list || !list.length) return null;
-  return h('div', { class: 'row' }, list.map((id) => {
+  return h('div', { class: 'row' }, list.map((id, i) => {
     const src = pic(kind, id);
-    return h('img', { key: kind + id, alt: src === '' ? 'Photo missing' : 'Photo', class: 'diary-photo', src: src || undefined, onClick: () => { if (src) viewer(src, 'Photo', true); } });
+    return h('img', { key: kind + id, alt: src === '' ? 'Photo missing' : 'Photo', class: 'diary-photo', src: src || undefined, onClick: () => { if (src) viewer(src, 'Photo', true, galleryOf(pic, kind, list, i)); } });
   }));
 }
 
@@ -103,7 +125,7 @@ export function filesBlock(t, { pic, openFile, onRemove = null }) {
  * "What's happening" (ui/detail.js): the last-7-days strip, box (today's update form) under the heading, the day in
  * bold with its date under it, the time on the right, the same day tags.
  */
-export function diaryBlock({ rules, t, updates, td, staff, meId, n, fillBy, photos, onMore, box = null, todayInRows = false }) {
+export function diaryBlock({ rules, t, updates, td, staff, meId, n, fillBy, photos, onMore, box = null, todayInRows = false, onDeleteUpdate = null }) {
   // todayInRows: today's update is a "Today" row too (the box above only writes or changes it)
   const { rows, more } = rules.diaryRows(t, updates, td, { staff: staff && !todayInRows, n, fillBy, nowHm: nowHm() });
   const SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -126,7 +148,9 @@ export function diaryBlock({ rules, t, updates, td, staff, meId, n, fillBy, phot
         h('div', { class: 'diary-line' },
           h('span', { class: 'diary-icon' }, u.state === 'stuck' ? '⚠️' : u.state === 'finished' ? '✅' : '📝'),
           h('div', { class: 'diary-text' }, h('strong', null, (staff && u.byId === meId ? 'You' : u.by) + ' '), u.state !== 'progress' ? [stateTag(u.state), ' '] : null, `“${u.note}”`, photos('photo', u.photos))),
-        h('span', { class: 'diary-time' }, fmtTime(u.at))))
+        h('span', { class: 'diary-time' }, fmtTime(u.at),
+          // the manager deletes an update and its photos (owner, 29 Oct: "delete this info only")
+          onDeleteUpdate && u.id ? h('button', { class: 'link small danger', type: 'button', title: 'Delete this update', 'aria-label': `Delete ${u.by}'s update`, onClick: () => onDeleteUpdate(u) }, ' ✕') : null)))
         : kind === 'off' ? h('span', { class: 'day-tag off' }, 'Off')
           : kind === 'wait' ? h('span', { class: 'day-tag wait' }, 'Waiting for today\'s update')
             : [h('span', { class: 'day-tag miss' }, 'No progress'), h('span', { class: 'muted small' }, staff ? ' no update' : ' no update from anyone')])))) : h('p', { class: 'muted small' }, 'Nothing yet.'),
@@ -148,7 +172,16 @@ export function msgTicks(c) {
   return by.length ? { cls: 'ticks seen', text: '✓✓', title: 'Seen by ' + by.join(', ') } : { cls: 'ticks', text: '✓', title: 'Sent — not seen yet' };
 }
 
-export function messagesBlock({ taskId, comments, waiting = [], draft, sending, placeholder, onInput, onSend, onPhoto, onEdit, onDelete, photos }) {
+/**
+ * Which buttons a message gets: ✎ change and ✕ delete on your own; a manager also gets ✕ on someone else's (owner, 29 Oct:
+ * "allow me to delete a msg added by the staff"). Never on the server's own notes (a move, a chase). Pure: tested.
+ */
+export function msgActs(c, manager = false) {
+  if (!c || c.kind === 'move' || c.kind === 'chase' || String(c.text || '').startsWith('↔ Moved')) return { edit: false, del: false };
+  return { edit: !!c.mine, del: !!c.mine || !!manager };
+}
+
+export function messagesBlock({ taskId, comments, waiting = [], draft, sending, placeholder, onInput, onSend, onPhoto, onEdit, onDelete, photos, manager = false }) {
   const err = errLine('merr-' + taskId);
   const say = (m) => err.say(m);
   const pick = h('input', { type: 'file', accept: 'image/*', class: 'visually-hidden', onChange: (e, el) => { const f = el.files[0]; el.value = ''; if (f) onPhoto(f).then(say); } });
@@ -156,9 +189,9 @@ export function messagesBlock({ taskId, comments, waiting = [], draft, sending, 
     comments.length ? comments.map((c) => h('div', { class: 'team-msg' + (c.mine ? ' mine' : ''), key: 'c-' + c.id },
       h('div', { class: 'row small' }, h('strong', null, c.mine ? 'You' : c.by), h('span', { class: 'muted' }, `${fmtDay(c.at)} ${fmtTime(c.at)}${c.editedAt ? ' · edited' : ''}`),
         ((t) => (t ? h('span', { class: t.cls, title: t.title, 'aria-label': t.title }, t.text) : null))(msgTicks(c)),
-        c.mine && !String(c.text || '').startsWith('↔ Moved') && c.kind !== 'move' && c.kind !== 'chase' ? h('span', { class: 'msg-acts' }, // (the server's own notes stay as they are)
-          h('button', { class: 'link small', title: 'Change', 'aria-label': 'Change this message', onClick: () => onEdit(c) }, '✎'),
-          h('button', { class: 'link small', title: 'Delete', 'aria-label': 'Delete this message', onClick: () => onDelete(c) }, '✕')) : null),
+        ((a) => (a.edit || a.del ? h('span', { class: 'msg-acts' }, // (the server's own notes stay as they are)
+          a.edit ? h('button', { class: 'link small', title: 'Change', 'aria-label': 'Change this message', onClick: () => onEdit(c) }, '✎') : null,
+          a.del ? h('button', { class: 'link small', title: 'Delete', 'aria-label': 'Delete this message', onClick: () => onDelete(c) }, '✕') : null) : null))(msgActs(c, manager))),
       c.photo ? photos('comment.photo', [c.id]) : null,
       c.text ? h('div', { class: 'pre' }, c.text) : null)) : (waiting.length ? null : h('span', { class: 'muted small' }, 'No messages yet.')),
     waiting.map((x) => h('div', { class: 'team-msg mine', key: 'wc-' + x.id },
@@ -184,5 +217,186 @@ export function phoneBack(win, isOpen, close) {
   return () => {
     if (isOpen() && !marked()) win.history.pushState({ dpBack: 1 }, '');
     else if (!isOpen() && marked()) { skip++; win.history.back(); }
+  };
+}
+
+/**
+ * 📒 A record's logbook: its entries by day, newest first — the time, the line, who (when it is not you), its photos.
+ * waiting = entries kept on the phone (no internet yet). onDelete(entry) on your own entries of the last 2 days.
+ */
+export function logbookBlock({ entries = [], waiting = [], photos, meId = 0, td = '', onDelete = null }) {
+  const days = [];
+  for (const e of entries) { const d = e.day || String(e.at).slice(0, 10); if (!days.length || days[days.length - 1].day !== d) days.push({ day: d, list: [] }); days[days.length - 1].list.push(e); }
+  const recent = (e) => !td || (e.day || String(e.at).slice(0, 10)) >= addDaysIso(td, -2);
+  return h('div', { class: 'logbook', key: 'logbook' },
+    waiting.map((w) => h('div', { class: 'log-entry waiting', key: 'lw-' + w.id }, h('span', { class: 'tag remind' }, '⏳ Waiting to send'), ' ', w.text, (w.files || []).length ? h('span', { class: 'muted small' }, ` 📷 ${w.files.length}`) : null)),
+    !entries.length && !waiting.length ? h('p', { class: 'muted small' }, 'No entries yet.') : null,
+    days.map((d) => h('div', { class: 'log-day', key: 'ld-' + d.day },
+      h('div', { class: 'log-day-head' }, d.day === td ? 'Today' : fmtDay(d.day)),
+      d.list.map((e) => h('div', { class: 'log-entry', key: 'le-' + e.id },
+        h('div', { class: 'log-line' },
+          h('span', { class: 'muted small log-time' }, fmtTime(e.at)),
+          h('span', { class: 'pre' }, e.text),
+          e.byId !== meId && e.by ? h('span', { class: 'muted small' }, ` · ${e.by}`) : null,
+          onDelete && e.byId === meId && recent(e) ? h('button', { class: 'link small danger', type: 'button', title: 'Remove this entry', onClick: () => onDelete(e) }, '✕') : null),
+        photos ? photos('photo', e.photos) : null)))));
+}
+const addDaysIso = (day, n) => new Date(Date.parse(day + 'T00:00:00Z') + n * 86400e3).toISOString().slice(0, 10);
+
+/**
+ * The phone's bottom bar on the team and staff pages, as on the owner's pages (owner, 24 Oct): the pages used most,
+ * then ☰ More (the menu). tabs: [icon, label, on, onTap, count?]. Shown only on a phone (styles.css .tabbar).
+ */
+export function bottomBar(tabs, onMore, moreOn = false) {
+  const tab = ([icon, label, on, onTap, count], i) => h('button', { class: 'tab' + (on ? ' current' : ''), key: 'tab-' + i, 'aria-label': label, onClick: onTap },
+    h('span', { class: 'tab-icon', 'aria-hidden': 'true' }, icon), h('span', { class: 'tab-label' }, label),
+    count ? h('span', { class: 'tab-count' }, String(count)) : null);
+  return h('nav', { class: 'tabbar', key: 'tabbar', 'aria-label': 'Main pages' }, tabs.filter(Boolean).map(tab),
+    h('button', { class: 'tab' + (moreOn ? ' current' : ''), key: 'tab-more', 'aria-label': 'More pages', onClick: onMore },
+      h('span', { class: 'tab-icon', 'aria-hidden': 'true' }, '☰'), h('span', { class: 'tab-label' }, 'More')));
+}
+
+/** A search result's words: a 📒 record's day has many lines, so only the lines with the words searched (up to 2). */
+export function hitLines(text, q) {
+  const lines = String(text || '').split('\n').map((l) => l.trim()).filter(Boolean);
+  if (lines.length < 2) return lines[0] || '';
+  const words = String(q || '').toLowerCase().split(/\s+/).filter((w) => w.length > 1);
+  const hit = lines.filter((l) => words.some((w) => l.toLowerCase().includes(w)));
+  return (hit.length ? hit : lines).slice(0, 2).join(' · ');
+}
+
+/**
+ * A task's dot in the staff app, the same rule as Team today (owner, 24 Oct: red at 11 am was wrong):
+ * sent today = green; waiting on the phone = yellow; due and not sent = yellow until the updates are due
+ * (fill-by), red after that, or when it is past its by-date, or stuck; a 📒 record with nothing today, or not due = grey.
+ */
+export function staffDot(t, { waiting = false, pastFillBy = false } = {}) {
+  if (!t || t.status !== 'open') return 'grey';
+  if (t.today) return 'green';
+  if (waiting) return 'yellow';
+  if (t.kind === 'log') return 'grey';
+  if (t.stuck) return 'red';
+  const late = t.late === true;
+  if (t.dueToday === false && !late) return 'grey'; // (the server always says; on today's list a task is due)
+  return late || pastFillBy ? 'red' : 'yellow';
+}
+
+/**
+ * ☑ Steps inside a single task (owner, 29 Oct: "let staff add steps to single tasks too", "steps with photos, with add
+ * photos option, edit and add photos option"). Who may do what, by the server's rules: anyone on the task (the person
+ * doing it, the manager) ticks, changes the words and adds photos; who added a step (or the manager) deletes it; who
+ * took a photo (or the manager) removes it. Pure: tested.
+ */
+export function stepActs(s, meId, manager = false) {
+  return { tick: true, edit: true, photo: (s.photos || []).length < STEP_PHOTOS, del: !!manager || s.byId === meId };
+}
+export const STEP_PHOTOS = 10; // (the server's MAX_STEP_PHOTOS)
+export const canRemoveStepPhoto = (p, meId, manager = false) => !!manager || p.byId === meId;
+/** Steps belong on a single task: not a project's step (those add steps in the project), not a 📒 record, not a suggestion. */
+export const takesSteps = (t) => !!t && (t.seq === null || t.seq === undefined) && t.kind !== 'log' && t.status !== 'suggested';
+
+export function stepsBlock({ t, steps = [], meId = 0, manager = false, draft = {}, adding = false, pic, viewer, onDraft, onAdd, onTick, onEdit, onDelete, onPhotos, onRemovePhoto }) {
+  const err = errLine('tserr-' + t.id);
+  const open = t.status === 'open';
+  const done = steps.filter((s) => s.done).length;
+  const files = draft.files || [];
+  const pickPhotos = (label, onPick, key) => h('label', { class: 'btn small', key, title: label, 'aria-label': label }, '📷',
+    h('input', { type: 'file', accept: 'image/*', multiple: true, class: 'visually-hidden', onChange: (e, el) => { const f = [...el.files]; el.value = ''; if (f.length) onPick(f); } }));
+  const photoBox = (s, p, i) => {
+    const src = pic('tstep.photo', p.id);
+    return h('span', { class: 'tstep-photo', key: 'sp-' + p.id },
+      h('img', { class: 'diary-photo', alt: src === '' ? 'Photo missing' : 'Photo', src: src || undefined, onClick: () => { if (src) viewer(src, s.title, true, galleryOf(pic, 'tstep.photo', s.photos.map((x) => x.id), i)); } }),
+      canRemoveStepPhoto(p, meId, manager) ? h('button', { class: 'link small danger', type: 'button', title: 'Remove this photo', 'aria-label': 'Remove this photo', onClick: () => onRemovePhoto(s, p) }, '✕') : null);
+  };
+  return block(`☑ Steps${steps.length ? ` · ${done} of ${steps.length} done` : ''}`, h('div', { class: 'stack tsteps', key: 'tsteps-' + t.id },
+    steps.length ? steps.map((s) => {
+      const a = stepActs(s, meId, manager);
+      return h('div', { class: 'tstep' + (s.done ? ' done' : ''), key: 'ts-' + s.id },
+        h('div', { class: 'row tstep-line' },
+          h('input', { type: 'checkbox', checked: s.done ? true : undefined, disabled: open ? undefined : true, 'aria-label': `${s.done ? 'Not done' : 'Done'}: ${s.title}`, onChange: () => onTick(s, !s.done) }),
+          h('span', { class: 'tstep-title' }, s.title, s.byId !== meId && s.by ? h('span', { class: 'muted small' }, ` · ${s.by}`) : null),
+          h('span', { class: 'msg-acts' },
+            a.edit ? h('button', { class: 'link small', type: 'button', title: 'Change the words', 'aria-label': 'Change this step', onClick: () => onEdit(s) }, '✎') : null,
+            a.photo ? pickPhotos('Add photos to this step', (f) => onPhotos(s, f).then((m) => err.say(m)), 'pp-' + s.id) : null,
+            a.del ? h('button', { class: 'link small danger', type: 'button', title: 'Delete', 'aria-label': 'Delete this step', onClick: () => onDelete(s) }, '✕') : null)),
+        s.photos && s.photos.length ? h('div', { class: 'row' }, s.photos.map((p, i) => photoBox(s, p, i))) : null);
+    }) : h('p', { class: 'muted small' }, open ? 'No steps yet. Add the steps of this work — each can have photos.' : 'No steps.'),
+    open ? h('form', { class: 'row add-step', onSubmit: (e) => { e.preventDefault(); onAdd().then((m) => err.say(m)); } },
+      h('input', { key: 'tsadd-' + t.id, placeholder: '+ Add a step…', 'aria-label': 'Add a step', maxlength: '300', enterkeyhint: 'enter', autocomplete: 'off', value: draft.title || '',
+        onInput: (e, el) => { onDraft({ ...draft, title: el.value }); err.clear(); } }),
+      pickPhotos('Photos for the new step', (f) => onDraft({ ...draft, files: [...files, ...f].slice(0, STEP_PHOTOS) }), 'pp-new'),
+      h('button', { class: 'btn primary small', type: 'submit', disabled: adding ? true : undefined }, 'Add step')) : null,
+    files.length ? h('div', { class: 'row small muted' }, `📷 ${files.length} photo${files.length > 1 ? 's' : ''} go with the new step`,
+      h('button', { class: 'link small', type: 'button', onClick: () => onDraft({ ...draft, files: [] }) }, 'Clear')) : null,
+    err));
+}
+
+/**
+ * What the ☑ Steps box does, the same in the staff view and the team pages. env: { api, state, render, toast, shrink,
+ * ask, fail }. Each answer carries the task's steps; they are shown only while that task is still the open page.
+ */
+export function makeStepActs({ api, state, render, toast, shrink, ask, fail }) {
+  const openId = () => (state.detail && state.detail.task ? state.detail.task.id : null);
+  const put = (tid, out) => { if (out && out.steps && openId() === tid) state.detail.steps = out.steps; render(); };
+  const say = (e) => { const m = fail(e); if (m) toast(m, 5000); return m; };
+  const drafts = () => (state.tstepDrafts ||= {});
+  const cids = {}; // the same id for a retry of the same words: the step is added once
+  async function sendPhotos(tid, stepId, files) {
+    if (state.offline) return 'Photos need the internet. Try again when online.';
+    toast(files.length > 1 ? `Sending ${files.length} photos…` : 'Sending photo…');
+    let out = null;
+    try {
+      for (const f of files) {
+        const fd = new FormData();
+        fd.append('stepId', String(stepId)); fd.append('clientId', newClientId()); fd.append('file', await shrink(f), 'photo.jpg');
+        out = await api('tstep.photo', fd, true);
+        put(tid, out);
+      }
+      toast('📷 Added ✓');
+      return '';
+    } catch (e) { return e.offline ? 'Photos need the internet. Try again when online.' : say(e); }
+  }
+  return {
+    draftFor: (tid) => drafts()[tid] || {},
+    setDraft: (tid, d) => { drafts()[tid] = d; render(); },
+    async add(tid) {
+      const d = drafts()[tid] || {};
+      const title = String(d.title || '').trim();
+      if (!title) return 'Write the step first.';
+      if (state.offline) return 'Adding a step needs the internet. Try again when online.';
+      if (state.addingStep) return '';
+      if (!cids[tid] || cids[tid].title !== title) cids[tid] = { id: newClientId(), title };
+      state.addingStep = true; render();
+      try {
+        const out = await api('tstep.add', { taskId: tid, title, clientId: cids[tid].id });
+        delete cids[tid]; delete drafts()[tid];
+        put(tid, out);
+        if ((d.files || []).length && out.stepId) return await sendPhotos(tid, out.stepId, d.files);
+        toast('➕ Step added');
+        return '';
+      } catch (e) { return e.offline ? 'Adding a step needs the internet. Try again when online.' : fail(e); }
+      finally { state.addingStep = false; render(); }
+    },
+    photos: (s, files) => sendPhotos(openId(), s.id, files),
+    async tick(s, done) {
+      const tid = openId();
+      try { put(tid, await api('tstep.edit', { id: s.id, done })); return ''; } catch (e) { return say(e); }
+    },
+    async edit(s) {
+      const title = ask.prompt('Change the step:', s.title);
+      if (title === null || title === undefined || !title.trim() || title.trim() === s.title) return '';
+      const tid = openId();
+      try { put(tid, await api('tstep.edit', { id: s.id, title: title.trim() })); toast('Changed ✓'); return ''; } catch (e) { return say(e); }
+    },
+    async remove(s) {
+      if (!ask.confirm(`Delete the step "${s.title}"${(s.photos || []).length ? ' and its photos' : ''}?`)) return '';
+      const tid = openId();
+      try { put(tid, await api('tstep.delete', { id: s.id })); toast('Deleted'); return ''; } catch (e) { return say(e); }
+    },
+    async removePhoto(s, p) {
+      if (!ask.confirm('Remove this photo?')) return '';
+      const tid = openId();
+      try { put(tid, await api('tstep.photo.delete', { id: p.id })); toast('Removed'); return ''; } catch (e) { return say(e); }
+    },
   };
 }

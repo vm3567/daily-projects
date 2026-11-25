@@ -189,33 +189,66 @@ export function dotColour(project, today = todayIndia()) {
 /** "Move every N days": how often a task or project should have a real update (owner sets it; 3 when not set). */
 export const MOVE_EVERY_DEFAULT = 3;
 export const MOVE_EVERY_PICKS = [1, 2, 3, 5, 7, 14, 30];
+const validEvery = (n) => Number.isInteger(n) && n >= 1 && n <= 90;
+/** The owner's own default (Settings → "Every task should move…", owner 24 Oct): for every task with no choice of its own. */
+let everyDefault = MOVE_EVERY_DEFAULT;
+export function useEveryDefault(data) {
+  const n = data && data.settings ? data.settings.moveEvery : null;
+  everyDefault = validEvery(n) ? n : MOVE_EVERY_DEFAULT;
+}
+export const everyDefaultOf = (data) => (data && data.settings && validEvery(data.settings.moveEvery) ? data.settings.moveEvery : MOVE_EVERY_DEFAULT);
 export function moveEveryOf(p) {
   const n = p ? p.moveEvery : null;
-  return Number.isInteger(n) && n >= 1 && n <= 90 ? n : MOVE_EVERY_DEFAULT;
+  return validEvery(n) ? n : everyDefault;
 }
 export const everyText = (n) => (n === 1 ? 'every day' : `every ${n} days`);
 
 const openSteps = (p) => (p.steps || []).filter((s) => !s.done);
 /** Its target date, or an open step's due date, has passed. */
 function datePassed(p, today) {
-  return (!!p.deadline && p.deadline < today) || openSteps(p).some((s) => s.dueDate && s.dueDate < today);
+  return (ownTarget(p) && p.deadline < today) || openSteps(p).some((s) => s.dueDate && s.dueDate < today);
 }
 /** Its target date, or an open step's due date, is today or in the next 2 days. */
 function dateSoon(p, today) {
   const soon = addDays(today, 2);
-  return (!!p.deadline && p.deadline <= soon) || openSteps(p).some((s) => s.dueDate && s.dueDate <= soon);
+  return (ownTarget(p) && p.deadline <= soon) || openSteps(p).some((s) => s.dueDate && s.dueDate <= soon);
 }
+
+const MONTHS3 = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+/** "2026-10-21" → "21 Oct" (as dates are shown everywhere). */
+export const shortDay = (d) => (/^\d{4}-\d{2}-\d{2}$/.test(String(d)) ? `${Number(d.slice(8, 10))} ${MONTHS3[Number(d.slice(5, 7)) - 1]}` : String(d || ''));
 
 /** Why the dot has its colour, in a few words (the dot's tooltip and the task page). */
 export function colourWhy(p, today = todayIndia()) {
   if (p.state === 'finished') return 'Finished';
   if (p.state !== 'active') return 'Paused';
   if (isSnoozed(p, today)) return 'Snoozed';
-  if (p.deadline && p.deadline < today) return `Target date passed (${p.deadline})`;
+  if (ownTarget(p) && p.deadline < today) return `Overdue · ${shortDay(p.deadline)}`; // (the same words as the list's tag, owner 24 Oct)
   if (datePassed(p, today)) return 'A step\'s due date has passed';
   const days = daysWithoutWork(p, today);
   const last = days === 0 ? 'Updated today' : `No update for ${days} day${days === 1 ? '' : 's'}`;
-  return `${last} · should move ${everyText(moveEveryOf(p))}${dateSoon(p, today) && days < moveEveryOf(p) ? ' · a date is near' : ''}`;
+  return `${last} · should move ${everyText(moveEveryOf(p))}${dateSoon(p, today) && days < moveEveryOf(p) ? ' · ' + soonText(p, today) : ''}`;
+}
+
+/** Which date is near, in words: "Target 25 Oct is near" or "A step is due 26 Oct". */
+function soonText(p, today) {
+  const soon = addDays(today, 2);
+  if (ownTarget(p) && p.deadline <= soon) return p.deadline === today ? 'Target is today' : `Target ${shortDay(p.deadline)} is near`;
+  const due = openSteps(p).map((s) => s.dueDate).filter((d) => d && d <= soon).sort()[0];
+  return due === today ? 'A step is due today' : `A step is due ${shortDay(due)}`;
+}
+
+/**
+ * The one reason a red / yellow task is not green, short (a list row's chip, the dashboard's Needs attention):
+ * never "Updated today" for a yellow one — then its reason is the near date (owner, 24 Oct).
+ */
+export function colourShort(p, today = todayIndia()) {
+  const c = dotColour(p, today);
+  if (c !== 'red' && c !== 'yellow') return '';
+  const days = daysWithoutWork(p, today);
+  if (c === 'yellow' && days < moveEveryOf(p) && dateSoon(p, today)) return soonText(p, today);
+  if (ownTarget(p) && p.deadline < today) return `Overdue · ${shortDay(p.deadline)}`;
+  return colourWhy(p, today).split(' · ')[0];
 }
 
 /**
@@ -244,7 +277,20 @@ export function daysWithoutWork(project, today = todayIndia()) {
 }
 
 export function isOverdue(project, today = todayIndia()) {
-  return !!(project.deadline && project.deadline < today);
+  return !!(ownTarget(project) && project.deadline < today);
+}
+
+/** New tasks get a target date 30 days ahead (shown, changeable). */
+export const DEFAULT_TARGET_DAYS = 30;
+/**
+ * A target date the owner chose (not the automatic one a new task gets): only this one makes the dot yellow / red or
+ * says "Overdue" (owner, 24 Oct: the automatic date would turn every task red after 30 days). Older tasks have no mark:
+ * a target exactly 30 days after the day it was made counts as the automatic one.
+ */
+export function ownTarget(p) {
+  if (!p || !p.deadline || p.autoTarget) return false;
+  if (p.targetSet) return true; // set (or kept) by you
+  return !(p.createdAt && p.deadline === addDays(indiaDate(p.createdAt), DEFAULT_TARGET_DAYS));
 }
 
 /** First unfinished step, or null. */
@@ -395,8 +441,8 @@ export function projectGiveChanges(data) {
     const m = (via && given.includes(via) ? nearer || via : given[0]) || null;
     if (!m) { if (t.team) out.push({ projectId: t.id, team: null }); continue; }
     if (!t.team && t.teamOff) continue;
-    const want = { userId: m.team.userId, name: m.team.name, needsPhoto: !!m.team.needsPhoto, viaProject: m.id };
-    if (!t.team || t.team.userId !== want.userId || t.team.name !== want.name || !!t.team.needsPhoto !== want.needsPhoto || t.team.viaProject !== m.id) out.push({ projectId: t.id, team: want });
+    const want = { userId: m.team.userId, name: m.team.name, needsPhoto: !!m.team.needsPhoto, record: !!m.team.record, viaProject: m.id };
+    if (!t.team || t.team.userId !== want.userId || t.team.name !== want.name || !!t.team.needsPhoto !== want.needsPhoto || !!t.team.record !== want.record || t.team.viaProject !== m.id) out.push({ projectId: t.id, team: want });
   }
   return out;
 }
@@ -472,8 +518,8 @@ export function mainSummary(children, today = todayIndia()) {
   const head = `${active.length} task${active.length === 1 ? '' : 's'}`;
   const bits = [n.red ? `${n.red} red` : null, n.yellow ? `${n.yellow} yellow` : null].filter(Boolean);
   if (bits.length) return [head, ...bits].join(' · ');
-  if (n.green === active.length) return `${head} · all green`;
-  return [head, n.green ? `${n.green} green` : null, n.grey ? `${n.grey} resting` : null].filter(Boolean).join(' · ');
+  if (n.green === active.length) return `${head} · all on track`;
+  return [head, n.green ? `${n.green} on track` : null, n.grey ? `${n.grey} resting` : null].filter(Boolean).join(' · ');
 }
 
 /**
@@ -508,8 +554,21 @@ export function projectTasks(data, id) {
   return projectParts(data, id).tasks;
 }
 
+/**
+ * Finishing a 📂 project: its open tasks (paused too) that would be left behind — at any depth, but not a task that is
+ * also in another project still open (it goes on there). Owner, 29 Oct: "Finish project" asks about these.
+ */
+export function openTasksInside(data, p) {
+  if (!data || !p || p.misc || !isMainProject(data, p)) return [];
+  const inside = new Set([p.id, ...descendantIds(data, p.id)]);
+  const byId = new Map(data.projects.map((x) => [x.id, x]));
+  return projectTasks(data, p.id).filter((t) => t.state !== 'finished'
+    && parentIdsOf(t).every((id) => inside.has(id) || (byId.get(id) || {}).state === 'finished'));
+}
+
 /** Everything inside the project `id` at any depth, in one pass: { tasks, projects } (isMainProject for each, without a scan each). */
 export function projectParts(data, id) {
+  if (id === MISC_ID && hasMisc(data)) return { tasks: childrenOf(data, id), projects: [] }; // 📂 Misc: its loose tasks (they have no parent)
   const ids = descendantIds(data, id);
   const holders = new Set(data.projects.flatMap((p) => parentIdsOf(p)));
   const tasks = [], projects = [];
@@ -609,6 +668,24 @@ export function todayWithoutEmptyMains(list, today = todayIndia()) {
 /** What Today counts (its rows, the progress line, the Daily round, the evening check): awake, empty 📂 projects left out. */
 export function todayList(data, today = todayIndia()) {
   return todayWithoutEmptyMains(awakeProjects(data, today), today);
+}
+
+/**
+ * 📥 Inbox: the tasks an item seems to belong to (up to 3). Two words in common (4+ letters), or one word and a person
+ * named in the item who is on one of the task's steps — one common word alone ("glaze") is too weak (owner, 24 Oct).
+ */
+export function inboxMatches(data, text, today = todayIndia()) {
+  const split = (t) => String(t || '').toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((w) => w.length >= 4);
+  const words = new Set(split(text));
+  const low = String(text || '').toLowerCase();
+  const people = (data.people || []).filter((x) => x.name && low.includes(x.name.toLowerCase()));
+  return stepTargets(data, today)
+    .map((p) => {
+      const common = new Set(split(p.name).filter((w) => words.has(w))).size;
+      const person = people.some((x) => p.steps.some((s) => !s.done && s.text.includes('@' + x.name)));
+      return { p, score: common * 2 + (person ? 1 : 0), ok: common >= 2 || (common >= 1 && person) };
+    })
+    .filter((x) => x.ok).sort((a, b) => b.score - a.score).slice(0, 3).map((x) => x.p);
 }
 
 /** Where a new step can go (Inbox, Chrome clip, a person's task box): awake tasks only — a 📂 project holds tasks, not steps. */
@@ -901,6 +978,62 @@ export function pasteGoesToProject(ui, { viewerOpen = false, narrow = false } = 
 }
 
 /** Ctrl+V inside the "+ New task" box: it belongs to the new task, never to the project open on the right. */
+/**
+ * A paste with nothing in it this app can read (no file, no words): e.g. Outlook's "Copy" on an attachment, which keeps
+ * only Outlook's own note of it on the clipboard ("application/owa-item-drag-data"), never the file (owner, 29 Oct).
+ */
+export function emptyPaste(cd) {
+  if (!cd) return false;
+  const has = (t) => !!String(cd.getData(t) || '').trim();
+  return ![...(cd.files || [])].length && !has('text/plain') && !has('text/html');
+}
+export const EMPTY_PASTE = 'Nothing to paste — Outlook keeps its attachments to itself. Download the file and drag it here, or open the photo (Preview), right-click → Copy image, then paste.';
+
+/**
+ * Give a task (team pages): the owner's own open tasks whose name has every typed word (any case), not given to
+ * anyone yet — newest first: [{ id, name, project, steps }] (project = its first 📂 project, "In no project" left out).
+ */
+export function ownerTaskMatches(data, q) {
+  const words = String(q || '').toLowerCase().split(/\s+/).filter(Boolean);
+  if (!data || !words.length) return [];
+  const byId = new Map(data.projects.map((p) => [p.id, p]));
+  return data.projects
+    .filter((p) => p.state === 'active' && !p.misc && !p.team && !isMainProject(data, p) && words.every((w) => p.name.toLowerCase().includes(w)))
+    .map((p) => ({ id: p.id, name: p.name, project: (parentIdsOf(p).map((id) => byId.get(id)).find((m) => m && !m.misc) || {}).name || '', steps: p.steps.filter((s) => !s.done).length }));
+}
+
+/**
+ * 📷 The photos on given steps that the person's task does not have yet (owner, 29 Oct: "he cannot see the images in
+ * the steps"): a step's own photos (pasted on it) and the photos of your updates about it. Each goes once, under a
+ * name that says which photo it is ("step-photo-<id>.jpg"), so a second device or a later look never sends it again.
+ * Up to 10 files per task (the server's limit). byStep: stepRef → the team task ({ id, status, files }).
+ * Returns [{ taskId, file, name }].
+ */
+export function stepPhotosToSend(data, byStep) {
+  const out = [];
+  if (!data || !byStep) return out;
+  const isImage = (f) => /\.(png|jpe?g|gif|webp|heic|heif)$/i.test(f.name || '') || /^image\//.test(f.type || '');
+  for (const p of data.projects) {
+    if (!p.team || p.state !== 'active') continue;
+    for (const s of p.steps) {
+      const t = s.done ? null : byStep.get(s.id);
+      if (!t || t.status !== 'open') continue;
+      const notes = new Set(p.workNotes.filter((n) => n.stepId === s.id).map((n) => n.id));
+      const have = new Set((t.files || []).map((f) => f.name));
+      let room = 10 - (t.files || []).length;
+      for (const f of p.files || []) {
+        if (room <= 0) break;
+        if (!f.sha || !isImage(f) || !(f.stepId === s.id || (f.noteId && notes.has(f.noteId)))) continue;
+        const name = `step-photo-${f.id}.jpg`;
+        if (have.has(name)) continue;
+        out.push({ taskId: t.id, file: f, name });
+        room--;
+      }
+    }
+  }
+  return out;
+}
+
 export function pasteInForm(target) {
   const el = target && target.nodeType === 3 ? target.parentNode : target; // (a text node inside a box)
   return !!(el && typeof el.closest === 'function' && el.closest('.new-task-box'));
@@ -1315,6 +1448,7 @@ export function stageOf(p, team = null) {
 /** The words on a stage chip: "🟠 Waiting: Approval" (`you` = shown as "Waiting: you"). */
 export function stageText(info, { you = false } = {}) {
   const s = info && STAGES.includes(info.stage) ? info.stage : 'notstarted';
+  if (s === 'done' && info && info.cancelled) return '✖ Cancelled'; // taken back or cancelled: never "Done"
   if (s !== 'waiting') return STAGE_LABELS[s];
   const who = you ? 'you' : cleanWaitingFor(info.waitingFor);
   return who ? `${STAGE_LABELS.waiting}: ${who}` : STAGE_LABELS.waiting;

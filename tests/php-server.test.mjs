@@ -18,8 +18,8 @@ const has = (cmd) => { try { execFileSync('which', [cmd], { stdio: 'ignore' }); 
 const READY = has('php') && has('mysqld') && has('mysql') && has('mysqladmin');
 const skip = READY ? false : 'php / mysqld not installed on this computer';
 
-const DB_PORT = 20000 + (process.pid % 5000);
-const WEB_PORT = DB_PORT + 5000;
+const DB_PORT = await freePort(20000 + (process.pid % 5000));
+const WEB_PORT = await freePort(DB_PORT + 5000);
 const SOCK = `/tmp/wtt-${process.pid}.sock`; // short: MySQL refuses long socket paths
 const B = `http://127.0.0.1:${WEB_PORT}/api/?a=`;
 let dir; let mysqld; let web;
@@ -33,7 +33,16 @@ async function until(fn, what, ms = 30000) {
 }
 const sql = (q) => execFileSync('mysql', ['-u', 'root', `--socket=${SOCK}`, '-e', q], { stdio: 'pipe' });
 // the fake servers sit below 32768: ports above it are handed out at random for outgoing connections and can be taken
-const MS_PORT = 10000 + (process.pid % 5000); // a fake Microsoft (sign-in and Graph) for the Outlook checks
+/** A port nobody uses now, from `start` up (another program on the Mac, e.g. Adobe on 15393, once held a fixed one: 24 Oct). */
+async function freePort(start) {
+  const { createServer } = await import('node:net');
+  for (let p = start; p < start + 300; p++) {
+    const free = await new Promise((r) => { const sv = createServer(); sv.once('error', () => r(false)); sv.listen(p, '127.0.0.1', () => sv.close(() => r(true))); });
+    if (free) return p;
+  }
+  return start;
+}
+const MS_PORT = await freePort(10000 + (process.pid % 5000)); // a fake Microsoft (sign-in and Graph) for the Outlook checks
 const MS = `http://127.0.0.1:${MS_PORT}`;
 const env = () => ({ ...process.env, WT_TEST_DIR: dir, WT_DB_HOST: `127.0.0.1;port=${DB_PORT}`, WT_PUSH_LOG: join(dir, 'push.log'), WT_MS_BASE: MS });
 
@@ -1673,7 +1682,7 @@ test('cron.php: runs the jobs from the command line, skips while another run hol
 });
 
 // ---------------------------------------------------------------- 🔌 Connections: outside apps send tasks and approvals (connect.php)
-const CB_PORT = 15000 + (process.pid % 5000); // a tiny fake app that receives the decisions (below 32768, as MS_PORT)
+const CB_PORT = await freePort(15000 + (process.pid % 5000)); // a tiny fake app that receives the decisions (below 32768, as MS_PORT)
 const CB = `http://127.0.0.1:${CB_PORT}/hook`;
 const cb = { reqs: [], code: 200, delay: 0, server: null };
 async function fakeApp() {
@@ -1970,7 +1979,7 @@ test('connections: Rotate key — the old key stops at once, the new key and a n
   const log = sqlOut("SELECT GROUP_CONCAT(action, ' ', detail SEPARATOR '\\n') FROM wt.audit WHERE action LIKE 'conn\\_%'");
   for (const a of ['conn_create #', 'conn_rotate #', 'conn_delete #', 'conn_update #', 'conn_decide #']) assert.ok(log.includes(a), a);
   assert.ok(!/wt[cs]_[0-9a-f]{20}/.test(log), 'no key or secret in the log');
-  assert.equal(sqlOut("SELECT v FROM wt.settings WHERE k = 'schema'").trim(), '38', 'the tables steps ran (v38: updates.waiting_for — Stuck: waiting for what)');
+  assert.equal(sqlOut("SELECT v FROM wt.settings WHERE k = 'schema'").trim(), '43', 'the tables steps ran (v42 task_steps, v43 step_photos — ☑ steps in a single task; v41: photos.entry_id — 📒 record entries; v39 tasks.kind, v40 entries)');
 });
 
 // ---------------------------------------------------------------- review round 12 (connect.php / outlook.php)
@@ -3051,11 +3060,212 @@ test('Stage: a Stuck update saves "waiting for what" (one short line, up to 80) 
   assert.equal(u.waitingFor, null);
 });
 
-test('Stage: migration v38 (updates.waiting_for) runs again safely — the column already there is not an error, the schema stays 38', { skip }, async () => {
+test('Stage: migration v38 (updates.waiting_for) runs again safely — the column already there is not an error, the schema goes on to the newest (43)', { skip }, async () => {
   sql("UPDATE wt.settings SET v = '37' WHERE k = 'schema'");
   await phpRun('migrate(db()); echo "ok";');
-  assert.equal(sqlOut("SELECT v FROM wt.settings WHERE k = 'schema'").trim(), '38');
+  assert.equal(sqlOut("SELECT v FROM wt.settings WHERE k = 'schema'").trim(), '43');
   await phpRun('migrate(db()); echo "ok";');
-  assert.equal(sqlOut("SELECT v FROM wt.settings WHERE k = 'schema'").trim(), '38');
+  assert.equal(sqlOut("SELECT v FROM wt.settings WHERE k = 'schema'").trim(), '43');
   assert.match(sqlOut("SHOW COLUMNS FROM wt.updates LIKE 'waiting_for'"), /waiting_for\s+varchar\(80\)\s+YES/i);
+});
+
+// ---------------------------------------------------------------- 📒 record tasks (owner asked 24 Oct)
+function entryPhoto(entryId, t, clientId) {
+  const fd = new FormData();
+  fd.append('entryId', String(entryId));
+  fd.append('file', new Blob([png], { type: 'image/png' }), 'p.png');
+  if (clientId) fd.append('clientId', clientId);
+  return call('entry.photo', fd, t, true);
+}
+
+test('📒 Record task: kind "log" is never due or late, always on the person\'s list; entries (a line each, any number a day) make the day\'s update ("10:42 text" lines), so Team today shows it sent; a resend is kept once; photos per entry (up to 5); the daily update box is refused', { skip }, async () => {
+  const t = (await call('task.save', { assigneeId: id.suresh, title: 'Follow up clay order', repeat: 'once', dueDate: '2026-01-01', kind: 'log' }, tok.boss)).task;
+  assert.equal(t.kind, 'log');
+  assert.equal(t.dueToday, false, 'a record is never due');
+  assert.equal(t.late, false, 'and never late, even past its date');
+  let mine = await call('my.today', {}, tok.suresh);
+  assert.ok(mine.tasks.some((x) => x.id === t.id), 'on the person\'s list with no entry yet');
+  assert.ok(!(await call('team.today', {}, tok.boss)).tasks.some((x) => x.id === t.id), 'Team today: not "Not yet" (no entry, nothing due)');
+  // entries
+  const e1 = (await call('entry.add', { taskId: t.id, text: '  PO sent to the supplier ', clientId: 'ent-0001-aa' }, tok.suresh)).entry;
+  assert.equal(e1.text, 'PO sent to the supplier');
+  const again = (await call('entry.add', { taskId: t.id, text: 'PO sent to the supplier', clientId: 'ent-0001-aa' }, tok.suresh)).entry;
+  assert.equal(again.id, e1.id, 'a resend (reply lost) is the same entry');
+  const e2 = (await call('entry.add', { taskId: t.id, text: 'Supplier says dispatch Monday', clientId: 'ent-0002-aa' }, tok.suresh)).entry;
+  assert.notEqual(e2.id, e1.id);
+  const got = await call('task.get', { id: t.id }, tok.boss);
+  assert.deepEqual(got.entries.map((e) => e.text), ['Supplier says dispatch Monday', 'PO sent to the supplier'], 'newest first');
+  assert.equal(got.task.entriesToday, 2);
+  assert.match(got.task.today.note, /^\d{1,2}:\d\d [ap]m PO sent to the supplier\n\d{1,2}:\d\d [ap]m Supplier says dispatch Monday$/, 'the day\'s update: a line each, with the time as on screen ("8:53 am", owner asked 24 Oct)');
+  assert.equal(got.task.today.state, 'progress');
+  assert.ok((await call('team.today', {}, tok.boss)).tasks.some((x) => x.id === t.id && x.today), 'Team today: sent');
+  // photos on an entry
+  const p1 = await entryPhoto(e1.id, tok.suresh, 'ent-0001-aa-p0');
+  assert.ok(p1.photoId);
+  assert.equal((await entryPhoto(e1.id, tok.suresh, 'ent-0001-aa-p0')).photoId, p1.photoId, 'a resend is kept once');
+  for (let i = 1; i < 5; i++) assert.ok((await entryPhoto(e1.id, tok.suresh, 'ent-0001-aa-p' + i)).photoId);
+  assert.match((await entryPhoto(e1.id, tok.suresh, 'ent-0001-aa-p5')).error, /Up to 5 photos per entry/);
+  assert.ok((await entryPhoto(e2.id, tok.suresh, 'ent-0002-aa-p0')).photoId, 'each entry has its own 5');
+  const got2 = await call('task.get', { id: t.id }, tok.boss);
+  assert.equal(got2.entries.find((e) => e.id === e1.id).photos.length, 5);
+  assert.equal(got2.task.today.photos.length, 6, 'the day\'s update shows every photo of the day');
+  assert.equal((await entryPhoto(e1.id, tok.anita, 'x-anita-p0')).s, 403, 'only the entry\'s writer adds its photos');
+  // the daily update box is not for a record
+  assert.match((await call('update.save', { taskId: t.id, note: 'x', state: 'progress' }, tok.suresh)).error, /add an entry instead/);
+  // not on a normal task; not by someone else; empty refused
+  const normal = (await call('task.save', { assigneeId: id.suresh, title: 'Daily kiln check', repeat: 'daily' }, tok.boss)).task;
+  assert.equal(normal.kind, 'task');
+  assert.match((await call('entry.add', { taskId: normal.id, text: 'x' }, tok.suresh)).error, /daily update, not entries/);
+  assert.equal((await call('entry.add', { taskId: t.id, text: 'me too' }, tok.anita)).s, 404, 'other staff: not found');
+  assert.ok(!(await call('entry.add', { taskId: t.id, text: '   ' }, tok.suresh)).ok, 'an empty entry is refused');
+});
+
+test('📒 Record entries: written offline yesterday count for yesterday (more than 2 days back: refused); remove your own entry (its photos go, the day\'s lines are made again; the last one removes the day\'s update); a closed record takes no entries', { skip }, async () => {
+  const t = (await call('task.save', { assigneeId: id.suresh, title: 'Glaze stock record', repeat: 'daily', kind: 'log' }, tok.boss)).task;
+  const yesterday = new Date(Date.now() + 5.5 * 3600e3 - 86400e3).toISOString().slice(0, 10);
+  const old = (await call('entry.add', { taskId: t.id, text: 'Counted 12 bags', clientId: 'ent-old-0001', writtenAt: new Date(Date.now() - 86400e3).toISOString(), sentAt: new Date().toISOString() }, tok.suresh)).entry;
+  assert.equal(old.day, yesterday, 'counts for the day it was written');
+  assert.match((await call('entry.add', { taskId: t.id, text: 'old', clientId: 'ent-old-0002', writtenAt: new Date(Date.now() - 4 * 86400e3).toISOString(), sentAt: new Date().toISOString() }, tok.suresh)).error, /more than 2 days ago/);
+  const a = (await call('entry.add', { taskId: t.id, text: 'Used 2 bags', clientId: 'ent-del-0001' }, tok.suresh)).entry;
+  const b = (await call('entry.add', { taskId: t.id, text: 'Used 1 more', clientId: 'ent-del-0002' }, tok.suresh)).entry;
+  const ph = (await entryPhoto(a.id, tok.suresh, 'ent-del-0001-p0')).photoId;
+  assert.equal((await call('entry.delete', { id: a.id }, tok.anita)).s, 403, 'only your own');
+  assert.ok((await call('entry.delete', { id: a.id }, tok.suresh)).ok !== false);
+  assert.equal(sqlOut(`SELECT COUNT(*) FROM wt.photos WHERE id = ${ph}`).trim(), '0', 'its photo went with it');
+  let got = await call('task.get', { id: t.id }, tok.boss);
+  assert.match(got.task.today.note, /^\d{1,2}:\d\d [ap]m Used 1 more$/, 'the day\'s lines made again');
+  await call('entry.delete', { id: b.id }, tok.suresh);
+  got = await call('task.get', { id: t.id }, tok.boss);
+  assert.equal(got.task.today, null, 'no entries left today: no update today');
+  assert.equal(got.task.last.note.endsWith('Counted 12 bags'), true, 'yesterday\'s stays');
+  await call('task.status', { id: t.id, status: 'done' }, tok.boss);
+  assert.match((await call('entry.add', { taskId: t.id, text: 'late one', clientId: 'ent-closed-01' }, tok.suresh)).error, /closed/);
+});
+
+test('📒 Record for a given project: project.sync kind "log" makes every open step a record, and a step the person adds later too; kind "" turns it back', { skip }, async () => {
+  const steps = [{ stepRef: 'rs1', title: 'Order clay' }, { stepRef: 'rs2', title: 'Follow up delivery' }];
+  let out = await call('project.sync', { projectRef: 'rec1', project: 'Materials', assigneeId: id.suresh, steps, kind: 'log' }, tok.boss);
+  assert.deepEqual(out.tasks.map((x) => x.kind), ['log', 'log']);
+  const added = await call('project.addStep', { projectRef: 'rec1', title: 'Check the invoice', clientId: 'rec1-step-0001' }, tok.suresh);
+  assert.equal(added.task.kind, 'log', 'a step they add takes the project\'s kind');
+  out = await call('project.sync', { projectRef: 'rec1', project: 'Materials', assigneeId: id.suresh, steps, kind: '' }, tok.boss);
+  assert.deepEqual(out.tasks.map((x) => x.kind), ['task', 'task', 'task'], 'back to daily updates');
+  out = await call('project.sync', { projectRef: 'rec1', project: 'Materials', assigneeId: id.suresh, steps }, tok.boss);
+  assert.deepEqual(out.tasks.map((x) => x.kind), ['task', 'task', 'task'], 'no kind sent: unchanged');
+});
+
+test('Review 6 (owner, 24 Oct): the Today page\'s team line counts the same rows as Team today (a task sent today counts, a record with entries too)', { skip }, async () => {
+  const tt = await call('team.today', {}, tok.boss);
+  const linked = await call('tasks.linked', {}, tok.boss);
+  assert.ok(linked.summary, 'the summary is there');
+  const due = tt.tasks.length;
+  const sent = tt.tasks.filter((t) => t.today).length;
+  assert.deepEqual([linked.summary.due, linked.summary.sent], [due, sent], 'the same counts as Team today');
+});
+
+test('Review2 1 (owner, 24 Oct): a task taken back after today\'s update leaves the staff list, its counts and Team today', { skip }, async () => {
+  const t = (await call('task.save', { assigneeId: id.suresh, title: 'Taken back after update', repeat: 'once' }, tok.boss)).task;
+  assert.ok((await call('update.save', { taskId: t.id, note: 'half done', state: 'progress' }, tok.suresh)).ok);
+  let my = await call('my.today', {}, tok.suresh);
+  assert.ok(my.tasks.some((x) => x.id === t.id), 'on the list while open');
+  await call('task.status', { id: t.id, status: 'cancelled' }, tok.boss);
+  my = await call('my.today', {}, tok.suresh);
+  assert.ok(![...my.tasks, ...my.other].some((x) => x.id === t.id), 'taken back: off the staff list (not "✓ Sent")');
+  const tt = await call('team.today', {}, tok.boss);
+  assert.ok(!tt.tasks.some((x) => x.id === t.id), 'and off Team today, so it is not counted as Sent');
+});
+
+test('Review2 6 (owner, 24 Oct): tasks.linked summary carries today\'s team words, a 📒 record given from the team pages too', { skip }, async () => {
+  const t = (await call('task.save', { assigneeId: id.suresh, title: 'Summary record', repeat: 'daily', skipSunday: false, kind: 'log' }, tok.boss)).task;
+  assert.ok((await call('entry.add', { taskId: t.id, text: 'Got 12 bags', clientId: 'sum-ent-0001' }, tok.suresh)).entry);
+  const s = (await call('tasks.linked', {}, tok.boss)).summary;
+  const u = s.updates.find((x) => x.title === 'Summary record');
+  assert.ok(u && /Got 12 bags/.test(u.note) && u.name, JSON.stringify(s.updates));
+  assert.equal(s.sent, s.updates.length);
+});
+
+test('Review3 15 (owner, 24 Oct): Follow-up shows a 📒 record\'s newest line and how many more, not every line run together', { skip }, async () => {
+  const t = (await call('task.save', { assigneeId: id.suresh, title: 'Follow-up record', repeat: 'daily', skipSunday: false, kind: 'log' }, tok.boss)).task;
+  for (const [i, text] of ['PO sent', 'Supplier says Monday', 'Truck left'].entries()) await call('entry.add', { taskId: t.id, text, clientId: 'fu-rec-000' + i }, tok.suresh);
+  const row = (await call('followup.list', {}, tok.boss)).rows.find((r) => r.title === 'Follow-up record');
+  assert.match(row.lastUpdate.note, /Truck left \(\+2 more\)$/, row.lastUpdate.note);
+  assert.ok(!row.lastUpdate.note.includes('PO sent'));
+});
+
+test('Review5 2 (owner, 24 Oct): a 📒 record is on the person\'s People list and in their morning email (it is never "due", but it is their work)', { skip }, async () => {
+  const t = (await call('task.save', { assigneeId: id.suresh, title: 'Kiln log record', repeat: 'once', kind: 'log' }, tok.boss)).task;
+  const p = (await call('people.morning', {}, tok.boss)).people.find((x) => x.id === id.suresh);
+  const item = p.items.find((x) => x.taskId === t.id);
+  assert.ok(item, 'on the People list');
+  assert.equal(item.repeat, '📒 Record');
+  assert.equal(item.lateSince, null, 'never late');
+  const mail = await call('morning.mail', { userId: id.suresh }, tok.boss);
+  assert.ok(mail.items.some((x) => x.taskId === t.id), 'in the morning email too');
+  await call('task.status', { id: t.id, status: 'cancelled' }, tok.boss);
+  assert.ok(!(await call('people.morning', {}, tok.boss)).people.find((x) => x.id === id.suresh).items.some((x) => x.taskId === t.id), 'a cancelled record is not');
+});
+
+test('a manager can delete a staff member\'s message (owner, 29 Oct), but not change it; staff still cannot delete someone else\'s; a move note stays', { skip }, async () => {
+  const t = (await call('task.save', { assigneeId: id.suresh, title: 'Manager deletes a message', repeat: 'once' }, tok.boss)).task;
+  const theirs = (await call('comment.add', { taskId: t.id, text: 'sent by mistake' }, tok.suresh)).comments.at(-1);
+  const bosss = (await call('comment.add', { taskId: t.id, text: 'from the boss' }, tok.boss)).comments.at(-1);
+  assert.equal((await call('comment.edit', { id: theirs.id, text: 'changed' }, tok.boss)).s, 403, 'never changed by the manager');
+  assert.equal((await call('comment.delete', { id: bosss.id }, tok.suresh)).s, 403, 'staff cannot delete the manager\'s message');
+  const del = await call('comment.delete', { id: theirs.id }, tok.boss);
+  assert.ok(del.ok, del.error);
+  assert.ok(!del.comments.some((c) => c.id === theirs.id), 'gone');
+  assert.ok((await call('task.get', { id: t.id }, tok.suresh)).comments.every((c) => c.id !== theirs.id), 'gone for the staff member too');
+  const ch = await call('task.chase', { id: t.id }, tok.boss);
+  const note = ch.comments.find((c) => c.kind === 'chase');
+  assert.match((await call('comment.delete', { id: note.id }, tok.boss)).error || '', /cannot be changed/, 'the server\'s own notes stay');
+});
+
+test('☑ steps in a single task, with photos (owner, 29 Oct): the person adds, changes, ticks, adds photos; the manager sees and can delete; others cannot see; not on a project step or a record', { skip }, async () => {
+  const t = (await call('task.save', { assigneeId: id.suresh, title: 'Pack 20 kg sample', repeat: 'once' }, tok.boss)).task;
+  const add = await call('tstep.add', { taskId: t.id, title: 'Weigh the sample', clientId: 'tstep-0001' }, tok.suresh);
+  assert.ok(add.ok, add.error);
+  assert.equal((await call('tstep.add', { taskId: t.id, title: 'Weigh the sample', clientId: 'tstep-0001' }, tok.suresh)).steps.length, 1, 'sent twice: one step');
+  const fd = () => { const f = new FormData(); f.append('stepId', String(add.stepId)); f.append('clientId', 'photo-' + String(Math.random()).slice(2, 12)); f.append('file', new Blob([png], { type: 'image/png' }), 'p.png'); return f; };
+  const ph = await call('tstep.photo', fd(), tok.suresh, true);
+  assert.ok(ph.ok, ph.error);
+  const pid = ph.steps[0].photos[0].id;
+  assert.equal((await fetch(`${B}tstep.photo&id=${pid}`, { headers: { Authorization: 'Bearer ' + tok.boss } })).headers.get('content-type'), 'image/jpeg', 'the manager sees the photo');
+  assert.equal((await fetch(`${B}tstep.photo&id=${pid}`, { headers: { Authorization: 'Bearer ' + tok.anita } })).status, 404, 'someone else does not');
+  assert.equal((await call('tstep.add', { taskId: t.id, title: 'x' }, tok.anita)).s, 404, 'not their task');
+  const ed = await call('tstep.edit', { id: add.stepId, title: 'Weigh 20 kg', done: true }, tok.suresh);
+  assert.equal(ed.steps[0].title, 'Weigh 20 kg'); assert.equal(ed.steps[0].done, true);
+  assert.equal((await call('tstep.edit', { id: add.stepId, done: false }, tok.suresh)).steps[0].done, false, 'ticked off again');
+  // the manager's view of the task carries the steps
+  const g = await call('task.get', { id: t.id }, tok.boss);
+  assert.deepEqual(g.steps.map((s) => [s.title, s.by, s.photos.length]), [['Weigh 20 kg', 'Suresh', 1]]);
+  const mgrStep = (await call('tstep.add', { taskId: t.id, title: 'Seal the bag' }, tok.boss)).steps.at(-1);
+  assert.equal((await call('tstep.delete', { id: mgrStep.id }, tok.suresh)).s, 403, 'staff cannot delete the manager\'s step');
+  assert.equal((await call('tstep.edit', { id: mgrStep.id, done: true }, tok.suresh)).steps.at(-1).done, true, 'but can tick it');
+  assert.ok((await call('tstep.photo.delete', { id: pid }, tok.boss)).ok, 'the manager removes a staff photo');
+  const del = await call('tstep.delete', { id: add.stepId }, tok.boss);
+  assert.deepEqual(del.steps.map((s) => s.title), ['Seal the bag'], 'the manager deletes a staff step');
+  // not on a project's step, not on a record
+  await call('project.sync', { projectRef: 'tsp', project: 'Step proj', assigneeId: id.suresh, steps: [{ stepRef: 'tsp1', title: 'One' }] }, tok.boss);
+  const ps = (await call('project.team', { projectRef: 'tsp' }, tok.boss)).tasks[0];
+  assert.match((await call('tstep.add', { taskId: ps.id, title: 'x' }, tok.suresh)).error || '', /step of a project/);
+  const rec = (await call('task.save', { assigneeId: id.suresh, title: 'Kiln log', repeat: 'once', kind: 'log' }, tok.boss)).task;
+  if (rec && rec.kind === 'log') assert.match((await call('tstep.add', { taskId: rec.id, title: 'x' }, tok.suresh)).error || '', /record/);
+  // a closed task takes no new step
+  await call('task.status', { id: t.id, status: 'done' }, tok.boss);
+  assert.match((await call('tstep.add', { taskId: t.id, title: 'late' }, tok.suresh)).error || '', /closed/);
+});
+
+test('the manager deletes a staff update and its photos (owner, 29 Oct: "delete this info only"); staff cannot; a Finished that closed the task opens it again', { skip }, async () => {
+  const t = (await call('task.save', { assigneeId: id.suresh, title: 'AMC 30x30 trial', repeat: 'once' }, tok.boss)).task;
+  const up = (await call('update.save', { taskId: t.id, note: 'AMC 30x30 ACT unfired', state: 'finished' }, tok.suresh)).update;
+  assert.ok(up && up.id, 'sent');
+  assert.ok((await photo(up.id, tok.suresh)).ok);
+  assert.equal((await call('task.get', { id: t.id }, tok.boss)).task.status, 'done', 'Finished closed it');
+  assert.equal((await call('update.delete', { id: up.id }, tok.suresh)).s, 403, 'staff cannot');
+  const del = await call('update.delete', { id: up.id }, tok.boss);
+  assert.ok(del.ok, del.error);
+  const g = await call('task.get', { id: t.id }, tok.boss);
+  assert.equal(g.updates.length, 0, 'the update is gone');
+  assert.equal(g.task.status, 'open', 'the task is open again (its Finished was deleted)');
+  assert.equal(sqlOut(`SELECT COUNT(*) FROM wt.photos WHERE update_id = ${up.id}`).trim(), '0', 'its photos went too');
 });

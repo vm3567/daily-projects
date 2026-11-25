@@ -63,7 +63,7 @@ test('dots by "move every N days" (owner asked 23 Oct): green while a real updat
   applyOp(s, op('setProjectField', { projectId: 'p1', field: 'deadline', value: '2026-10-09' }, '2026-10-06'));
   assert.equal(dotColour(p, '2026-10-07'), 'yellow', 'target in 2 days');
   assert.equal(dotColour(p, '2026-10-10'), 'red', 'target passed');
-  assert.match(colourWhy(p, '2026-10-10'), /Target date passed/);
+  assert.match(colourWhy(p, '2026-10-10'), /Overdue · /); // (owner asked 24 Oct: the same words as the list, was "Target date passed")
   // values
   assert.equal(applyOp(s, op('setMoveEvery', { projectId: 'p1', days: 0 }, '2026-10-06')), false);
   assert.equal(applyOp(s, op('setMoveEvery', { projectId: 'p1', days: 91 }, '2026-10-06')), false);
@@ -1842,7 +1842,7 @@ test('📂 rules: childrenOf, parentsOf, isMainProject, mainColour (worst; resti
   assert.equal(dotColour(P(s, 'k1'), d), 'grey');
   assert.equal(mainColour(P(s, 'm'), childrenOf(s.data, 'm'), d), 'green', 'a snoozed task counts as grey (better than green)');
   applyOp(s, op('pause', { projectId: 'k1' }, d));
-  assert.equal(mainSummary(childrenOf(s.data, 'm'), d), '1 task · all green', 'only active ones');
+  assert.equal(mainSummary(childrenOf(s.data, 'm'), d), '1 task · all on track', 'only active ones');
   assert.equal(mainSummary([], d), 'No tasks in it yet');
 });
 
@@ -3160,3 +3160,222 @@ test('📂 Review round 3: projectParts finds the tasks and the projects inside,
   assert.ok(!src.includes('subProjectsDeep'), 'the colour uses projectParts');
 });
 
+
+test('📒 Giving a 📂 project as a record: its tasks go with it as records too (projectGiveChanges carries record)', async () => {
+  const { projectGiveChanges } = await import('../docs/rules.js');
+  const s = withMains();
+  applyOp(s, op('addToProject', { projectId: 'k1', parentId: 'm' }, '2026-10-01'));
+  applyOp(s, op('setProjectTeam', { projectId: 'm', userId: 7, name: 'Ravi', record: true, giveTasks: true }, '2026-10-02'));
+  const ch = projectGiveChanges(s.data).find((c) => c.projectId === 'k1');
+  assert.equal(ch.team.record, true);
+  applyOp(s, op('setProjectTeam', { projectId: 'k1', ...ch.team }, '2026-10-02'));
+  assert.equal(projectGiveChanges(s.data).some((c) => c.projectId === 'k1'), false, 'in step now');
+  applyOp(s, op('setProjectTeam', { projectId: 'm', userId: 7, name: 'Ravi', giveTasks: true }, '2026-10-03'));
+  assert.equal(projectGiveChanges(s.data).find((c) => c.projectId === 'k1').team.record, false, 'the project back to daily updates: its task follows');
+});
+
+// ---------------------------------------------------------------- screen review fixes (owner, 24 Oct)
+test('Review 1: 📂 Misc\'s dot is the worst of its loose tasks (it was green with a red task in it)', async () => {
+  const { listColour } = await import('../docs/ui/mains.js');
+  const s = fresh();
+  applyOp(s, op('makeMisc', {}, '2026-10-01'));
+  applyOp(s, op('createProject', { projectId: 'a', name: 'A', deadline: null }, '2026-10-01'));
+  applyOp(s, op('setProjectField', { projectId: 'a', field: 'deadline', value: '2026-10-05' }, '2026-10-01'));
+  assert.equal(listColour(s.data, s.data.projects.find((p) => p.id === 'misc'), '2026-10-06'), 'red');
+});
+
+test('Review 2: the automatic 30-day target date of a new task never makes it yellow / red or "Overdue"; a date you set does', async () => {
+  const { dotColour, isOverdue, ownTarget } = await import('../docs/rules.js');
+  const s = fresh();
+  applyOp(s, op('createProject', { projectId: 'a', name: 'A' }, '2026-10-01'));
+  const p = s.data.projects.find((x) => x.id === 'a');
+  assert.equal(p.deadline, '2026-10-31', 'still gets one (shown, can be changed)');
+  assert.equal(ownTarget(p), false);
+  applyOp(s, op('addWorkNote', { projectId: 'a', noteId: 'n', text: 'x' }, '2026-11-01'));
+  assert.equal(dotColour(p, '2026-11-01'), 'green', 'past the automatic date, but worked on: green');
+  assert.equal(isOverdue(p, '2026-11-01'), false);
+  applyOp(s, op('setProjectField', { projectId: 'a', field: 'deadline', value: '2026-10-31' }, '2026-11-01'));
+  assert.equal(ownTarget(p), true, 'chosen by you now (even the same date)');
+  assert.equal(dotColour(p, '2026-11-01'), 'red');
+  // older tasks (no mark): exactly 30 days after they were made counts as automatic
+  assert.equal(ownTarget({ deadline: '2026-10-31', createdAt: '2026-10-01T05:00:00.000Z' }), false);
+  assert.equal(ownTarget({ deadline: '2026-10-20', createdAt: '2026-10-01T05:00:00.000Z' }), true);
+});
+
+test('The server checks pick free ports for their throwaway servers (a fixed port taken by another program broke 23 checks, 24 Oct)', async () => {
+  const { readFileSync } = await import('node:fs');
+  const src = readFileSync(new URL('./php-server.test.mjs', import.meta.url), 'utf8');
+  for (const name of ['DB_PORT', 'WEB_PORT', 'MS_PORT', 'CB_PORT']) assert.match(src, new RegExp(`const ${name} = await freePort\\(`), name);
+});
+
+test('Review 15: the reason line shows the date as "21 Oct", not "2026-10-21"', async () => {
+  const { colourWhy, shortDay } = await import('../docs/rules.js');
+  assert.equal(shortDay('2026-10-21'), '21 Oct');
+  assert.equal(colourWhy({ state: 'active', steps: [], deadline: '2026-10-21', targetSet: true }, '2026-10-24'), 'Overdue · 21 Oct'); // (owner asked 24 Oct, was "Target date passed (21 Oct)")
+});
+
+test('Review2 4 (owner, 24 Oct): a yellow task worked on today gives its near date as the reason, never "Updated today"', async () => {
+  const { colourShort, addDays: plus, todayIndia: td } = await import('../docs/rules.js');
+  const today = td();
+  const s = { data: emptyData(), history: {} };
+  applyOps(s, [makeOp('createProject', { projectId: 'y', name: 'Near one', deadline: null }), makeOp('setProjectField', { projectId: 'y', field: 'deadline', value: plus(today, 1) }), makeOp('addWorkNote', { projectId: 'y', noteId: 'n', text: 'did it' })]);
+  const p = s.data.projects.find((x) => x.id === 'y');
+  assert.match(colourShort(p, today), /^Target \d+ \w{3} is near$/);
+  applyOps(s, [makeOp('setProjectField', { projectId: 'y', field: 'deadline', value: '2020-01-01' })]);
+  assert.match(colourShort(p, today), /Overdue · /); // (owner asked 24 Oct: the same words as the list, was "Target date passed")
+});
+
+test('Review2 6 (owner, 24 Oct): the 📋 summary\'s Team updates use the server\'s rows (a 📒 record too) and never a taken-back step', async () => {
+  const { teamUpdatesText } = await import('../docs/reports.js');
+  const data = emptyData();
+  const rows = [{ name: 'Suresh', projectRef: null, project: '', title: 'Material log', note: '8:53 am Got 12 bags', state: 'progress' }];
+  assert.match(teamUpdatesText(data, { updates: rows }, [], '2026-10-24'), /Team updates:\n- Suresh — : Material log: 8:53 am Got 12 bags/);
+  const linked = [{ assignee: { name: 'Anita' }, title: 'Taken back', status: 'cancelled', today: { day: '2026-10-24', note: 'x', state: 'progress' } }];
+  assert.equal(teamUpdatesText(data, null, linked, '2026-10-24'), '', 'a cancelled one is left out');
+});
+
+test('Review2 22 (owner, 24 Oct): Settings sets how often a task with no choice of its own should move (was always 3); a task\'s own choice still wins', async () => {
+  const { moveEveryOf, useEveryDefault, everyDefaultOf } = await import('../docs/rules.js');
+  const s = { data: emptyData(), history: {} };
+  applyOps(s, [makeOp('createProject', { projectId: 'a', name: 'Plain', deadline: null }), makeOp('createProject', { projectId: 'b', name: 'Own', deadline: null }), makeOp('setMoveEvery', { projectId: 'b', days: 2 })]);
+  const pr = (id) => s.data.projects.find((x) => x.id === id);
+  assert.equal(everyDefaultOf(s.data), 3);
+  assert.ok(applyOp(s, makeOp('setEveryDefault', { days: 7 })));
+  assert.equal(s.data.settings.moveEvery, 7);
+  assert.ok(!applyOp(s, makeOp('setEveryDefault', { days: 0 })), 'a wrong number is refused');
+  useEveryDefault(s.data);
+  try {
+    assert.equal(moveEveryOf(pr('a')), 7, 'no choice of its own: the Settings one');
+    assert.equal(moveEveryOf(pr('b')), 2, 'its own choice wins');
+    assert.ok(applyOp(s, makeOp('setEveryDefault', { days: null })));
+    useEveryDefault(s.data);
+    assert.equal(moveEveryOf(pr('a')), 3, 'back to 3');
+  } finally { useEveryDefault(null); }
+});
+
+test('setNoteStep (owner, 24 Oct): an update saved under the wrong step moves to another step of the same task, or to the whole task; a step from elsewhere, a missing update or no change is refused; never carried in by a link', async () => {
+  const { applyOps, emptyData, makeOp, CARRIED, NOT_CARRIED } = await import('../docs/ops.js');
+  const s = { data: emptyData(), history: {} };
+  applyOps(s, [makeOp('createProject', { projectId: 'w', name: 'Water absorption' }), makeOp('createProject', { projectId: 'x', name: 'Other' }),
+    makeOp('addStep', { projectId: 'w', stepId: 'a', text: 'Water absorption data' }), makeOp('addStep', { projectId: 'w', stepId: 'b', text: 'Residue photos' }),
+    makeOp('addStep', { projectId: 'x', stepId: 'z', text: 'Elsewhere' }),
+    makeOp('addWorkNote', { projectId: 'w', noteId: 'n', text: 'All photos of the residue', stepId: 'a' }), makeOp('tickStep', { projectId: 'w', stepId: 'a' })]);
+  const note = () => s.data.projects.find((p) => p.id === 'w').workNotes[0];
+  const go = (args) => applyOps(s, [makeOp('setNoteStep', { projectId: 'w', noteId: 'n', ...args })]).length;
+  assert.equal(go({ stepId: 'b' }), 1); assert.equal(note().stepId, 'b');
+  assert.equal(go({ stepId: 'b' }), 0, 'no change');
+  assert.equal(go({ stepId: 'z' }), 0, 'a step of another task'); assert.equal(note().stepId, 'b');
+  assert.equal(go({ stepId: 'a' }), 1, 'a done step is fine'); assert.equal(note().stepId, 'a');
+  assert.equal(go({ stepId: null }), 1); assert.equal(note().stepId, null, 'the whole task');
+  assert.equal(applyOps(s, [makeOp('setNoteStep', { projectId: 'w', noteId: 'gone', stepId: 'b' })]).length, 0, 'no such update');
+  assert.equal(note().text, 'All photos of the residue', 'the words stay');
+  assert.ok(NOT_CARRIED.has('setNoteStep') && !CARRIED.has('setNoteStep'));
+});
+
+test('emptyPaste (owner, 29 Oct): a paste with no file and no words (Outlook\'s attachment "Copy") is told, not ignored; a photo or words are not "empty"', async () => {
+  const { emptyPaste, EMPTY_PASTE } = await import('../docs/rules.js');
+  const cd = (data = {}, files = []) => ({ files, getData: (t) => data[t] || '' });
+  assert.equal(emptyPaste(cd()), true, 'Outlook\'s copy: only its own note, nothing we can read');
+  assert.equal(emptyPaste(cd({ 'text/html': '  ' })), true);
+  assert.equal(emptyPaste(cd({}, [{ name: '3.jpg', type: 'image/jpeg' }])), false, 'a real photo');
+  assert.equal(emptyPaste(cd({ 'text/plain': 'hello' })), false);
+  assert.equal(emptyPaste(cd({ 'text/html': '<b>x</b>' })), false);
+  assert.equal(emptyPaste(null), false);
+  const { readFileSync } = await import('node:fs');
+  assert.match(EMPTY_PASTE, /Download the file and drag it here/);
+  const css = readFileSync(new URL('../docs/styles.css', import.meta.url), 'utf8');
+  assert.match(css, /#toast\.full > span \{ display: block; -webkit-line-clamp: unset; \}/, 'shown in full, not cut after 2 lines (owner, 29 Oct)');
+  assert.match(readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8'), /t\.classList\.toggle\('full', !!full\)/, 'the next normal message is 2 lines again');
+  assert.match(EMPTY_PASTE, /Copy image/);
+  const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
+  assert.equal((app.match(/if \(emptyPaste\(e\.clipboardData\)\) \{ e\.preventDefault\(\); toast\(EMPTY_PASTE, 10000, null, true\); return; \}/g) || []).length, 2, 'the owner\'s pages, and the team pages + staff app');
+});
+
+test('addFile with stepId (owner, 29 Oct): a photo pasted on a step belongs to that step; a step of another task is not kept', async () => {
+  const { applyOps, emptyData, makeOp } = await import('../docs/ops.js');
+  const s = { data: emptyData(), history: {} };
+  applyOps(s, [makeOp('createProject', { projectId: 'c', name: 'Cut angle of media' }), makeOp('addStep', { projectId: 'c', stepId: 'a', text: 'Measure angles' }),
+    makeOp('addFile', { projectId: 'c', fileId: 'f1', name: '3.jpg', sha: 'x1', size: 5, type: 'image/jpeg', stepId: 'a' }),
+    makeOp('addFile', { projectId: 'c', fileId: 'f2', name: '4.jpg', sha: 'x2', size: 5, type: 'image/jpeg', stepId: 'nope' })]);
+  const files = s.data.projects[0].files;
+  assert.equal(files.find((f) => f.id === 'f1').stepId, 'a');
+  assert.equal(files.find((f) => f.id === 'f2').stepId, undefined, 'unknown step: an ordinary file of the task');
+});
+
+test('linkFollow (owner, 29 Oct): the next task is linked both ways and sits where the old one was (projects, tag, priority, move every); never twice, never a 📂 project', async () => {
+  const { applyOps, emptyData, makeOp, NOT_CARRIED } = await import('../docs/ops.js');
+  const s = { data: emptyData(), history: {} };
+  applyOps(s, [makeOp('createMainProject', { projectId: 'm', name: 'Raw materials' }),
+    makeOp('createProject', { projectId: 'a', name: 'Get 400# feldspar sample' }), makeOp('addToProject', { projectId: 'a', parentId: 'm' }),
+    makeOp('setProjectField', { projectId: 'a', field: 'priority', value: 'high' }),
+    makeOp('createProject', { projectId: 'b', name: 'Get 20 kg of 400# feldspar' }),
+    makeOp('linkFollow', { projectId: 'a', nextId: 'b' }), makeOp('finish', { projectId: 'a' })]);
+  const a = s.data.projects.find((p) => p.id === 'a'), b = s.data.projects.find((p) => p.id === 'b');
+  assert.equal(a.nextId, 'b'); assert.equal(b.prevId, 'a');
+  assert.deepEqual(b.parentIds, ['m'], 'in the same 📂 project');
+  assert.equal(b.priority, 'high');
+  assert.equal(a.state, 'finished'); assert.equal(b.state, 'active');
+  applyOps(s, [makeOp('createProject', { projectId: 'c', name: 'Again' })]);
+  assert.equal(applyOps(s, [makeOp('linkFollow', { projectId: 'a', nextId: 'c' })]).length, 0, 'one next task only');
+  assert.equal(applyOps(s, [makeOp('linkFollow', { projectId: 'm', nextId: 'c' })]).length, 0, 'not a 📂 project');
+  assert.ok(NOT_CARRIED.has('linkFollow'));
+});
+
+test('ownerTaskMatches (owner, 29 Oct): Give a task finds your own open tasks by every typed word, any case; not given ones only; no 📂 projects or "In no project"; its project named', async () => {
+  const { applyOps, emptyData, makeOp } = await import('../docs/ops.js');
+  const { ownerTaskMatches } = await import('../docs/rules.js');
+  const s = { data: emptyData(), history: {} };
+  applyOps(s, [makeOp('createMainProject', { projectId: 'm', name: 'Raw materials' }),
+    makeOp('createProject', { projectId: 'a', name: 'Get 20 kg of 400# Feldspar' }), makeOp('addToProject', { projectId: 'a', parentId: 'm' }),
+    makeOp('addStep', { projectId: 'a', stepId: 's', text: 'Ask supplier' }),
+    makeOp('createProject', { projectId: 'b', name: 'Feldspar old trial' }), makeOp('finish', { projectId: 'b' }),
+    makeOp('createProject', { projectId: 'c', name: 'Feldspar given one' }), makeOp('setProjectTeam', { projectId: 'c', userId: 7, name: 'Ruturaj' })]);
+  assert.deepEqual(ownerTaskMatches(s.data, 'feldspar 20'), [{ id: 'a', name: 'Get 20 kg of 400# Feldspar', project: 'Raw materials', steps: 1 }]);
+  assert.deepEqual(ownerTaskMatches(s.data, 'FELD').map((x) => x.id), ['a'], 'finished and given ones left out');
+  assert.deepEqual(ownerTaskMatches(s.data, 'raw'), [], 'a 📂 project is not a task to give here');
+  assert.deepEqual(ownerTaskMatches(s.data, '  '), []);
+  assert.deepEqual(ownerTaskMatches(null, 'x'), []);
+});
+
+test('openTasksInside (owner, 29 Oct): finishing a 📂 project offers its open tasks (any depth, paused too) — not finished ones, not a task also in another open project', async () => {
+  const { applyOps, emptyData, makeOp } = await import('../docs/ops.js');
+  const { openTasksInside } = await import('../docs/rules.js');
+  const s = { data: emptyData(), history: {} };
+  applyOps(s, [makeOp('createMainProject', { projectId: 'm', name: 'Feldspar trial' }), makeOp('createMainProject', { projectId: 'o', name: 'Other' }),
+    makeOp('createMainProject', { projectId: 'sub', name: 'Sub' }), makeOp('addToProject', { projectId: 'sub', parentId: 'm' }),
+    ...['a', 'b', 'c', 'd', 'e'].map((id) => makeOp('createProject', { projectId: id, name: 'Task ' + id })),
+    makeOp('addToProject', { projectId: 'a', parentId: 'm' }), makeOp('addToProject', { projectId: 'b', parentId: 'sub' }),
+    makeOp('addToProject', { projectId: 'c', parentId: 'm' }), makeOp('finish', { projectId: 'c' }),
+    makeOp('addToProject', { projectId: 'd', parentId: 'm' }), makeOp('addToProject', { projectId: 'd', parentId: 'o' }),
+    makeOp('addToProject', { projectId: 'e', parentId: 'm' }), makeOp('pause', { projectId: 'e' })]);
+  const p = (id) => s.data.projects.find((x) => x.id === id);
+  assert.deepEqual(openTasksInside(s.data, p('m')).map((t) => t.id).sort(), ['a', 'b', 'e'], 'd goes on in "Other"; c is finished');
+  assert.deepEqual(openTasksInside(s.data, p('a')), [], 'a task has no tasks inside');
+});
+
+test('stepPhotosToSend (owner, 29 Oct): a given step\'s photos (pasted on it, or with an update about it) go to the person\'s open task once each; not other steps\', not files, not when the task has them, up to 10', async () => {
+  const { applyOps, emptyData, makeOp } = await import('../docs/ops.js');
+  const { stepPhotosToSend } = await import('../docs/rules.js');
+  const s = { data: emptyData(), history: {} };
+  applyOps(s, [makeOp('createProject', { projectId: 'p', name: 'Exhaust check' }),
+    makeOp('addStep', { projectId: 'p', stepId: 'a', text: 'Check the opening' }), makeOp('addStep', { projectId: 'p', stepId: 'b', text: 'Other step' }),
+    makeOp('addFile', { projectId: 'p', fileId: 'f1', name: '3.jpg', sha: 'x1', size: 5, type: 'image/jpeg', stepId: 'a' }),
+    makeOp('addWorkNote', { projectId: 'p', noteId: 'n1', text: 'Photo of it', stepId: 'a' }),
+    makeOp('addFile', { projectId: 'p', fileId: 'f2', name: 'IMG_1.HEIC', sha: 'x2', size: 5, type: '', noteId: 'n1' }),
+    makeOp('addFile', { projectId: 'p', fileId: 'f3', name: 'drawing.pdf', sha: 'x3', size: 5, type: 'application/pdf', stepId: 'a' }),
+    makeOp('addFile', { projectId: 'p', fileId: 'f4', name: '4.jpg', sha: 'x4', size: 5, type: 'image/jpeg', stepId: 'b' }),
+    makeOp('setProjectTeam', { projectId: 'p', userId: 7, name: 'Ruturaj' })]);
+  const byStep = new Map([['a', { id: 51, status: 'open', files: [] }], ['b', { id: 52, status: 'done', files: [] }]]);
+  assert.deepEqual(stepPhotosToSend(s.data, byStep).map((x) => [x.taskId, x.file.id, x.name]), [[51, 'f1', 'step-photo-f1.jpg'], [51, 'f2', 'step-photo-f2.jpg']], 'its photos only; a PDF and a closed task\'s step are left');
+  byStep.get('a').files = [{ name: 'step-photo-f1.jpg' }];
+  assert.deepEqual(stepPhotosToSend(s.data, byStep).map((x) => x.file.id), ['f2'], 'one already there: not again');
+  byStep.get('a').files = Array.from({ length: 10 }, (_, i) => ({ name: 'x' + i }));
+  assert.deepEqual(stepPhotosToSend(s.data, byStep), [], 'a full task (10 files)');
+  applyOps(s, [makeOp('setProjectTeam', { projectId: 'p', userId: null, name: '' })]);
+  byStep.get('a').files = [];
+  assert.deepEqual(stepPhotosToSend(s.data, byStep), [], 'not given: nothing goes');
+  const { readFileSync } = await import('node:fs');
+  const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
+  assert.match(app, /await syncGivenProjects\(gen\);\n\s*sendStepPhotos\(\);/, 'sent after each look at the team list');
+  assert.match(app, /fd\.append\('taskId', String\(taskId\)\); fd\.append\('file', blob, name\);[\s\S]{0,200}a=task\.file\.add/, 'as the task\'s instruction photos');
+});

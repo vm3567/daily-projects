@@ -62,12 +62,12 @@ if (!$done && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST') {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Work Task setup</title>
+<title>Task List setup</title>
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
 <main class="narrow">
-  <h1>Work Task setup</h1>
+  <h1>Task List setup</h1>
 <?php if ($done): ?>
   <p class="ok"><?= htmlspecialchars($okMsg ?: 'This server is already set up.') ?></p>
   <p><a class="btn primary" href="./">Go to sign in</a></p>
