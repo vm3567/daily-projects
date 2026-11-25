@@ -72,15 +72,15 @@ test('dots by "move every N days" (owner asked 23 Oct): green while a real updat
   assert.equal(moveEveryOf(p), 3, 'back to 3');
 });
 
-test('"Move every" on a 📂 project goes to everything inside it (every level); a task put in later takes it unless it has its own; it is not work', async () => {
+test('"Move every" on a group goes to every task in it (one level since 25 Nov); a task put in later takes it unless it has its own; it is not work', async () => {
   const { moveEveryOf, lastWorkDate } = await import('../docs/rules.js');
   const s = { data: emptyData(), history: {} };
   for (const [id, name] of [['a', 'A'], ['b', 'B'], ['c', 'C']]) applyOp(s, op('createProject', { projectId: id, name }, '2026-10-01'));
   applyOp(s, op('createMainProject', { projectId: 'm', name: 'Kilns', childId: 'a' }, '2026-10-01'));
-  applyOp(s, op('createMainProject', { projectId: 'big', name: 'Plant', childId: 'm' }, '2026-10-01'));
+  assert.equal(applyOp(s, op('createMainProject', { projectId: 'big', name: 'Plant', childId: 'm' }, '2026-10-01')), false, 'a group never goes into a group');
   const P2 = (id) => s.data.projects.find((p) => p.id === id);
-  assert.ok(applyOp(s, op('setMoveEvery', { projectId: 'big', days: 7 }, '2026-10-02')));
-  assert.deepEqual(['big', 'm', 'a'].map((id) => moveEveryOf(P2(id))), [7, 7, 7], 'every level');
+  assert.ok(applyOp(s, op('setMoveEvery', { projectId: 'm', days: 7 }, '2026-10-02')));
+  assert.deepEqual(['m', 'a'].map((id) => moveEveryOf(P2(id))), [7, 7], 'the group and its task');
   assert.equal(moveEveryOf(P2('b')), 3, 'not inside: unchanged');
   assert.equal(lastWorkDate(P2('a')), null, 'not work');
   applyOp(s, op('setMoveEvery', { projectId: 'a', days: 1 }, '2026-10-02'));
@@ -1680,9 +1680,9 @@ test('📂 setParent / addToProject checks — exists, not itself, a project ins
   applyOp(s, op('addToProject', { projectId: 'k1', parentId: 'm' }, '2026-10-02'));
   assert.equal(applyOp(s, op('addToProject', { projectId: 'k2', parentId: 'k1' }, '2026-10-02')), false, 'a task in a project cannot hold tasks');
   assert.equal(applyOp(s, op('addToProject', { projectId: 'm', parentId: 'x' }, '2026-10-02')), false, 'a project never goes into a task');
-  // (rule changed, owner asked 23 Oct: a project can go inside another project — never in a circle)
+  // (rule changed again, owner asked 25 Nov: groups are one level — a group never goes inside another)
   applyOp(s, op('createMainProject', { projectId: 'big', name: 'Plant upgrade' }, '2026-10-02'));
-  assert.equal(applyOp(s, op('addToProject', { projectId: 'm', parentId: 'big' }, '2026-10-02')), true, 'a project inside a project');
+  assert.equal(applyOp(s, op('addToProject', { projectId: 'm', parentId: 'big' }, '2026-10-02')), false, 'never a group inside a group');
   assert.equal(applyOp(s, op('addToProject', { projectId: 'big', parentId: 'm' }, '2026-10-02')), false, 'no circle (big holds m)');
   assert.equal(applyOp(s, op('addToProject', { projectId: 'big', parentId: 'k1' }, '2026-10-02')), false, 'no circle through a task either');
   applyOp(s, op('removeFromProject', { projectId: 'm', parentId: 'big' }, '2026-10-02'));
@@ -1780,8 +1780,8 @@ test('📂 createMainProject makes an active isMain project, with the task in it
   assert.ok(!allEvents(s).some((e) => e.projectId === 'nm'), 'its history lines gone');
   assert.equal(applyOp(s, op('createMainProject', { projectId: 'em', name: 'Empty' }, '2026-10-02')), true);
   assert.equal(P(s, 'em').isMain, true);
-  assert.equal(applyOp(s, op('createMainProject', { projectId: 'zz', name: 'Z', childId: 'em' }, '2026-10-02')), true, 'a project can go into a new one (rule changed, owner asked 23 Oct)');
-  assert.deepEqual(P(s, 'em').parentIds, ['zz']);
+  assert.equal(applyOp(s, op('createMainProject', { projectId: 'zz', name: 'Z', childId: 'em' }, '2026-10-02')), false, 'a group never goes into a new one (rule changed again, owner asked 25 Nov: groups are one level)');
+  assert.ok(!P(s, 'em').parentIds || !P(s, 'em').parentIds.length);
 });
 
 test('📂 deleting a project keeps its tasks (it leaves their parentIds, the other projects stay); Undo puts them back; finishing a project keeps open tasks', () => {
@@ -1889,11 +1889,9 @@ test('📂 the "Add to a project" box choices (projects only, ✓ on the ones it
   assert.equal(mainChoices(s.data, P(s, 'k2'), 'kil').create, 'kil', 'no exact match: offer to create it');
   assert.equal(mainChoices(s.data, P(s, 'k2'), 'KILNS').create, null, 'an exact match: no create line');
   assert.deepEqual(mainChoices(s.data, P(s, 'k1'), '').items.map((x) => `${x.p.id}:${x.in}`).sort(), ['m:true', 'sa:false'], 'its own project is offered with ✓ (to take it out)');
-  // (rule changed, owner asked 23 Oct: a project can be put inside another project)
-  assert.deepEqual(mainChoices(s.data, P(s, 'm'), '').items.map((x) => x.p.id), ['sa'], 'a project can go inside another project');
-  assert.equal(mainChoices(s.data, P(s, 'm'), 'Plant').create, 'Plant', 'or inside a new one');
-  applyOp(s, op('addToProject', { projectId: 'm', parentId: 'sa' }, '2026-10-02'));
-  assert.deepEqual(mainChoices(s.data, P(s, 'sa'), '').items, [], 'never in a circle (sa holds m)');
+  // (rule changed again, owner asked 25 Nov: groups are one level — a group goes into no group, not even a new one)
+  assert.deepEqual(mainChoices(s.data, P(s, 'm'), '').items, [], 'a group is never offered a group');
+  assert.equal(mainChoices(s.data, P(s, 'm'), 'Plant').create, null, 'nor a new one');
   assert.deepEqual(addHereChoices(s.data, P(s, 'm'), '').map((x) => x.id).sort(), ['k2', 'x']);
   assert.deepEqual(addHereChoices(s.data, P(s, 'sa'), '').map((x) => x.id).sort(), ['k1', 'k2', 'x'], 'a task in another project can be added too');
   assert.deepEqual(addHereChoices(s.data, P(s, 'm'), 'oth').map((x) => x.id), ['x']);
@@ -2998,7 +2996,7 @@ test('Right-click → Move to another project: the choices (not the one it leave
   applyOp(s, op('addToProject', { projectId: 'k1', parentId: 'q' }, '2026-10-02'));
   assert.deepEqual(moveChoices(s.data, P(s, 'k1'), 'm', '').items.map((x) => x.id), ['sa'], 'not Kilns (it leaves it), not Quality (in it already)');
   assert.equal(moveChoices(s.data, P(s, 'k1'), 'm', 'New one').create, 'New one', 'a typed new name: create it');
-  assert.deepEqual(moveChoices(s.data, P(s, 'm'), null, '').items.map((x) => x.id).sort(), ['q', 'sa'], 'a 📂 project can move inside another (rule changed, owner asked 23 Oct)');
+  assert.deepEqual(moveChoices(s.data, P(s, 'm'), null, '').items, [], 'a group moves into no group (rule changed again, owner asked 25 Nov: groups are one level)');
   // from Kilns to Supplier approval: out of Kilns, into Supplier approval, still in Quality
   const steps = moveSteps(P(s, 'k1'), 'm', 'sa');
   assert.deepEqual(steps.map(([t]) => t), ['removeFromProject', 'addToProject']);
@@ -3023,86 +3021,65 @@ test('Test servers with helper copies (PHP_CLI_SERVER_WORKERS) are started on th
   assert.match(src, /function stopServer\(child\) \{\n  if \(!child\) return;\n  try \{ process\.kill\(-child\.pid, 'SIGTERM'\); \}/);
 });
 
-test('📂 Projects inside projects (owner asked 23 Oct): tasks at any depth, the parents going up, the line "2 projects · 3 tasks", the colour is the worst of all its tasks, giving the top project gives the tasks of the projects inside, the delete question names both', async () => {
-  const { descendantIds, projectTasks, subProjectsOf, ancestorsOf, projectLine, deleteQuestion, projectGiveChanges, isMainProject } = await import('../docs/rules.js');
+test('📂 Groups are one level (rule changed, owner asked 25 Nov; it was "projects inside projects", 23 Oct): a group never goes into a group; a group\'s tasks, its line, its colour (the worst of its tasks), giving it gives its tasks, the delete question', async () => {
+  const { descendantIds, projectTasks, subProjectsOf, ancestorsOf, projectLine, deleteQuestion, projectGiveChanges } = await import('../docs/rules.js');
   const { listColour } = await import('../docs/ui/mains.js');
   const s = withMains(); // k1, k2, m (Kilns), x
   applyOp(s, op('createMainProject', { projectId: 'big', name: 'Plant upgrade' }, '2026-10-01'));
   applyOp(s, op('addToProject', { projectId: 'k1', parentId: 'm' }, '2026-10-01'));
-  applyOp(s, op('addToProject', { projectId: 'm', parentId: 'big' }, '2026-10-01'));
+  assert.equal(applyOp(s, op('addToProject', { projectId: 'm', parentId: 'big' }, '2026-10-01')), false, 'never a group inside a group');
+  assert.equal(applyOp(s, op('setParent', { projectId: 'm', parentId: 'big' }, '2026-10-01')), false);
   applyOp(s, op('addToProject', { projectId: 'k2', parentId: 'big' }, '2026-10-01'));
-  assert.deepEqual([...descendantIds(s.data, 'big')].sort(), ['k1', 'k2', 'm']);
-  assert.deepEqual(projectTasks(s.data, 'big').map((p) => p.id).sort(), ['k1', 'k2'], 'its tasks and its projects\' tasks, not the projects');
-  assert.deepEqual(subProjectsOf(s.data, 'big').map((p) => p.id), ['m']);
-  assert.deepEqual(ancestorsOf(s.data, P(s, 'k1')).map((p) => p.id), ['m', 'big'], 'nearest first');
-  assert.ok(isMainProject(s.data, P(s, 'm')), 'still a project inside a project');
-  assert.match(projectLine(s.data, P(s, 'big'), '2026-10-01'), /^1 project · 2 tasks/);
-  assert.equal(projectLine(s.data, P(s, 'm'), '2026-10-01').startsWith('1 task'), true, 'no projects inside: as before');
-  assert.match(deleteQuestion(s.data, P(s, 'big')), /Its 1 task and 1 project are kept/);
-  // colour: a red task deep inside makes the top project red
-  applyOp(s, op('addStep', { projectId: 'k1', stepId: 's1', text: 'Fix' }, '2026-09-01'));
-  assert.equal(listColour(s.data, P(s, 'big'), '2026-10-05'), listColour(s.data, P(s, 'k1'), '2026-10-05'));
-  // giving the top project: the task inside its project goes to the same person
+  assert.deepEqual([...descendantIds(s.data, 'big')], ['k2']);
+  assert.deepEqual(projectTasks(s.data, 'big').map((p) => p.id), ['k2']);
+  assert.deepEqual(subProjectsOf(s.data, 'big'), []);
+  assert.deepEqual(ancestorsOf(s.data, P(s, 'k1')).map((p) => p.id), ['m']);
+  assert.match(projectLine(s.data, P(s, 'big'), '2026-10-01'), /^1 task/);
+  assert.match(deleteQuestion(s.data, P(s, 'big')), /Its 1 task is kept/);
+  applyOp(s, op('addStep', { projectId: 'k2', stepId: 's1', text: 'Fix' }, '2026-09-01'));
+  assert.equal(listColour(s.data, P(s, 'big'), '2026-10-05'), listColour(s.data, P(s, 'k2'), '2026-10-05'), 'the worst of its tasks');
   applyOp(s, op('setProjectTeam', { projectId: 'big', userId: 7, name: 'Ravi', giveTasks: true }, '2026-10-02'));
-  const ch = projectGiveChanges(s.data);
-  assert.ok(ch.some((c) => c.projectId === 'k1' && c.team && c.team.viaProject === 'big'), 'k1 (inside Kilns, inside Plant upgrade) goes with it');
-  // a nearer given project wins
-  applyOp(s, op('setProjectTeam', { projectId: 'm', userId: 8, name: 'Valar', giveTasks: true }, '2026-10-02'));
-  assert.ok(projectGiveChanges(s.data).some((c) => c.projectId === 'k1' && c.team && c.team.userId === 8 && c.team.viaProject === 'm'));
-  // 📂 Misc never goes inside anything
+  assert.ok(projectGiveChanges(s.data).some((c) => c.projectId === 'k2' && c.team && c.team.viaProject === 'big'), 'giving the group gives its tasks');
   applyOp(s, op('makeMisc', {}, '2026-10-02'));
   assert.equal(applyOp(s, op('addToProject', { projectId: 'misc', parentId: 'big' }, '2026-10-02')), false);
 });
-
-test('📂 Review fix: a nearer given project wins also after the task already went with the outer one (the changes applied, as the app does)', async () => {
+test('📂 A task given with its group goes with it, and comes back when the group is taken back (one level; the "nearer project wins" case needed groups inside groups, gone 25 Nov)', async () => {
   const { projectGiveChanges } = await import('../docs/rules.js');
   const s = withMains(); // k1, k2, m (Kilns), x
-  applyOp(s, op('createMainProject', { projectId: 'big', name: 'Plant upgrade' }, '2026-10-01'));
   applyOp(s, op('addToProject', { projectId: 'k1', parentId: 'm' }, '2026-10-01'));
-  applyOp(s, op('addToProject', { projectId: 'm', parentId: 'big' }, '2026-10-01'));
-  applyOp(s, op('addToProject', { projectId: 'k2', parentId: 'big' }, '2026-10-01'));
   const follow = (date) => { for (const c of projectGiveChanges(s.data)) applyOp(s, op('setProjectTeam', c.team ? { projectId: c.projectId, ...c.team } : { projectId: c.projectId, userId: null }, date)); };
-  applyOp(s, op('setProjectTeam', { projectId: 'big', userId: 7, name: 'Ravi', giveTasks: true }, '2026-10-02'));
+  applyOp(s, op('setProjectTeam', { projectId: 'm', userId: 7, name: 'Ravi', giveTasks: true }, '2026-10-02'));
   follow('2026-10-02');
-  assert.equal(P(s, 'k1').team.viaProject, 'big');
-  applyOp(s, op('setProjectTeam', { projectId: 'm', userId: 8, name: 'Valar', giveTasks: true }, '2026-10-03'));
-  follow('2026-10-03');
-  assert.deepEqual([P(s, 'k1').team.userId, P(s, 'k1').team.viaProject], [8, 'm'], 'k1 is inside Kilns, given to Valar: it goes to Valar');
-  assert.deepEqual([P(s, 'k2').team.userId, P(s, 'k2').team.viaProject], [7, 'big'], 'k2 is right in Plant upgrade: stays with Ravi');
-  assert.deepEqual(projectGiveChanges(s.data), [], 'and it stays (no flip back and forth)');
-  // Kilns taken back: k1 goes back to the outer project's person
+  assert.deepEqual([P(s, 'k1').team.userId, P(s, 'k1').team.viaProject], [7, 'm']);
+  assert.deepEqual(projectGiveChanges(s.data), [], 'and it stays');
   applyOp(s, op('setProjectTeam', { projectId: 'm', userId: null }, '2026-10-04'));
   follow('2026-10-04');
-  assert.deepEqual([P(s, 'k1').team.userId, P(s, 'k1').team.viaProject], [7, 'big']);
+  assert.ok(!P(s, 'k1').team, 'the group taken back: the task too');
 });
-
-test('📂 Review fix: giving a 📂 project again gives a task kept back inside one of its projects too (teamOff cleared at every depth)', async () => {
+test('📂 Review fix: giving a group again gives a task that was kept back in it (teamOff cleared)', async () => {
   const { projectGiveChanges } = await import('../docs/rules.js');
   const s = withMains();
-  applyOp(s, op('createMainProject', { projectId: 'big', name: 'Plant upgrade' }, '2026-10-01'));
   applyOp(s, op('addToProject', { projectId: 'k1', parentId: 'm' }, '2026-10-01'));
-  applyOp(s, op('addToProject', { projectId: 'm', parentId: 'big' }, '2026-10-01'));
   applyOp(s, op('setProjectTeam', { projectId: 'k1', userId: null, keepOff: true }, '2026-10-01'));
   assert.equal(P(s, 'k1').teamOff, true);
-  applyOp(s, op('setProjectTeam', { projectId: 'big', userId: 7, name: 'Ravi', giveTasks: true }, '2026-10-02'));
+  applyOp(s, op('setProjectTeam', { projectId: 'm', userId: 7, name: 'Ravi', giveTasks: true }, '2026-10-02'));
   assert.equal(P(s, 'k1').teamOff, undefined, 'the box "keep" is unticked when giving: it goes');
   assert.ok(projectGiveChanges(s.data).some((c) => c.projectId === 'k1' && c.team && c.team.userId === 7));
 });
-
-test('📂 Review fix: a 📂 project put into one with a "move every" brings its tasks along (each unless it has its own)', async () => {
+test('📂 "Move every": a task put into a group takes the group\'s setting unless it has its own; a group goes into no group (one level, 25 Nov)', async () => {
   const { moveEveryOf } = await import('../docs/rules.js');
   const s = withMains();
   applyOp(s, op('createMainProject', { projectId: 'big', name: 'Plant upgrade' }, '2026-10-01'));
   applyOp(s, op('setMoveEvery', { projectId: 'big', days: 7 }, '2026-10-01'));
-  applyOp(s, op('addToProject', { projectId: 'k1', parentId: 'm' }, '2026-10-01'));
-  applyOp(s, op('addToProject', { projectId: 'k2', parentId: 'm' }, '2026-10-01'));
   applyOp(s, op('setMoveEvery', { projectId: 'k2', days: 1 }, '2026-10-01'));
-  applyOp(s, op('addToProject', { projectId: 'm', parentId: 'big' }, '2026-10-02'));
-  assert.deepEqual(['m', 'k1', 'k2'].map((id) => moveEveryOf(P(s, id))), [7, 7, 1]);
+  applyOp(s, op('createMainProject', { projectId: 'g2', name: 'Kiln work', childId: 'x' }, '2026-10-01')); // (a group with a task)
+  applyOp(s, op('addToProject', { projectId: 'k1', parentId: 'big' }, '2026-10-02'));
+  applyOp(s, op('addToProject', { projectId: 'k2', parentId: 'big' }, '2026-10-02'));
+  assert.deepEqual(['k1', 'k2'].map((id) => moveEveryOf(P(s, id))), [7, 1]);
+  assert.equal(applyOp(s, op('addToProject', { projectId: 'g2', parentId: 'big' }, '2026-10-02')), false, 'a group goes into no group');
   applyOp(s, op('setParent', { projectId: 'x', parentId: 'big' }, '2026-10-02'));
   assert.equal(moveEveryOf(P(s, 'x')), 7, 'a task as before');
 });
-
 test('📂 Review fix: descendantIds reads each task once (not a full scan for every task inside), and a long chain does not run out of stack', async () => {
   const { descendantIds } = await import('../docs/rules.js');
   const data = emptyData();
@@ -3117,50 +3094,42 @@ test('📂 Review fix: descendantIds reads each task once (not a full scan for e
   assert.equal(descendantIds(chain, 'c0').size, 19999);
 });
 
-test('📂 createMainProject with a 📂 project as its child: the new project holds it (projects inside projects); never 📂 Misc', () => {
+test('📂 createMainProject with a child: a task goes into the new group; a group never (one level, rule changed 25 Nov); never 📂 Misc', () => {
   const s = withMains();
+  assert.equal(applyOp(s, op('createMainProject', { projectId: 'g1', name: 'Kiln work', childId: 'k2' }, '2026-10-02')), true);
+  assert.deepEqual(P(s, 'k2').parentIds, ['g1']);
   applyOp(s, op('addToProject', { projectId: 'k1', parentId: 'm' }, '2026-10-01'));
-  assert.equal(applyOp(s, op('createMainProject', { projectId: 'big', name: 'Plant upgrade', childId: 'm' }, '2026-10-02')), true);
-  assert.deepEqual(P(s, 'm').parentIds, ['big']);
+  assert.equal(applyOp(s, op('createMainProject', { projectId: 'big', name: 'Plant upgrade', childId: 'm' }, '2026-10-02')), false, 'a group never goes into a new group');
   applyOp(s, op('makeMisc', {}, '2026-10-02'));
   assert.equal(applyOp(s, op('createMainProject', { projectId: 'b2', name: 'Other', childId: 'misc' }, '2026-10-02')), false);
 });
-
-test('📂 Review round 2: an inner project\'s own late step turns the outer project red too (its dot rolls up every level)', async () => {
+test('📂 A group\'s own late step turns it red even when its tasks are green (one level; it was "an inner project rolls up", gone 25 Nov)', async () => {
   const { listColour } = await import('../docs/ui/mains.js');
   const s = withMains();
   applyOp(s, op('createMainProject', { projectId: 'big', name: 'Plant upgrade' }, '2026-10-01'));
-  applyOp(s, op('createMainProject', { projectId: 'in', name: 'Kilns inner' }, '2026-10-01'));
-  applyOp(s, op('addToProject', { projectId: 'in', parentId: 'big' }, '2026-10-01'));
-  applyOp(s, op('addStep', { projectId: 'in', stepId: 's1', text: 'Order bricks' }, '2026-10-01'));
   const late = '2026-10-20';
-  // the outer one also holds a task worked on today (green), so only the inner project can make it red
+  applyOp(s, op('addStep', { projectId: 'big', stepId: 'b1', text: 'Order bricks' }, '2026-10-01'));
   applyOp(s, op('addToProject', { projectId: 'k1', parentId: 'big' }, '2026-10-01'));
   applyOp(s, op('addStep', { projectId: 'k1', stepId: 'k1a', text: 'Check' }, late));
   applyOp(s, op('addWorkNote', { projectId: 'k1', noteId: 'n1', text: 'Checked' }, late));
-  applyOp(s, op('addStep', { projectId: 'big', stepId: 'b1', text: 'Plan' }, late));
-  applyOp(s, op('addWorkNote', { projectId: 'big', noteId: 'n2', text: 'Planned' }, late));
   assert.notEqual(listColour(s.data, P(s, 'k1'), late), 'red');
-  assert.equal(listColour(s.data, P(s, 'in'), late), 'red', 'the inner project is red (no work for long)');
-  assert.equal(listColour(s.data, P(s, 'big'), late), 'red', 'so the outer one is red too');
+  assert.equal(listColour(s.data, P(s, 'big'), late), 'red', 'its own step had no work for long');
 });
-
-test('📂 Review round 3: projectParts finds the tasks and the projects inside, every level, in one pass (no full scan for each one)', async () => {
+test('📂 Review round 3: projectParts finds a group\'s tasks in one pass; groups are one level, so it finds no groups inside', async () => {
   const { projectParts } = await import('../docs/rules.js');
   const { readFileSync } = await import('node:fs');
   const s = withMains();
   applyOp(s, op('createMainProject', { projectId: 'big', name: 'Plant upgrade' }, '2026-10-01'));
-  applyOp(s, op('addToProject', { projectId: 'k1', parentId: 'm' }, '2026-10-01'));
-  applyOp(s, op('addToProject', { projectId: 'm', parentId: 'big' }, '2026-10-01'));
+  applyOp(s, op('createMainProject', { projectId: 'g2', name: 'Kiln work', childId: 'x' }, '2026-10-01')); // (a group with a task)
+  applyOp(s, op('addToProject', { projectId: 'k1', parentId: 'big' }, '2026-10-01'));
+  applyOp(s, op('addToProject', { projectId: 'g2', parentId: 'big' }, '2026-10-01')); // (refused: one level)
   applyOp(s, op('addToProject', { projectId: 'k2', parentId: 'big' }, '2026-10-01'));
   const parts = projectParts(s.data, 'big');
   assert.deepEqual(parts.tasks.map((p) => p.id).sort(), ['k1', 'k2']);
-  assert.deepEqual(parts.projects.map((p) => p.id), ['m']);
+  assert.deepEqual(parts.projects, []);
   const src = readFileSync(new URL('../docs/ui/mains.js', import.meta.url), 'utf8');
   assert.ok(!src.includes('subProjectsDeep'), 'the colour uses projectParts');
 });
-
-
 test('📒 Giving a 📂 project as a record: its tasks go with it as records too (projectGiveChanges carries record)', async () => {
   const { projectGiveChanges } = await import('../docs/rules.js');
   const s = withMains();
@@ -3337,14 +3306,14 @@ test('ownerTaskMatches (owner, 29 Oct): Give a task finds your own open tasks by
   assert.deepEqual(ownerTaskMatches(null, 'x'), []);
 });
 
-test('openTasksInside (owner, 29 Oct): finishing a 📂 project offers its open tasks (any depth, paused too) — not finished ones, not a task also in another open project', async () => {
+test('openTasksInside (owner, 29 Oct): finishing a 📂 project offers its open tasks (paused too; groups are one level since 25 Nov) — not finished ones, not a task also in another open project', async () => {
   const { applyOps, emptyData, makeOp } = await import('../docs/ops.js');
   const { openTasksInside } = await import('../docs/rules.js');
   const s = { data: emptyData(), history: {} };
   applyOps(s, [makeOp('createMainProject', { projectId: 'm', name: 'Feldspar trial' }), makeOp('createMainProject', { projectId: 'o', name: 'Other' }),
-    makeOp('createMainProject', { projectId: 'sub', name: 'Sub' }), makeOp('addToProject', { projectId: 'sub', parentId: 'm' }),
+    // (groups are one level since 25 Nov: b sits right in m — it was in a group "Sub" inside m)
     ...['a', 'b', 'c', 'd', 'e'].map((id) => makeOp('createProject', { projectId: id, name: 'Task ' + id })),
-    makeOp('addToProject', { projectId: 'a', parentId: 'm' }), makeOp('addToProject', { projectId: 'b', parentId: 'sub' }),
+    makeOp('addToProject', { projectId: 'a', parentId: 'm' }), makeOp('addToProject', { projectId: 'b', parentId: 'm' }),
     makeOp('addToProject', { projectId: 'c', parentId: 'm' }), makeOp('finish', { projectId: 'c' }),
     makeOp('addToProject', { projectId: 'd', parentId: 'm' }), makeOp('addToProject', { projectId: 'd', parentId: 'o' }),
     makeOp('addToProject', { projectId: 'e', parentId: 'm' }), makeOp('pause', { projectId: 'e' })]);
@@ -3378,4 +3347,29 @@ test('stepPhotosToSend (owner, 29 Oct): a given step\'s photos (pasted on it, or
   const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
   assert.match(app, /await syncGivenProjects\(gen\);\n\s*sendStepPhotos\(\);/, 'sent after each look at the team list');
   assert.match(app, /fd\.append\('taskId', String\(taskId\)\); fd\.append\('file', blob, name\);[\s\S]{0,200}a=task\.file\.add/, 'as the task\'s instruction photos');
+});
+
+test('📂 Groups are one level (owner, 25 Nov): older data with a group inside a group — flattenGroups lifts it to the top once, with its tasks, notes, team and history; again: no change; the app does it when it opens', async () => {
+  const { nestedGroups, childrenOf } = await import('../docs/rules.js');
+  const s = withMains(); // k1, k2, m (Kilns), x
+  applyOp(s, op('createMainProject', { projectId: 'big', name: 'Plant upgrade', childId: 'k2' }, '2026-10-01'));
+  applyOp(s, op('addToProject', { projectId: 'k1', parentId: 'm' }, '2026-10-01'));
+  // saved before 25 Nov: Kilns sat inside Plant upgrade (written as the old app saved it)
+  P(s, 'm').parentIds = ['big'];
+  P(s, 'm').notes = 'Kiln notes';
+  P(s, 'm').team = { userId: 7, name: 'Ravi' };
+  assert.deepEqual(nestedGroups(s.data).map((p) => p.id), ['m']);
+  assert.equal(applyOp(s, op('flattenGroups', {}, '2026-11-25')), true);
+  assert.ok(!(P(s, 'm').parentIds || []).length, 'its own group now');
+  assert.deepEqual(childrenOf(s.data, 'm').map((p) => p.id), ['k1'], 'its task stays with it');
+  assert.deepEqual(childrenOf(s.data, 'big').map((p) => p.id), ['k2'], 'the outer group keeps its own task');
+  assert.deepEqual([P(s, 'm').notes, P(s, 'm').team.name], ['Kiln notes', 'Ravi'], 'nothing lost');
+  assert.ok(allEvents(s).some((e) => e.projectId === 'm' && e.detail === 'Now its own group (was inside Plant upgrade)'));
+  assert.deepEqual(nestedGroups(s.data), []);
+  assert.equal(applyOp(s, op('flattenGroups', {}, '2026-11-25', '10:01')), false, 'again: no change');
+  const { readFileSync } = await import('node:fs');
+  const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
+  assert.match(app, /if \(store\.canEdit\(\) && nestedGroups\(store\.view\.data\)\.length\) store\.dispatch\('flattenGroups', \{\}\);/);
+  const { NOT_CARRIED } = await import('../docs/ops.js');
+  assert.ok(NOT_CARRIED.has('flattenGroups'), 'never from a link');
 });

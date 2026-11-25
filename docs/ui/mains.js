@@ -338,7 +338,6 @@ export function subProjectsBlock(ctx, p, today = todayIndia()) {
     save(c, movedOrder(kids, c.id, e.key === 'ArrowUp' ? -1 : 1));
   };
   return h('section', { class: 'block sub-projects', key: 'subs-' + p.id },
-    innerProjects(ctx, p, today),
     // the same count as its row in 📂 Projects (open ones); paused / finished ones say so (owner, 24 Oct: "6 tasks" vs "TASKS (8)")
     h('h3', null, (() => { const open = all.filter((c) => c.state === 'active').length, rest = all.length - open; return `TASKS (${open})${rest ? ` + ${rest} paused / finished` : ''}`; })()),
     all.length ? stageFilterBar(stageCounts(all, stageOfKid), sf, (k) => { (ctx.ui.subStage ||= {})[p.id] = k; ctx.render(); }) : null,
@@ -371,47 +370,16 @@ export function subProjectsBlock(ctx, p, today = todayIndia()) {
             class: 'link small sub-remove', type: 'button', title: `Take out of project — ${c.name} is kept`, 'aria-label': `Take ${c.name} out of this project`, // (a quiet ✕, not "Remove": it never deletes, owner 24 Oct)
             onClick: (e) => { if (e && e.stopPropagation) e.stopPropagation(); ctx.act('removeFromProject', { projectId: c.id, parentId: p.id }, `${c.name} taken out of 📂 ${p.name} (the task is kept)`); },
           }, '✕')));
-      }))) : h('p', { class: 'muted small' }, (() => { // a project that only holds projects: say where its tasks are
-        const n = projectParts(data, p.id).tasks.filter((c) => c.state !== 'finished').length;
-        return n ? `No tasks right in it — the projects above hold ${n} task${n === 1 ? '' : 's'}.` : 'No tasks in it yet.';
-      })()),
+      }))) : h('p', { class: 'muted small' }, 'No tasks in it yet.'),
     h('div', { class: 'sub-buttons' },
       p.misc ? null : h('button', { class: 'btn small', type: 'button', onClick: () => openAddTasks(ctx, p) }, '+ Add tasks'),
       h('button', { class: 'btn small', type: 'button', onClick: () => newProjectHere(ctx, p) }, '+ New task here'),
-      p.misc ? null : h('button', { class: 'btn small', type: 'button', title: 'A project inside this one (it holds its own tasks)', onClick: () => newInnerProject(ctx, p) }, '+ 📂 Project inside'),
       h('button', { class: 'btn small', type: 'button', title: 'Copy this project\'s tasks as a numbered list (for an AI chat or an email)', onClick: () => ctx.copyList && ctx.copyList(all.filter((c) => c.state !== 'finished'), { title: `📂 ${p.name}`, about: p.about || '' }) }, '📋 Copy list')),
     addTasksPicker(ctx, p),
     newHereBox(ctx, p));
 }
 
 /** "+ New task here": opens a box on the page (a name, and notes you can paste a screenshot or a table into). */
-/** On a project's page: the 📂 projects inside it (each opens; right-click: move, take out…), with their own counts. */
-function innerProjects(ctx, p, today) {
-  const data = ctx.store.view.data;
-  const subs = subProjectsOf(data, p.id).filter((c) => c.state !== 'finished');
-  if (!subs.length) return null;
-  const openIt = (c) => (ctx.ui.view === 'mains' && ctx.showHere ? ctx.showHere(c.id) : ctx.openProject(c.id));
-  return h('div', { class: 'inner-projects', key: 'inner-' + p.id },
-    h('h3', null, `PROJECTS INSIDE (${subs.length})`),
-    h('ul', { class: 'plist' }, subs.map((c) => h('li', {
-      key: 'in-' + c.id, class: 'prow main-row inner-project', onContextmenu: (e) => ctx.openRowMenu && ctx.openRowMenu(c.id, e, p.id),
-    },
-    h('button', { class: 'prow-btn', type: 'button', onClick: () => openIt(c) },
-      h('span', { class: 'dot ' + listColour(data, c, today) }),
-      h('span', { class: 'prow-text' }, h('span', { class: 'prow-name' }, '📂 ', c.name), h('span', { class: 'prow-next' }, projectLine(data, c, today))))))));
-}
-
-/** "+ 📂 Project inside": a new project made inside this one (one Undo takes it away). */
-export function newInnerProject(ctx, p) {
-  const name = globalThis.prompt ? prompt(`Name of the new project inside 📂 ${p.name}:`) : null;
-  if (!name || !name.trim()) return;
-  const projectId = newId();
-  if (!ctx.store.dispatch('createMainProject', { projectId, name: name.trim() })) return;
-  ctx.store.dispatch('addToProject', { projectId, parentId: p.id });
-  ctx.toast(`New project 📂 ${name.trim()} inside 📂 ${p.name}`);
-  ctx.render();
-}
-
 export function newProjectHere(ctx, p) {
   ctx.ui.newHere = p.id;
   ctx.render();

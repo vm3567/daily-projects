@@ -1005,7 +1005,7 @@ function projectMenu(ctx, p) {
     timed ? item('⏱ Add time', () => addTimePrompt(ctx, p)) : null,
     item('✎ Tag, priority, target date', () => { ui.editMeta = true; }),
     // 📂 a task can be in several projects; a project can be inside other projects too (never 📂 Misc)
-    p.misc ? null : item(isMainProject(store.view.data, p) ? '📂 Put inside a project…' : '📂 Add to a project…', () => openMainBox(ctx, p, 'parent')),
+    p.misc || isMainProject(store.view.data, p) ? null : item('📂 Add to a project…', () => openMainBox(ctx, p, 'parent')), // (a group goes into no group: one level, owner 25 Nov)
     p.misc ? null : item(`🗑 Delete ${kindWord(ctx, p)}`, () => { // (📂 Misc stays: it holds every task in no other project)
       if (!confirm(deleteQuestion(ctx.store.view.data, p))) return;
       ctx.act('deleteProject', { projectId: p.id }, `Deleted: ${p.name}`, 10000);

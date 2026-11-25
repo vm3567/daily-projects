@@ -44,3 +44,9 @@ Each lesson: what went wrong, then what to do next time.
     → Never promise a deploy from here. Push to GitHub and ask the owner to run the deploy on their Mac.
 13. **Main moves on its own.** Main had 14, later 22, new commits the branch did not have.
     → Fetch main and bring it in before starting work, and again before merging.
+14. **A `//` note in the middle of a one-line statement switches off the rest of the line.** It broke all of
+    app.js once (the "all app files parse" check caught it).
+    → Inside a line of code use `/* … */`, or put the note on its own line. Run `node --check` after editing.
+15. **In test data, a 📂 project is only a group once it holds a task** (or was made with createMainProject).
+    Two checks wrongly assumed "Kilns" was already a group.
+    → Make the group in the test the way the app does, before testing what it can or cannot do.

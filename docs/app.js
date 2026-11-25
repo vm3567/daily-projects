@@ -11,7 +11,7 @@ import { renderDashboard } from './ui/dashboard.js';
 import { renderTimeReport } from './ui/timereport.js';
 import { renderReplies, renderReplyRound, replyArea, readyCount } from './ui/replies.js';
 import { renderConnectionsSettings, renderFromApps, loadApps, appsPending, forgetOnce } from './ui/connections.js';
-import { projectChips, renderProjectsHead, openMainBox, openMoveBox, moveBox, listColour, newInnerProject } from './ui/mains.js';
+import { projectChips, renderProjectsHead, openMainBox, openMoveBox, moveBox, listColour } from './ui/mains.js';
 import { projectMatches, diaryEntries, backupPayload, summaryText, personMessageText, personMessageHtml, sentMarkOf, copyNotice, tasksListText, teamUpdatesText } from './reports.js';
 import { closeViewer, uploadBlob, photoThumb } from './ui/files.js';
 import { showPhotos } from './ui/photoview.js';
@@ -25,7 +25,7 @@ import { DATA_OWNER, DATA_REPO, DATA_BRANCH, MOVED_TO, REFRESH_MS, AI_DAILY_LIMI
 import { dotColour, greenByTeamOnly, isSnoozed, restUntil, restReason, onlyDaysLabel, openIdFromHash, awakeProjects, activeProjects, nextStep, todayIndia, isSundayIndia, colourCounts, isOverdue, indiaDate, waitingDays, daysWithoutWork, dayScore, greenStreak, addDays, monthOf, fmtMinutes, takeBackWaits, staffStepAction, pasteGoesToProject, emptyPaste, EMPTY_PASTE, ownerTaskMatches, stepPhotosToSend, singleStepClose, versionRequest, askDiaryAgain, pasteInForm, diaryLoadedAt, photoNeedsFetch, teamUndoKey, teamActionUndone, teamProgressOf, projectKeyIgnored, teamMovedTo, serverHolder, keepMovedStep, teamMemberFor, repliesOf, mailThreads, replyMailto, MAILTO_BODY_MAX, emailPath, pasteReason } from './rules.js';
 import { stageOf, stageCounts, byStage, STAGES, STAGE_LABELS, moveEveryOf, everyText, MOVE_EVERY_PICKS, MOVE_EVERY_DEFAULT, everyDefaultOf, useEveryDefault, colourShort, colourWhy } from './rules.js';
 import { stageChip, stageFilterBar } from './ui/stage.js';
-import { whoFromUser, signInTag, timerOn, projectGiveChanges, UNDO_GRACE_MS, MISC_ID } from './rules.js';
+import { whoFromUser, signInTag, timerOn, projectGiveChanges, UNDO_GRACE_MS, MISC_ID, nestedGroups } from './rules.js';
 import { signInCard, firstPasswordCard } from './ui/signin.js';
 import { createBell } from './ui/bell.js';
 import { parentIdsOf, isMainProject, mainProjects, activeTasks, todayWithoutEmptyMains, todayList, stepTargets, mainSummary, childrenOf, deleteQuestion, pickEnterTarget, projectLine, projectTasks, inboxMatches } from './rules.js';
@@ -1853,9 +1853,9 @@ function rowMenu() {
       ? item('👥', `Take back from ${p.team.name}`, () => { if (confirm(takeBackQuestion(store.view.data, p))) giveProject(p, null); })
       : item('👥', `Give ${kindWord(p)} to…`, () => { select(p.id); ui.giveOpen = p.id; ui.givePhoto = false; ui.giveRecord = false; })) : null,
     item('↗', 'Open', () => select(p.id)),
-    movable ? item('🔀', task ? 'Move to another project…' : 'Move inside another project…', () => openMoveBox(ctx, p, from ? from.id : null)) : null,
-    movable ? item('📂', task ? 'Add to a project…' : 'Put inside a project…', () => { select(p.id); openMainBox(ctx, p, 'parent'); }) : null,
-    !task && !p.misc && p.state !== 'finished' ? item('＋', 'New project inside…', () => newInnerProject(ctx, p)) : null,
+    // (groups are one level, owner 25 Nov — a group never goes inside another)
+    movable && task ? item('🔀', 'Move to another project…', () => openMoveBox(ctx, p, from ? from.id : null)) : null,
+    movable && task ? item('📂', 'Add to a project…', () => { select(p.id); openMainBox(ctx, p, 'parent'); }) : null,
     from && !from.misc ? item('✕', `Take out of 📂 ${from.name}`, () => act('removeFromProject', { projectId: p.id, parentId: from.id }, `${p.name} taken out of 📂 ${from.name} (the task is kept)`)) : null,
     item('✎', 'Rename…', () => {
       const n = prompt('New name:', p.name);
@@ -3922,7 +3922,7 @@ function startOwner() {
   render();
   if (onServer && !isMock) takeTeamFromHash(); // "#team…": the team pages of this app (from 👥, a team task chip, Give to team)
   if (onServer && !isMock) startBell();
-  store.init().then(() => { if (store.status === 'saved') dataFreshAt = Date.now(); if (store.canEdit() && !store.view.data.projects.some((p) => p.id === MISC_ID)) store.dispatch('makeMisc', {}); render(); if (ui.capture) focusKey('capture-input'); voiceReady = true; runVoice(); loadTeam(true); if (onServer) loadApps(appsCtx, true); shareLocalKeys(); markShownOpened(); makeBrief(); recordPastScores(); });
+  store.init().then(() => { if (store.status === 'saved') dataFreshAt = Date.now(); if (store.canEdit() && !store.view.data.projects.some((p) => p.id === MISC_ID)) store.dispatch('makeMisc', {}); if (store.canEdit() && nestedGroups(store.view.data).length) store.dispatch('flattenGroups', {}); /* (groups are one level, owner 25 Nov) */ render(); if (ui.capture) focusKey('capture-input'); voiceReady = true; runVoice(); loadTeam(true); if (onServer) loadApps(appsCtx, true); shareLocalKeys(); markShownOpened(); makeBrief(); recordPastScores(); });
   if (started) return;
   started = true;
   // redraw now and then: the running timer, and the "not sent yet" bar appearing after a minute

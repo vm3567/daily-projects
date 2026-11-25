@@ -532,9 +532,14 @@ export function canPutUnder(data, child, main) {
   if (main.id === MISC_ID || child.id === MISC_ID) return false; // 📂 Misc holds what is in no other project by itself
   if (main.state === 'finished') return false;
   if (parentIdsOf(main).length && !isMainProject(data, main)) return false; // a task inside a project cannot hold tasks
-  if (isMainProject(data, child) && !isMainProject(data, main)) return false; // a project goes into a project, never into a task
-  if (isMainProject(data, child) && descendantIds(data, child.id).has(main.id)) return false; // no circle
+  if (isMainProject(data, child)) return false; // groups are one level (owner, 25 Nov): a group never goes into another
   return true;
+}
+
+/** Groups that sit inside another group (allowed before 25 Nov): flattenGroups lifts them to the top, once. */
+export function nestedGroups(data) {
+  const ids = new Set(data.projects.filter((p) => isMainProject(data, p)).map((p) => p.id));
+  return data.projects.filter((p) => ids.has(p.id) && parentIdsOf(p).some((id) => ids.has(id)));
 }
 
 /** Every id inside the project `id`, at any depth (its tasks and projects, theirs…); each once, safe from circles. */
@@ -612,7 +617,8 @@ export function mainChoices(data, p, query = '') {
   const fits = (x) => (inIds.includes(x.id) || canPutUnder(data, p, x)) && x.id !== p.id && (!q || x.name.toLowerCase().includes(q));
   const mains = data.projects.filter((x) => isMainProject(data, x) && x.state !== 'finished' && fits(x));
   const exact = q && data.projects.some((x) => isMainProject(data, x) && x.name.trim().toLowerCase() === q);
-  return { items: mains.map((x) => ({ p: x, main: true, in: inIds.includes(x.id) })), create: q && !exact && p.id !== MISC_ID ? String(query).trim() : null };
+  // (a group itself goes into no group, not even a new one: groups are one level, owner 25 Nov)
+  return { items: mains.map((x) => ({ p: x, main: true, in: inIds.includes(x.id) })), create: q && !exact && p.id !== MISC_ID && !isMainProject(data, p) ? String(query).trim() : null };
 }
 
 /**

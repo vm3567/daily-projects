@@ -9,7 +9,7 @@
 // applyOp(state, op) changes the state in place and returns true, or returns false
 // when the operation must be skipped (for example, its item no longer exists).
 
-import { WORK, indiaDate, monthOf, laterDate, addDays, REPEATS, nextRepeatDate, waitingAgain, WEEKDAYS, indiaDateTime, validRemindOnce, remindOnceText, canPutUnder, parentIdsOf, normalizeParents, isMainProject, descendantIds, MOVE_EVERY_DEFAULT, DEFAULT_TARGET_DAYS, THREAD_MAX, timerOn, MISC_ID, STAGES, STAGE_LABELS, cleanWaitingFor } from './rules.js';
+import { WORK, indiaDate, monthOf, laterDate, addDays, REPEATS, nextRepeatDate, waitingAgain, WEEKDAYS, indiaDateTime, validRemindOnce, remindOnceText, canPutUnder, parentIdsOf, normalizeParents, isMainProject, descendantIds, MOVE_EVERY_DEFAULT, DEFAULT_TARGET_DAYS, THREAD_MAX, timerOn, MISC_ID, STAGES, STAGE_LABELS, cleanWaitingFor, nestedGroups } from './rules.js';
 import { AI_DAILY_LIMIT, BRIEF_CLAIM_MINUTES } from './config.js';
 import { sanitizeRich, htmlToText, isRich, RICH_MAX } from './rich.js';
 
@@ -474,6 +474,23 @@ const handlers = {
   },
 
   /** A new project (isMain, so it shows even while empty); with childId, that task is added to it in the same change (one Undo). */
+  /**
+   * Groups are one level (owner, 25 Nov): a group that sits inside another becomes its own group at the top, with its
+   * tasks, notes and history (nothing is lost). Made once when the app opens; doing it again changes nothing.
+   */
+  flattenGroups(state, op) {
+    const list = nestedGroups(state.data);
+    if (!list.length) return false;
+    for (const [i, g] of list.entries()) {
+      const outer = parentIdsOf(g).map((id) => findProject(state.data, id)).filter(Boolean);
+      setParents(g, []);
+      dropFromOrder(state.data, g.id, outer.map((x) => x.id));
+      g.updatedAt = op.at;
+      addEvent(state, { ...op, id: op.id + 'g' + i }, g, 'main_changed', `Now its own group (was inside ${outer.map((x) => x.name).join(', ')})`);
+    }
+    return true;
+  },
+
   /** 📂 Misc, made once (its fixed id: made on two devices at once, it is still one). See rules.js MISC_ID. */
   makeMisc(state, op) {
     if (findProject(state.data, MISC_ID)) return false;
@@ -488,7 +505,7 @@ const handlers = {
   createMainProject(state, op, a) {
     const { data } = state;
     const child = typeof a.childId === 'string' && a.childId ? findProject(data, a.childId) : null;
-    if (a.childId && (!child || child.misc)) return false; // (a 📂 project can go into the new one too, owner asked 23 Oct; never 📂 Misc)
+    if (a.childId && (!child || child.misc || isMainProject(data, child))) return false; // (a task only: groups are one level, owner 25 Nov; never 📂 Misc)
     if (!handlers.createProject(state, op, { projectId: a.projectId, name: a.name })) return false;
     const main = findProject(data, a.projectId);
     main.isMain = true;
@@ -1720,7 +1737,7 @@ export const CARRIED = new Set(['createProject', 'createMainProject', 'addToProj
 export const NOT_CARRIED = new Set(['deleteProject', 'restoreProject', 'deleteStep', 'setProjectTeam', 'addFile', 'setAiKey', 'setAiProvider',
   'removeFromProject', 'setParent', 'removeLink', 'editLink', 'finish', 'teamWorked', 'deleteWorkNote', 'editWorkNote', 'setNoteStep', 'linkFollow', 'setProjectField', 'setStepField',
   'removeFile', 'setTimer', 'setEveryDefault', 'deleteTag', 'clearReply', 'markReplySent', 'undoReplySent', 'mailReplied', 'removeInbox', 'inboxUndo', 'deletePerson',
-  'recordScores', 'removeTime', 'incrementAiUsage', 'claimBrief', 'setBriefReady', 'addEvent', 'makeMisc']);
+  'recordScores', 'removeTime', 'incrementAiUsage', 'claimBrief', 'setBriefReady', 'addEvent', 'makeMisc', 'flattenGroups']);
 
 /** Changes carried from the old address (#ops=): keeps only known, harmless ones. Returns { ok, files, dropped }. */
 export function carriedOps(list) {

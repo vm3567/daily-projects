@@ -1006,7 +1006,7 @@ test('📂 app wiring (app.js): ✅ Tasks and 📂 Projects menu items (keys; li
   assert.match(APP, /if \(ui\.view === 'all'\) return activeTasks\(store\.view\.data\)/);
   assert.match(APP, /const rows = open\.map\(\(p\) => projectRow\(p, today\)\);/, 'flat: each task once');
   assert.match(APP, /projectChips\(store\.view\.data, p\)/, 'project chips under the row');
-  assert.match(APP, /item\('📂', task \? 'Add to a project…' : 'Put inside a project…'/, 'a task: Add to a project; a 📂 project: Put inside a project (owner asked 23 Oct)');
+  assert.match(APP, /movable && task \? item\('📂', 'Add to a project…'/, 'a task: Add to a project; a group goes into no group (rule changed again, owner asked 25 Nov: groups are one level)');
   assert.match(APP, /'\+ New task', keyHint\('N'\)/);
   assert.match(APP, /todayWithoutEmptyMains\(awakeProjects/);
   assert.match(APP, /type === 'createMainProject' \? \{ removeProjectId: args\.projectId \} : parentIds \? \{ parentIds \}/);
@@ -3829,38 +3829,22 @@ test('Right-click in the staff app (my tasks, a folder\'s table): open, write to
   assert.ok(app.includes("for (const v of [teamView, staffView]) if (v && v.state.rowMenu && !(e && e.target && e.target.closest && e.target.closest('.row-menu'))) { v.state.rowMenu = null; v.render(); }"), 'a click elsewhere closes it');
 });
 
-test('📂 A project\'s page lists the projects inside it (each opens; right-click: its menu) above its TASKS table; "+ 📂 Project inside" makes one; the TASKS table has only tasks', () => {
+test('📂 Groups are one level (rule changed, owner asked 25 Nov; it was "projects inside projects", 23 Oct): a group\'s page has no "projects inside" list and no "+ 📂 Project inside"; its TASKS table; the menus never offer to put a group inside a group', () => {
   const s = mainsState(); // 📂 Kilns: p1, c2
   applyOps(s, [makeOp('createMainProject', { projectId: 'big', name: 'Plant upgrade' }), makeOp('addToProject', { projectId: 'm', parentId: 'big' }), makeOp('addToProject', { projectId: 'o', parentId: 'big' })]);
+  assert.ok(!(s.data.projects.find((p) => p.id === 'm').parentIds || []).length, 'Kilns (a group) did not go inside');
   const ctx = liveCtx(s, { selected: 'big' });
-  ctx.openRowMenu = (id, e, from) => ctx.calls.push(['menu', id, from]);
   const big = s.data.projects.find((p) => p.id === 'big');
   const el = mains.subProjectsBlock(ctx, big);
-  assert.match(el.textContent, /PROJECTS INSIDE \(1\)/);
-  const inner = rFind(el, (n) => n.nodeName === 'LI' && /inner-project/.test(n.className));
-  assert.match(inner.textContent, /📂 Kilns/);
-  assert.match(inner.textContent, /2 tasks/, 'its own line');
-  rFind(inner, (n) => n.nodeName === 'BUTTON').__on.click();
-  assert.deepEqual(ctx.calls.at(-1), ['open', 'm']);
-  inner.__on.contextmenu({ preventDefault() {} });
-  assert.deepEqual(ctx.calls.at(-1), ['menu', 'm', 'big']);
-  assert.match(el.textContent, /TASKS \(1\)/, 'only the task Office move: Kilns is listed above');
-  // + 📂 Project inside
-  const btn = rFind(el, (n) => n.nodeName === 'BUTTON' && n.textContent === '+ 📂 Project inside');
-  globalThis.prompt = () => 'Dryers';
-  ctx.toast = (t) => ctx.calls.push(['toast', t]);
-  btn.__on.click();
-  delete globalThis.prompt;
-  const dryers = s.data.projects.find((p) => p.name === 'Dryers');
-  assert.deepEqual(dryers.parentIds, ['big']);
-  assert.deepEqual(ctx.calls.at(-1), ['toast', 'New project 📂 Dryers inside 📂 Plant upgrade']);
-  // the right-click menu and the ⋯ menu offer it for projects (never 📂 Misc)
+  assert.doesNotMatch(el.textContent, /PROJECTS INSIDE/);
+  assert.ok(!rFind(el, (n) => n.nodeName === 'BUTTON' && /Project inside/.test(n.textContent)), 'no "+ 📂 Project inside"');
+  assert.match(el.textContent, /TASKS \(1\)/, 'its task Office move');
   const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
-  assert.ok(app.includes("movable ? item('🔀', task ? 'Move to another project…' : 'Move inside another project…'"));
-  assert.ok(app.includes("!task && !p.misc && p.state !== 'finished' ? item('＋', 'New project inside…', () => newInnerProject(ctx, p)) : null,"));
-  assert.ok(readFileSync(new URL('../docs/ui/detail.js', import.meta.url), 'utf8').includes("p.misc ? null : item(isMainProject(store.view.data, p) ? '📂 Put inside a project…' : '📂 Add to a project…'"));
+  assert.ok(app.includes("movable && task ? item('🔀', 'Move to another project…'"), 'Move: tasks only');
+  assert.ok(!app.includes('New project inside') && !app.includes('Move inside another project') && !app.includes('Put inside a project'));
+  assert.ok(readFileSync(new URL('../docs/ui/detail.js', import.meta.url), 'utf8').includes("p.misc || isMainProject(store.view.data, p) ? null : item('📂 Add to a project…'"));
+  assert.ok(!readFileSync(new URL('../docs/ui/mains.js', import.meta.url), 'utf8').includes('newInnerProject'));
 });
-
 test('Review fixes (23 Oct): staff / manager menus close on a click elsewhere; Move → a new project from a list row leaves its old projects; Copy list on a project copies its tasks only; take-back counts the tasks of its inner projects; one isTyping, one menu item builder', async () => {
   const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
   const keys = app.slice(app.indexOf('function listenKeys() {'), app.indexOf('function onKey(e) {'));
@@ -3877,17 +3861,17 @@ test('Review fixes (23 Oct): staff / manager menus close on a click elsewhere; M
   rFind(mains.moveBox(ctx), (n) => /main-box-item/.test(n.className || '') && /create/.test(n.className)).__on.click();
   const dryers = s.data.projects.find((p) => p.name === 'Dryers');
   assert.deepEqual(c2().parentIds, [dryers.id], 'out of Kilns too');
-  // Copy list: tasks only (not the projects inside)
+  // Copy list: its tasks (Kilns, a group, cannot go inside since 25 Nov)
   applyOps(s, [makeOp('createMainProject', { projectId: 'big', name: 'Plant upgrade' }), makeOp('addToProject', { projectId: 'm', parentId: 'big' }), makeOp('addToProject', { projectId: 'o', parentId: 'big' })]);
   let copied = null;
   ctx.copyList = (list) => { copied = list.map((p) => p.id); };
   rFind(mains.subProjectsBlock(ctx, s.data.projects.find((p) => p.id === 'big')), (n) => n.nodeName === 'BUTTON' && n.textContent === '📋 Copy list').__on.click();
   assert.deepEqual(copied, ['o']);
-  // take back: the tasks inside its projects that went with it are counted
+  // take back: the tasks that went with it are counted (groups are one level since 25 Nov: its own task o)
   const { takeBackQuestion } = await import('../docs/ui/detail.js');
   const big = s.data.projects.find((p) => p.id === 'big');
   big.team = { userId: 7, name: 'Ravi' };
-  s.data.projects.find((p) => p.id === 'p1').team = { userId: 7, name: 'Ravi', viaProject: 'big' };
+  s.data.projects.find((p) => p.id === 'o').team = { userId: 7, name: 'Ravi', viaProject: 'big' };
   assert.match(takeBackQuestion(s.data, big), /The 1 task that went with it comes back too/);
 });
 
@@ -4103,16 +4087,15 @@ test('Review 7: the dashboard\'s "Most worked" counts real work only (not adding
   assert.ok(today);
 });
 
-test('Review 8: a 📂 project that only holds projects says where its tasks are, and its diary does not ask it for an update of its own', () => {
+test('Review 8: an empty group says "No tasks in it yet." and its diary does not ask it for an update of its own (a group that held only groups is gone: one level since 25 Nov)', () => {
   const s = mainsState(); // 📂 Kilns holds p1, c2
-  applyOps(s, [makeOp('createMainProject', { projectId: 'big', name: 'Plant upgrade' }), makeOp('addToProject', { projectId: 'm', parentId: 'big' })]);
+  applyOps(s, [makeOp('createMainProject', { projectId: 'big', name: 'Plant upgrade' })]);
   const ctx = liveCtx(s, { selected: 'big', update: {} });
   const big = s.data.projects.find((p) => p.id === 'big');
-  assert.match(mains.subProjectsBlock(ctx, big).textContent, /No tasks right in it — the projects above hold 2 tasks\./);
+  assert.match(mains.subProjectsBlock(ctx, big).textContent, /No tasks in it yet\./);
   const text = renderDetail(ctx).textContent;
   assert.ok(!text.includes('Waiting for today\'s update') && !text.includes('No progress'), 'no update of its own is asked for');
 });
-
 test('Review 9: People lists your team members who are not in People yet (one tap adds them); not off the server', async () => {
   const s = sampleState();
   const ctx = liveCtx(s, {});
