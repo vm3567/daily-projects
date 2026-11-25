@@ -254,7 +254,7 @@ test('server: phone notifications go to the right person, once', { skip }, async
   assert.equal(m[0].msg.url, '/projects/#team-task=' + t.id, 'one app: a tap opens the task in the one app (worktask.in/projects/), not the old Work Task page');
   const steps = [{ stepRef: 'n1', title: 'Weigh clay' }, { stepRef: 'n2', title: 'Mix slip' }];
   await call('project.sync', { projectRef: 'pn', project: 'New body', assigneeId: id.suresh, steps }, tok.boss);
-  assert.deepEqual(fresh().map((x) => [x.user, x.msg.title, x.msg.body]), [[id.suresh, '📁 New project for you: New body', '2 steps. First: Weigh clay']]);
+  assert.deepEqual(fresh().map((x) => [x.user, x.msg.title, x.msg.body]), [[id.suresh, '📥 New task for you: New body', '2 steps. First: Weigh clay']]);
   await call('project.sync', { projectRef: 'pn', project: 'New body', assigneeId: id.suresh, steps }, tok.boss);
   assert.deepEqual(fresh(), [], 'nothing new = no notification (Daily Projects sends this often)');
   await call('project.sync', { projectRef: 'pn', project: 'New body', assigneeId: id.suresh, steps: [...steps, { stepRef: 'n3', title: 'Cast trial' }] }, tok.boss);
@@ -325,7 +325,7 @@ test('server: team logic fixes (whole project, take-back, telling people)', { sk
   const add = await call('project.addStep', { projectRef: 'pt', title: 'Check sieve mesh', clientId: 'c7654321-bb' }, tok.suresh);
   await call('project.sync', { projectRef: 'pt', project: 'Glaze line', assigneeId: 0, steps: [], reason: 'paused' }, tok.boss);
   const after = fresh().filter((x) => x.user === id.suresh);
-  assert.ok(after.some((x) => x.msg.title === '📁 Off your list: Glaze line' && /paused/.test(x.msg.body)), 'the person is told why');
+  assert.ok(after.some((x) => x.msg.title === '📋 Off your list: Glaze line' && /paused/.test(x.msg.body)), 'the person is told why');
   const linked = (await call('tasks.linked', {}, tok.boss)).tasks.find((t) => t.id === add.task.id);
   assert.ok(linked && linked.fromStaff && linked.status === 'cancelled', 'still offered to Daily Projects to add');
   await call('project.sync', { projectRef: 'pt', project: 'Glaze line', assigneeId: id.suresh, steps: [{ stepRef: 'pt1', title: 'Sieve' }, { stepRef: add.task.stepRef, title: 'Check sieve mesh' }] }, tok.boss);
@@ -3005,6 +3005,19 @@ test('review (Team today): one "late" rule on the server — open and past its b
   assert.ok(!/Waiting step[^\n]*late/i.test(mail.text || ''), 'the email does not call the waiting step late');
   assert.ok((await call('project.sync', { projectRef: 'late1', project: 'Late steps', assigneeId: 0, steps: [] }, tok.boss)).ok);
   assert.ok((await call('task.status', { id: once.id, status: 'cancelled' }, tok.boss)).ok);
+});
+
+test('Groups on the team side (owner, 25 Nov): the 📂 Groups list carries the owner\'s group of each given task (folder); a task given with its steps is told as "📥 New task for you", taken back as "📋 Off your list"', { skip }, async () => {
+  const n = pushLen();
+  assert.ok((await call('project.sync', { projectRef: 'grp1', project: 'Glaze photos', folder: 'Ceramic Media', assigneeId: id.suresh, steps: [{ stepRef: 'gs1', title: 'Shoot the tiles' }, { stepRef: 'gs2', title: 'Pick 5 best' }] }, tok.boss)).ok);
+  const row = (await call('projects.overview', {}, tok.boss)).projects.find((p) => p.ref === 'grp1');
+  assert.deepEqual([row.name, row.folder], ['Glaze photos', 'Ceramic Media'], 'its group, for the team pages\' 📂 Groups');
+  const told = pushSince(n).split('\n').filter(Boolean).map((l) => JSON.parse(l)).filter((x) => x.user === id.suresh);
+  assert.ok(told.some((x) => x.msg.title === '📥 New task for you: Glaze photos'), JSON.stringify(told.map((x) => x.msg.title)));
+  const m = pushLen();
+  assert.ok((await call('project.sync', { projectRef: 'grp1', project: 'Glaze photos', assigneeId: 0, steps: [] }, tok.boss)).ok);
+  assert.ok(pushSince(m).includes('📋 Off your list: Glaze photos'));
+  assert.ok(!pushSince(n).includes('project'), 'no "project" word in what the person is told');
 });
 
 test('review round 1 (whole code): importing a data folder with more than 500 files works (it goes in parts of 500; data.json last), every file is there', { skip }, async () => {

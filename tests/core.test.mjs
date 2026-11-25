@@ -1146,7 +1146,7 @@ test('pending list as an email table: columns, order, late / waiting / last upda
   assert.ok(!/3 items · 2 late/.test(m.html), 'no item count above the table (owner asked, to match the Outlook template, 22 Oct)');
   // order: the given project, then waiting on him, then to discuss
   const at = (t) => m.html.indexOf(t);
-  assert.ok(at('📁 Basin mould') > 0 && at('📁 Basin mould') < at('Send burner quote') && at('Send burner quote') < at('Check &lt;b&gt;glaze'), 'given, waiting, discuss');
+  assert.ok(at('Basin mould') > 0 && at('Basin mould') < at('Send burner quote') && at('Send burner quote') < at('Check &lt;b&gt;glaze'), 'given, waiting, discuss');
   assert.ok(!/Now:/.test(m.html), 'the email shows a project\'s title and description only, not its steps (owner, 22 Oct)');
   assert.match(m.html, /color:#c62828;[^>]*>Late since 15 Oct</, 'project past its target date');
   assert.match(m.html, /Late since 20 Oct/, 'step past its date');
@@ -1159,7 +1159,7 @@ test('pending list as an email table: columns, order, late / waiting / last upda
   assert.match(m.html, /Status: keep one of Done \/ Going on \/ Stuck\.<\/p><\/div>$/, 'ends with the Status line: no "Any problem" line, no sign-off (owner asked, to match the Outlook template, 22 Oct)');
   assert.ok(!/Thanks/.test(m.html), 'no sign-off: the Outlook template adds it');
   assert.ok(!/Thanks/.test(personMessageHtml(s.data, s.data.people[0], '2026-10-22').html), 'never a sign-off');
-  assert.match(m.text, /1\. 📁 Basin mould\n {3}Late since 15 Oct\n {3}Last update: —/);
+  assert.match(m.text, /1\. Basin mould\n {3}Late since 15 Oct\n {3}Last update: —/); // (owner, 25 Nov: a task given with its steps is a task — no 📁)
   // nothing pending
   applyOp(s, op('addPerson', { personId: 'n', name: 'Nobody' }, '2026-10-01'));
   const none = personMessageHtml(s.data, s.data.people.find((x) => x.id === 'n'), '2026-10-22');
@@ -1182,10 +1182,12 @@ test('pending list for a Work Task person: the server items first (late, stuck, 
   assert.match(m.html, /21 Oct: No clay/);
   assert.ok(!m.html.includes('Kiln trial</div><div style="color:#666;font-size:12px;margin-top:2px;">Now'), 'the given project here is not added twice');
   const text = personMessageText(s.data, s.data.people[0], '2026-10-22', items);
-  assert.ok(text.indexOf('Projects and tasks (Work Task):') < text.indexOf('Waiting on you:'));
+  // (this heading was 'Projects and tasks (team):'; the old check compared with a heading that did not exist, so it
+  // always passed — now it must be there, above Waiting on you)
+  assert.ok(text.indexOf('Tasks (team):') > -1 && text.indexOf('Tasks (team):') < text.indexOf('Waiting on you:'), text.slice(0, 200));
   const own = personMessageText(s.data, s.data.people[0], '2026-10-22');
-  assert.match(own, /Projects given:\n1\. 📁 Basin mould — late since 15 Oct/); assert.ok(!/Now:/.test(own), 'no steps in the email (owner, 22 Oct)');
-  assert.ok(own.indexOf('Projects given:') < own.indexOf('To discuss:'));
+  assert.match(own, /Tasks given:\n1\. Basin mould — late since 15 Oct/); assert.ok(!/Now:/.test(own), 'no steps in the email (owner, 22 Oct)');
+  assert.ok(own.indexOf('Tasks given:') > -1 && own.indexOf('Tasks given:') < own.indexOf('To discuss:'));
 });
 
 test('markPersonSent: saved on the person, not counted as work; "sent today" shows only today (India time)', async () => {

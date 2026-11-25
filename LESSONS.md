@@ -50,3 +50,10 @@ Each lesson: what went wrong, then what to do next time.
 15. **In test data, a 📂 project is only a group once it holds a task** (or was made with createMainProject).
     Two checks wrongly assumed "Kilns" was already a group.
     → Make the group in the test the way the app does, before testing what it can or cannot do.
+16. **Skipped checks look like passes.** On a new cloud machine MySQL was missing, so all ~146 server checks
+    were skipped and the summary still said "0 fail".
+    → Always read the `skipped` count too. If server checks skip: `apt-get install -y mysql-server`, then comment out
+    `user = mysql` in /etc/mysql/mysql.conf.d/mysqld.cnf (the throwaway test databases must run as root).
+17. **"Text A comes before text B" passes when A is missing** (`indexOf` gives -1). An email check compared with a
+    heading that no longer existed, so it tested nothing.
+    → Check that the text is there (`> -1`) before comparing positions.

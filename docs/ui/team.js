@@ -524,17 +524,17 @@ export function createTeam(opts) {
       h('input', { class: 'search', type: 'search', placeholder: 'Search…', key: 'team-menu-search', 'aria-label': 'Search', value: state.searchQ || '',
         onInput: (e, el) => { if (state.view !== 'search') go('search'); search(el.value); } }),
       h('ul', { class: 'menu-list' },
-        opts.toProjects ? item('📋 My projects', false, () => toProjects()) : null,
+        opts.toProjects ? item('📋 My tasks', false, () => toProjects()) : null,
         item('Team today', listOn('today') && !state.personFilter, () => { state.personFilter = 0; state.boardPage = 1; go('today'); }, t ? String(today.length) : null),
         t ? h('li', { class: 'menu-dots', key: 'dots', title: needs ? `${needs} need you` : '' },
           h('span', { class: 'dot red' }), String(dots.red), ' ', h('span', { class: 'dot yellow' }), String(dots.yellow), ' ', h('span', { class: 'dot green' }), String(dots.green)) : null,
         item('✅ Tasks', listOn('tasks') && !state.closed, () => { state.closed = false; go('tasks'); }),
-        item('📂 Projects', listOn('projects'), () => go('projects')),
+        item('📂 Groups', listOn('projects'), () => go('projects')),
         item('🔁 Follow-up', listOn('followup'), () => go('followup')),
         h('li', { class: 'menu-sep' }),
         item('Done / cancelled', listOn('tasks') && state.closed, () => { state.closed = true; go('tasks'); }),
         item('📊 Weekly report', listOn('report'), () => go('report')),
-        item(opts.openPeople ? 'People ↗ (in My projects)' : 'People', listOn('people'), () => (opts.openPeople ? opts.openPeople() : go('people'))), // (the owner: one People page, in My projects — said, so the jump is expected)
+        item(opts.openPeople ? 'People ↗ (in My tasks)' : 'People', listOn('people'), () => (opts.openPeople ? opts.openPeople() : go('people'))), // (the owner: one People page, in My projects — said, so the jump is expected)
         item('Settings', listOn('settings'), () => go('settings')),
         t && t.people && t.people.length ? [h('li', { class: 'menu-head' }, 'Team'), t.people.map((p) => {
           const tasks = t.tasks.filter((x) => x.assignee.id === p.id);
@@ -654,7 +654,7 @@ export function createTeam(opts) {
       return h('tr', { key: 'b-' + t.id, class: 'sub-row board-row' + (state.sel === 'task:' + t.id ? ' current' : ''), onClick: () => open('task:' + t.id),
         onContextmenu: (e) => openMenuAt(state, render, { t }, e) }, // right-click: message, finish, edit, move, cancel
         cell('', h('span', { class: 'dot ' + dotOf(r.colour) })),
-        cell('board-task', h('button', { class: 'link sub-name', type: 'button' }, t.title), ' ', state.boardGroup === 'project' || r.project === 'Misc' ? null : h('span', { class: 'tag main-tag' }, '📂 ' + r.project), // (by 📂 project: its line says it; in no project: no "📂 Misc", owner 24 Oct)
+        cell('board-task', h('button', { class: 'link sub-name', type: 'button' }, t.title), ' ', state.boardGroup === 'project' || r.project === rules.NO_GROUP ? null : h('span', { class: 'tag main-tag' }, '📂 ' + r.project), // (by 📂 project: its line says it; in no project: no "📂 Misc", owner 24 Oct)
           state.newIds.has(t.id) ? h('span', { class: 'tag high' }, 'New') : null,
           t.kind === 'log' ? [' ', h('span', { class: 'tag record-tag' }, '📒 Record')] : null, // (marked as on ✅ Tasks and the staff app: owner, 24 Oct)
           r.stage && t.kind !== 'log' ? [' ', stageChip(r.stage, { you: r.you })] : null, // its Stage; stuck waiting for "Manager": "Waiting: you"
@@ -673,7 +673,7 @@ export function createTeam(opts) {
     return [
       h('div', { class: 'board-counts row' }, chip('sent', `✓ Sent ${b.counts.sent}`), chip('notyet', `⏳ Not yet ${b.counts.notyet}`), chip('stuck', `⚠️ Stuck ${b.counts.stuck}`),
         chip('late', `⏰ Late ${b.counts.late}`), chip('you', `🟠 Waiting for you ${b.you}`), b.counts.notdue || state.boardFilter === 'notdue' ? chip('notdue', `📅 Not due today ${b.counts.notdue}`) : null, chip('msg', `💬 New messages ${b.counts.msg}`), b.counts.sugg || state.boardFilter === 'sugg' ? chip('sugg', `💡 Suggestions ${b.counts.sugg}`) : null),
-      h('div', { class: 'segmented board-group-by', role: 'group', 'aria-label': 'Group the table' }, seg('person', 'By person'), seg('project', 'By 📂 project')),
+      h('div', { class: 'segmented board-group-by', role: 'group', 'aria-label': 'Group the table' }, seg('person', 'By person'), seg('project', 'By 📂 group')),
       !b.total ? h('p', { class: 'empty-list' }, 'No tasks today.') : !b.groups.length ? h('p', { class: 'empty-list' }, 'None of these. ', h('button', { class: 'link', onClick: pick(state.boardFilter) }, 'Show all')) :
         h('table', { class: 'sub-table board-table' },
           h('thead', null, h('tr', null, h('th', null, ''), h('th', null, 'Task'), h('th', null, 'Person'), h('th', { class: 'col-extra' }, 'Today'), h('th', null, 'Status'), h('th', { class: 'col-extra' }, 'Last message'))),
@@ -698,7 +698,7 @@ export function createTeam(opts) {
           h('button', { class: 'chip', onClick: async () => { if (await chase(r)) load(); } }, '🔔 Chase'),
           h('button', { class: 'chip', onClick: async () => { if (await closeFollow(r)) load(); } }, '✓ Done'),
           r.kind === 'project'
-            ? [h('button', { class: 'chip', onClick: () => open('project:' + r.projectRef) }, '📁 Open project'), h('span', { class: 'muted small' }, 'Take back on your projects page')]
+            ? [h('button', { class: 'chip', onClick: () => open('project:' + r.projectRef) }, '📋 Open task'), h('span', { class: 'muted small' }, 'Take back on the task in My tasks')]
             : h('button', { class: 'chip', onClick: () => takeBack(r) }, '↩ Take back'))));
   }
 
@@ -759,7 +759,7 @@ export function createTeam(opts) {
       h('p', null, h('span', { class: 'dot ' + dotOf(r.colour) }), ` ${r.person.name} · ${r.reason}`),
       h('p', { class: 'muted small' }, r.lastUpdate ? `Last update: ${fmtDay(r.lastUpdate.day)} — ${r.lastUpdate.note || ''}` : 'No update yet'),
       R.changing ? h('div', { class: 'stack' },
-        h('strong', null, r.kind === 'project' ? 'Move the whole project (all its open steps) to:' : 'Give it to:'),
+        h('strong', null, r.kind === 'project' ? 'Move the whole task (all its open steps) to:' : 'Give it to:'),
         h('div', { class: 'row' }, others.length ? others.map((p) => h('button', { class: 'chip', onClick: async () => {
           try { await api('task.move', { id: r.taskId, toId: p.id }); toast(`Moved to ${p.name} ✓`); mark('changed'); } catch (e) { say(e); }
         } }, p.name)) : h('span', { class: 'muted' }, 'Add another person first (People).'))) : null,
@@ -811,17 +811,22 @@ export function createTeam(opts) {
     ];
   }
 
+  /** 📂 Groups (owner, 25 Nov): every task given with its steps, under the owner's group it is in (📂 No group last). */
   function projectsList() {
     const list = state.data.projects || [];
-    if (!list.length) return h('p', { class: 'empty-list' }, 'No projects given to the team yet. Give one from your projects page (👥 Give project).');
+    if (!list.length) return h('p', { class: 'empty-list' }, 'Nothing given to the team yet. Give a task from My tasks (👥 Give task).');
     const ago = (day) => !day ? 'no update yet' : day === state.data.today ? 'updated today' : `last update ${fmtDay(day)}`;
-    return h('ul', { class: 'plist' }, list.map((p) => {
+    const row = (p) => {
       const total = p.open + p.done;
       const { dot, now } = rules.projectRowState(p);
-      const sub = [p.people.join(', '), total ? `${p.done} of ${total} done` : 'no steps yet', now, ago(p.lastUpdate), p.staffSteps ? `${p.staffSteps} step${p.staffSteps > 1 ? 's' : ''} added by them` : ''].filter(Boolean).join(' · ');
-      return taskRow({ key: 'p-' + p.ref, title: '📁 ' + p.name, sub: (p.projectAbout ? rules.aboutShort(p.projectAbout) + ' · ' : '') + sub, dot: dotOf(dot),
+      const sub = [p.people.join(', '), total ? `${p.done} of ${total} steps done` : 'no steps yet', now, ago(p.lastUpdate), p.staffSteps ? `${p.staffSteps} step${p.staffSteps > 1 ? 's' : ''} added by them` : ''].filter(Boolean).join(' · ');
+      return taskRow({ key: 'p-' + p.ref, title: p.name, sub: (p.projectAbout ? rules.aboutShort(p.projectAbout) + ' · ' : '') + sub, dot: dotOf(dot),
         current: state.sel === 'project:' + p.ref, tags: p.stuck ? h('span', { class: 'tag late' }, 'Stuck') : null, onOpen: () => open('project:' + p.ref) });
-    }));
+    };
+    const groups = new Map();
+    for (const p of list) { const g = rules.groupOf(p) || rules.NO_GROUP; if (!groups.has(g)) groups.set(g, []); groups.get(g).push(p); }
+    const names = [...groups.keys()].sort((a, b) => (a === rules.NO_GROUP) - (b === rules.NO_GROUP) || a.localeCompare(b));
+    return names.map((g) => [sec('📂 ' + g, h('span', { class: 'tag' }, String(groups.get(g).length))), h('ul', { class: 'plist' }, groups.get(g).map(row))]);
   }
 
   function projectPage() {
@@ -845,9 +850,9 @@ export function createTeam(opts) {
         h('div', { class: 'progress-text' }, last ? (last === state.detail.today ? 'Last update: today' : `Last update: ${fmtDay(last)} (${daysBetween(last, state.detail.today)} days ago)`) : 'No update yet')),
       done.length ? block(`✓ ${done.length} done`, h('ul', { class: 'plist' }, done.map((t, i) => rowOf(t, `Step ${i + 1} · done ${t.doneAt ? fmtDay(t.doneAt) : ''}${who(t)}${pics(t)}`, 'green')))) : null,
       openSteps.length ? block('To do', h('ul', { class: 'plist' }, openSteps.map((t, i) => rowOf(t,
-        (String(t.stepRef).endsWith(':whole') ? 'The whole project (no steps yet)' : `Step ${done.length + i + 1}`) + (t === cur ? ` · current · ${t.today ? '✓ sent today' : 'no update today'}` : ' · next') + who(t) + (t.dueDate ? ` · by ${fmtDay(t.dueDate)}` : '') + pics(t),
-        t.stuck ? 'red' : t === cur ? (t.today ? 'green' : 'yellow') : 'grey', t.stuck)))) : h('p', { class: 'muted' }, 'Nothing open on this project.'),
-      h('p', { class: 'muted small' }, owner ? 'Add, tick or change steps on your projects page; the person’s list follows by itself.' : 'Steps are added and changed on the owner’s projects page; the person’s list follows by itself.'),
+        (String(t.stepRef).endsWith(':whole') ? 'The whole task (no steps yet)' : `Step ${done.length + i + 1}`) + (t === cur ? ` · current · ${t.today ? '✓ sent today' : 'no update today'}` : ' · next') + who(t) + (t.dueDate ? ` · by ${fmtDay(t.dueDate)}` : '') + pics(t),
+        t.stuck ? 'red' : t === cur ? (t.today ? 'green' : 'yellow') : 'grey', t.stuck)))) : h('p', { class: 'muted' }, 'Nothing open on this task.'),
+      h('p', { class: 'muted small' }, owner ? 'Add, tick or change steps on the task in My tasks; the person’s list follows by itself.' : 'Steps are added and changed on the owner’s task; the person’s list follows by itself.'),
     ];
   }
 
@@ -1046,7 +1051,7 @@ export function createTeam(opts) {
           h('button', { class: 'btn primary small', onClick: () => answerSuggestion(t, true) }, '✓ Yes, add it'),
           h('button', { class: 'btn small', onClick: () => answerSuggestion(t, false) }, 'Not now'))) : null,
       t.status === 'open' && state.moving === t.id ? h('div', { class: 'banner stack' },
-        h('strong', null, whole ? `Move the whole project "${t.project}" (all its open steps) to:` : `Move "${t.title}" to:`),
+        h('strong', null, whole ? `Move the whole task "${t.project}" (all its open steps) to:` : `Move "${t.title}" to:`),
         h('span', { class: 'muted small' }, 'Updates so far stay with the task. Both people see a note about the move.'),
         h('div', { class: 'row' }, others.length ? others.map((p) => h('button', { class: 'chip', onClick: () => move(t, p) }, p.name)) : h('span', { class: 'muted' }, 'Add another person first (People).'),
           h('button', { class: 'link', onClick: () => { state.moving = 0; render(); } }, 'Cancel'))) : null,
@@ -1108,7 +1113,7 @@ export function createTeam(opts) {
           h('button', { class: 'seg' + (f.record ? ' on' : ''), type: 'button', key: 'g-kind-log', 'aria-pressed': String(!!f.record), onClick: () => { f.record = true; render(); } }, '📒 Record (entries)')),
         f.record ? h('p', { class: 'muted small' }, 'They add an entry (a line + photos) whenever something happens — e.g. a material order follow-up. Never "not sent" or late.') : null,
         f.picked ? null : h('label', null, 'Details', h('textarea', { key: 'g-details', placeholder: 'Anything they need to know (optional)', value: f.details, onInput: set('details') })),
-        f.picked ? null : h('label', null, 'Project', h('input', { key: 'g-project', placeholder: 'Kiln trial (optional)', value: f.project, onInput: set('project') })),
+        f.picked ? null : h('label', null, 'Group', h('input', { key: 'g-project', placeholder: 'Kilns (optional)', value: f.project, onInput: set('project') })),
         f.record || f.picked ? null : h('label', null, 'How often', h('select', { key: 'g-how', value: f.how, onChange: set('how') }, // (a 📒 record has no "how often": entries come when something happens)
           h('option', { value: 'daily' }, 'Every day (Mon–Sat)'), h('option', { value: 'daily7' }, 'Every day, Sunday too'), h('option', { value: 'weekly' }, 'Once a week'), h('option', { value: 'once' }, 'One time'))),
         !f.record && !f.picked && f.how === 'weekly' ? h('label', null, 'On', h('select', { key: 'g-wd', value: String(f.weekday), onChange: (e, el) => { f.weekday = Number(el.value); } }, LONG_DAYS.map((n, i) => h('option', { value: String(i) }, n)))) : null,
@@ -1175,7 +1180,7 @@ export function createTeam(opts) {
 
   function list() {
     shownIds = [];
-    const titles = { today: 'Team today', followup: '🔁 Follow-up', tasks: state.closed ? 'Done / cancelled' : '✅ Tasks', projects: '📂 Projects', report: '📊 Weekly report', search: '🔍 Search', people: 'People', settings: 'Settings' };
+    const titles = { today: 'Team today', followup: '🔁 Follow-up', tasks: state.closed ? 'Done / cancelled' : '✅ Tasks', projects: '📂 Groups', report: '📊 Weekly report', search: '🔍 Search', people: 'People', settings: 'Settings' };
     let title = titles[state.view];
     if (state.view === 'today' && state.personFilter && state.team) { const p = state.team.people.find((x) => x.id === state.personFilter); if (p) title = p.name; }
     const head = h('div', { class: 'list-head' },
@@ -1217,7 +1222,7 @@ export function createTeam(opts) {
       dot = t.status !== 'open' ? 'grey' : t.stuck ? 'red' : t.today ? 'green' : 'yellow';
     } else {
       const all = state.detail.tasks || [];
-      title = '📁 ' + ((all[all.length - 1] && all[all.length - 1].project) || 'Project');
+      title = (all[all.length - 1] && all[all.length - 1].project) || 'Task'; // (a task given with its steps, owner 25 Nov)
       body = projectPage();
     }
     const about = state.detail && sel.startsWith('task:') ? rules.projectAboutOf([state.detail.task]) : state.detail && sel.startsWith('project:') ? rules.projectAboutOf([...(state.detail.tasks || [])].reverse()) : '';
@@ -1240,7 +1245,7 @@ export function createTeam(opts) {
       bottomBar([
         ['👥', 'Today', onList('today') && !state.menuOpen, () => { state.personFilter = 0; go('today'); }],
         ['✅', 'Tasks', onList('tasks') && !state.closed && !state.menuOpen, () => { state.closed = false; go('tasks'); }],
-        ['📂', 'Projects', onList('projects') && !state.menuOpen, () => go('projects')],
+        ['📂', 'Groups', onList('projects') && !state.menuOpen, () => go('projects')],
         ['🔁', 'Follow-up', onList('followup') && !state.menuOpen, () => go('followup')],
       ], () => { state.menuOpen = true; render(); }, state.menuOpen));
   }

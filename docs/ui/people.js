@@ -35,7 +35,8 @@ export function teamCounts(data, person, link) {
 }
 
 function statusWords(st, counts = { projects: 0, tasks: 0 }) {
-  const extra = [counts.projects ? `${counts.projects} project${counts.projects === 1 ? '' : 's'}` : '', counts.tasks ? `${counts.tasks} task${counts.tasks === 1 ? '' : 's'}` : ''].filter(Boolean);
+  const all = counts.projects + counts.tasks; // (a task given with its steps is a task too: Group → Task → Steps, owner 25 Nov)
+  const extra = [all ? `${all} task${all === 1 ? '' : 's'}` : ''].filter(Boolean);
   if (!st.open) return extra.length ? extra.join(' · ') : 'Nothing open';
   const bits = [];
   if (st.waiting) bits.push(`Waiting ${st.maxWait ? st.maxWait + ' day' + (st.maxWait > 1 ? 's' : '') : 'since today'}`);
@@ -242,22 +243,22 @@ function teamSection(ctx, person, link) {
     const items = teamOrder(link.member.items || []);
     const open = (x) => (x.projectRef && data.projects.some((p) => p.id === x.projectRef) ? () => ctx.openProject(x.projectRef) : null);
     return h('section', { class: 'block wt-block', key: 'wt-' + person.id },
-      h('h3', null, `📁 Projects and tasks from the team (${items.length})`),
+      h('h3', null, `👥 Tasks from the team (${items.length})`),
       items.length ? h('table', { class: 'wt-table' },
         h('thead', null, h('tr', null, h('th', null, '#'), h('th', null, 'Work'), h('th', null, 'Last update'))),
         h('tbody', null, items.map((x, i) => {
           const go = open(x);
           return h('tr', { key: 'wt-' + (x.taskId || i), class: go ? 'wt-open' : '', onClick: go || undefined, title: go ? 'Open the project' : '' },
             h('td', null, String(i + 1)),
-            h('td', null, h('b', null, (x.kind === 'project' ? '📁 ' : '') + (x.title || '')), ...itemLines(x)),
+            h('td', null, h('b', null, x.title || ''), ...itemLines(x)),
             h('td', { class: 'muted' }, x.lastUpdate && x.lastUpdate.day ? `${mailDate(x.lastUpdate.day)}: ${x.lastUpdate.note || ''}` : '—'));
         }))) : h('p', { class: 'muted small' }, `Nothing pending for ${first} on Task List.`));
   }
   const given = givenProjectsOf(data, person);
-  const note = link && link.loading ? 'Loading Task List…' : link && link.failed ? 'Task List could not load — showing the projects given from here.' : '';
+  const note = link && link.loading ? 'Loading Task List…' : link && link.failed ? 'Task List could not load — showing the tasks given from here.' : '';
   if (!given.length && !note) return null;
   return h('section', { class: 'block wt-block', key: 'wt-' + person.id },
-    h('h3', null, `📁 Projects given to ${person.name} (${given.length})`),
+    h('h3', null, `👥 Tasks given to ${person.name} (${given.length})`),
     note ? h('p', { class: 'muted small' }, note) : null,
     given.length ? h('ul', { class: 'person-steps' }, given.map((p) => {
       const next = nextStep(p, today);
@@ -266,7 +267,7 @@ function teamSection(ctx, person, link) {
       const bits = [p.steps.length ? `${done} of ${p.steps.length} steps done` : '', tp && tp.stuck ? '⚠️ stuck' : '',
         tp && tp.lastUpdate ? (tp.lastUpdate === today ? 'updated today' : `last update ${mailDate(tp.lastUpdate)}`) : '', p.state === 'paused' ? 'paused' : ''].filter(Boolean);
       return h('li', { key: 'gp-' + p.id, class: 'person-step given-project' },
-        h('button', { class: 'link given-open', title: 'Open the project', onClick: () => ctx.openProject(p.id) }, h('b', null, `📁 ${p.name}`)),
+        h('button', { class: 'link given-open', title: 'Open the task', onClick: () => ctx.openProject(p.id) }, h('b', null, p.name)),
         h('div', { class: 'muted small' }, next ? `Now: ${next.text}` : 'No open step', bits.length ? ` · ${bits.join(' · ')}` : ''));
     })) : null);
 }

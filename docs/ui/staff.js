@@ -172,16 +172,15 @@ export function myProjects(d) {
  * steps (its name); else 📂 Misc — so one task given from the owner's project is just a task, never also a project.
  * waiting(id): an update for it waits on the phone. Pure: tested.
  */
-export function staffFolders(d, waiting = () => false) {
+export function staffFolders(d, waiting = () => false, groupOf = (t) => t.folder || '') {
   if (!d) return { tasks: [], folders: [] };
   const seen = new Set();
   const all = [...(d.tasks || []), ...(d.other || [])].filter((t) => t.status === 'open' && !seen.has(t.id) && seen.add(t.id));
-  const projs = new Map(myProjects(d).map((pr) => [pr.ref, pr]));
+  // its 📂 = its group (owner, 25 Nov: Group → Task → Steps; the rule: logic.js groupOf), else 📂 No group — a task
+  // given with its steps is a task (its steps on its own page), never a folder of its own
   const folderOf = (t) => {
-    if (t.folder) return { key: 'f:' + t.folder, name: t.folder };
-    const pr = t.projectRef && t.seq !== null && t.seq !== undefined ? projs.get(t.projectRef) : null;
-    if (pr && pr.real.length >= 2) return { key: 'p:' + pr.ref, name: pr.name, ref: pr.ref };
-    return { key: 'misc', name: IN_NO_PROJECT }; // (the owner's 📂 Misc: the same name everywhere, owner 24 Oct)
+    const g = groupOf(t);
+    return g ? { key: 'f:' + g, name: g } : { key: 'misc', name: IN_NO_PROJECT }; // (the owner's 📂 No group: the same name everywhere)
   };
   const RANK = { red: 0, yellow: 1, green: 2, grey: 3 };
   const dotOf = (t) => staffDot(t, { waiting: !!waiting(t.id), pastFillBy: nowHm() >= (d.fillBy || '18:00') });
@@ -305,7 +304,7 @@ export function createStaff(opts) {
     if (detail && !detail.fromCache && detail.task && detail.task.unread) load(); // opening it marked its messages read (task.get): the list's "New" goes
   }
   // ✅ Tasks and 📂 Projects, as on the owner's pages (staffFolders)
-  const folders = () => staffFolders(state.data, (id) => !!waitingFor(id));
+  const folders = () => staffFolders(state.data, (id) => !!waitingFor(id), rules.groupOf);
   // one dot rule everywhere in the staff app (owner, 24 Oct): green sent · yellow not yet / waiting to send · red after the due time, late or stuck
   const dotFor = (t) => staffDot(t, { waiting: !!waitingFor(t.id), pastFillBy: nowHm() >= ((state.data && state.data.fillBy) || '18:00') });
   /** A 📂 project: a given project with its steps opens its own page (steps in order, add a step); the others list their tasks. */
@@ -501,7 +500,7 @@ export function createStaff(opts) {
       const out = await api('project.addStep', { projectRef: ref, title, clientId });
       if (out && out.task) state.knownIds.add(out.task.id); // my own step: never told to me as news
       delete ids.step[ref]; typedOn();
-      toast('➕ Step added — add its photos here. Your manager sees it in the project too.');
+      toast('➕ Step added — add its photos here. Your manager sees it in the task too.');
       reload();
       if (out && out.task) open('task:' + out.task.id); // the new step opens: its photos (e.g. each test step) go on at once
       return '';
@@ -543,7 +542,7 @@ export function createStaff(opts) {
     if (!push) return '';
     try {
       const s = await push.turnOn();
-      if (s === 'on') notice('🔔 Notifications are on', `New tasks, new project steps and messages will come to ${HERE}, like email.`);
+      if (s === 'on') notice('🔔 Notifications are on', `New tasks, new steps and messages will come to ${HERE}, like email.`);
       render();
       return '';
     } catch (e) { toast('Could not turn on notifications: ' + e.message, 6000); return e.message; }
@@ -615,9 +614,9 @@ export function createStaff(opts) {
     const steps = fresh.filter((t) => t.projectRef && t.seq !== null && t.seq !== undefined);
     const names = fresh.map((t) => t.title).slice(0, 3).join(' · ');
     if (steps.length === fresh.length && new Set(steps.map((t) => t.projectRef)).size === 1) {
-      const p = steps[0].project || 'a project';
+      const p = steps[0].project || 'a task';
       const had = listOf(before).some((t) => t.projectRef === steps[0].projectRef);
-      state.news = [{ title: had ? (steps.length === 1 ? `➕ New step in ${p}` : `➕ ${steps.length} new steps in ${p}`) : `📁 New project for you: ${p}`, body: names, sel: 'project:' + steps[0].projectRef }];
+      state.news = [{ title: had ? (steps.length === 1 ? `➕ New step in ${p}` : `➕ ${steps.length} new steps in ${p}`) : `📥 New task for you: ${p}`, body: names, sel: 'project:' + steps[0].projectRef }];
     } else state.news = [{ title: fresh.length === 1 ? '📥 New task for you' : `📥 ${fresh.length} new tasks`, body: names, sel: 'task:' + fresh[0].id }];
   }
 
@@ -671,7 +670,7 @@ export function createStaff(opts) {
         d ? h('li', { class: 'menu-dots', key: 'dots', title: due ? `${due} still to send today` : 'All sent today' },
           h('span', { class: 'dot red' }), String(dots.red), ' ', h('span', { class: 'dot yellow' }), String(dots.yellow), ' ', h('span', { class: 'dot green' }), String(dots.green)) : null,
         item('✅ Tasks', !state.sel && state.section === 'tasks', () => show('tasks'), d ? String(sf.tasks.length) : null),
-        item('📂 Projects', !state.sel && state.section === 'projects', () => show('projects'), d ? String(sf.folders.filter((f) => f.key !== 'misc').length) : null),
+        item('📂 Groups', !state.sel && state.section === 'projects', () => show('projects'), d ? String(sf.folders.filter((f) => f.key !== 'misc').length) : null),
         h('li', { class: 'menu-sep' }),
         item('📅 Coming next', !state.sel && state.section === 'next', () => show('next'), d ? String(d.other.length) : null),
         item('💡 My suggestions', !state.sel && state.section === 'sugg', () => show('sugg'), d ? String((d.suggestions || []).length) : null),
@@ -719,10 +718,10 @@ export function createStaff(opts) {
 
   /** A 📂 project that is not one given project (the owner's 📂 project, 📂 Misc): its tasks, as the owner's "Tasks" table. */
   function folderPage(f) {
-    if (!f) return h('p', { class: 'muted' }, 'This project is not on your list any more.');
+    if (!f) return h('p', { class: 'muted' }, 'This is not on your list any more.');
     const last = (t) => t.today || t.last;
     return [
-      f.key === 'misc' ? h('p', { class: 'muted' }, 'Every task of yours that is in no project.') : null,
+      f.key === 'misc' ? h('p', { class: 'muted' }, 'Every task of yours that is in no group.') : null,
       block(`Tasks (${f.tasks.length})`, h('table', { class: 'sub-table' },
         h('thead', null, h('tr', null, h('th', null, ''), h('th', null, 'Task'), h('th', null, 'Now'), h('th', null, 'Last update'))),
         h('tbody', null, f.tasks.map((x) => h('tr', { key: 'ft-' + x.t.id, class: 'sub-row', onClick: () => open('task:' + x.t.id), onContextmenu: (e) => openMenuAt(state, render, { t: x.t }, e) },
@@ -786,7 +785,7 @@ export function createStaff(opts) {
 
   function list() {
     const d = state.data;
-    const title = { today: 'My tasks today', tasks: '✅ Tasks', projects: '📂 Projects', next: 'Coming next', sugg: 'My suggestions', search: 'Search' }[state.section];
+    const title = { today: 'My tasks today', tasks: '✅ Tasks', projects: '📂 Groups', next: 'Coming next', sugg: 'My suggestions', search: 'Search' }[state.section];
     const head = h('div', { class: 'list-head' },
       h('button', { class: 'icon menu-btn', 'aria-label': 'Menu', onClick: () => { state.menuOpen = true; render(); } }, '☰'),
       h('h2', null, title),
@@ -818,13 +817,13 @@ export function createStaff(opts) {
       // real projects only: the tasks in no project are their own line (owner, 24 Oct: "1 project" was only "In no project")
       const real = fs.filter((f) => f.key !== 'misc'), loose = fs.filter((f) => f.key === 'misc').reduce((k, f) => k + f.tasks.length, 0);
       const n = real.reduce((k, f) => k + f.tasks.length, 0);
-      body = [sec([real.length ? `${real.length} project${real.length === 1 ? '' : 's'} · ${n} task${n === 1 ? '' : 's'} in them` : 'No projects yet', loose ? `${loose} in no project` : '', 'red first'].filter(Boolean).join(' · ')),
+      body = [sec([real.length ? `${real.length} group${real.length === 1 ? '' : 's'} · ${n} task${n === 1 ? '' : 's'} in them` : 'No groups yet', loose ? `${loose} in no group` : '', 'red first'].filter(Boolean).join(' · ')),
         h('ul', { class: 'plist' }, fs.map((f) => h('li', { key: 'f-' + f.key, class: 'prow' + (state.navFolder === f.key && state.sel ? ' current' : '') },
           h('span', { class: 'quick-tick-space', 'aria-hidden': 'true' }),
           h('button', { class: 'prow-btn', onClick: () => openFolder(f) }, h('span', { class: 'dot ' + f.dot }),
             h('span', { class: 'prow-text' }, h('span', { class: 'prow-name' }, '📂 ', f.name),
               h('span', { class: 'prow-next' }, `${f.tasks.length} task${f.tasks.length === 1 ? '' : 's'}${f.red ? ` · ${f.red} red` : ''}`)))))),
-        fs.length ? null : h('p', { class: 'empty-list' }, 'No projects yet.')];
+        fs.length ? null : h('p', { class: 'empty-list' }, 'No groups yet.')];
     } else if (state.section === 'next') {
       body = [sec(d.other.length ? `${d.other.length} coming next` : 'Coming next'), // (not "0 coming next" and then "Nothing coming next": owner, 24 Oct) h('ul', { class: 'plist' }, d.other.map((t) => row(t, [t.project, repeatLabel(t, td)].filter(Boolean).join(' · '), 'grey'))),
         d.other.length ? null : h('p', { class: 'empty-list' }, 'Nothing coming next.')];
@@ -963,8 +962,8 @@ export function createStaff(opts) {
         t.status === 'suggested' || t.kind === 'log' ? null : h('div', { class: 'stage-line' }, stageChip(rules.teamStage(t))), // its Stage (from your updates; 📒 a record has none)
         chips(t, td)),
       // its 📂 project, as on the owner's task: opens it (a given project: its steps, where a step can be added)
-      f && f.folder.key !== 'misc' ? h('div', { class: 'main-chips' }, h('button', { class: 'main-chip', title: `Open the project ${f.folder.name}`, onClick: () => openFolder(f.folder) }, `📂 ${f.folder.name} ›`),
-        !f.folder.ref && t.projectRef && t.seq !== null && t.seq !== undefined ? h('button', { class: 'main-chip', title: 'Its steps (add the steps you will do)', onClick: () => open('project:' + t.projectRef) }, `Steps of ${t.project || 'this work'} ›`) : null) : null,
+      f && f.folder.key !== 'misc' ? h('div', { class: 'main-chips' }, h('button', { class: 'main-chip', title: `Open the group ${f.folder.name}`, onClick: () => openFolder(f.folder) }, `📂 ${f.folder.name} ›`),
+        t.projectRef && t.seq !== null && t.seq !== undefined ? h('button', { class: 'main-chip', title: 'Its steps (add the steps you will do)', onClick: () => open('project:' + t.projectRef) }, `Steps of ${t.project || 'this work'} ›`) : null) : null,
       t.details ? h('p', { class: 'pre muted' }, t.details) : null,
       files(t),
       takesSteps(t) ? stepsBox(t) : null,
@@ -995,9 +994,9 @@ export function createStaff(opts) {
     const waiting = state.outbox.filter((x) => x.kind === 'step' && x.projectRef === ref);
     return [
       done.length ? [sec(`✓ ${done.length} done`), h('ul', { class: 'plist' }, done.map((t, i) => row(t, `Step ${i + 1} · done ${t.doneAt ? fmtDay(t.doneAt) : ''}${pics(t)}`, 'green')))] : null,
-      !pr ? h('p', { class: 'muted' }, done.length ? 'All your steps are done ✓. Your manager decides what comes next.' : 'This project is not on your list any more.')
+      !pr ? h('p', { class: 'muted' }, done.length ? 'All your steps are done ✓. Your manager decides what comes next.' : 'This is not on your list any more.')
         : [h('p', { class: 'muted' }, pr.real.length ? 'Do the steps in order. Every day, open the current step and send what you did. Found more work? Add a step below.'
-          : 'No steps yet. Add the steps you will do, in order. Until then, send your daily update on the whole project.'),
+          : 'No steps yet. Add the steps you will do, in order. Until then, send your daily update on the whole task.'),
         block('Steps', h('ul', { class: 'plist' }, (pr.real.length ? pr.real : pr.steps).map((t, i) => row(t,
           (!pr.real.length ? sentSub(t) : t === pr.current ? `Step ${k + i + 1} · current · ${sentSub(t)}` : `Step ${k + i + 1} · next${t.fromStaff ? ' · added by you' : ''}`) + pics(t),
           t === pr.current || !pr.real.length ? dotFor(t) : 'grey')),
@@ -1040,7 +1039,7 @@ export function createStaff(opts) {
   function notifyPage() {
     const s = push ? push.state() : 'no';
     const parts = [h('p', null, `You get a message on ${HERE}, like new email, for:`),
-      h('ul', null, ['A new task, or a whole project given to you', 'A new step added to your project', 'A message from your manager'].map((w) => h('li', null, w)))];
+      h('ul', null, ['A new task (with its steps) given to you', 'A new step added to your task', 'A message from your manager'].map((w) => h('li', null, w)))];
     if (s === 'on') {
       parts.push(h('p', { class: 'ok' }, `✓ On for ${HERE}.`), h('div', { class: 'row' },
         h('button', { class: 'btn small', onClick: () => push.test().then(() => toast('🔔 Test sent. It comes in a few seconds.'), (e) => toast(e.message, 5000)) }, 'Send me a test'),
@@ -1070,7 +1069,7 @@ export function createStaff(opts) {
     if (sel === 'suggest') { title = '💡 Suggest a task'; body = suggestPage(); }
     else if (sel === 'password') { title = 'Change password'; body = passwordPage(); }
     else if (sel === 'notify') { title = '🔔 Notifications'; body = notifyPage(); }
-    else if (sel.startsWith('folder:')) { const f = folders().folders.find((x) => x.key === sel.slice(7)); title = '📂 ' + (f ? f.name : 'Project'); body = folderPage(f); }
+    else if (sel.startsWith('folder:')) { const f = folders().folders.find((x) => x.key === sel.slice(7)); title = '📂 ' + (f ? f.name : 'Group'); body = folderPage(f); }
     else if (!state.detail || (sel.startsWith('task:') && !state.detail.task)) body = h('p', { class: 'muted' }, state.detailFailed ? [state.detailFailed, ' ', h('button', { class: 'link', onClick: loadDetail }, 'Try again')] : 'Loading…');
     else if (sel.startsWith('task:')) {
       const t = state.detail.task;
@@ -1082,7 +1081,7 @@ export function createStaff(opts) {
         h('button', { class: 'btn icon-btn', title: 'Previous task', 'aria-label': 'Previous task', disabled: i > 0 ? undefined : true, onClick: go(i - 1) }, '‹'),
         h('button', { class: 'btn icon-btn', title: 'Next task', 'aria-label': 'Next task', disabled: i < ids.length - 1 ? undefined : true, onClick: go(i + 1) }, '›')];
     }
-    else { const pr = myProjects(state.data).find((x) => x.ref === sel.slice(8)); title = '📂 ' + (pr ? pr.name : 'Project'); body = projectPage(); }
+    else { const pr = myProjects(state.data).find((x) => x.ref === sel.slice(8)); title = pr ? pr.name : 'Task'; body = projectPage(); } // (a task given with its steps: its steps in order, owner 25 Nov)
     return h('div', { class: 'detail-inner', key: 'detail-' + sel },
       h('div', { class: 'detail-top' }, h('button', { class: 'icon back', 'aria-label': 'Back', onClick: back }, '←'), dot ? h('span', { class: 'dot ' + dot, 'aria-label': dot }) : null, h('h2', null, title),
         actions ? h('div', { class: 'state-buttons' }, actions) : null),
@@ -1112,7 +1111,7 @@ export function createStaff(opts) {
       bottomBar([
         ['☀︎', 'Today', !state.sel && state.section === 'today' && !state.menuOpen, () => show('today'), state.data ? (state.data.tasks || []).filter((t) => !t.today && t.kind !== 'log').length : 0],
         ['✅', 'Tasks', !state.sel && state.section === 'tasks' && !state.menuOpen, () => show('tasks')],
-        ['📂', 'Projects', !state.sel && state.section === 'projects' && !state.menuOpen, () => show('projects')],
+        ['📂', 'Groups', !state.sel && state.section === 'projects' && !state.menuOpen, () => show('projects')],
         ['🔍', 'Search', !state.sel && state.section === 'search' && !state.menuOpen, openSearch],
       ], () => { state.menuOpen = true; render(); }, state.menuOpen));
   }

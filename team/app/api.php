@@ -767,7 +767,7 @@ function handle(string $a, array $in): array {
         $ids = array_map(fn($t) => $t['id'], $list);
         $last = one('SELECT MAX(day) AS d FROM updates WHERE task_id IN (' . implode(',', array_fill(0, count($ids), '?')) . ')', $ids)['d'] ?? null;
         $names = array_values(array_unique(array_map(fn($t) => $t['assignee']['name'], $openAll ?: $list)));
-        $out[] = ['ref' => $ref, 'name' => end($list)['project'] ?: 'Project', 'projectAbout' => end($list)['projectAbout'], 'people' => $names, 'open' => count($open) ?: count($openAll), 'done' => count($done),
+        $out[] = ['ref' => $ref, 'name' => end($list)['project'] ?: 'Task', 'folder' => end($list)['folder'] ?? '', 'projectAbout' => end($list)['projectAbout'], 'people' => $names, 'open' => count($open) ?: count($openAll), 'done' => count($done),
           'current' => $cur ? ['id' => $cur['id'], 'title' => $cur['title'], 'sentToday' => (bool)$cur['today']] : null, 'lastUpdate' => $last,
           'stuck' => (bool)array_filter($openAll, fn($t) => $t['stuck']), 'staffSteps' => count(array_filter($list, fn($t) => $t['createdBy'] === $t['assignee']['id']))];
       }
@@ -1168,7 +1168,7 @@ function add_staff_step(array $me, string $ref, string $title, array $mine, stri
   q("UPDATE tasks SET status = 'cancelled', done_at = ?, updated_at = ? WHERE project_ref = ? AND step_ref = ? AND status = 'open'", [now(), now(), $ref, $ref . ':whole']);
   carry_whole_update($ref, $me['id']);
   audit($me['id'], 'step_added', "{$mine[0]['project']}: $title");
-  notify(admin_ids(), 'update', "➕ {$me['name']} added a step", ($mine[0]['project'] ?: 'Project') . ': ' . $title, '/projects/#team-task=' . $id);
+  notify(admin_ids(), 'update', "➕ {$me['name']} added a step", ($mine[0]['project'] ?: 'Task') . ': ' . $title, '/projects/#team-task=' . $id);
   return $id;
 }
 
@@ -1197,8 +1197,8 @@ function project_sync(array $me, array $in, string $ref, string $day): array {
     // the person's own new steps are cancelled too, but Daily Projects still adds them to the project (so nothing is lost)
     foreach ($open as $t) q("UPDATE tasks SET status = 'cancelled', done_at = ?, updated_at = ? WHERE id = ?", [now(), now(), $t['id']]);
     if (empty($in['_server'])) audit($me['id'], 'project_taken_back', $name);
-    $why = ['paused' => 'Your manager paused this project. It comes back to you when it starts again.', 'finished' => 'Your manager finished this project. Thank you!'][$in['reason'] ?? ''] ?? 'Your manager took this project back. Nothing more to do on it.';
-    if ($open) notify(array_map(fn($t) => (int)$t['assignee_id'], $open), 'task', '📁 Off your list: ' . ($name ?: ($open[0]['project'] ?? 'a project')), $why, '/', 'p' . md5($ref));
+    $why = ['paused' => 'Your manager paused this task. It comes back to you when it starts again.', 'finished' => 'Your manager finished this task. Thank you!'][$in['reason'] ?? ''] ?? 'Your manager took this task back. Nothing more to do on it.';
+    if ($open) notify(array_map(fn($t) => (int)$t['assignee_id'], $open), 'task', '📋 Off your list: ' . ($name ?: ($open[0]['project'] ?? 'a task')), $why, '/', 'p' . md5($ref));
     return ['tasks' => [], 'assigneeId' => 0];
   }
   $person = one('SELECT id, active FROM users WHERE id = ?', [$who]);
@@ -1296,7 +1296,7 @@ function project_sync(array $me, array $in, string $ref, string $day): array {
   }
   carry_whole_update($ref, $who);
   $leftBy = array_values(array_diff(array_unique($leftBy), [$who]));
-  if ($leftBy) notify($leftBy, 'task', '📁 Off your list: ' . ($name ?: 'a project'), 'Your manager gave it to ' . user_name($who) . '.', '/', 'p' . md5($ref));
+  if ($leftBy) notify($leftBy, 'task', '📋 Off your list: ' . ($name ?: 'a task'), 'Your manager gave it to ' . user_name($who) . '.', '/', 'p' . md5($ref));
   if ($closed) notify([$who], 'task', count($closed) === 1 ? "✓ Step closed in $name" : '✓ ' . count($closed) . " steps closed in $name", 'Your manager closed: ' . implode(' · ', array_slice($closed, 0, 3)), '/', 'c' . md5($ref));
   $after = $hadSome && !$news ? $current() : null;
   // the order changed (not because a step was finished or closed): tell them which step is theirs now
@@ -1304,7 +1304,7 @@ function project_sync(array $me, array $in, string $ref, string $day): array {
   if (empty($in['_server']) || $news || $closed) audit($me['id'], 'project_given', "$name → #$who");
   if ($news) {
     $n = count($news);
-    notify([$who], 'task', $hadSome ? ($n === 1 ? "➕ New step in $name" : "➕ $n new steps in $name") : "📁 New project for you: $name",
+    notify([$who], 'task', $hadSome ? ($n === 1 ? "➕ New step in $name" : "➕ $n new steps in $name") : "📥 New task for you: $name", // (owner, 25 Nov: groups → tasks → steps; what was given is a task with its steps)
       $hadSome ? implode(' · ', array_slice($news, 0, 3)) : "$n step" . ($n > 1 ? 's' : '') . '. First: ' . $news[0], '/', 'p' . md5($ref));
   }
   // 📒 "record" for the whole given project (owner asked 24 Oct): every open step, and steps the person adds later

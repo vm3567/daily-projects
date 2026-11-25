@@ -193,7 +193,7 @@ test('team: menu and list clicks never redraw over a half-filled Give / Edit for
 
 test('team: a project given as one task (no steps yet) is live work, not "all done"', () => {
   const whole = { open: 0, done: 0, stuck: false, current: { title: 'Paint line 2', sentToday: false } };
-  assert.deepEqual(projectRowState(whole), { dot: 'orange', now: 'now: whole project' }, 'no update today: orange, never green "all done"');
+  assert.deepEqual(projectRowState(whole), { dot: 'orange', now: 'now: whole task' }, 'no update today: orange, never green "all done"');
   assert.equal(projectRowState({ ...whole, current: { ...whole.current, sentToday: true } }).dot, 'green');
   assert.deepEqual(projectRowState({ open: 0, done: 3, current: null }), { dot: 'green', now: 'all done ✓' });
   assert.deepEqual(projectRowState({ open: 2, done: 1, current: { title: 'Step B', sentToday: false } }), { dot: 'orange', now: 'now: Step B' });
@@ -349,8 +349,8 @@ const mmItems = [
 const rowTitles = (html) => [...html.matchAll(/<tr><td[^>]*>\d+<\/td><td[^>]*><b>([^<]*)<\/b>/g)].map((m) => m[1]);
 
 test('morning email: late first, then stuck, then the rest (projects before tasks, then by title)', () => {
-  assert.deepEqual(rowTitles(MM(mmItems).html), ['Fix pump', 'Clean moulds', '📁 Basin glaze', 'Apple order', 'Zebra daily check']);
-  assert.match(MM(mmItems).text, /1\. Fix pump[\s\S]*2\. Clean moulds[\s\S]*3\. 📁 Basin glaze[\s\S]*4\. Apple order[\s\S]*5\. Zebra daily check/, 'the plain words in the same order');
+  assert.deepEqual(rowTitles(MM(mmItems).html), ['Fix pump', 'Clean moulds', 'Basin glaze', 'Apple order', 'Zebra daily check']);
+  assert.match(MM(mmItems).text, /1\. Fix pump[\s\S]*2\. Clean moulds[\s\S]*3\. Basin glaze[\s\S]*4\. Apple order[\s\S]*5\. Zebra daily check/, 'the plain words in the same order');
 });
 
 test('morning email: subject has the day name and date', () => {
@@ -412,7 +412,7 @@ test('morning email: the plain-words version (for when a table cannot be copied)
   const { text } = MM(mmItems);
   assert.ok(!/<[a-z]/i.test(text), 'no HTML');
   assert.match(text, /^Dear Mr\. Suresh,\n\nGood morning\./);
-  assert.match(text, /3\. 📁 Basin glaze\n   New glaze for line 2\n   Last update: 21 Oct: Mixed 20 kg\n   What I did today: \n   Status: Done \/ Going on \/ Stuck/);
+  assert.match(text, /3\. Basin glaze\n   New glaze for line 2\n   Last update: 21 Oct: Mixed 20 kg\n   What I did today: \n   Status: Done \/ Going on \/ Stuck/);
   assert.match(text, /1\. Fix pump\n   Late since 20 Oct\n   Last update: —/);
   assert.match(text, /Status: keep one of Done \/ Going on \/ Stuck\.$/, 'ends with the Status line (owner asked, to match the Outlook template, 22 Oct)');
 });
@@ -620,7 +620,7 @@ test('follow-up: the menu item, the screen and its buttons are wired', () => {
   assert.match(row, /chase\(r\)\) load\(\); \} \}, '🔔 Chase'/);
   assert.match(row, /closeFollow\(r\)\) load\(\); \} \}, '✓ Done'/);
   assert.match(row, /takeBack\(r\) \}, '↩ Take back'/);
-  assert.match(row, /r\.kind === 'project'[^]*open\('project:' \+ r\.projectRef\) \}, '📁 Open project'\)[^]*'Take back on your projects page'/, 'a project is taken back on the projects page');
+  assert.match(row, /r\.kind === 'project'[^]*open\('project:' \+ r\.projectRef\) \}, '📋 Open task'\)[^]*'Take back on the task in My tasks'/, 'a task given with its steps is taken back on the owner\'s task (owner, 25 Nov: tasks, not projects)');
   const fns = TEAM.slice(TEAM.indexOf('async function chase('), TEAM.indexOf('// the round:'));
   assert.match(fns, /api\('task\.chase', \{ id: r\.taskId \}\)/);
   assert.match(fns, /api\('task\.status', \{ id: r\.taskId, status: 'done' \}\)/, 'Done: the same close as Mark done');
@@ -706,7 +706,7 @@ test('outlook: the Settings section (owner only) — three fields, the Redirect 
 
 test('one People page: Work Task\'s menu opens the People page on the projects page, which opens on People', async () => {
   // (one app: the owner's team pages open the projects' People page; another manager has the team pages' own)
-  assert.match(TEAM, /item\(opts\.openPeople \? 'People ↗ \(in My projects\)' : 'People', listOn\('people'\), \(\) => \(opts\.openPeople \? opts\.openPeople\(\) : go\('people'\)\)\)/, 'the owner\'s item says where it goes (owner asked 24 Oct)');
+  assert.match(TEAM, /item\(opts\.openPeople \? 'People ↗ \(in My tasks\)' : 'People', listOn\('people'\), \(\) => \(opts\.openPeople \? opts\.openPeople\(\) : go\('people'\)\)\)/, 'the owner\'s item says where it goes (owner asked 24 Oct)');
   assert.match(DP, /openPeople: \(\) => \{ leaveTeam\(\); go\('people'\); \}/, 'the owner: the projects\' People page');
   assert.match(DP, /if \(location\.hash === '#people'\) \{ ui\.view = 'people';/, 'the projects page opens on People');
 });
@@ -1336,30 +1336,29 @@ test('✓✓ seen ticks (23 Oct): ✓ sent, blue ✓✓ seen (who read it in the
   assert.match(readFileSync(new URL('../docs/styles.css', import.meta.url), 'utf8'), /\.ticks\.seen \{ color: #0ea5e9; \}/, 'blue when seen');
 });
 
-test('staff ✅ Tasks and 📂 Projects (owner, 23 Oct): every open task once, red first; its 📂 = the owner\'s 📂 project, else a given project with 2+ steps, else 📂 Misc — one task given from the owner\'s project is never also a project', async () => {
+test('staff ✅ Tasks and 📂 Groups (rule changed, owner asked 25 Nov: Group → Task → Steps; it was "📂 Projects", 23 Oct): every open task once, red first; its 📂 = its group (groupOf: the owner\'s group, else the group a manager typed), else 📂 No group — a task given with its steps is a task, never a folder of its own', async () => {
   const { staffFolders } = await import('../docs/ui/staff.js');
+  const { groupOf } = await import('../team/public_html/logic.js');
   const T = (id, x = {}) => ({ id, title: 't' + id, status: 'open', seq: null, projectRef: null, project: '', folder: '', dueToday: true, today: null, ...x });
   const d = {
     tasks: [
       T(1, { today: { at: '2026-10-23 10:00:00' } }), // sent: green
-      T(2, { projectRef: 'fs1', seq: 1, stepRef: 'fs1:whole', project: 'Feldspar', title: 'Feldspar', folder: 'Ceramic Media' }), // one task from the owner's 📂
+      T(2, { projectRef: 'fs1', seq: 1, stepRef: 'fs1:whole', project: 'Feldspar', title: 'Feldspar', folder: 'Ceramic Media' }), // one task from the owner's group
       T(3, { projectRef: 'gl1', seq: 1, stepRef: 'g1', project: 'Glaze photos', folder: 'Ceramic Media' }),
-      T(4, { projectRef: 'k1', seq: 1, stepRef: 'k1a', project: 'Kiln trial' }),
-      T(5, { projectRef: 'w1', seq: 1, stepRef: 'w1:whole', project: 'Paint door', title: 'Paint door' }), // one task, no 📂: just a task (Misc)
+      T(4, { projectRef: 'k1', seq: 1, stepRef: 'k1a', project: 'Kiln trial' }), // a step of a task given with no group
+      T(5, { projectRef: 'w1', seq: 1, stepRef: 'w1:whole', project: 'Paint door', title: 'Paint door' }),
+      T(8, { project: 'Dryers' }), // a manager typed its group when giving it
     ],
     other: [T(6, { projectRef: 'k1', seq: 2, stepRef: 'k1b', project: 'Kiln trial', dueToday: false, queued: true }), T(7, { dueToday: false }), T(3)], // (3 again: once)
     fillBy: '00:00', // (past the time updates are due: not sent = red; before it, yellow — owner asked 24 Oct)
   };
-  const { tasks, folders } = staffFolders(d, (id) => id === 4);
-  assert.deepEqual(tasks.map((x) => x.t.id), [2, 3, 5, 4, 1, 6, 7], 'each once; red, then yellow (waiting to send), green, grey');
-  assert.deepEqual(tasks.map((x) => x.dot), ['red', 'red', 'red', 'yellow', 'green', 'grey', 'grey']);
+  const { tasks, folders } = staffFolders(d, (id) => id === 4, groupOf);
+  assert.deepEqual(tasks.map((x) => x.t.id), [2, 3, 5, 8, 4, 1, 6, 7], 'each once; red, then yellow (waiting to send), green, grey');
   const where = Object.fromEntries(tasks.map((x) => [x.t.id, x.folder.name]));
-  assert.deepEqual(where, { 1: 'No group', 2: 'Ceramic Media', 3: 'Ceramic Media', 4: 'Kiln trial', 5: 'No group', 6: 'Kiln trial', 7: 'No group' }, '📂 Misc is "In no project" for staff (owner asked 24 Oct, round 4: one name everywhere, was "Other tasks")');
-  assert.deepEqual(folders.map((f) => [f.name, f.tasks.length, f.dot, f.red]), [['Ceramic Media', 2, 'red', 2], ['Kiln trial', 2, 'yellow', 0], ['No group', 3, 'red', 1]], 'worst first; 📂 Misc last (called "In no project", owner asked 24 Oct)');
-  assert.equal(folders.find((f) => f.name === 'Kiln trial').ref, 'k1', 'a given project with steps opens its own page (steps in order, add a step)');
-  assert.ok(!folders.some((f) => f.name === 'Feldspar' || f.name === 'Paint door'), 'one given task is never also a project');
+  assert.deepEqual(where, { 1: 'No group', 2: 'Ceramic Media', 3: 'Ceramic Media', 4: 'No group', 5: 'No group', 6: 'No group', 7: 'No group', 8: 'Dryers' });
+  assert.deepEqual(folders.map((f) => [f.name, f.tasks.length, f.dot, f.red]), [['Ceramic Media', 2, 'red', 2], ['Dryers', 1, 'red', 1], ['No group', 5, 'red', 1]], 'worst first; 📂 No group last');
+  assert.ok(!folders.some((f) => ['Feldspar', 'Paint door', 'Kiln trial'].includes(f.name) || f.ref), 'a task given (with or without steps) is never a folder of its own');
 });
-
 test('Team today as one table (owner, 23 Oct): status of each task (sent / not yet / stuck / late), the counts, red first, a filter, By person or By 📂 project (📂 Misc last)', async () => {
   const { teamBoard } = await import('../team/public_html/logic.js');
   const V = { id: 3, name: 'Valar' }, R = { id: 4, name: 'Ravi' };
@@ -1376,7 +1375,7 @@ test('Team today as one table (owner, 23 Oct): status of each task (sent / not y
     [['Ravi', [[3, 'late', 'red'], [4, 'notyet', 'yellow']], 0], ['Valar', [[2, 'stuck', 'red'], [1, 'sent', 'green']], 1]], 'by person, red first (both red: by name)');
   assert.equal(b.groups[1].person.id, 3, 'a person\'s line has the person (📧 Morning email)');
   b = teamBoard({ ...d, late: true }, { group: 'project' });
-  assert.deepEqual(b.groups.map((g) => [g.name, g.rows.map((r) => r.t.id)]), [['Glaze photos', [3]], ['Kilns', [2, 4]], ['Misc', [1]]], 'by 📂 project: the owner\'s 📂, else its work, else 📂 Misc (last)');
+  assert.deepEqual(b.groups.map((g) => [g.name, g.rows.map((r) => r.t.id)]), [['Glaze photos', [3]], ['Kilns', [2, 4]], ['No group', [1]]], 'by 📂 group: the owner\'s group, else the group a manager typed, else 📂 No group (last) — owner, 25 Nov');
   assert.equal(b.groups[1].rows[1].colour, 'red', 'after the fill-by time "not yet" is red');
   assert.deepEqual(teamBoard(d, { filter: 'msg' }).groups.flatMap((g) => g.rows.map((r) => r.t.id)), [4], 'a count shows only those');
   assert.deepEqual(teamBoard(d, { filter: 'sent' }).groups.flatMap((g) => g.rows.map((r) => r.t.id)), [1]);
@@ -1604,4 +1603,14 @@ test('the manager deletes a staff update: asks first (with the photo count), the
   assert.match(asked[1], /^Delete Ruturaj's update of .+ and its 2 photos\? It goes for everyone\.$/);
   assert.deepEqual(calls.filter((c) => c.a === 'update.delete').map((c) => c.body), [{ id: 77 }]);
   assert.ok(calls.some((c) => c.a === 'task.get'), 'the page is fetched again');
+});
+
+test('groupOf (owner, 25 Nov: Group → Task → Steps): a team task\'s group is the owner\'s group it came from, else the group a manager typed, else none — a given task\'s own name is never its group', async () => {
+  const { groupOf, NO_GROUP } = await import('../team/public_html/logic.js');
+  assert.equal(groupOf({ folder: 'Ceramic Media', projectRef: 'fs1', project: 'Feldspar' }), 'Ceramic Media');
+  assert.equal(groupOf({ projectRef: 'fs1', project: 'Feldspar' }), '', 'given from the owner with no group: none (Feldspar is the task)');
+  assert.equal(groupOf({ projectRef: null, project: 'Dryers' }), 'Dryers', 'a manager typed it');
+  assert.equal(groupOf({}), '');
+  assert.equal(groupOf(null), '');
+  assert.equal(NO_GROUP, 'No group');
 });

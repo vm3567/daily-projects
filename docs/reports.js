@@ -204,11 +204,11 @@ export function personMessageText(data, person, today, serverItems = null) {
     if (showWait) { const d = waitingDays(step, today); if (d >= 1) bits.push(`— pending ${d} day${d === 1 ? '' : 's'}`); }
     return bits.join(' ');
   };
-  const teamLine = (r, i) => [`${i + 1}. ${r.kind === 'project' ? '📁 ' : ''}${r.title}`, '', // (the email shows a project's title and description only, not its steps)
+  const teamLine = (r, i) => [`${i + 1}. ${r.title}`, '', // (the email shows a project's title and description only, not its steps)
     r.lateSince ? `— late since ${mailDate(r.lateSince)}` : '', r.stuck ? '— stuck' : ''].filter(Boolean).join(' ');
   if (!team.length && !waiting.length && !discuss.length) return `Hi ${first},\n\nNothing is pending between us right now. Thank you!`;
   const lines = [`Hi ${first},`, '', 'Here are the open items between us:'];
-  if (team.length) lines.push('', serverItems ? 'Projects and tasks (team):' : 'Projects given:', ...team.map(teamLine));
+  if (team.length) lines.push('', serverItems ? 'Tasks (team):' : 'Tasks given:', ...team.map(teamLine));
   if (waiting.length) lines.push('', 'Waiting on you:', ...waiting.map((it, i) => line(it, i, true)));
   if (discuss.length) lines.push('', 'To discuss:', ...discuss.map((it, i) => line(it, i, false)));
   lines.push('', 'Could you please share an update on these? Thank you.');
@@ -229,7 +229,7 @@ export function personMessageHtml(data, person, today, opts = {}) {
   const late = rows.filter((r) => r.lateSince).length;
   const stuck = rows.filter((r) => r.stuck).length;
   const summary = [`${rows.length} item${rows.length === 1 ? '' : 's'}`, late ? `${late} late` : '', stuck ? `${stuck} stuck` : ''].filter(Boolean).join(' · ');
-  const title = (r) => (r.kind === 'project' ? '📁 ' : '') + r.title;
+  const title = (r) => r.title; // (a task given with its steps is a task: no 📁, owner 25 Nov)
   const last = (r) => (r.lastUpdate ? `${mailDate(r.lastUpdate.day)}: ${cut(r.lastUpdate.note, 80)}` : '—');
   const extras = (r) => [
     r.project ? ['#666', r.project] : null,
