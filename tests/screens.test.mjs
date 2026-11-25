@@ -882,7 +882,7 @@ test('📂 smart box: ⋯ → "📂 Add to a project…"; projects only (typed a
   applyOps(s, [makeOp('createMainProject', { projectId: 'sa', name: 'Supplier approval' })]);
   const ui = { selected: 'o', update: {}, projMenu: 'o' };
   const ctx = liveCtx(s, ui);
-  btn(renderDetail(ctx), '📂 Add to a project…').__on.click();
+  btn(renderDetail(ctx), '📂 Add to a group…').__on.click();
   assert.equal(ui.mainBox.mode, 'parent');
   assert.equal(ui.mainBox.id, 'o');
   const input = () => rFind(renderDetail(ctx), (n) => n.className === 'main-box-input');
@@ -890,7 +890,7 @@ test('📂 smart box: ⋯ → "📂 Add to a project…"; projects only (typed a
   const P = (id) => s.data.projects.find((p) => p.id === id);
   assert.deepEqual(items(renderDetail(ctx)).sort(), ['📂 Kilns', '📂 Supplier approval'], 'only projects (never a task)');
   input().__on.input(null, { value: 'KIL' });
-  assert.deepEqual(items(renderDetail(ctx)), ['📂 Kilns', "+ Create 'KIL' as a new project"], 'any case, anywhere');
+  assert.deepEqual(items(renderDetail(ctx)), ['📂 Kilns', "+ Create 'KIL' as a new group"], 'any case, anywhere');
   const key = (k) => input().__on.keydown({ key: k, preventDefault() {}, stopPropagation() {} });
   key('ArrowDown');
   assert.equal(ui.mainBox.index, 1);
@@ -908,7 +908,7 @@ test('📂 smart box: ⋯ → "📂 Add to a project…"; projects only (typed a
   assert.deepEqual(P('o').parentIds, ['sa'], 'tap again: taken out of that one only');
   // a new name: the create line makes the project with this task in it (one act = one Undo), and keeps the others
   input().__on.input(null, { value: 'Furnaces' });
-  assert.deepEqual(items(renderDetail(ctx)), ["+ Create 'Furnaces' as a new project"]);
+  assert.deepEqual(items(renderDetail(ctx)), ["+ Create 'Furnaces' as a new group"]);
   key('Enter');
   const made = ctx.calls.filter((c) => c[0] === 'act:createMainProject').pop();
   assert.deepEqual([made[1].childId, made[1].name], ['o', 'Furnaces']);
@@ -916,7 +916,7 @@ test('📂 smart box: ⋯ → "📂 Add to a project…"; projects only (typed a
   key('Escape');
   assert.equal(ui.mainBox, null, 'Esc closes');
   // a project has no "Add to a project" (a project is never inside another)
-  assert.ok(!btn(renderDetail(liveCtx(s, { selected: 'm', update: {}, projMenu: 'm' })), '📂 Add to a project…'));
+  assert.ok(!btn(renderDetail(liveCtx(s, { selected: 'm', update: {}, projMenu: 'm' })), '📂 Add to a group…'));
 });
 
 test('📂 project page: TASKS (N) table (dot, name + 👥, Now / "No next step", last update), tap opens; "+ Add a task here" and "+ New task here"', () => {
@@ -973,14 +973,14 @@ test('📂 Projects page head: the line (each task counted once) and "+ New proj
   let head;
   try {
     head = mains.renderProjectsHead(ctx);
-    assert.ok(head.textContent.includes('1 project · 2 tasks in them'), head.textContent); // (then "· N in no project", owner asked 24 Oct)
-    btn(head, '+ New project').__on.click();
+    assert.ok(head.textContent.includes('1 group · 2 tasks in them'), head.textContent); // (then "· N in no project", owner asked 24 Oct)
+    btn(head, '+ New group').__on.click();
   } finally { delete globalThis.prompt; }
   const fur = s.data.projects.find((p) => p.name === 'Furnaces');
   assert.ok(fur && fur.isMain, 'made as a project (shows while empty)');
   applyOps(s, [makeOp('addToProject', { projectId: 'p1', parentId: fur.id })]);
   head = mains.renderProjectsHead(ctx);
-  assert.ok(head.textContent.includes('2 projects · 2 tasks in them'), 'Kiln is in both, counted once');
+  assert.ok(head.textContent.includes('2 groups · 2 tasks in them'), 'Kiln is in both, counted once');
   assert.ok(!head.textContent.includes('Kiln 2'), 'no task lists on the Projects page: only projects');
   const { readFileSync } = await import('node:fs');
   const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
@@ -996,17 +996,17 @@ test('📂 app wiring (app.js): ✅ Tasks and 📂 Projects menu items (keys; li
   const APP = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
   assert.match(APP, /item\('all', '✅ Tasks', activeTasks\(data\)\.length\)/);
   assert.doesNotMatch(APP, /'All projects'|Main projects/, 'the old words are gone');
-  assert.match(APP, /item\('mains', '📂 Projects', mainProjects\(data\)\.filter\(\(m\) => m\.state !== 'finished' && !m\.misc\)\.length\)/ /* (owner asked 24 Oct: the same count as the page, without "In no project") */);
+  assert.match(APP, /item\('mains', '📂 Groups', mainProjects\(data\)\.filter\(\(m\) => m\.state !== 'finished' && !m\.misc\)\.length\)/ /* (owner asked 24 Oct: the same count as the page, without "In no project") */);
   assert.match(APP, /mains: 'M'/);
   assert.match(APP, /else if \(k === 'm'\) go\('mains'\)/);
-  assert.match(APP, /\['m', 'Go to 📂 Projects'\]/);
+  assert.match(APP, /\['m', 'Go to 📂 Groups'\]/);
   assert.match(APP, /\['✅ Tasks', \(\) => go\('all'\)\]/, 'Ctrl-K');
   assert.match(APP, /all: '✅ Tasks',/, 'page title');
-  assert.match(APP, /mains: '📂 Projects' \}\[ui\.view\]/, 'page title');
+  assert.match(APP, /mains: '📂 Groups' \}\[ui\.view\]/, 'page title');
   assert.match(APP, /if \(ui\.view === 'all'\) return activeTasks\(store\.view\.data\)/);
   assert.match(APP, /const rows = open\.map\(\(p\) => projectRow\(p, today\)\);/, 'flat: each task once');
   assert.match(APP, /projectChips\(store\.view\.data, p\)/, 'project chips under the row');
-  assert.match(APP, /movable && task \? item\('📂', 'Add to a project…'/, 'a task: Add to a project; a group goes into no group (rule changed again, owner asked 25 Nov: groups are one level)');
+  assert.match(APP, /movable && task \? item\('📂', 'Add to a group…'/, 'a task: Add to a project; a group goes into no group (rule changed again, owner asked 25 Nov: groups are one level)');
   assert.match(APP, /'\+ New task', keyHint\('N'\)/);
   assert.match(APP, /todayWithoutEmptyMains\(awakeProjects/);
   assert.match(APP, /type === 'createMainProject' \? \{ removeProjectId: args\.projectId \} : parentIds \? \{ parentIds \}/);
@@ -1099,7 +1099,7 @@ test('📋 Copy list buttons: on a project page (its tasks) and on the task list
 test('✅ Tasks: "All tasks N" | "No project N" switch (both red first, remembered); no "My order" there', async () => {
   const { readFileSync } = await import('node:fs');
   const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
-  assert.match(app, /opt\('all', `All tasks \$\{all\.length\}`\), opt\('loose', `No project \$\{loose\}`\)/);
+  assert.match(app, /opt\('all', `All tasks \$\{all\.length\}`\), opt\('loose', `No group \$\{loose\}`\)/);
   assert.match(app, /if \(ui\.view === 'all'\) return activeTasks\(store\.view\.data\)\.filter\(\(p\) => ui\.taskFilter !== 'loose' \|\| !parentIdsOf\(p\)\.length\);/, '"No project" = tasks in no project');
   assert.match(app, /taskListView\(\) && !ui\.search && !ui\.adding \? taskFilterSwitch\(\) : showSort/, 'the switch replaces My order / Red first on Tasks and in groups (owner asked, 22 Oct)');
   // (groups are gone, owner 23 Oct: ✅ Tasks only)
@@ -1845,7 +1845,7 @@ test('🔌 app wiring (app.js): "🔌 From apps" after ✉ Replies with the wait
   assert.match(app, /if \(location\.hash === '#apps' && onServer\) \{ ui\.view = 'apps';/);
   assert.match(app, /function go\(view\) \{\n\s*if \(view !== 'settings'\) forgetOnce\(\);/);
   assert.match(app, /if \(onServer\) loadApps\(appsCtx, force \|\| ui\.view === 'apps'\);/);
-  assert.match(app, /replies: '✉ Replies', apps: '🔌 From apps', mains: '📂 Projects' \}\[ui\.view\]/, 'its page title');
+  assert.match(app, /replies: '✉ Replies', apps: '🔌 From apps', mains: '📂 Groups' \}\[ui\.view\]/, 'its page title');
   assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-65'/, 'phones get the new copy');
 });
 
@@ -3678,7 +3678,7 @@ test('Move box (right-click → Move to another project…): the projects it can
   ctx.ui.moveBox.q = 'Dryers';
   el = mains.moveBox(ctx);
   const create = rFind(el, (n) => /main-box-item/.test(n.className || '') && /create/.test(n.className));
-  assert.equal(create.textContent, "+ Create 'Dryers' as a new project");
+  assert.equal(create.textContent, "+ Create 'Dryers' as a new group");
   create.__on.click();
   const dryers = s.data.projects.find((p) => p.name === 'Dryers');
   assert.ok(dryers, 'the new project');
@@ -3695,8 +3695,8 @@ test('Right-click menu (app.js): drawn over the whole page (list or task page); 
   assert.ok(!app.includes('rowMenu())') && !app.includes('empty,\n    rowMenu()'), 'drawn once (no longer only inside the list column)');
   assert.ok(app.includes(`e.target.closest('input:not([type="checkbox"]):not([data-rowmenu]), textarea, select, [contenteditable="true"]')) return;`), 'a text box keeps the browser menu (not a tick box or a step name)');
   assert.ok(readFileSync(new URL('../docs/ui/detail.js', import.meta.url), 'utf8').includes("class: 'step-text', value: s.text, 'aria-label': 'Step', key: 'st-' + s.id, 'data-mention': '1', 'data-rowmenu': '1',"), 'a step name opens the step menu');
-  for (const label of ["'Move to another project…'", "'Add to a project…'", '`Take out of 📂 ${from.name}`', "'Rename…'", '`Finish ${kindWord(p)}`', '`Reopen ${kindWord(p)}`',
-    "'Tick (done)'", "'Waiting on someone'", "'Give to team…'", "'Make it a task'", "'Delete step'", "'Make it a new task'", "'Make it a task in a project…'"]) {
+  for (const label of ["'Move to another group…'", "'Add to a group…'", '`Take out of 📂 ${from.name}`', "'Rename…'", '`Finish ${kindWord(p)}`', '`Reopen ${kindWord(p)}`',
+    "'Tick (done)'", "'Waiting on someone'", "'Give to team…'", "'Make it a task'", "'Delete step'", "'Make it a new task'", "'Make it a task in a group…'"]) {
     assert.ok(app.includes(label), label);
   }
   assert.match(app, /task && p\.state !== 'finished' \? stageButtons\(p\) : null,/);
@@ -3840,9 +3840,9 @@ test('📂 Groups are one level (rule changed, owner asked 25 Nov; it was "proje
   assert.ok(!rFind(el, (n) => n.nodeName === 'BUTTON' && /Project inside/.test(n.textContent)), 'no "+ 📂 Project inside"');
   assert.match(el.textContent, /TASKS \(1\)/, 'its task Office move');
   const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
-  assert.ok(app.includes("movable && task ? item('🔀', 'Move to another project…'"), 'Move: tasks only');
+  assert.ok(app.includes("movable && task ? item('🔀', 'Move to another group…'"), 'Move: tasks only');
   assert.ok(!app.includes('New project inside') && !app.includes('Move inside another project') && !app.includes('Put inside a project'));
-  assert.ok(readFileSync(new URL('../docs/ui/detail.js', import.meta.url), 'utf8').includes("p.misc || isMainProject(store.view.data, p) ? null : item('📂 Add to a project…'"));
+  assert.ok(readFileSync(new URL('../docs/ui/detail.js', import.meta.url), 'utf8').includes("p.misc || isMainProject(store.view.data, p) ? null : item('📂 Add to a group…'"));
   assert.ok(!readFileSync(new URL('../docs/ui/mains.js', import.meta.url), 'utf8').includes('newInnerProject'));
 });
 test('Review fixes (23 Oct): staff / manager menus close on a click elsewhere; Move → a new project from a list row leaves its old projects; Copy list on a project copies its tasks only; take-back counts the tasks of its inner projects; one isTyping, one menu item builder', async () => {
@@ -4129,7 +4129,7 @@ test('Review 12–14 + 16 + 18: top icons have a small word on a computer (phone
   const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
   for (const w of ["iconCap('Capture')", "iconCap('Find')", "iconCap('Refresh')", "iconCap('Saved')", "iconCap('Team')"]) assert.ok(app.includes(w), w);
   assert.ok(app.includes("h('a', { class: 'menu-item', href: '#team', title: 'Tasks you gave and their daily updates' }, h('span', null, '👥 Team'))"));
-  assert.match(app, /tab\('today', '☀︎', 'Today'\),\n\s*tab\('all', '✅', 'Tasks'\),\n\s*tab\('mains', '📂', 'Projects'\),\n\s*tab\('inbox', '📥', 'Inbox'/);
+  assert.match(app, /tab\('today', '☀︎', 'Today'\),\n\s*tab\('all', '✅', 'Tasks'\),\n\s*tab\('mains', '📂', 'Groups'\),\n\s*tab\('inbox', '📥', 'Inbox'/);
   const css = readFileSync(new URL('../docs/styles.css', import.meta.url), 'utf8');
   assert.match(css, /\.icon-cap \{ display: none; \}\n\s*\.list-head \.status\.sync\.ok, \.list-head \.capture-btn \{ display: none; \}/);
   assert.match(css, /\.step-main \.tag\.me, \.step-main \.days-link \{ display: none; \}/);
@@ -4307,7 +4307,7 @@ test('Review2 17 (owner, 24 Oct): the project table\'s take-out button is a quie
   const page = renderDetail(liveCtx(s, { selected: 'm', update: {} }));
   const btn = rAll(page, (n) => n.nodeName === 'BUTTON' && /sub-remove/.test(n.className || ''))[0];
   assert.equal(btn.textContent, '✕');
-  assert.match(btn.getAttribute('title'), /^Take out of project — .+ is kept$/);
+  assert.match(btn.getAttribute('title'), /^Take out of group — .+ is kept$/);
   assert.ok(rAll(page, (n) => n.nodeName === 'TH' && n.textContent === 'Last update' && /nowrap/.test(n.className || '')).length);
 });
 
@@ -4396,7 +4396,7 @@ test('Review2 23 (owner, 24 Oct): keys for ✅ Tasks (a) and Inbox (i); team pag
   const staff = { state: {}, act: { show: (v) => shown.push(v) } };
   for (const k of ['t', 'a', 'm', 'f']) listKeys.pageKey(ev(k), doc, staff);
   assert.deepEqual(shown, ['today', 'tasks', 'projects'], 'staff: no Follow-up page');
-  assert.match(listKeys.PAGE_KEYS_HELP, /t a m: Today \/ Tasks \/ Projects · f: Follow-up/);
+  assert.match(listKeys.PAGE_KEYS_HELP, /t a m: Today \/ Tasks \/ Groups · f: Follow-up/);
 });
 
 test('Review2 25 (owner, 24 Oct): with no task open the right side shows today at a glance (counts, the red / yellow ones with why, tap to open)', () => {
@@ -4562,7 +4562,7 @@ test('Review3 19 (owner, 24 Oct): 📂 Projects counts real projects only (not �
   applyOps(s, [makeOp('createProject', { projectId: 'loose', name: 'Loose task', deadline: null }),
     makeOp('createProject', { projectId: 'rest', name: 'Resting', deadline: null }), makeOp('addToProject', { projectId: 'rest', parentId: 'm' }), makeOp('pause', { projectId: 'rest' })]);
   const head = mains.renderProjectsHead(liveCtx(s, { view: 'mains', update: {} }));
-  assert.match(head.textContent, /^1 project · 2 tasks in them · \d+ in no project · red first/, head.textContent);
+  assert.match(head.textContent, /^1 group · 2 tasks in them · \d+ in no group · red first/, head.textContent);
 });
 
 test('Review3 20 (owner, 24 Oct): "1 step done" (not "1 steps"); an overdue task says "Overdue · 21 Oct" everywhere', async () => {
@@ -4594,7 +4594,7 @@ test('Review4 1 + 4 (owner, 24 Oct): staff 📂 Projects counts real projects on
   s.act.show('projects');
   const text = s.view().textContent;
   assert.match(text, /1 project · 2 tasks in them · 2 in no project · red first/, text.slice(0, 400));
-  assert.match(text, /📂 In no project/);
+  assert.match(text, /📂 No group/);
   assert.ok(!text.includes('Other tasks'));
 });
 
@@ -4607,7 +4607,7 @@ test('Review4 2 + 3 + 4 (owner, 24 Oct): the 📂 In no project page counts open
   assert.ok(misc && misc.misc, 'Misc made');
   const el = renderDetail(liveCtx(s, { selected: MISC_ID, update: {} }));
   const text = el.textContent;
-  assert.match(text, /📂 In no project/);
+  assert.match(text, /📂 No group/);
   assert.match(text, /TASKS \(1\) \+ 1 paused \/ finished/);
   for (const gone of ['▶ Start', '💤 Snooze', '+ Target date', 'Add time', 'Medium']) assert.ok(!text.includes(gone), gone);
   const { readFileSync } = await import('node:fs');
@@ -4847,7 +4847,7 @@ test('Review6 5 (owner, 24 Oct): "Today at a glance" shows red, yellow, then gre
 test('Review6 3 + 8 (owner, 24 Oct): the menu\'s 📂 Projects count leaves out "In no project"; Settings says where Outlook, the due time and the morning email are', async () => {
   const { readFileSync } = await import('node:fs');
   const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
-  assert.match(app, /item\('mains', '📂 Projects', mainProjects\(data\)\.filter\(\(m\) => m\.state !== 'finished' && !m\.misc\)\.length\)/);
+  assert.match(app, /item\('mains', '📂 Groups', mainProjects\(data\)\.filter\(\(m\) => m\.state !== 'finished' && !m\.misc\)\.length\)/);
   assert.ok(app.includes("The morning email is on each person\\'s page (People)."));
   assert.ok(!app.includes('the time updates are due are in'), 'the muddled sentence is gone');
 });
@@ -5251,4 +5251,22 @@ test('fresh look, second check (owner, 3 Nov "check again with screenshots"): th
   assert.match(part, /@media \(min-width: 761px\) \{[\s\S]*?\.bell-wrap \{ top: calc\(18px \+ env\(safe-area-inset-top\)\); right: 24px; \}[\s\S]*?\n\}/, 'the bell in the card corner (computer only)');
   assert.ok(css.indexOf('.bell-wrap { top: calc(18px') > css.indexOf('.bell-wrap { position: fixed;'), 'after the bell\'s own rule, so it wins');
   assert.match(part, /input\[type=checkbox\], input\[type=radio\] \{ accent-color: var\(--brand\); flex: none; \}/, 'was 7px wide in Settings on a phone');
+});
+
+test('Groups (owner, 25 Nov): the owner\'s pages say "Group" for a 📂 project — menu, page, its buttons, the box, the right-click menu, 📂 No group — and never "📂 Project(s)" on screen', async () => {
+  const { readFileSync } = await import('node:fs');
+  const s = mainsState(); // 📂 Kilns: p1, c2
+  const ctx = liveCtx(s, { selected: 'm', update: {}, projMenu: 'm' });
+  const page = renderDetail(ctx).textContent;
+  assert.match(page, /Finish group/, 'its buttons say group');
+  assert.ok(!/Finish project|Delete project|Give project/.test(page));
+  const head = mains.renderProjectsHead(liveCtx(s, {}));
+  assert.match(head.textContent, /^1 group · 2 tasks in them/);
+  assert.ok(head.textContent.includes('+ New group'));
+  const { IN_NO_PROJECT } = await import('../docs/ui/workparts.js');
+  assert.equal(IN_NO_PROJECT, 'No group', '📂 Misc is "No group"');
+  const files = ['../docs/app.js', '../docs/ui/detail.js', '../docs/ui/mains.js', '../docs/ui/listkeys.js', '../docs/rules.js', '../docs/ops.js'].map((f) => readFileSync(new URL(f, import.meta.url), 'utf8')).join('\n');
+  for (const old of ["'📂 Projects'", "'+ New project'", "'Move to another project…'", "'Add to a project…'", "'📂 Add to a project…'", "as a new project`", "'Type a project name…'", "`Delete the project", "? 'project' : 'task'", "'In no project'"])
+    assert.ok(!files.includes(old), 'still says: ' + old);
+  assert.match(files, /item\('mains', '📂 Groups'/, 'the menu');
 });

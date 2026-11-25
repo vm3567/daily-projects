@@ -436,7 +436,7 @@ const handlers = {
     dropFromOrder(data, p.id, [a.parentId]);
     p.updatedAt = op.at;
     const main = findProject(data, a.parentId);
-    addEvent(state, op, p, 'main_changed', main ? `Taken out of 📂 ${main.name}` : 'Taken out of a project');
+    addEvent(state, op, p, 'main_changed', main ? `Taken out of 📂 ${main.name}` : 'Taken out of a group');
     if (main) addEvent(state, { ...op, id: op.id + 'm' }, main, 'main_changed', `${p.name} taken out`);
     return true;
   },
@@ -456,7 +456,7 @@ const handlers = {
       setParents(p, []);
       dropFromOrder(data, p.id, now);
       p.updatedAt = op.at;
-      addEvent(state, op, p, 'main_changed', old ? `Taken out of 📂 ${old.name}` : 'Taken out of its project');
+      addEvent(state, op, p, 'main_changed', old ? `Taken out of 📂 ${old.name}` : 'Taken out of its group');
       if (old) addEvent(state, { ...op, id: op.id + 'm' }, old, 'main_changed', `${p.name} taken out`);
       return true;
     }
@@ -496,7 +496,7 @@ const handlers = {
     if (findProject(state.data, MISC_ID)) return false;
     if (!handlers.createProject(state, op, { projectId: MISC_ID, name: 'Misc', deadline: null })) return false;
     const m = findProject(state.data, MISC_ID);
-    m.isMain = true; m.misc = true; m.about = 'Every task that is in no other project';
+    m.isMain = true; m.misc = true; m.about = 'Every task that is in no group';
     state.data.projects.splice(state.data.projects.indexOf(m), 1);
     state.data.projects.push(m); // (at the end of the list)
     return true;

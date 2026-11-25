@@ -1981,7 +1981,7 @@ test('📂 delete question: a project says its tasks are kept (they only leave i
   applyOp(s, op('createMainProject', { projectId: 'm', name: 'Kilns', childId: 'k1' }, '2026-10-22'));
   applyOp(s, op('addToProject', { projectId: 'k2', parentId: 'm' }, '2026-10-22'));
   const main = s.data.projects.find((p) => p.id === 'm');
-  assert.match(deleteQuestion(s.data, main), /Delete the project "Kilns"\?\n\nIts 2 tasks are kept — they just leave this project\./);
+  assert.match(deleteQuestion(s.data, main), /Delete the group "Kilns"\?\n\nIts 2 tasks are kept — they just leave this group\./);
   assert.match(deleteQuestion(s.data, s.data.projects.find((p) => p.id === 'k1')), /^Delete "Kiln 1"\?/);
   applyOp(s, op('deleteProject', { projectId: 'm' }, '2026-10-22'));
   assert.equal(s.data.projects.filter((p) => ['k1', 'k2'].includes(p.id)).length, 2, 'the tasks are still there after the delete');

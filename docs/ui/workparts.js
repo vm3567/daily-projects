@@ -5,7 +5,7 @@
 import { h, fmtDay as dayOf, errLine, HAS_KEYBOARD } from './dom.js';
 
 /** 📂 Misc's name on every screen (owner, 24 Oct: it was "Misc", "Other tasks" and "in no project"). */
-export const IN_NO_PROJECT = 'In no project';
+export const IN_NO_PROJECT = 'No group'; // (owner, 25 Nov: 📂 projects are groups now)
 
 /** The device in the words on screen: "this computer" with a mouse, else "this phone" (owner, 24 Oct: a computer was told "this phone"). */
 export const HERE = HAS_KEYBOARD ? 'this computer' : 'this phone';

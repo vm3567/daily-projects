@@ -3,8 +3,8 @@
 // n give a task (owner), ? shows the keys. Not while typing in a box, and never with Ctrl / ⌘ / Alt.
 // It works on what is on screen: the rows in the list column (#list): list rows (li.prow) and table rows (tr.sub-row).
 
-export const PAGE_KEYS_HELP = '↓ ↑ (or j k): next / previous task · t a m: Today / Tasks / Projects · f: Follow-up · Esc: close · /: search · n: give a task · ?: these keys';
-export const STAFF_KEYS_HELP = '↓ ↑ (or j k): next / previous task · t a m: Today / Tasks / Projects · Esc: close · /: search · ?: these keys';
+export const PAGE_KEYS_HELP = '↓ ↑ (or j k): next / previous task · t a m: Today / Tasks / Groups · f: Follow-up · Esc: close · /: search · n: give a task · ?: these keys';
+export const STAFF_KEYS_HELP = '↓ ↑ (or j k): next / previous task · t a m: Today / Tasks / Groups · Esc: close · /: search · ?: these keys';
 /** t a m (f): go to a page (owner, 24 Oct: the same letters as on the owner's pages: t Today, a ✅ Tasks, m 📂 Projects). */
 const PAGE_LETTERS = { t: 'today', a: 'tasks', m: 'projects', f: 'followup' };
 

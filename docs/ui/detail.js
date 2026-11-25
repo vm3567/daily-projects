@@ -19,7 +19,7 @@ import { stageLine } from './stage.js';
 import { IN_NO_PROJECT } from './workparts.js';
 
 /** 'project' for a 📂 project, 'task' for everything else (what the app once called a project). */
-const kindWord = (ctx, p) => (isMainProject(ctx.store.view.data, p) ? 'project' : 'task');
+const kindWord = (ctx, p) => (isMainProject(ctx.store.view.data, p) ? 'group' : 'task'); // (owner, 25 Nov: 📂 projects are groups)
 
 const REPEAT_WORD = { daily: 'every day', weekly: 'every week', monthly: 'every month' };
 const HISTORY_WORDS = {
@@ -33,7 +33,7 @@ const HISTORY_WORDS = {
   team_ticked: 'Done by the team', team_note: 'Team note', team_step_added: 'Step added by the team', team_step_unticked: 'Opened again by the team',
   team_note_deleted: 'Team note removed', team_moved: 'Moved by the team', mail_note: 'Email reply', mail_task: 'Task made from an email', app_task: '🔌 Task from an app', app_note: '🔌 Update from an app',
   reply_prepared: 'Reply prepared', reply_sent: 'Reply sent', mail_replied: 'Reply sent (seen in Outlook)',
-  step_to_project: 'Step made a task', main_changed: '📂 Project',
+  step_to_project: 'Step made a task', main_changed: '📂 Group',
 };
 
 /** Text box that saves on its own: after a short pause in typing, and when leaving the box. */
@@ -99,7 +99,7 @@ export async function pasteIntoStep(ctx, p, files, stepId = null) {
  */
 export function startNextTask(ctx, p) {
   if (!p || p.misc || p.nextId) return false;
-  const name = globalThis.prompt ? prompt(`What is the next task?\n\n“${p.name}” is finished, and the new task is linked to it (same project, tag and priority).`, '') : null;
+  const name = globalThis.prompt ? prompt(`What is the next task?\n\n“${p.name}” is finished, and the new task is linked to it (same group, tag and priority).`, '') : null;
   if (!name || !name.trim()) return false;
   const nextId = newId();
   const steps = [['createProject', { projectId: nextId, name: name.trim() }], ['linkFollow', { projectId: p.id, nextId }]];
@@ -117,7 +117,7 @@ export function finishProject(ctx, p) {
   const open = openTasksInside(ctx.store.view.data, p);
   const n = open.length, s = n === 1 ? '' : 's';
   const list = open.slice(0, 8).map((t) => `• ${t.name}`).join('\n') + (n > 8 ? `\n… and ${n - 8} more` : '');
-  const all = n && globalThis.confirm ? confirm(`${n} task${s} still open inside 📂 ${p.name}:\n${list}\n\nFinish ${n === 1 ? 'it' : 'them'} too?\nOK = finish the project and ${n === 1 ? 'this task' : 'these tasks'}\nCancel = finish only the project (the task${s} stay${n === 1 ? 's' : ''} open)`) : false;
+  const all = n && globalThis.confirm ? confirm(`${n} task${s} still open inside 📂 ${p.name}:\n${list}\n\nFinish ${n === 1 ? 'it' : 'them'} too?\nOK = finish the group and ${n === 1 ? 'this task' : 'these tasks'}\nCancel = finish only the project (the task${s} stay${n === 1 ? 's' : ''} open)`) : false;
   if (!all) return ctx.act('finish', { projectId: p.id }, `Finished: ${p.name} (moved to Finished)`);
   return ctx.actMany(p.id, [...open.map((t) => ['finish', { projectId: t.id }]), ['finish', { projectId: p.id }]], `Finished: ${p.name} and its ${n} open task${s}`);
 }
@@ -1005,7 +1005,7 @@ function projectMenu(ctx, p) {
     timed ? item('⏱ Add time', () => addTimePrompt(ctx, p)) : null,
     item('✎ Tag, priority, target date', () => { ui.editMeta = true; }),
     // 📂 a task can be in several projects; a project can be inside other projects too (never 📂 Misc)
-    p.misc || isMainProject(store.view.data, p) ? null : item('📂 Add to a project…', () => openMainBox(ctx, p, 'parent')), // (a group goes into no group: one level, owner 25 Nov)
+    p.misc || isMainProject(store.view.data, p) ? null : item('📂 Add to a group…', () => openMainBox(ctx, p, 'parent')), // (a group goes into no group: one level, owner 25 Nov)
     p.misc ? null : item(`🗑 Delete ${kindWord(ctx, p)}`, () => { // (📂 Misc stays: it holds every task in no other project)
       if (!confirm(deleteQuestion(ctx.store.view.data, p))) return;
       ctx.act('deleteProject', { projectId: p.id }, `Deleted: ${p.name}`, 10000);
@@ -1025,7 +1025,7 @@ function oldStepsBlock(ctx, p, openSteps) {
     ctx.render();
   };
   return section(`Steps from before (${openSteps.length})`,
-    h('p', { class: 'muted small' }, 'A project holds tasks; steps belong in its tasks. Make each of these a task in this project:'),
+    h('p', { class: 'muted small' }, 'A group holds tasks; steps belong in its tasks. Make each of these a task in this group:'),
     h('ul', { class: 'old-steps', key: 'oldsteps-' + p.id }, openSteps.map((st) => h('li', { key: 'os-' + st.id, class: 'old-step' },
       h('span', null, st.text),
       h('button', { class: 'btn small', type: 'button', onClick: () => makeTask(st) }, '↗ Make it a task')))));
@@ -1245,7 +1245,7 @@ export function renderDetail(ctx) {
     h('div', { class: 'detail-top' },
       h('button', { class: 'icon back', 'aria-label': 'Back to list', onClick: () => { ui.mobile = 'list'; ctx.render(); } }, '←'),
       h('span', { class: `dot ${colour}`, title: colourWhy(p, today) }), // why it has this colour
-      p.misc ? h('h2', { class: 'misc-title' }, `📂 ${IN_NO_PROJECT}`) : autoField('input', { class: 'title-input', value: p.name, 'aria-label': `${kindWord(ctx, p) === 'task' ? 'Task' : 'Project'} name`, title: `Click to change the ${kindWord(ctx, p)} name`, key: 'name-' + p.id },
+      p.misc ? h('h2', { class: 'misc-title' }, `📂 ${IN_NO_PROJECT}`) : autoField('input', { class: 'title-input', value: p.name, 'aria-label': `${kindWord(ctx, p) === 'task' ? 'Task' : 'Group'} name`, title: `Click to change the ${kindWord(ctx, p)} name`, key: 'name-' + p.id },
         (v) => store.dispatch('setProjectField', { projectId: p.id, field: 'name', value: v })),
       p.misc ? null : h('button', {
         class: 'icon edit-title', title: `Change the ${kindWord(ctx, p)} name`, 'aria-label': `Change the ${kindWord(ctx, p)} name`,

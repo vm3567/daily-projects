@@ -603,7 +603,7 @@ export function ancestorsOf(data, p) {
 export function projectLine(data, p, today = todayIndia()) {
   const subs = subProjectsOf(data, p.id).filter((c) => c.state !== 'finished').length;
   const line = mainSummary(projectTasks(data, p.id).filter((c) => c.state !== 'finished'), today);
-  return subs ? `${subs} project${subs === 1 ? '' : 's'} · ${line === 'No tasks in it yet' ? 'no tasks yet' : line}` : line;
+  return subs ? `${subs} group${subs === 1 ? '' : 's'} · ${line === 'No tasks in it yet' ? 'no tasks yet' : line}` : line;
 }
 
 /**
@@ -1353,8 +1353,8 @@ export function deleteQuestion(data, p) {
   const subs = kids.filter((c) => isMainProject(data, c)).length;
   const n = kids.length - subs;
   if (isMainProject(data, p)) {
-    const what = [n ? `${n} task${n === 1 ? '' : 's'}` : '', subs ? `${subs} project${subs === 1 ? '' : 's'}` : ''].filter(Boolean).join(' and ');
-    return `Delete the project "${p.name}"?\n\n${what ? `Its ${what} ${n + subs === 1 ? 'is' : 'are'} kept — ${n + subs === 1 ? 'it just leaves' : 'they just leave'} this project.` : 'It has no tasks.'}\n\nYou can press Undo for a few seconds after.`;
+    const what = [n ? `${n} task${n === 1 ? '' : 's'}` : '', subs ? `${subs} group${subs === 1 ? '' : 's'}` : ''].filter(Boolean).join(' and ');
+    return `Delete the group "${p.name}"?\n\n${what ? `Its ${what} ${n + subs === 1 ? 'is' : 'are'} kept — ${n + subs === 1 ? 'it just leaves' : 'they just leave'} this group.` : 'It has no tasks.'}\n\nYou can press Undo for a few seconds after.`;
   }
   return `Delete "${p.name}"?\n\nYou can press Undo for a few seconds after.`;
 }
