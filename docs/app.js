@@ -3615,7 +3615,7 @@ async function giveProject(p, person, needsPhoto = !!ui.givePhoto, keep = ui.giv
     await withSyncLock(async () => {
       const steps = person ? projectSteps(p) : [];
       // (the change of person is saved right after this: the server must not act on the older saved copy meanwhile)
-      const out = await teamApi('project.sync', { projectRef: p.id, project: p.name, about: p.about || '', folder: folderOf(p), assigneeId: person ? person.id : 0, steps, needsPhoto, kind: record ? 'log' : '', reason: person ? '' : 'taken', baseCommit: store.base && store.base.commit, pending: true });
+      const out = await teamApi('project.sync', { projectRef: p.id, project: p.name, about: p.about || '', folder: folderOf(p), slot: p.slot || null, assigneeId: person ? person.id : 0, steps, needsPhoto, kind: record ? 'log' : '', reason: person ? '' : 'taken', baseCommit: store.base && store.base.commit, pending: true });
       team.gen++; // a list fetched before this change is old now: it must not move the project back
       store.dispatch('setProjectTeam', { projectId: p.id, userId: person ? person.id : null, name: person ? person.name : '', needsPhoto, record, ...(main && person ? { giveTasks: true } : {}), ...(!main && !person ? { keepOff: true } : {}) });
       const kids = new Set(main ? projectTasks(store.view.data, p.id).map((c) => c.id) : []); // (its projects' tasks too)
@@ -3679,7 +3679,7 @@ function notSent(out, steps) {
 
 /** What was sent for a given project: a change in any part (the short description too) sends it again. */
 function syncSig(userId, p, steps, needsPhoto) {
-  return JSON.stringify([userId, p.name, steps, !!needsPhoto, folderOf(p), p.about || '', !!(p.team && p.team.record)]); // (📒 record: a change sends it again)
+  return JSON.stringify([userId, p.name, steps, !!needsPhoto, folderOf(p), p.slot || null, p.about || '', !!(p.team && p.team.record)]); // (📒 record, 📅 a new time: a change sends it again)
 }
 /** The 📂 project a given task is in (its first one; '' = in none, 📂 Misc too): the team sees the same folders. */
 function folderOf(p) {
@@ -3722,7 +3722,7 @@ async function syncGivenNow(gen) {
     if (m[p.id] === sig) continue;
     const name = p.name, about = p.about || '', who = p.team.name;
     try {
-      const out = await teamApi('project.sync', { projectRef: p.id, project: name, about, folder: folderOf(p), assigneeId: p.state === 'active' ? p.team.userId : 0, steps, needsPhoto: !!p.team.needsPhoto, kind: p.team.record ? 'log' : '', reason: p.state,
+      const out = await teamApi('project.sync', { projectRef: p.id, project: name, about, folder: folderOf(p), slot: p.slot || null, assigneeId: p.state === 'active' ? p.team.userId : 0, steps, needsPhoto: !!p.team.needsPhoto, kind: p.team.record ? 'log' : '', reason: p.state,
         baseCommit: store.base && store.base.commit, pending: store.pending.length > 0 });
       // a re-opened step that was just finished is not made yet: sent again next time
       rememberSync(id, notSent(out, steps).length ? SYNC_RETRY : sig);

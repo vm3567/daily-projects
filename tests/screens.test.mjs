@@ -1060,7 +1060,7 @@ test('📂 Projects page: a click on a project row selects it and stays on the p
   assert.match(mainsSrc, /ctx\.ui\.view === 'mains' && ctx\.showHere \? ctx\.showHere\(c\.id\)/, 'a task in the TASKS table while on the Projects page');
   const here = app.slice(app.indexOf('  showHere: (id) => {'), app.indexOf('  openProject: (id) => {'));
   assert.match(here, /select\(id\);/);
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-65'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-66'/, 'phones get the new copy');
 });
 
 test('📂 project page: "✕ Remove" on a task row takes it out of this project only — the task is kept (and stays in its other projects)', () => {
@@ -1846,7 +1846,7 @@ test('🔌 app wiring (app.js): "🔌 From apps" after ✉ Replies with the wait
   assert.match(app, /function go\(view\) \{\n\s*if \(view !== 'settings'\) forgetOnce\(\);/);
   assert.match(app, /if \(onServer\) loadApps\(appsCtx, force \|\| ui\.view === 'apps'\);/);
   assert.match(app, /replies: '✉ Replies', apps: '🔌 From apps', mains: '📂 Groups' \}\[ui\.view\]/, 'its page title');
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-65'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-66'/, 'phones get the new copy');
 });
 
 test('🔌 the PHP connector (team/connector/worktask-connector.php): the same text the app downloads, placeholders only (no real key), valid PHP 7.4+ (php -l), with wt_push / wt_withdraw / wt_decisions / wt_receive_decision', async () => {
@@ -3408,7 +3408,7 @@ test('staff ✅ Tasks / 📂 Projects pages: the menu as the owner\'s, ✅ Tasks
   const { readFileSync } = await import('node:fs');
   const DP = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
   assert.equal((DP.match(/teamApi\('project\.sync', \{ projectRef: p\.id, [^}]*folder: folderOf\(p\)/g) || []).length, 2, 'both sends carry the 📂 name');
-  assert.match(DP, /JSON\.stringify\(\[userId, p\.name, steps, !!needsPhoto, folderOf\(p\), p\.about \|\| '', !!\(p\.team && p\.team\.record\)\]\)/, 'a new 📂 sends it again (the signature also has 📒 record, owner asked 24 Oct)');
+  assert.match(DP, /JSON\.stringify\(\[userId, p\.name, steps, !!needsPhoto, folderOf\(p\), p\.slot \|\| null, p\.about \|\| '', !!\(p\.team && p\.team\.record\)\]\)/, 'a new 📂 or a new 📅 time sends it again (the signature also has 📒 record, owner asked 24 Oct)');
   assert.match(DP, /\.find\(\(x\) => x && !x\.misc\)/, '📂 Misc is no folder for the team');
 });
 
@@ -5385,4 +5385,59 @@ test('📅 Calendar keeps its own style names (pcal-…): the Dashboard\'s strea
   const block = css.slice(css.indexOf('/* 📅 Calendar (ui/calendar.js)'), css.indexOf('/* ---------------------------------------------------------------- the staff view'));
   assert.ok(block.length > 100 && !/(^|\s|,)\.cal[-\s{.,:]/m.test(block), 'the calendar\'s styles never touch .cal / .cal-*');
   assert.match(css, /\.pcal-main \{ flex-direction: column; align-items: stretch; \}/, 'a phone\'s day fills its width');
+});
+
+test('📅 Calendar on the team pages (owner, 25 Nov): the menu item; every open team task with a time (who does it under it); drag moves one given from here (task.slot), not one from the owner\'s tasks; a click on a time opens Give a task with that time; the Give form has 📅 day / time / length and sends it', async () => {
+  const tasks = [
+    { id: 61, title: 'Fire the kiln', assignee: { id: 3, name: 'Valar' }, status: 'open', repeat: 'daily', today: null, dueToday: true, slot: { day: '2026-11-25', start: '10:00', mins: 60 } },
+    { id: 62, title: 'Shoot the tiles', assignee: { id: 4, name: 'Ravi' }, status: 'open', repeat: 'once', projectRef: 'cal1', seq: 1, today: null, slot: { day: '2026-11-26', start: '11:00', mins: 60 } },
+    { id: 63, title: 'No time yet', assignee: { id: 3, name: 'Valar' }, status: 'open', repeat: 'daily', today: null, slot: null },
+  ];
+  const calls = [];
+  const { t } = fakeTeam({ 'tasks.list': () => ({ ok: true, tasks }), 'task.slot': (b) => { calls.push(b); return { ok: true, task: tasks[0] }; }, 'users.list': () => ({ ok: true, users: [{ id: 3, name: 'Valar', role: 'staff', active: true }] }) });
+  t.state.calDay = '2026-11-25'; t.state.calMode = 'week';
+  t.go('calendar'); await tick(); await tick();
+  const v = t.view();
+  assert.match(v.className, /\bwide\b/, 'fills the screen');
+  const text = v.textContent;
+  for (const bit of ['📅 Calendar', 'Fire the kiln', 'Valar', 'Shoot the tiles', 'Ravi']) assert.ok(text.includes(bit), bit);
+  assert.ok(!text.includes('No time yet'), 'only tasks with a time');
+  const find = (n, f) => (f(n) ? n : (n.childNodes || []).map((c) => find(c, f)).find(Boolean));
+  const col = find(v, (n) => n.getAttribute && n.getAttribute('data-day') === '2026-11-27');
+  const at = (hours) => ({ preventDefault() {}, clientY: hours * 48, dataTransfer: { getData: () => '61' } });
+  col.__on.drop(at(2), { getBoundingClientRect: () => ({ top: 0 }) });
+  await tick();
+  assert.deepEqual(calls.at(-1), { id: 61, slot: { day: '2026-11-27', start: '09:00', mins: 60 } }, 'given from here: moved');
+  col.__on.drop({ ...at(3), dataTransfer: { getData: () => '62' } }, { getBoundingClientRect: () => ({ top: 0 }) });
+  await tick();
+  assert.equal(calls.length, 1, 'from the owner\'s tasks: not moved here');
+  col.__on.click({ clientY: 3 * 48 + 5 }, { getBoundingClientRect: () => ({ top: 0 }) });
+  await tick(); await tick();
+  assert.equal(t.state.sel, 'give');
+  const form = t.view().textContent; // (the form is made when it is drawn)
+  assert.ok(form.includes('📅 On the calendar (optional)'));
+  assert.deepEqual([t.state.giveForm.slotDay, t.state.giveForm.slotStart], ['2026-11-27', '10:00'], 'Give a task, at that time');
+  const { readFileSync } = await import('node:fs');
+  const TEAM = readFileSync(new URL('../docs/ui/team.js', import.meta.url), 'utf8');
+  assert.match(TEAM, /item\('📅 Calendar', listOn\('calendar'\), \(\) => go\('calendar'\)\)/);
+  assert.match(TEAM, /\.\.\.rules\.slotBody\(f, !!t\)/, 'the form sends its time');
+  assert.match(TEAM, /'📅 On the calendar \(optional\)'/);
+});
+
+test('📅 Calendar on the staff view (owner, 25 Nov): their own tasks with a time, read only (nothing to drag, no add); a block opens the task', async () => {
+  const data = staffData();
+  data.tasks[0].slot = { day: STAFF_DAY, start: '09:00', mins: 60 };
+  const { s } = fakeStaff2({ 'my.today': () => data });
+  await s.load();
+  s.state.calMode = 'day';
+  s.act.show('calendar');
+  const v = s.view();
+  assert.match(v.className, /\bwide\b/);
+  assert.ok(v.textContent.includes('📅 Calendar') && v.textContent.includes('Check kiln temperature') && v.textContent.includes('09:00–10:00'));
+  const find = (n, f) => (f(n) ? n : (n.childNodes || []).map((c) => find(c, f)).find(Boolean));
+  const block = find(v, (n) => / pcal-block /.test(' ' + (n.className || '') + ' '));
+  assert.equal(block.getAttribute('draggable'), null, 'read only');
+  assert.ok(!/ can-add /.test(' ' + find(v, (n) => / pcal-col /.test(' ' + (n.className || '') + ' ')).className + ' '), 'no add');
+  block.__on.click();
+  assert.equal(s.state.sel, 'task:11');
 });

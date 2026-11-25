@@ -64,3 +64,6 @@ Each lesson: what went wrong, then what to do next time.
     → Set sizes and places through the element's style object (`el.style.cssText = …`), as the rest of the app does.
 20. **A browser try re-run on the same data makes doubles** (two tasks with the same name).
     → Start fresh throwaway data (stop, up, seed) before each run.
+21. **A form or box is made when the page is drawn.** Twice a test read a form's values (the 📅 Plan box, the Give
+    form) before the page had drawn it, and failed.
+    → In a test, draw the page (render / view) after opening a box, then read or change its values.

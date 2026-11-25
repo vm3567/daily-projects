@@ -10,6 +10,7 @@ import { isPhoto } from './heic.js';
 import { createOutbox } from './staffbox.js';
 import { stageChip, stageFilterBar } from './stage.js';
 import { openMenuAt, menuBox, focusLater } from './rowmenu.js';
+import { calendarView, calendarDays } from './calendar.js';
 import { fmtDay, fmtTime, LONG_DAYS, stateTag, newClientId, istDay, daysBetween, repeatLabel, block, sec, taskRow, chipsFor, makePics, photosRow, filesBlock, diaryBlock, messagesBlock, phoneBack, logbookBlock, bottomBar, hitLines, HERE, blockedSteps, quickExample, stepsBlock, makeStepActs, takesSteps } from './workparts.js';
 
 const KEEP_FAIL = 'Could not keep this on the phone. Try again when online.';
@@ -114,6 +115,7 @@ export function createTeam(opts) {
       } else if (view === 'tasks') data = await api('tasks.list', { status: state.closed ? 'closed' : 'open' });
       else if (view === 'people') { const [u, m] = await Promise.all([api('users.list'), api('people.morning').catch(() => null)]); data = { ...u, morning: m }; }
       else if (view === 'projects') data = await api('projects.overview');
+      else if (view === 'calendar') data = await api('tasks.list', { status: 'open' }); // 📅 every open team task (each with its time)
       else if (view === 'report') data = await api('report.week', state.reportEnd ? { end: state.reportEnd } : {});
       else if (view === 'search') data = { search: true }; // the results come as you type
       else if (view === 'followup') { const [f, u] = await Promise.all([api('followup.list'), api('users.list')]); data = { ...f, people: u.users.filter((x) => x.active) }; }
@@ -530,6 +532,7 @@ export function createTeam(opts) {
           h('span', { class: 'dot red' }), String(dots.red), ' ', h('span', { class: 'dot yellow' }), String(dots.yellow), ' ', h('span', { class: 'dot green' }), String(dots.green)) : null,
         item('✅ Tasks', listOn('tasks') && !state.closed, () => { state.closed = false; go('tasks'); }),
         item('📂 Groups', listOn('projects'), () => go('projects')),
+        item('📅 Calendar', listOn('calendar'), () => go('calendar')),
         item('🔁 Follow-up', listOn('followup'), () => go('followup')),
         h('li', { class: 'menu-sep' }),
         item('Done / cancelled', listOn('tasks') && state.closed, () => { state.closed = true; go('tasks'); }),
@@ -680,6 +683,38 @@ export function createTeam(opts) {
           h('tbody', null, b.groups.map((g) => [head(g), g.rows.map(line)]))),
       pager, // 20 tasks a page
     ];
+  }
+
+  /**
+   * 📅 Calendar (owner, 25 Nov): every open team task with a time, by day and hour, with who does it. A block opens the
+   * task; drag moves a task given from here (one given from the owner's tasks changes its time there, 📅 Plan);
+   * a click on an empty time gives a new task at that time.
+   */
+  function calendarPage() {
+    const td = today();
+    const narrow = typeof matchMedia === 'function' && matchMedia('(max-width: 760px)').matches;
+    const mode = state.calMode || (narrow ? 'day' : 'week');
+    const day = state.calDay || td;
+    const days = calendarDays(mode, day), first = days[0], last = days[days.length - 1];
+    const all = state.data.tasks || [];
+    const colour = (t) => (t.today ? 'green' : t.stuck || t.late ? 'red' : t.dueToday ? 'yellow' : 'grey');
+    const items = all.filter((t) => t.slot && t.slot.day >= first && t.slot.day <= last)
+      .map((t) => ({ id: String(t.id), title: t.title, day: t.slot.day, start: t.slot.start, mins: t.slot.mins, colour: colour(t), sub: t.assignee.name }));
+    const allDay = all.filter((t) => t.dueDate && t.dueDate >= first && t.dueDate <= last && !(t.slot && t.slot.day === t.dueDate))
+      .map((t) => ({ id: String(t.id), title: `${t.title} · ${t.assignee.name}`, day: t.dueDate, colour: colour(t) }));
+    return calendarView({
+      mode, day, today: td, items, allDay,
+      onNav: (d) => { state.calDay = d; render(); },
+      onMode: (m) => { state.calMode = m; render(); },
+      onOpen: (id) => open('task:' + id),
+      onMove: async (id, d, start) => {
+        const t = all.find((x) => String(x.id) === String(id));
+        if (!t) return;
+        if (t.projectRef && t.seq !== null && t.seq !== undefined) { toast(owner ? 'This came from your tasks: change its time on the task (📅 Plan).' : 'This came from the owner\'s tasks: its time is changed there.', 5000); return; }
+        try { await api('task.slot', { id: t.id, slot: { day: d, start, mins: t.slot ? t.slot.mins : 60 } }); toast(`📅 ${t.title}: ${fmtDay(d)} ${start}`); load(); } catch (e) { say(e); }
+      },
+      onAdd: (d, start) => { state.prefill = { slotDay: d, slotStart: start }; state.giveForm = null; open('give'); },
+    });
   }
 
   function followRow(r) {
@@ -1086,6 +1121,8 @@ export function createTeam(opts) {
         startDate: t && t.startDate && t.startDate > today() ? t.startDate : '', needsPhoto: t ? !!t.needsPhoto : false, files: [],
         record: t ? t.kind === 'log' : false, // 📒 a record (many entries a day) or a daily update
         projectRef: t ? t.projectRef : pre.projectRef, stepRef: t ? t.stepRef : pre.stepRef,
+        // 📅 its time on the calendar (owner, 25 Nov): optional
+        slotDay: t && t.slot ? t.slot.day : pre.slotDay || '', slotStart: t && t.slot ? t.slot.start : pre.slotStart || '', slotMins: t && t.slot ? t.slot.mins : 60,
       };
     }
     const f = state.giveForm;
@@ -1119,6 +1156,11 @@ export function createTeam(opts) {
         !f.record && !f.picked && f.how === 'weekly' ? h('label', null, 'On', h('select', { key: 'g-wd', value: String(f.weekday), onChange: (e, el) => { f.weekday = Number(el.value); } }, LONG_DAYS.map((n, i) => h('option', { value: String(i) }, n)))) : null,
         f.how === 'once' && !f.picked ? h('label', null, 'By (date, optional)', h('input', { key: 'g-due', type: 'date', value: f.dueDate, onInput: set('dueDate') })) : null,
         f.picked ? null : h('label', null, 'Start on (optional — empty = today)', h('input', { key: 'g-start', type: 'date', min: td, value: f.startDate, onInput: set('startDate') })),
+        f.picked ? null : h('div', { class: 'row g-slot', role: 'group', 'aria-label': 'On the calendar' }, h('span', null, '📅 On the calendar (optional)'),
+          h('input', { key: 'g-slot-day', type: 'date', 'aria-label': 'Day', value: f.slotDay, onInput: set('slotDay') }),
+          h('input', { key: 'g-slot-start', type: 'time', step: '900', 'aria-label': 'Time', value: f.slotStart, onInput: set('slotStart') }),
+          h('select', { key: 'g-slot-mins', 'aria-label': 'How long', value: String(f.slotMins), onChange: (e, el) => { f.slotMins = Number(el.value); } },
+            [15, 30, 45, 60, 90, 120, 180, 240, 360, 480].map((m) => h('option', { value: String(m) }, m < 60 ? `${m} min` : `${m / 60} h`)))),
         h('label', { class: 'row' }, h('input', { key: 'g-photo', type: 'checkbox', checked: f.needsPhoto ? true : undefined, onChange: set('needsPhoto') }), ' 📷 Photo needed to finish'),
         f.picked ? null : h('div', { class: 'stack file-pick' }, h('span', null, '📎 Instruction photos / PDF (optional)'),
           h('div', { class: 'row' }, // (the app's own button, not the browser's grey "Choose files": owner, 24 Oct)
@@ -1132,6 +1174,7 @@ export function createTeam(opts) {
             repeat: f.how === 'daily7' ? 'daily' : f.how, skipSunday: f.how === 'daily' || (f.how === 'once' && (!t || t.skipSunday)), weekday: Number(f.weekday), dueDate: f.dueDate,
             projectRef: f.projectRef, stepRef: f.stepRef, needsPhoto: !!f.needsPhoto, startDate: f.startDate || (t && t.startDate && t.startDate > td ? td : ''),
             kind: f.record ? 'log' : '',
+            ...rules.slotBody(f, !!t), // 📅 (a time, or null to take it off when editing)
           }, f.files).then((m) => { err.say(m); })) }, editing ? 'Save' : 'Give task'),
           h('button', { class: 'btn small', onClick: () => { state.prefill = null; state.giveForm = null; if (editing) open('task:' + t.id); else if (!(state.fromProjects && toProjects())) back(); } }, 'Cancel')))),
     ];
@@ -1180,7 +1223,7 @@ export function createTeam(opts) {
 
   function list() {
     shownIds = [];
-    const titles = { today: 'Team today', followup: '🔁 Follow-up', tasks: state.closed ? 'Done / cancelled' : '✅ Tasks', projects: '📂 Groups', report: '📊 Weekly report', search: '🔍 Search', people: 'People', settings: 'Settings' };
+    const titles = { today: 'Team today', followup: '🔁 Follow-up', tasks: state.closed ? 'Done / cancelled' : '✅ Tasks', projects: '📂 Groups', calendar: '📅 Calendar', report: '📊 Weekly report', search: '🔍 Search', people: 'People', settings: 'Settings' };
     let title = titles[state.view];
     if (state.view === 'today' && state.personFilter && state.team) { const p = state.team.people.find((x) => x.id === state.personFilter); if (p) title = p.name; }
     const head = h('div', { class: 'list-head' },
@@ -1190,7 +1233,7 @@ export function createTeam(opts) {
       state.view === 'settings' ? null : h('button', { class: 'icon head-icon', title: 'Get latest', 'aria-label': 'Refresh', onClick: reload }, '↻', h('span', { class: 'icon-cap', 'aria-hidden': 'true' }, 'Refresh')));
     if (!state.data) return h('div', { class: 'col-inner' }, head, bars(), h('p', { class: 'empty-list' }, state.loadFailed ? [state.loadFailed === 'You are offline. Try again when the internet is back.' ? `No saved copy on ${HERE} yet.` : state.loadFailed, ' ', h('button', { class: 'link', onClick: reload }, 'Try again')] : 'Loading…'));
     const body = state.view === 'followup' ? followupList() : state.view === 'tasks' ? tasksList() : state.view === 'projects' ? projectsList()
-      : state.view === 'search' ? searchList() : state.view === 'report' ? reportPage() : state.view === 'people' ? peoplePage() : state.view === 'settings' ? settingsPage() : teamList();
+      : state.view === 'search' ? searchList() : state.view === 'calendar' ? calendarPage() : state.view === 'report' ? reportPage() : state.view === 'people' ? peoplePage() : state.view === 'settings' ? settingsPage() : teamList();
     // "+ Give a task" at the top of the list, as the owner's "+ New task"
     const give = ['today', 'tasks', 'followup', 'projects'].includes(state.view) ? h('button', { class: 'btn primary new-project', onClick: () => open('give') }, '+ Give a task') : null;
     return h('div', { class: 'col-inner' }, head, bars(), give, body);
@@ -1234,7 +1277,7 @@ export function createTeam(opts) {
 
   const onList = (v) => !state.sel && state.view === v; // (the bottom bar: this page is on screen)
   function view() {
-    const wide = WIDE.includes(state.view) || (state.view === 'today' && !state.sel && !!state.data); // Team today's table fills the screen until a task is open
+    const wide = WIDE.includes(state.view) || ((state.view === 'today' || state.view === 'calendar') && !state.sel && !!state.data); // Team today's table and 📅 Calendar fill the screen until a task is open // Team today's table fills the screen until a task is open
     return h('div', { class: ['layout', 'staff', 'team', wide ? 'wide' : '', state.mobile === 'detail' && !wide ? 'show-detail' : '', state.menuOpen ? 'menu-open' : ''].join(' ').replace(/\s+/g, ' ').trim() },
       h('aside', { id: 'menu' }, menu()),
       h('div', { class: 'scrim', onClick: () => { state.menuOpen = false; render(); } }),

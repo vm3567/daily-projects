@@ -1979,7 +1979,7 @@ test('connections: Rotate key — the old key stops at once, the new key and a n
   const log = sqlOut("SELECT GROUP_CONCAT(action, ' ', detail SEPARATOR '\\n') FROM wt.audit WHERE action LIKE 'conn\\_%'");
   for (const a of ['conn_create #', 'conn_rotate #', 'conn_delete #', 'conn_update #', 'conn_decide #']) assert.ok(log.includes(a), a);
   assert.ok(!/wt[cs]_[0-9a-f]{20}/.test(log), 'no key or secret in the log');
-  assert.equal(sqlOut("SELECT v FROM wt.settings WHERE k = 'schema'").trim(), '43', 'the tables steps ran (v42 task_steps, v43 step_photos — ☑ steps in a single task; v41: photos.entry_id — 📒 record entries; v39 tasks.kind, v40 entries)');
+  assert.equal(sqlOut("SELECT v FROM wt.settings WHERE k = 'schema'").trim(), '44', 'the tables steps ran (v44: 📅 tasks.slot_day / slot_start / slot_mins, owner 25 Nov; v42 task_steps, v43 step_photos — ☑ steps in a single task; v41: photos.entry_id — 📒 record entries; v39 tasks.kind, v40 entries)');
 });
 
 // ---------------------------------------------------------------- review round 12 (connect.php / outlook.php)
@@ -3020,6 +3020,29 @@ test('Groups on the team side (owner, 25 Nov): the 📂 Groups list carries the 
   assert.ok(!pushSince(n).includes('project'), 'no "project" word in what the person is told');
 });
 
+test('📅 Calendar on the team side (owner, 25 Nov): a task given with a time keeps it; a manager moves it (task.slot, managers only; a bad time refused) or takes it off; a task given from the owner\'s tasks carries its time to the step being worked on now (never a waiting step)', { skip }, async () => {
+  const t = (await call('task.save', { assigneeId: id.suresh, title: 'Calendar check', repeat: 'once', slot: { day: '2026-11-26', start: '10:00', mins: 90 } }, tok.boss)).task;
+  assert.deepEqual(t.slot, { day: '2026-11-26', start: '10:00', mins: 90 });
+  const bad = await call('task.slot', { id: t.id, slot: { day: '2026-11-26', start: '10:10', mins: 50 } }, tok.boss);
+  assert.match(bad.error || '', /Pick a day, a time and how long/);
+  assert.equal((await call('task.slot', { id: t.id, slot: { day: '2026-11-27', start: '09:00', mins: 60 } }, tok.suresh)).s, 403, 'staff cannot move it');
+  const moved = (await call('task.slot', { id: t.id, slot: { day: '2026-11-27', start: '09:00', mins: 60 } }, tok.boss)).task;
+  assert.deepEqual(moved.slot, { day: '2026-11-27', start: '09:00', mins: 60 });
+  const mine = (await call('my.today', {}, tok.suresh));
+  assert.deepEqual([...mine.tasks, ...mine.other].find((x) => x.id === t.id).slot, { day: '2026-11-27', start: '09:00', mins: 60 }, 'the person sees its time');
+  assert.equal((await call('task.slot', { id: t.id, slot: null }, tok.boss)).task.slot, null, 'off the calendar');
+  const kept = (await call('task.save', { id: t.id, assigneeId: id.suresh, title: 'Calendar check 2', repeat: 'once', slot: { day: '2026-11-28', start: '14:00', mins: 30 } }, tok.boss)).task;
+  assert.deepEqual(kept.slot, { day: '2026-11-28', start: '14:00', mins: 30 }, 'an edit sets it');
+  assert.equal((await call('task.save', { id: t.id, assigneeId: id.suresh, title: 'Calendar check 3', repeat: 'once' }, tok.boss)).task.slot.day, '2026-11-28', 'an edit without a time leaves it');
+  // a task given from the owner's tasks, with its steps: the time is on the step being worked on now
+  assert.ok((await call('project.sync', { projectRef: 'cal1', project: 'Glaze photos', slot: { day: '2026-11-26', start: '11:00', mins: 60 }, assigneeId: id.suresh, steps: [{ stepRef: 'c1', title: 'Shoot the tiles' }, { stepRef: 'c2', title: 'Pick 5 best' }] }, tok.boss)).ok);
+  const steps = (await call('tasks.list', { status: 'open' }, tok.boss)).tasks.filter((x) => x.projectRef === 'cal1');
+  assert.deepEqual(steps.map((x) => [x.title, x.slot && x.slot.start]), [['Shoot the tiles', '11:00'], ['Pick 5 best', null]], 'the waiting step has no time (never twice on the calendar)');
+  assert.ok((await call('project.sync', { projectRef: 'cal1', project: 'Glaze photos', slot: null, assigneeId: id.suresh, steps: [{ stepRef: 'c1', title: 'Shoot the tiles' }, { stepRef: 'c2', title: 'Pick 5 best' }] }, tok.boss)).ok);
+  assert.ok((await call('tasks.list', { status: 'open' }, tok.boss)).tasks.filter((x) => x.projectRef === 'cal1').every((x) => x.slot === null), 'taken off');
+  assert.ok((await call('project.sync', { projectRef: 'cal1', project: 'Glaze photos', assigneeId: 0, steps: [] }, tok.boss)).ok);
+});
+
 test('review round 1 (whole code): importing a data folder with more than 500 files works (it goes in parts of 500; data.json last), every file is there', { skip }, async () => {
   const src = join(dir, 'import-big'); mkdirSync(join(src, 'files', 'x1'), { recursive: true });
   const n = 520;
@@ -3073,12 +3096,12 @@ test('Stage: a Stuck update saves "waiting for what" (one short line, up to 80) 
   assert.equal(u.waitingFor, null);
 });
 
-test('Stage: migration v38 (updates.waiting_for) runs again safely — the column already there is not an error, the schema goes on to the newest (43)', { skip }, async () => {
+test('Stage: migration v38 (updates.waiting_for) runs again safely — the column already there is not an error, the schema goes on to the newest (44)', { skip }, async () => {
   sql("UPDATE wt.settings SET v = '37' WHERE k = 'schema'");
   await phpRun('migrate(db()); echo "ok";');
-  assert.equal(sqlOut("SELECT v FROM wt.settings WHERE k = 'schema'").trim(), '43');
+  assert.equal(sqlOut("SELECT v FROM wt.settings WHERE k = 'schema'").trim(), '44'); // (v44: 📅 the calendar's columns, 25 Nov)
   await phpRun('migrate(db()); echo "ok";');
-  assert.equal(sqlOut("SELECT v FROM wt.settings WHERE k = 'schema'").trim(), '43');
+  assert.equal(sqlOut("SELECT v FROM wt.settings WHERE k = 'schema'").trim(), '44'); // (v44: 📅 the calendar's columns, 25 Nov)
   assert.match(sqlOut("SHOW COLUMNS FROM wt.updates LIKE 'waiting_for'"), /waiting_for\s+varchar\(80\)\s+YES/i);
 });
 

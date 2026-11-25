@@ -15,6 +15,19 @@ function txt($v, int $max, bool $required = false, string $what = 'This'): strin
   if ($required && $s === '') throw new ApiError("$what is empty.");
   return mb_substr($s, 0, $max);
 }
+/** 📅 A time on the calendar from the app: [day, start, mins] (15 min to 12 h, steps of 15), or null (none / not right). */
+function slot_in($v): ?array {
+  if (!is_array($v)) return null;
+  $day = date_or_null($v['day'] ?? null);
+  $start = is_string($v['start'] ?? null) && preg_match('/^([01]\d|2[0-3]):[0-5]\d$/', $v['start']) ? $v['start'] : null;
+  $mins = is_int($v['mins'] ?? null) && $v['mins'] >= 15 && $v['mins'] <= 720 && $v['mins'] % 15 === 0 ? $v['mins'] : null;
+  return $day && $start && $mins ? [$day, $start, $mins] : null;
+}
+/** A team task's own time on the calendar (null takes it off). */
+function set_task_slot(int $id, ?array $slot): void {
+  q('UPDATE tasks SET slot_day = ?, slot_start = ?, slot_mins = ? WHERE id = ?', [$slot[0] ?? null, $slot[1] ?? null, $slot[2] ?? null, $id]);
+}
+
 function date_or_null($v): ?string {
   $v = (string)($v ?? '');
   if ($v === '') return null;
@@ -129,6 +142,13 @@ function tasks_out(array $tasks, string $day): array {
   $queued = fn($t) => $t['seq'] !== null && $t['status'] === 'open' && (int)$t['seq'] > ($firstSeq[$t['project_ref'] . '|' . $t['assignee_id']] ?? PHP_INT_MAX);
   $about = project_abouts($refs);
   $folder = project_abouts($refs, 'pfo:'); // the owner's 📂 project the given task is in ('' = none): the team sees the same folders
+  $refSlot = project_abouts($refs, 'psl:'); // 📅 a given task's time ("day|start|mins")
+  $slotOf = function ($t) use ($refSlot, $queued) {
+    if (!empty($t['slot_day'])) return ['day' => $t['slot_day'], 'start' => $t['slot_start'], 'mins' => (int)$t['slot_mins']];
+    if ($t['seq'] === null || !$t['project_ref'] || empty($refSlot[$t['project_ref']]) || $queued($t) || $t['status'] !== 'open') return null;
+    [$d, $s, $m] = explode('|', $refSlot[$t['project_ref']]) + ['', '', '0'];
+    return ['day' => $d, 'start' => $s, 'mins' => (int)$m];
+  };
   $turnSince = [];
   foreach ($tasks as $t) {
     if ($t['seq'] === null || !$t['project_ref']) continue;
@@ -142,6 +162,7 @@ function tasks_out(array $tasks, string $day): array {
     'dueDate' => $t['due_date'], 'startDate' => $t['start_date'], 'project' => $t['project'] ?? '', 'projectRef' => $t['project_ref'], 'stepRef' => $t['step_ref'],
     'projectAbout' => $t['seq'] !== null && $t['project_ref'] ? ($about[$t['project_ref']] ?? '') : '',
     'folder' => $t['seq'] !== null && $t['project_ref'] ? ($folder[$t['project_ref']] ?? '') : '',
+    'slot' => $slotOf($t), // 📅 its time on the calendar, or null
     'status' => $t['status'], 'createdAt' => $t['created_at'], 'doneAt' => $t['done_at'],
     // 📒 a record (kind 'log') is never due or late: entries come when there is something to record
     'kind' => ($t['kind'] ?? '') === 'log' ? 'log' : 'task', 'entriesToday' => $entriesToday[$t['id']] ?? 0,
@@ -908,6 +929,7 @@ function handle(string $a, array $in): array {
         q('UPDATE tasks SET needs_photo = ? WHERE id = ?', [empty($in['needsPhoto']) ? 0 : 1, $id]);
         if (array_key_exists('kind', $in)) q('UPDATE tasks SET kind = ? WHERE id = ?', [($in['kind'] ?? '') === 'log' ? 'log' : null, $id]); // 📒 record or daily update
         if ($start = date_or_null($in['startDate'] ?? null)) q('UPDATE tasks SET start_date = ? WHERE id = ?', [$start, $id]);
+        if (array_key_exists('slot', $in)) set_task_slot($id, slot_in($in['slot'])); // 📅
         audit($me['id'], 'task_edit', "#$id $title");
       } else {
         $cid = client_id($in['clientId'] ?? null); // the form's id: a resend (reply lost) gives back the task already made
@@ -918,12 +940,20 @@ function handle(string $a, array $in): array {
         }
         $id = (int)db()->lastInsertId();
         q('UPDATE tasks SET needs_photo = ?, kind = ? WHERE id = ?', [empty($in['needsPhoto']) ? 0 : 1, ($in['kind'] ?? '') === 'log' ? 'log' : null, $id]);
+        if (array_key_exists('slot', $in)) set_task_slot($id, slot_in($in['slot'])); // 📅
         audit($me['id'], 'task_new', "#$id $title");
         $start = date_or_null($in['startDate'] ?? null);
         if ($start && $start > $day) q('UPDATE tasks SET start_date = ? WHERE id = ?', [$start, $id]); // starts on a later day
         notify([(int)$assignee['id']], 'task', '📥 New task for you', $title . ($vals[7] ? ' · ' . $vals[7] : '') . ($start && $start > $day ? ' · starts ' . date('D j M', strtotime($start)) : ''), '/projects/#team-task=' . $id, 't' . $id);
       }
       return ['task' => tasks_out([own_task($me, $id)], $day)[0]];
+    }
+    case 'task.slot': { // 📅 a manager puts a team task on the calendar, moves it, or takes it off (slot null)
+      require_admin($me);
+      $t = own_task($me, (int)($in['id'] ?? 0));
+      if (($in['slot'] ?? null) !== null && !slot_in($in['slot'])) throw new ApiError('Pick a day, a time and how long.');
+      set_task_slot((int)$t['id'], slot_in($in['slot'] ?? null));
+      return ['task' => tasks_out([own_task($me, (int)$t['id'])], $day)[0]];
     }
     case 'task.status': {
       $t = own_task($me, (int)($in['id'] ?? 0));
@@ -1181,6 +1211,11 @@ function project_sync(array $me, array $in, string $ref, string $day): array {
     if ($about === '') q('DELETE FROM settings WHERE k = ?', ['pab:' . md5($ref)]); else set_setting('pab:' . md5($ref), $about);
   }
   // the owner's 📂 project this task is in (its name; '' = in none): kept like the description, shown to the team as its folder
+  // 📅 the given task's time on the calendar (by ref, like its group); shown on the step being worked on now
+  if (array_key_exists('slot', $in)) {
+    $slot = slot_in($in['slot']);
+    if (!$slot) q('DELETE FROM settings WHERE k = ?', ['psl:' . md5($ref)]); else set_setting('psl:' . md5($ref), implode('|', $slot));
+  }
   if (array_key_exists('folder', $in)) {
     $folder = txt(preg_replace('/\s+/u', ' ', (string)$in['folder']) ?? '', 200);
     if ($folder === '') q('DELETE FROM settings WHERE k = ?', ['pfo:' . md5($ref)]); else set_setting('pfo:' . md5($ref), $folder);

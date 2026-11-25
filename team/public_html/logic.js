@@ -619,3 +619,17 @@ export function groupOf(t) {
   return '';
 }
 
+/**
+ * 📅 A task's time from the Give form (owner, 25 Nov): { slot: { day, start, mins } } when a day and a time are filled
+ * (the time on the quarter hour), { slot: null } when editing with them empty (takes it off), {} for a new task with
+ * none. Pure: tested.
+ */
+export function slotBody(f, editing) {
+  const ok = /^\d{4}-\d{2}-\d{2}$/.test(f.slotDay || '') && /^([01]\d|2[0-3]):[0-5]\d$/.test(f.slotStart || '');
+  if (!ok) return editing ? { slot: null } : {};
+  const [hh, mm] = f.slotStart.split(':').map(Number);
+  const q = Math.min(23 * 60 + 45, Math.round((hh * 60 + mm) / 15) * 15);
+  const pad = (n) => String(n).padStart(2, '0');
+  return { slot: { day: f.slotDay, start: `${pad(Math.floor(q / 60))}:${pad(q % 60)}`, mins: Number(f.slotMins) || 60 } };
+}
+

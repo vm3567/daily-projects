@@ -1614,3 +1614,11 @@ test('groupOf (owner, 25 Nov: Group → Task → Steps): a team task\'s group is
   assert.equal(groupOf(null), '');
   assert.equal(NO_GROUP, 'No group');
 });
+
+test('📅 slotBody (owner, 25 Nov): the Give form\'s time — a day and a time make a slot (on the quarter hour, its length); empty when editing takes it off; empty for a new task sends nothing', async () => {
+  const { slotBody } = await import('../team/public_html/logic.js');
+  assert.deepEqual(slotBody({ slotDay: '2026-11-26', slotStart: '10:07', slotMins: 90 }, false), { slot: { day: '2026-11-26', start: '10:00', mins: 90 } });
+  assert.deepEqual(slotBody({ slotDay: '2026-11-26', slotStart: '23:59', slotMins: '30' }, false), { slot: { day: '2026-11-26', start: '23:45', mins: 30 } });
+  assert.deepEqual(slotBody({ slotDay: '', slotStart: '' }, true), { slot: null }, 'editing, emptied: off the calendar');
+  assert.deepEqual(slotBody({ slotDay: '2026-11-26', slotStart: '' }, false), {}, 'no time: nothing sent');
+});

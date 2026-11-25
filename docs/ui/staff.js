@@ -12,6 +12,7 @@ import { createOutbox } from './staffbox.js';
 import { isHeic, heicToJpeg, isPhoto } from './heic.js';
 import { stageChip, stageFilterBar } from './stage.js';
 import { openMenuAt, menuBox, focusLater } from './rowmenu.js';
+import { calendarView, calendarDays } from './calendar.js';
 import { fmtDay, fmtTime, STATES, stateTag, newClientId, istDay, repeatLabel, block, chipsFor, makePics, photosRow, filesBlock, diaryBlock, messagesBlock, logbookBlock, bottomBar, hitLines, staffDot, nowHm, HERE, blockedSteps, stepsBlock, makeStepActs, takesSteps } from './workparts.js';
 
 export { STATES, repeatLabel }; // (the pieces of a task page are shared with the team pages: ui/workparts.js)
@@ -671,6 +672,7 @@ export function createStaff(opts) {
           h('span', { class: 'dot red' }), String(dots.red), ' ', h('span', { class: 'dot yellow' }), String(dots.yellow), ' ', h('span', { class: 'dot green' }), String(dots.green)) : null,
         item('✅ Tasks', !state.sel && state.section === 'tasks', () => show('tasks'), d ? String(sf.tasks.length) : null),
         item('📂 Groups', !state.sel && state.section === 'projects', () => show('projects'), d ? String(sf.folders.filter((f) => f.key !== 'misc').length) : null),
+        item('📅 Calendar', !state.sel && state.section === 'calendar', () => show('calendar')), // (owner, 25 Nov: their tasks by day and time)
         h('li', { class: 'menu-sep' }),
         item('📅 Coming next', !state.sel && state.section === 'next', () => show('next'), d ? String(d.other.length) : null),
         item('💡 My suggestions', !state.sel && state.section === 'sugg', () => show('sugg'), d ? String((d.suggestions || []).length) : null),
@@ -785,7 +787,7 @@ export function createStaff(opts) {
 
   function list() {
     const d = state.data;
-    const title = { today: 'My tasks today', tasks: '✅ Tasks', projects: '📂 Groups', next: 'Coming next', sugg: 'My suggestions', search: 'Search' }[state.section];
+    const title = { today: 'My tasks today', tasks: '✅ Tasks', projects: '📂 Groups', calendar: '📅 Calendar', next: 'Coming next', sugg: 'My suggestions', search: 'Search' }[state.section];
     const head = h('div', { class: 'list-head' },
       h('button', { class: 'icon menu-btn', 'aria-label': 'Menu', onClick: () => { state.menuOpen = true; render(); } }, '☰'),
       h('h2', null, title),
@@ -812,6 +814,20 @@ export function createStaff(opts) {
       body = [sec(`${tasks.length} open task${tasks.length === 1 ? '' : 's'} · red first`), cut.bar,
         h('ul', { class: 'plist' }, cut.list.map((x) => chipRow(x))),
         tasks.length ? null : h('p', { class: 'empty-list' }, 'No open tasks. 🎉')];
+    } else if (state.section === 'calendar') {
+      // 📅 their tasks with a time, by day and hour (the owner or a manager sets the time); a block opens the task
+      const td = d.today || istDay();
+      const narrow = typeof matchMedia === 'function' && matchMedia('(max-width: 760px)').matches;
+      const mode = state.calMode || (narrow ? 'day' : 'week');
+      const day = state.calDay || td;
+      const days = calendarDays(mode, day), first = days[0], last = days[days.length - 1];
+      const mine = folders().tasks.map((x) => x);
+      const items = mine.filter((x) => x.t.slot && x.t.slot.day >= first && x.t.slot.day <= last)
+        .map((x) => ({ id: String(x.t.id), title: x.t.title, day: x.t.slot.day, start: x.t.slot.start, mins: x.t.slot.mins, colour: x.dot }));
+      const allDay = mine.filter((x) => x.t.dueDate && x.t.dueDate >= first && x.t.dueDate <= last && !(x.t.slot && x.t.slot.day === x.t.dueDate))
+        .map((x) => ({ id: String(x.t.id), title: x.t.title, day: x.t.dueDate, colour: x.dot }));
+      body = calendarView({ mode, day, today: td, items, allDay, onNav: (v) => { state.calDay = v; render(); }, onMode: (m) => { state.calMode = m; render(); },
+        onOpen: (id) => open('task:' + id), onMove: null, onAdd: null });
     } else if (state.section === 'projects') {
       const { folders: fs } = folders();
       // real projects only: the tasks in no project are their own line (owner, 24 Oct: "1 project" was only "In no project")
@@ -1101,11 +1117,12 @@ export function createStaff(opts) {
   }
 
   function view() {
-    return h('div', { class: ['layout', 'staff', state.mobile === 'detail' ? 'show-detail' : '', state.menuOpen ? 'menu-open' : ''].join(' ').trim() },
+    const wide = state.section === 'calendar' && !state.sel && !!state.data; // 📅 the calendar fills the screen until a task is open
+    return h('div', { class: ['layout', 'staff', wide ? 'wide' : '', state.mobile === 'detail' && !wide ? 'show-detail' : '', state.menuOpen ? 'menu-open' : ''].join(' ').replace(/\s+/g, ' ').trim() },
       h('aside', { id: 'menu' }, menu()),
       h('div', { class: 'scrim', onClick: () => { state.menuOpen = false; render(); } }),
       h('main', { id: 'list' }, list()),
-      h('section', { id: 'detail' }, detail()),
+      wide ? null : h('section', { id: 'detail' }, detail()),
       rowMenu(),
       // 📱 the bottom bar (owner, 24 Oct): Today, Tasks, Projects, Search, More
       bottomBar([
