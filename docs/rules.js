@@ -436,7 +436,9 @@ export function projectGiveChanges(data) {
     // the projects it is in, and the ones those are in (a task in a project inside a given project goes too), nearest first
     const given = ancestorsOf(data, t).filter((m) => m.team && m.state !== 'finished');
     const via = t.team && byId.get(t.team.viaProject);
-    const m = (via && given.includes(via) ? via : given[0]) || null;
+    // it stays with the project it went with, unless a given project nearer to it (inside that one) came since
+    const nearer = via && given.includes(via) ? given.find((g) => g !== via && descendantIds(data, via.id).has(g.id)) : null;
+    const m = (via && given.includes(via) ? nearer || via : given[0]) || null;
     if (!m) { if (t.team) out.push({ projectId: t.id, team: null }); continue; }
     if (!t.team && t.teamOff) continue;
     const want = { userId: m.team.userId, name: m.team.name, needsPhoto: !!m.team.needsPhoto, record: !!m.team.record, viaProject: m.id };
@@ -530,16 +532,24 @@ export function canPutUnder(data, child, main) {
   if (main.id === MISC_ID || child.id === MISC_ID) return false; // 📂 Misc holds what is in no other project by itself
   if (main.state === 'finished') return false;
   if (parentIdsOf(main).length && !isMainProject(data, main)) return false; // a task inside a project cannot hold tasks
-  if (isMainProject(data, child) && !isMainProject(data, main)) return false; // a project goes into a project, never into a task
-  if (isMainProject(data, child) && descendantIds(data, child.id).has(main.id)) return false; // no circle
+  if (isMainProject(data, child)) return false; // groups are one level (owner, 25 Nov): a group never goes into another
   return true;
+}
+
+/** Groups that sit inside another group (allowed before 25 Nov): flattenGroups lifts them to the top, once. */
+export function nestedGroups(data) {
+  const ids = new Set(data.projects.filter((p) => isMainProject(data, p)).map((p) => p.id));
+  return data.projects.filter((p) => ids.has(p.id) && parentIdsOf(p).some((id) => ids.has(id)));
 }
 
 /** Every id inside the project `id`, at any depth (its tasks and projects, theirs…); each once, safe from circles. */
 export function descendantIds(data, id) {
+  // what is right inside each project, in one pass over the list (not a full scan for every one inside; no deep recursion)
+  const kids = new Map();
+  for (const c of data.projects) for (const pid of parentIdsOf(c)) { if (!kids.has(pid)) kids.set(pid, []); kids.get(pid).push(c.id); }
   const out = new Set();
-  const walk = (x) => { for (const c of data.projects) if (!out.has(c.id) && c.id !== id && parentIdsOf(c).includes(x)) { out.add(c.id); walk(c.id); } };
-  walk(id);
+  const todo = [id];
+  while (todo.length) for (const c of kids.get(todo.pop()) || []) if (c !== id && !out.has(c)) { out.add(c); todo.push(c); }
   return out;
 }
 
@@ -593,7 +603,7 @@ export function ancestorsOf(data, p) {
 export function projectLine(data, p, today = todayIndia()) {
   const subs = subProjectsOf(data, p.id).filter((c) => c.state !== 'finished').length;
   const line = mainSummary(projectTasks(data, p.id).filter((c) => c.state !== 'finished'), today);
-  return subs ? `${subs} project${subs === 1 ? '' : 's'} · ${line === 'No tasks in it yet' ? 'no tasks yet' : line}` : line;
+  return subs ? `${subs} group${subs === 1 ? '' : 's'} · ${line === 'No tasks in it yet' ? 'no tasks yet' : line}` : line;
 }
 
 /**
@@ -607,7 +617,8 @@ export function mainChoices(data, p, query = '') {
   const fits = (x) => (inIds.includes(x.id) || canPutUnder(data, p, x)) && x.id !== p.id && (!q || x.name.toLowerCase().includes(q));
   const mains = data.projects.filter((x) => isMainProject(data, x) && x.state !== 'finished' && fits(x));
   const exact = q && data.projects.some((x) => isMainProject(data, x) && x.name.trim().toLowerCase() === q);
-  return { items: mains.map((x) => ({ p: x, main: true, in: inIds.includes(x.id) })), create: q && !exact && p.id !== MISC_ID ? String(query).trim() : null };
+  // (a group itself goes into no group, not even a new one: groups are one level, owner 25 Nov)
+  return { items: mains.map((x) => ({ p: x, main: true, in: inIds.includes(x.id) })), create: q && !exact && p.id !== MISC_ID && !isMainProject(data, p) ? String(query).trim() : null };
 }
 
 /**
@@ -1342,8 +1353,8 @@ export function deleteQuestion(data, p) {
   const subs = kids.filter((c) => isMainProject(data, c)).length;
   const n = kids.length - subs;
   if (isMainProject(data, p)) {
-    const what = [n ? `${n} task${n === 1 ? '' : 's'}` : '', subs ? `${subs} project${subs === 1 ? '' : 's'}` : ''].filter(Boolean).join(' and ');
-    return `Delete the project "${p.name}"?\n\n${what ? `Its ${what} ${n + subs === 1 ? 'is' : 'are'} kept — ${n + subs === 1 ? 'it just leaves' : 'they just leave'} this project.` : 'It has no tasks.'}\n\nYou can press Undo for a few seconds after.`;
+    const what = [n ? `${n} task${n === 1 ? '' : 's'}` : '', subs ? `${subs} group${subs === 1 ? '' : 's'}` : ''].filter(Boolean).join(' and ');
+    return `Delete the group "${p.name}"?\n\n${what ? `Its ${what} ${n + subs === 1 ? 'is' : 'are'} kept — ${n + subs === 1 ? 'it just leaves' : 'they just leave'} this group.` : 'It has no tasks.'}\n\nYou can press Undo for a few seconds after.`;
   }
   return `Delete "${p.name}"?\n\nYou can press Undo for a few seconds after.`;
 }
@@ -1460,3 +1471,50 @@ export function stageCounts(list, stage) {
 export function byStage(list, want, stage) {
   return !want || want === 'all' ? list : list.filter((x) => stage(x) === want);
 }
+
+// ---------- 📅 Calendar (owner, 25 Nov: every task can have a day and a time) ----------
+
+/** 'HH:MM' → minutes after midnight; minutes → 'HH:MM'. */
+export const timeToMin = (t) => { const m = /^(\d{2}):(\d{2})$/.exec(String(t || '')); return m ? Number(m[1]) * 60 + Number(m[2]) : null; };
+export const minToTime = (n) => `${String(Math.floor(n / 60)).padStart(2, '0')}:${String(n % 60).padStart(2, '0')}`;
+/** The end of a slot ('10:00', 90 → '11:30'; never past midnight). */
+export const slotEnd = (start, mins) => minToTime(Math.min(24 * 60 - 1, timeToMin(start) + mins));
+/** The Monday of the week of `day` (weeks start on Monday). */
+export function mondayOf(day) {
+  const wd = new Date(day + 'T00:00:00Z').getUTCDay(); // 0 = Sunday
+  return addDays(day, wd === 0 ? -6 : 1 - wd);
+}
+/** The weeks (Monday first) that show the month of `day`: [[7 days], …], 4 to 6 rows. */
+export function monthWeeks(day) {
+  const first = day.slice(0, 8) + '01';
+  const weeks = [];
+  for (let d = mondayOf(first); weeks.length < 6 && (weeks.length < 4 || d.slice(0, 7) === first.slice(0, 7)); d = addDays(d, 7)) {
+    weeks.push(Array.from({ length: 7 }, (_, i) => addDays(d, i)));
+  }
+  return weeks;
+}
+
+/**
+ * What the calendar shows from `from` to `to` (both days kept): timed = the tasks planned in those days (day, start,
+ * mins, colour), allDay = the tasks with a target date in those days and no time on that day. Never a group, 📂 No
+ * group or a finished task. Each sorted by time, then name.
+ */
+export function calendarItems(data, from, to, today = todayIndia()) {
+  const tasks = data.projects.filter((p) => p.state !== 'finished' && !p.misc && !isMainProject(data, p));
+  const inRange = (d) => !!d && d >= from && d <= to;
+  const timed = tasks.filter((p) => p.slot && inRange(p.slot.day))
+    .map((p) => ({ id: p.id, title: p.name, day: p.slot.day, start: p.slot.start, mins: p.slot.mins, colour: dotColour(p, today) }))
+    .sort((a, b) => a.day.localeCompare(b.day) || a.start.localeCompare(b.start) || a.title.localeCompare(b.title));
+  const allDay = tasks.filter((p) => inRange(p.deadline) && !(p.slot && p.slot.day === p.deadline))
+    .map((p) => ({ id: p.id, title: p.name, day: p.deadline, colour: dotColour(p, today) }))
+    .sort((a, b) => a.day.localeCompare(b.day) || a.title.localeCompare(b.title));
+  return { timed, allDay };
+}
+
+/** The open tasks with no time on the calendar from `today` on (to plan them), red first, then yellow, then green. */
+export function unplannedTasks(data, today = todayIndia()) {
+  const RANK = { red: 0, yellow: 1, green: 2, grey: 3 };
+  return activeTasks(data).filter((p) => !p.misc && !(p.slot && p.slot.day >= today))
+    .map((p) => ({ p, c: dotColour(p, today) })).sort((a, b) => (RANK[a.c] ?? 4) - (RANK[b.c] ?? 4) || a.p.name.localeCompare(b.p.name)).map((x) => x.p);
+}
+

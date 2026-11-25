@@ -9,7 +9,7 @@
 // applyOp(state, op) changes the state in place and returns true, or returns false
 // when the operation must be skipped (for example, its item no longer exists).
 
-import { WORK, indiaDate, monthOf, laterDate, addDays, REPEATS, nextRepeatDate, waitingAgain, WEEKDAYS, indiaDateTime, validRemindOnce, remindOnceText, canPutUnder, parentIdsOf, normalizeParents, isMainProject, descendantIds, MOVE_EVERY_DEFAULT, DEFAULT_TARGET_DAYS, THREAD_MAX, timerOn, MISC_ID, STAGES, STAGE_LABELS, cleanWaitingFor } from './rules.js';
+import { WORK, indiaDate, monthOf, laterDate, addDays, REPEATS, nextRepeatDate, waitingAgain, WEEKDAYS, indiaDateTime, validRemindOnce, remindOnceText, canPutUnder, parentIdsOf, normalizeParents, isMainProject, descendantIds, MOVE_EVERY_DEFAULT, DEFAULT_TARGET_DAYS, THREAD_MAX, timerOn, MISC_ID, STAGES, STAGE_LABELS, cleanWaitingFor, nestedGroups } from './rules.js';
 import { AI_DAILY_LIMIT, BRIEF_CLAIM_MINUTES } from './config.js';
 import { sanitizeRich, htmlToText, isRich, RICH_MAX } from './rich.js';
 
@@ -339,8 +339,11 @@ function teamTime(v, op) {
 
 /** The projects a task is in (parentIds; an older parentId is folded in). An empty list: the field goes. */
 /** A task put into a project with a "move every" takes it, unless it has its own (owner asked 23 Oct). */
-function inheritEvery(child, main) {
-  if (child && main && Number.isInteger(main.moveEvery) && !Number.isInteger(child.moveEvery)) child.moveEvery = main.moveEvery;
+/** A 📂 project put in: the tasks and projects inside it take it too (each unless it has its own), as setMoveEvery does. */
+function inheritEvery(child, main, data = null) {
+  if (!child || !main || !Number.isInteger(main.moveEvery)) return;
+  const inside = data && isMainProject(data, child) ? data.projects.filter((x) => descendantIds(data, child.id).has(x.id)) : [];
+  for (const x of [child, ...inside]) if (!Number.isInteger(x.moveEvery)) x.moveEvery = main.moveEvery;
 }
 
 function setParents(p, ids) {
@@ -415,7 +418,7 @@ const handlers = {
     if (now.includes(main.id) || !canPutUnder(data, p, main)) return false;
     setParents(p, [...now, main.id]);
     main.isMain = true;
-    inheritEvery(p, main);
+    inheritEvery(p, main, data);
     p.updatedAt = op.at;
     addEvent(state, op, p, 'main_changed', `Added to 📂 ${main.name}`);
     addEvent(state, { ...op, id: op.id + 'm' }, main, 'main_changed', `${p.name} added`);
@@ -433,7 +436,7 @@ const handlers = {
     dropFromOrder(data, p.id, [a.parentId]);
     p.updatedAt = op.at;
     const main = findProject(data, a.parentId);
-    addEvent(state, op, p, 'main_changed', main ? `Taken out of 📂 ${main.name}` : 'Taken out of a project');
+    addEvent(state, op, p, 'main_changed', main ? `Taken out of 📂 ${main.name}` : 'Taken out of a group');
     if (main) addEvent(state, { ...op, id: op.id + 'm' }, main, 'main_changed', `${p.name} taken out`);
     return true;
   },
@@ -453,7 +456,7 @@ const handlers = {
       setParents(p, []);
       dropFromOrder(data, p.id, now);
       p.updatedAt = op.at;
-      addEvent(state, op, p, 'main_changed', old ? `Taken out of 📂 ${old.name}` : 'Taken out of its project');
+      addEvent(state, op, p, 'main_changed', old ? `Taken out of 📂 ${old.name}` : 'Taken out of its group');
       if (old) addEvent(state, { ...op, id: op.id + 'm' }, old, 'main_changed', `${p.name} taken out`);
       return true;
     }
@@ -462,7 +465,7 @@ const handlers = {
     setParents(p, [main.id]);
     dropFromOrder(data, p.id, now.filter((x) => x !== main.id));
     main.isMain = true;
-    inheritEvery(p, main);
+    inheritEvery(p, main, data);
     p.updatedAt = op.at;
     addEvent(state, op, p, 'main_changed', `Added to 📂 ${main.name}`);
     addEvent(state, { ...op, id: op.id + 'm' }, main, 'main_changed', `${p.name} added`);
@@ -471,12 +474,29 @@ const handlers = {
   },
 
   /** A new project (isMain, so it shows even while empty); with childId, that task is added to it in the same change (one Undo). */
+  /**
+   * Groups are one level (owner, 25 Nov): a group that sits inside another becomes its own group at the top, with its
+   * tasks, notes and history (nothing is lost). Made once when the app opens; doing it again changes nothing.
+   */
+  flattenGroups(state, op) {
+    const list = nestedGroups(state.data);
+    if (!list.length) return false;
+    for (const [i, g] of list.entries()) {
+      const outer = parentIdsOf(g).map((id) => findProject(state.data, id)).filter(Boolean);
+      setParents(g, []);
+      dropFromOrder(state.data, g.id, outer.map((x) => x.id));
+      g.updatedAt = op.at;
+      addEvent(state, { ...op, id: op.id + 'g' + i }, g, 'main_changed', `Now its own group (was inside ${outer.map((x) => x.name).join(', ')})`);
+    }
+    return true;
+  },
+
   /** 📂 Misc, made once (its fixed id: made on two devices at once, it is still one). See rules.js MISC_ID. */
   makeMisc(state, op) {
     if (findProject(state.data, MISC_ID)) return false;
     if (!handlers.createProject(state, op, { projectId: MISC_ID, name: 'Misc', deadline: null })) return false;
     const m = findProject(state.data, MISC_ID);
-    m.isMain = true; m.misc = true; m.about = 'Every task that is in no other project';
+    m.isMain = true; m.misc = true; m.about = 'Every task that is in no group';
     state.data.projects.splice(state.data.projects.indexOf(m), 1);
     state.data.projects.push(m); // (at the end of the list)
     return true;
@@ -485,7 +505,7 @@ const handlers = {
   createMainProject(state, op, a) {
     const { data } = state;
     const child = typeof a.childId === 'string' && a.childId ? findProject(data, a.childId) : null;
-    if (a.childId && (!child || child.misc)) return false; // (a 📂 project can go into the new one too, owner asked 23 Oct; never 📂 Misc)
+    if (a.childId && (!child || child.misc || isMainProject(data, child))) return false; // (a task only: groups are one level, owner 25 Nov; never 📂 Misc)
     if (!handlers.createProject(state, op, { projectId: a.projectId, name: a.name })) return false;
     const main = findProject(data, a.projectId);
     main.isMain = true;
@@ -772,6 +792,29 @@ const handlers = {
    * "Move every N days" (1–90; null = back to 3): how often it should have a real update; its dot follows it.
    * On a 📂 project: the project and everything inside it, every level (each can be changed after). Not work.
    */
+  /**
+   * 📅 A task's time on the calendar (owner, 25 Nov): a day, a start time and how long (15 minutes to 12 hours, in
+   * steps of 15). day null / '' takes it off the calendar. Only a task (never a group or 📂 No group).
+   */
+  setSlot(state, op, a) {
+    const p = findProject(state.data, a.projectId);
+    if (!p || p.misc || isMainProject(state.data, p)) return false;
+    if (a.day === null || a.day === undefined || a.day === '') {
+      if (!p.slot) return false;
+      delete p.slot;
+      p.updatedAt = op.at;
+      return true;
+    }
+    const day = cleanDate(a.day);
+    const start = typeof a.start === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(a.start) ? a.start : null;
+    const mins = Number.isInteger(a.mins) && a.mins >= 15 && a.mins <= 720 && a.mins % 15 === 0 ? a.mins : null;
+    if (!day || !start || !mins) return false;
+    if (p.slot && p.slot.day === day && p.slot.start === start && p.slot.mins === mins) return false;
+    p.slot = { day, start, mins };
+    p.updatedAt = op.at;
+    return true;
+  },
+
   setMoveEvery(state, op, a) {
     const { data } = state;
     const p = findProject(data, a.projectId);
@@ -928,7 +971,10 @@ const handlers = {
       p.team = { userId, name, since: old && old.userId === userId ? old.since : indiaDate(op.at), ...(needsPhoto ? { needsPhoto: true } : {}), ...(record ? { record: true } : {}), ...(via ? { viaProject: via } : {}) };
       delete p.teamOff;
       // giving a 📂 project gives all its tasks again, also one taken back on its own before
-      if (main && a.giveTasks) for (const c of state.data.projects) if (parentIdsOf(c).includes(p.id)) delete c.teamOff;
+      if (main && a.giveTasks) { // (at every depth: a task in a project inside it goes with it too, rules.js projectGiveChanges)
+        const inside = descendantIds(state.data, p.id);
+        for (const c of state.data.projects) if (inside.has(c.id)) delete c.teamOff;
+      }
     } else {
       delete p.team;
       if (a.keepOff && !main) p.teamOff = true; // taken back on its own: does not come back with its 📂 project
@@ -1714,7 +1760,7 @@ export const CARRIED = new Set(['createProject', 'createMainProject', 'addToProj
 export const NOT_CARRIED = new Set(['deleteProject', 'restoreProject', 'deleteStep', 'setProjectTeam', 'addFile', 'setAiKey', 'setAiProvider',
   'removeFromProject', 'setParent', 'removeLink', 'editLink', 'finish', 'teamWorked', 'deleteWorkNote', 'editWorkNote', 'setNoteStep', 'linkFollow', 'setProjectField', 'setStepField',
   'removeFile', 'setTimer', 'setEveryDefault', 'deleteTag', 'clearReply', 'markReplySent', 'undoReplySent', 'mailReplied', 'removeInbox', 'inboxUndo', 'deletePerson',
-  'recordScores', 'removeTime', 'incrementAiUsage', 'claimBrief', 'setBriefReady', 'addEvent', 'makeMisc']);
+  'recordScores', 'removeTime', 'incrementAiUsage', 'claimBrief', 'setBriefReady', 'addEvent', 'makeMisc', 'flattenGroups', 'setSlot']);
 
 /** Changes carried from the old address (#ops=): keeps only known, harmless ones. Returns { ok, files, dropped }. */
 export function carriedOps(list) {

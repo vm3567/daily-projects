@@ -151,7 +151,7 @@ export function redrawHow({ typed = false, listTyped = false, hasDetail = false 
 export function projectRowState(p) {
   const live = !!(p.open || p.current);
   const dot = p.stuck ? 'red' : !live ? 'green' : p.current && p.current.sentToday ? 'green' : 'orange';
-  const now = p.current ? `now: ${p.open ? p.current.title : 'whole project'}` : !p.open ? 'all done ✓' : '';
+  const now = p.current ? `now: ${p.open ? p.current.title : 'whole task'}` : !p.open ? 'all done ✓' : '';
   return { dot, now };
 }
 
@@ -258,7 +258,7 @@ export function morningSummary(items) {
 }
 
 /** One item's bold title (📁 for a project) and its last update ('21 Oct: note', or '—'). */
-export const morningTitle = (x) => (x.kind === 'project' ? '📁 ' : '') + (x.title || '');
+export const morningTitle = (x) => x.title || ''; // (a task given with its steps is a task: no 📁, owner 25 Nov)
 export const morningLast = (x) => (x.lastUpdate ? `${mailDate(x.lastUpdate.day)}: ${x.lastUpdate.note || ''}` : '—');
 export { mailDate };
 
@@ -553,8 +553,8 @@ export function oneAppAddress(search, hash) {
 
 /**
  * Team today as one table (owner, 23 Oct): every task of today, red first, with its status, the counts for the strip
- * on top (each a filter), and the rows grouped by person or by 📂 project (the owner's 📂 project, else the work it is a
- * step of, else 📂 Misc). Status, first that fits: sugg (a suggestion: yes or no?) · stuck · late (the server's `late`:
+ * on top (each a filter), and the rows grouped by person or by 📂 group (groupOf: the owner's group, else the group a
+ * manager typed, else 📂 No group, last). Status, first that fits: sugg (a suggestion: yes or no?) · stuck · late (the server's `late`:
  * open and past its by-date, never a step waiting its turn — also on a Sunday; not when sent today) · sent · notdue (a
  * stuck task or one with new messages that is not due today: the server's dueToday false — or no dueToday on one from
  * those lists, an older copy) · notyet (red once the fill-by time has passed). "x of y sent" counts the rows due today;
@@ -578,7 +578,7 @@ export function teamBoard(d, { filter = '', group = 'person', person = 0, page =
     const late = pastBy && !t.today;
     const status = t.status === 'suggested' ? 'sugg' : t.stuck ? 'stuck' : late ? 'late' : t.today ? 'sent' : notDue ? 'notdue' : 'notyet';
     const colour = status === 'sent' ? 'green' : status === 'sugg' || status === 'notdue' || (status === 'notyet' && !d.late) ? 'yellow' : 'red';
-    const project = t.folder || t.project || 'Misc';
+    const project = groupOf(t) || NO_GROUP; // (its group; one rule: groupOf)
     const stage = t.status === 'suggested' ? null : teamStage(t); // (a suggestion has no stage yet)
     return { t, status, colour, project, msg: (t.unread || 0) > 0, notDue, stage, you: !!(stage && stage.you), i };
   });
@@ -592,7 +592,7 @@ export function teamBoard(d, { filter = '', group = 'person', person = 0, page =
   for (const r of shown) { if (!groups.has(key(r))) groups.set(key(r), []); groups.get(key(r)).push(r); }
   const list = [...groups].map(([name, rs]) => ({ name, rows: rs, all: rs.filter((r) => r.status !== 'sugg' && !r.notDue).length, sent: rs.filter((r) => r.status === 'sent' && !r.notDue).length,
     red: rs.filter((r) => r.colour === 'red').length, person: group === 'person' ? rs[0].t.assignee : null }))
-    .sort((a, b) => (group === 'project' && (a.name === 'Misc') - (b.name === 'Misc')) || RANK[a.rows[0].colour] - RANK[b.rows[0].colour] || a.name.localeCompare(b.name));
+    .sort((a, b) => (group === 'project' && (a.name === NO_GROUP) - (b.name === NO_GROUP)) || RANK[a.rows[0].colour] - RANK[b.rows[0].colour] || a.name.localeCompare(b.name));
   // this page's 20 rows, each under its line (the line's "x of y sent" counts the whole group)
   const flat = list.flatMap((g) => g.rows.map((r) => [g, r]));
   const pages = Math.max(1, Math.ceil(flat.length / BOARD_PAGE));
@@ -604,3 +604,32 @@ export function teamBoard(d, { filter = '', group = 'person', person = 0, page =
   }
   return { counts, you, total: rows.length, shown: flat.length, page: at, pages, groups: onPage };
 }
+
+/**
+ * The group a team task is in (owner, 25 Nov: Group → Task → Steps): the owner's 📂 group it was given from (folder,
+ * sent with project.sync), else the group a manager typed when giving it (project, with no projectRef — a given task's
+ * project is the task's own name, never a group), else '' (No group). One rule for the team table and the staff view.
+ * Pure: tested.
+ */
+export const NO_GROUP = 'No group';
+export function groupOf(t) {
+  if (!t) return '';
+  if (t.folder) return String(t.folder);
+  if (!t.projectRef && t.project) return String(t.project);
+  return '';
+}
+
+/**
+ * 📅 A task's time from the Give form (owner, 25 Nov): { slot: { day, start, mins } } when a day and a time are filled
+ * (the time on the quarter hour), { slot: null } when editing with them empty (takes it off), {} for a new task with
+ * none. Pure: tested.
+ */
+export function slotBody(f, editing) {
+  const ok = /^\d{4}-\d{2}-\d{2}$/.test(f.slotDay || '') && /^([01]\d|2[0-3]):[0-5]\d$/.test(f.slotStart || '');
+  if (!ok) return editing ? { slot: null } : {};
+  const [hh, mm] = f.slotStart.split(':').map(Number);
+  const q = Math.min(23 * 60 + 45, Math.round((hh * 60 + mm) / 15) * 15);
+  const pad = (n) => String(n).padStart(2, '0');
+  return { slot: { day: f.slotDay, start: `${pad(Math.floor(q / 60))}:${pad(q % 60)}`, mins: Number(f.slotMins) || 60 } };
+}
+

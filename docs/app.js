@@ -11,7 +11,7 @@ import { renderDashboard } from './ui/dashboard.js';
 import { renderTimeReport } from './ui/timereport.js';
 import { renderReplies, renderReplyRound, replyArea, readyCount } from './ui/replies.js';
 import { renderConnectionsSettings, renderFromApps, loadApps, appsPending, forgetOnce } from './ui/connections.js';
-import { projectChips, renderProjectsHead, openMainBox, openMoveBox, moveBox, listColour, newInnerProject } from './ui/mains.js';
+import { projectChips, renderProjectsHead, openMainBox, openMoveBox, moveBox, listColour } from './ui/mains.js';
 import { projectMatches, diaryEntries, backupPayload, summaryText, personMessageText, personMessageHtml, sentMarkOf, copyNotice, tasksListText, teamUpdatesText } from './reports.js';
 import { closeViewer, uploadBlob, photoThumb } from './ui/files.js';
 import { showPhotos } from './ui/photoview.js';
@@ -25,7 +25,8 @@ import { DATA_OWNER, DATA_REPO, DATA_BRANCH, MOVED_TO, REFRESH_MS, AI_DAILY_LIMI
 import { dotColour, greenByTeamOnly, isSnoozed, restUntil, restReason, onlyDaysLabel, openIdFromHash, awakeProjects, activeProjects, nextStep, todayIndia, isSundayIndia, colourCounts, isOverdue, indiaDate, waitingDays, daysWithoutWork, dayScore, greenStreak, addDays, monthOf, fmtMinutes, takeBackWaits, staffStepAction, pasteGoesToProject, emptyPaste, EMPTY_PASTE, ownerTaskMatches, stepPhotosToSend, singleStepClose, versionRequest, askDiaryAgain, pasteInForm, diaryLoadedAt, photoNeedsFetch, teamUndoKey, teamActionUndone, teamProgressOf, projectKeyIgnored, teamMovedTo, serverHolder, keepMovedStep, teamMemberFor, repliesOf, mailThreads, replyMailto, MAILTO_BODY_MAX, emailPath, pasteReason } from './rules.js';
 import { stageOf, stageCounts, byStage, STAGES, STAGE_LABELS, moveEveryOf, everyText, MOVE_EVERY_PICKS, MOVE_EVERY_DEFAULT, everyDefaultOf, useEveryDefault, colourShort, colourWhy } from './rules.js';
 import { stageChip, stageFilterBar } from './ui/stage.js';
-import { whoFromUser, signInTag, timerOn, projectGiveChanges, UNDO_GRACE_MS, MISC_ID } from './rules.js';
+import { whoFromUser, signInTag, timerOn, projectGiveChanges, UNDO_GRACE_MS, MISC_ID, nestedGroups, calendarItems, unplannedTasks } from './rules.js';
+import { calendarView, calendarDays } from './ui/calendar.js';
 import { signInCard, firstPasswordCard } from './ui/signin.js';
 import { createBell } from './ui/bell.js';
 import { parentIdsOf, isMainProject, mainProjects, activeTasks, todayWithoutEmptyMains, todayList, stepTargets, mainSummary, childrenOf, deleteQuestion, pickEnterTarget, projectLine, projectTasks, inboxMatches } from './rules.js';
@@ -967,7 +968,7 @@ async function makeBrief(force = false) {
 
 /** 'project' for a 📂 project, 'task' for everything else (what the app once called a project). */
 function kindWord(p) {
-  return isMainProject(store.view.data, p) ? 'project' : 'task';
+  return isMainProject(store.view.data, p) ? 'group' : 'task';
 }
 
 
@@ -991,11 +992,12 @@ function visibleProjects({ stage = true } = {}) {
 
 function viewTitle() {
   if (ui.search.trim()) return `Search: "${ui.search.trim()}"`;
-  return { today: 'Today', inbox: 'Inbox', all: '✅ Tasks', paused: 'Paused', finished: 'Finished', diary: 'Diary', settings: 'Settings', people: 'People', dashboard: 'Dashboard', time: 'Time report', replies: '✉ Replies', apps: '🔌 From apps', mains: '📂 Projects' }[ui.view];
+  return { today: 'Today', calendar: '📅 Calendar', inbox: 'Inbox', all: '✅ Tasks', paused: 'Paused', finished: 'Finished', diary: 'Diary', settings: 'Settings', people: 'People', dashboard: 'Dashboard', time: 'Time report', replies: '✉ Replies', apps: '🔌 From apps', mains: '📂 Groups' }[ui.view];
 }
 
 function go(view) {
   if (view !== 'settings') forgetOnce(); // a new key shown once: gone when you leave Settings
+  ui.calBack = false; // ("← Back to 📅 Calendar" only right after a block was opened)
   if (view === 'apps' && onServer) loadApps(appsCtx, true); // 🔌 From apps: always fresh when you open it (a new job shows at once)
   ui.view = view;
   ui.rowMenu = null;
@@ -1143,7 +1145,8 @@ function renderMenu() {
         h('span', { class: 'dot green' }), String(counts.green)),
       // order the owner chose (22 Oct): Today, Tasks, Projects, Replies, Inbox, Paused, Finished, People, Settings, More (no groups, 23 Oct)
       item('all', '✅ Tasks', activeTasks(data).length),
-      item('mains', '📂 Projects', mainProjects(data).filter((m) => m.state !== 'finished' && !m.misc).length), // (the page's own count: "In no project" is not a project, owner 24 Oct)
+      item('mains', '📂 Groups', mainProjects(data).filter((m) => m.state !== 'finished' && !m.misc).length), // (the page's own count: "In no project" is not a project, owner 24 Oct)
+      item('calendar', '📅 Calendar', calendarItems(data, today, today, today).timed.length), // (owner, 25 Nov: what is planned today)
       item('replies', '✉ Replies', readyCount(data, today)), // replies ready to send
       onServer ? item('apps', '🔌 From apps', appsPending()) : null, // approvals your apps sent, waiting for ✓ / ✕
       item('inbox', '📥 Inbox', (data.inbox || []).length),
@@ -1217,7 +1220,7 @@ function projectRow(p, today, opts = {}) {
     picking
       ? h('input', {
         type: 'checkbox', class: 'row-pick', key: 'pick-' + p.id, checked: picked.has(p.id) ? true : undefined,
-        title: 'Select (then 📂 Add to project…)', 'aria-label': `Select ${p.name}`,
+        title: 'Select (then 📂 Add to group…)', 'aria-label': `Select ${p.name}`,
         onChange: (e, el) => { if (el.checked) picked.add(p.id); else picked.delete(p.id); render(); },
       })
       : canTick
@@ -1277,7 +1280,7 @@ function pickBar(list) {
     const projectId = newId();
     if (!store.dispatch('createMainProject', { projectId, name, childId: ids[0] })) return;
     for (const id of ids.slice(1)) store.dispatch('addToProject', { projectId: id, parentId: projectId });
-    toast(`New project 📂 ${name} with ${ids.length} task${ids.length === 1 ? '' : 's'}`);
+    toast(`New group 📂 ${name} with ${ids.length} task${ids.length === 1 ? '' : 's'}`);
     picked.clear(); ui.pickBox = null; render();
   };
   const q = box ? box.q.trim() : '';
@@ -1286,16 +1289,16 @@ function pickBar(list) {
   return h('div', { class: 'pick-bar', key: 'pick-bar' },
     h('div', { class: 'row' },
       h('strong', null, `${picked.size} selected`),
-      h('button', { class: 'btn primary small', type: 'button', onClick: () => { ui.pickBox = box ? null : { q: '' }; render(); focusKey('pick-q'); } }, '📂 Add to project…'),
+      h('button', { class: 'btn primary small', type: 'button', onClick: () => { ui.pickBox = box ? null : { q: '' }; render(); focusKey('pick-q'); } }, '📂 Add to group…'),
       h('button', { class: 'link small', type: 'button', onClick: () => { for (const p of list) picked.add(p.id); render(); } }, 'Select all'),
       h('button', { class: 'link small', type: 'button', onClick: () => { picked.clear(); ui.pickBox = null; render(); } }, 'Clear')),
     box ? h('div', { class: 'pick-box' },
-      h('input', { class: 'main-box-input', key: 'pick-q', value: box.q, placeholder: 'Type a project name…', autocomplete: 'off', 'aria-label': 'Project name',
+      h('input', { class: 'main-box-input', key: 'pick-q', value: box.q, placeholder: 'Type a group name…', autocomplete: 'off', 'aria-label': 'Group name',
         onInput: (e, el) => { box.q = el.value; render(); },
         onKeydown: (e) => { if (e.key === 'Escape') { ui.pickBox = null; render(); } else if (e.key === 'Enter') { e.preventDefault(); const t = pickEnterTarget(mains, q); if (t && t.add) add(t.add); else if (t) create(t.create); } } }),
       h('div', { class: 'pick-list' }, mains.slice(0, 10).map((m) =>
         h('button', { class: 'main-box-item', key: 'pk-' + m.id, type: 'button', onClick: () => add(m) }, `📂 ${m.name}`)),
-        q && !exact ? h('button', { class: 'main-box-item create', key: 'pk-new', type: 'button', onClick: () => create(q) }, `+ Create '${q}' as a new project`) : null)) : null);
+        q && !exact ? h('button', { class: 'main-box-item create', key: 'pk-new', type: 'button', onClick: () => create(q) }, `+ Create '${q}' as a new group`) : null)) : null);
 }
 
 /** One-tap action on a row that is not green yet: "Chased" for a waiting step (a real update). */
@@ -1716,6 +1719,68 @@ async function openReplyDraft(m) {
   }
 }
 
+/**
+ * 📅 Calendar (owner, 25 Nov): Day / Week / Month (a phone opens on Day). Drag a block to move it; drag a task from
+ * "Not on the calendar" onto a time to plan it; click an empty time to add a task there. A block opens its task.
+ */
+function renderCalendar() {
+  const today = todayIndia();
+  const data = store.view.data;
+  const narrow = typeof matchMedia === 'function' && matchMedia('(max-width: 760px)').matches;
+  const mode = ui.calMode || (narrow ? 'day' : 'week');
+  const day = ui.calDay || today;
+  const days = calendarDays(mode, day);
+  const { timed, allDay } = calendarItems(data, days[0], days[days.length - 1], today);
+  const find = (id) => data.projects.find((p) => p.id === id);
+  const un = unplannedTasks(data, today);
+  const side = h('aside', { class: 'pcal-side' },
+    h('h3', null, `Not on the calendar (${un.length})`),
+    un.length ? h('ul', { class: 'pcal-unplanned-list' }, un.slice(0, 60).map((p) => h('li', {
+      class: 'pcal-unplanned', key: 'un-' + p.id, draggable: 'true', title: 'Drag onto a time to plan it (or open it and tap 📅 Plan)',
+      onDragstart: (e) => { if (e.dataTransfer) { e.dataTransfer.setData('text/plain', p.id); e.dataTransfer.effectAllowed = 'move'; } },
+      onClick: () => openFromCalendar(p.id),
+    }, h('span', { class: 'dot ' + dotColour(p, today) }), ' ', p.name))) : h('p', { class: 'muted small' }, 'Every open task has a time.'));
+  return calendarView({
+    mode, day, today, items: timed, allDay, side, box: ui.calAdd ? calendarAddBox(un) : null,
+    onNav: (d) => { ui.calDay = d; render(); },
+    onMode: (m) => { ui.calMode = m; render(); },
+    onOpen: (id) => openFromCalendar(id),
+    onMove: (id, d, start) => {
+      const p = find(id);
+      if (!p) return;
+      const mins = p.slot ? p.slot.mins : 60;
+      act('setSlot', { projectId: id, day: d, start, mins }, `📅 ${p.name}: ${fmtDay(d)} ${start}`);
+    },
+    onAdd: (d, start) => { ui.calAdd = { day: d, start, mins: 60, name: '' }; render(); focusKey('cal-add-name'); },
+  });
+}
+/** From the calendar to a task's page, with "← Back to 📅 Calendar" on it. */
+function openFromCalendar(id) { ui.calBack = true; ui.view = 'all'; select(id); render(); }
+/** Click on an empty time: a new task there (its name), or a task not on the calendar yet put there. */
+function calendarAddBox(un) {
+  const a = ui.calAdd;
+  const close = () => { ui.calAdd = null; render(); };
+  const plan = (id, name) => { act('setSlot', { projectId: id, day: a.day, start: a.start, mins: a.mins }, `📅 ${name}: ${fmtDay(a.day)} ${a.start}`); close(); };
+  const add = () => {
+    const name = String(a.name || '').trim();
+    if (!name) { toast('Write the task first'); return; }
+    const projectId = newId();
+    if (!store.dispatch('createProject', { projectId, name })) return;
+    store.dispatch('setSlot', { projectId, day: a.day, start: a.start, mins: a.mins });
+    toast(`📅 New task: ${name} · ${fmtDay(a.day)} ${a.start}`);
+    close();
+  };
+  return h('form', { class: 'pcal-addbox row', key: 'cal-add', onSubmit: (e) => { e.preventDefault(); add(); } },
+    h('strong', null, `📅 ${fmtDay(a.day)} at ${a.start}`),
+    h('input', { name: 'name', key: 'cal-add-name', placeholder: 'New task…', autocomplete: 'off', value: a.name, onInput: (e, el) => { a.name = el.value; } }),
+    h('select', { key: 'cal-add-mins', 'aria-label': 'How long', value: String(a.mins), onChange: (e, el) => { a.mins = Number(el.value); } },
+      [15, 30, 45, 60, 90, 120, 180, 240].map((m) => h('option', { value: String(m) }, m < 60 ? `${m} min` : `${m / 60} h`))),
+    h('button', { class: 'btn primary small', type: 'submit' }, 'Add'),
+    un.length ? h('select', { key: 'cal-add-pick', 'aria-label': 'Or plan a task', onChange: (e, el) => { const p = un.find((x) => x.id === el.value); if (p) plan(p.id, p.name); } },
+      h('option', { value: '' }, 'or plan a task…'), un.slice(0, 60).map((p) => h('option', { value: p.id }, p.name))) : null,
+    h('button', { class: 'link small', type: 'button', onClick: close }, 'Cancel'));
+}
+
 function renderInbox() {
   const { data } = store.view;
   const items = data.inbox || [];
@@ -1853,9 +1918,9 @@ function rowMenu() {
       ? item('👥', `Take back from ${p.team.name}`, () => { if (confirm(takeBackQuestion(store.view.data, p))) giveProject(p, null); })
       : item('👥', `Give ${kindWord(p)} to…`, () => { select(p.id); ui.giveOpen = p.id; ui.givePhoto = false; ui.giveRecord = false; })) : null,
     item('↗', 'Open', () => select(p.id)),
-    movable ? item('🔀', task ? 'Move to another project…' : 'Move inside another project…', () => openMoveBox(ctx, p, from ? from.id : null)) : null,
-    movable ? item('📂', task ? 'Add to a project…' : 'Put inside a project…', () => { select(p.id); openMainBox(ctx, p, 'parent'); }) : null,
-    !task && !p.misc && p.state !== 'finished' ? item('＋', 'New project inside…', () => newInnerProject(ctx, p)) : null,
+    // (groups are one level, owner 25 Nov — a group never goes inside another)
+    movable && task ? item('🔀', 'Move to another group…', () => openMoveBox(ctx, p, from ? from.id : null)) : null,
+    movable && task ? item('📂', 'Add to a group…', () => { select(p.id); openMainBox(ctx, p, 'parent'); }) : null,
     from && !from.misc ? item('✕', `Take out of 📂 ${from.name}`, () => act('removeFromProject', { projectId: p.id, parentId: from.id }, `${p.name} taken out of 📂 ${from.name} (the task is kept)`)) : null,
     item('✎', 'Rename…', () => {
       const n = prompt('New name:', p.name);
@@ -1908,7 +1973,7 @@ function inboxMenu(m) {
   const el = h('div', { class: 'row-menu', role: 'menu', key: 'inbox-menu', 'aria-label': `Actions for ${item0.text}` },
     h('div', { class: 'row-menu-title' }, item0.text),
     item('+', 'Make it a new task', () => newTask()),
-    item('📂', 'Make it a task in a project…', () => {
+    item('📂', 'Make it a task in a group…', () => {
       const id = newTask();
       const p = id && store.view.data.projects.find((x) => x.id === id);
       if (p) openMoveBox(ctx, p, null);
@@ -2085,7 +2150,7 @@ function taskFilterSwitch() {
     class: 'seg' + (ui.taskFilter === value ? ' on' : ''), 'aria-pressed': String(ui.taskFilter === value),
     onClick: () => { ui.taskFilter = value; resetRedOrder(); rememberUi(); render(); },
   }, label);
-  return h('div', { class: 'segmented', role: 'group', 'aria-label': 'Which tasks' }, opt('all', `All tasks ${all.length}`), opt('loose', `No project ${loose}`));
+  return h('div', { class: 'segmented', role: 'group', 'aria-label': 'Which tasks' }, opt('all', `All tasks ${all.length}`), opt('loose', `No group ${loose}`));
 }
 
 /** ✅ Tasks: All N | Not started N | In progress N | Waiting N | Done N — counts within the list shown (All tasks or No project). */
@@ -2246,7 +2311,7 @@ function renderListColumn() {
     statusText(),
     // each icon has a small word under it on a computer (owner, 24 Oct); on a phone 📥 is in the bottom bar (Inbox)
     h('button', { class: 'icon head-icon capture-btn', title: 'Quick capture: write down an idea or task (key: q)', 'aria-label': 'Quick capture', onClick: openCapture }, '📥', iconCap('Capture')),
-    h('button', { class: 'icon head-icon', title: 'Jump to a task, project, person or page (Ctrl+K)', 'aria-label': 'Jump', onClick: openJump }, '🔍', iconCap('Find')),
+    h('button', { class: 'icon head-icon', title: 'Jump to a task, group, person or page (Ctrl+K)', 'aria-label': 'Jump', onClick: openJump }, '🔍', iconCap('Find')),
     onServer ? teamButton() : null,
     h('button', { class: 'icon head-icon', title: 'Get latest', 'aria-label': 'Refresh', onClick: () => doRefresh(true) }, '↻', iconCap('Refresh')));
   const mobileSearch = h('input', {
@@ -2261,6 +2326,7 @@ function renderListColumn() {
   if (ui.view === 'apps' && !ui.search) return h('div', { class: 'col-inner' }, head, timerStrip(), onServer ? renderFromApps(appsCtx) : h('p', { class: 'muted' }, 'Connections work on worktask.in.'));
   if (ui.view === 'settings' && !ui.search) return h('div', { class: 'col-inner' }, head, timerStrip(), renderSettings());
   if (ui.view === 'dashboard' && !ui.search) return h('div', { class: 'col-inner' }, head, timerStrip(), renderDashboard(ctx));
+  if (ui.view === 'calendar' && !ui.search) return h('div', { class: 'col-inner' }, head, timerStrip(), renderCalendar());
   if (ui.view === 'time' && !ui.search) return h('div', { class: 'col-inner' }, head, timerStrip(), renderTimeReport(ctx));
   if (ui.view === 'people' && !ui.search) return h('div', { class: 'col-inner' }, head, timerStrip(), renderPeopleList(ctx));
 
@@ -2418,7 +2484,7 @@ function renderSettings() {
   const usage = data.aiUsage.date === todayIndia() ? data.aiUsage.count : 0;
   return h('div', { class: 'settings' },
     h('section', { class: 'block' }, h('h3', null, onServer ? 'Account' : 'GitHub access key'),
-      h('p', null, isMock ? 'Test mode (no real GitHub).' : onServer ? 'Signed in to Task List ✓ Your projects are private to you.' : 'Connected to your private data ✓'),
+      h('p', null, isMock ? 'Test mode (no real GitHub).' : onServer ? 'Signed in to Task List ✓ Your tasks are private to you.' : 'Connected to your private data ✓'),
       h('div', { class: 'row' },
         isMock || onServer ? null : h('button', { class: 'btn', onClick: () => showKeyScreen('Paste your new GitHub access key.') }, 'Change key'),
         onServer ? h('a', { class: 'btn', href: '#team' }, '👥 Team') : null,
@@ -2452,7 +2518,7 @@ function renderSettings() {
       keyForm('gemini', 'Gemini', 'Optional backup. From aistudio.google.com → Get API key. Shared with all your devices. On the free plan Google may read the text.')),
     // 🔁 how often a task should move when it has no choice of its own (was always 3, owner 24 Oct)
     h('section', { class: 'block', key: 'every-default' }, h('h3', null, '🔁 How often a task should move'),
-      h('p', { class: 'muted small' }, 'A task with no real update for this many days turns yellow (twice as long: red). Each task or 📂 project can still have its own.'),
+      h('p', { class: 'muted small' }, 'A task with no real update for this many days turns yellow (twice as long: red). Each task or 📂 group can still have its own.'),
       h('div', { class: 'row every-picks' }, MOVE_EVERY_PICKS.map((n) => h('button', {
         class: 'chip' + (everyDefaultOf(data) === n ? ' on' : ''), type: 'button', key: 'ed-' + n, 'aria-pressed': String(everyDefaultOf(data) === n),
         onClick: () => { if (store.dispatch('setEveryDefault', { days: n === MOVE_EVERY_DEFAULT ? null : n })) toast(`Tasks with no choice of their own: should move ${everyText(n)}`); },
@@ -2544,7 +2610,7 @@ function showKeyScreen(message = '') {
   },
   h('img', { src: 'icons/icon-192.png', alt: '', width: 64, height: 64 }),
   h('h1', null, 'Task List'),
-  h('p', null, message || 'Paste your GitHub access key to open your projects.'),
+  h('p', null, message || 'Paste your GitHub access key to open your tasks.'),
   h('input', { name: 'key', type: 'password', placeholder: 'github_pat_…', autocomplete: 'off', autofocus: true }),
   h('button', { class: 'btn primary', type: 'submit' }, 'Open'),
   h('p', { class: 'key-msg muted' }),
@@ -2583,7 +2649,7 @@ function showMoved() {
   screen.replaceChildren(h('div', { class: 'key-card' },
     h('img', { src: 'icons/icon-192.png', alt: '', width: 64, height: 64 }),
     h('h1', null, 'Task List has moved'),
-    h('p', null, 'Your projects are now at worktask.in. Sign in there with your username and password.'),
+    h('p', null, 'Your tasks are now at worktask.in. Sign in there with your username and password.'),
     h('p', null, `⚠︎ ${waiting.length} change(s) made on this device were not sent before the move. The button below takes them with you.`),
     h('a', { class: 'btn primary', href: carry, onClick: () => { try { localStorage.setItem('dp.pending.moved', JSON.stringify(all)); localStorage.removeItem('dp.pending'); } catch { /* kept */ } } }, `Open worktask.in with my ${waiting.length} change(s)`)));
 }
@@ -2674,14 +2740,15 @@ function render() {
   useEveryDefault(store.view.data); // 🔁 Settings: the owner's own "should move every N days" for tasks with no choice of their own
   if (ui.selected && !store.view.data.projects.some((p) => p.id === ui.selected)) ui.selected = null;
   if (!(ui.capture && typeof ui.capture === 'object')) { try { localStorage.removeItem(CLIP_KEY); } catch { /* blocked */ } } // added or closed
-  const wide = ['diary', 'settings', 'dashboard', 'time'].includes(ui.view) && !ui.search;
+  const wide = ['diary', 'settings', 'dashboard', 'calendar', 'time'].includes(ui.view) && !ui.search;
   const next = h('div', {
     class: ['layout', wide ? 'wide' : '', ui.mobile === 'detail' && !wide ? 'show-detail' : '', ui.menuOpen ? 'menu-open' : ''].join(' ').trim(),
   },
   h('aside', { id: 'menu' }, renderMenu()),
   h('div', { class: 'scrim', onClick: () => { ui.menuOpen = false; render(); } }),
   h('main', { id: 'list' }, renderListColumn()),
-  wide ? null : h('section', { id: 'detail' }, ui.round ? renderRound() : ui.view === 'people' && !ui.search ? renderPerson(ctx) : renderDetail(ctx)),
+  wide ? null : h('section', { id: 'detail' }, ui.calBack && ui.view === 'all' ? h('button', { class: 'link small pcal-back', type: 'button', onClick: () => { ui.calBack = false; go('calendar'); } }, '← Back to 📅 Calendar') : null,
+    ui.round ? renderRound() : ui.view === 'people' && !ui.search ? renderPerson(ctx) : renderDetail(ctx)),
   ui.showKeys ? keysHelp() : null,
   ui.capture ? captureBox() : null,
   rowMenu(), // right-click menu: over the list or the task's page
@@ -2739,7 +2806,7 @@ function tabBar() {
     // the pages used most (owner, 24 Oct): People is in More (☰)
     tab('today', '☀︎', 'Today'),
     tab('all', '✅', 'Tasks'),
-    tab('mains', '📂', 'Projects'),
+    tab('mains', '📂', 'Groups'),
     tab('inbox', '📥', 'Inbox', n ? h('span', { class: 'tab-count' }, String(n)) : null),
     h('button', { class: 'tab' + (ui.menuOpen ? ' current' : ''), key: 'tab-more', 'aria-label': 'More pages', onClick: () => { ui.menuOpen = true; render(); } },
       h('span', { class: 'tab-icon', 'aria-hidden': 'true' }, '☰'), h('span', { class: 'tab-label' }, 'More')));
@@ -3040,7 +3107,7 @@ function goProject(step) {
 /** The next project after this one (in the tab you are in) that is not green yet — red first. */
 function nextOpenProject(id) {
   const today = todayIndia();
-  let list = ['diary', 'settings', 'dashboard', 'time', 'people', 'inbox', 'replies', 'apps'].includes(ui.view) || ui.search
+  let list = ['diary', 'settings', 'dashboard', 'calendar', 'time', 'people', 'inbox', 'replies', 'apps'].includes(ui.view) || ui.search
     ? store.view.data.projects.filter((p) => p.state === 'active') : sortForView(visibleProjects(), today);
   list = list.filter((p) => p.state === 'active' && (p.id === id || !isSnoozed(p, today)));
   const i = Math.max(0, list.findIndex((p) => p.id === id));
@@ -3099,7 +3166,7 @@ function jumpItems() {
   const pages = [
     ['Today', () => go('today')], ['✅ Tasks', () => go('all')], ['Dashboard', () => go('dashboard')],
     ['People', () => go('people')], ['Diary', () => go('diary')], ['Paused', () => go('paused')],
-    ['Finished', () => go('finished')], ['Settings', () => go('settings')], ['Time report', () => go('time')], ['✉ Replies', () => go('replies')], ['📂 Projects', () => go('mains')], ['Daily round', () => { go('today'); startRound(); }],
+    ['Finished', () => go('finished')], ['Settings', () => go('settings')], ['Time report', () => go('time')], ['✉ Replies', () => go('replies')], ['📂 Groups', () => go('mains')], ['Daily round', () => { go('today'); startRound(); }],
     ["Today's summary", () => openSummary()], ['New task', () => { go('today'); ui.adding = true; render(); focusKey('new-name'); }],
   ].map(([label, run]) => ({ kind: 'page', label, run }));
   const projects = data.projects.map((p) => ({
@@ -3122,7 +3189,7 @@ function openJump() {
   let shown = [];
   let index = 0;
   const list = h('ul', { class: 'jump-list', role: 'listbox' });
-  const input = h('input', { class: 'jump-input', placeholder: 'Type a task, project, person or page…', autocomplete: 'off', 'aria-label': 'Jump to' });
+  const input = h('input', { class: 'jump-input', placeholder: 'Type a task, group, person or page…', autocomplete: 'off', 'aria-label': 'Jump to' });
   const run = (it) => { closeSheet(); it.run(); };
   const draw = () => {
     const q = input.value.trim().toLowerCase();
@@ -3159,7 +3226,7 @@ const KEYS = [
   ['↓  ↑', 'Next / previous task'],
   ['←  →', 'Previous / next task (or person on People)'],
   ['⌫', 'Back to where you came from'],
-  ['Ctrl K', 'Jump to any task, project, person or page'],
+  ['Ctrl K', 'Jump to any task, group, person or page'],
   ['x', 'Tick the next step of the open task'],
   ['g', 'Start the daily round (then x s w o c n)'],
   ['s', 'Type a new step'],
@@ -3171,14 +3238,14 @@ const KEYS = [
   ['t  b  d  p', 'Go to Today / Dashboard / Diary / People'],
   ['a  i', 'Go to ✅ Tasks / 📥 Inbox'],
   ['e', 'Go to ✉ Replies (emails waiting for your reply)'],
-  ['m', 'Go to 📂 Projects'],
+  ['m', 'Go to 📂 Groups'],
   ['@', 'In a step or note: pick a person'],
   ['Ctrl/⌘ Enter', 'In Today\'s update: save and tick the step'],
   ['Enter', 'In search: open the first task found'],
   ['Right-click', 'On a task in the list: quick menu'],
   ['Esc', 'Leave a box, or close what is open'],
   ['?', 'Show or hide this list'],
-  ['👥 Team pages', 't a m f: Team today / Tasks / Projects / Follow-up · n: give a task · ↓ ↑ · / · Esc'],
+  ['👥 Team pages', 't a m f: Team today / Tasks / Groups / Follow-up · n: give a task · ↓ ↑ · / · Esc'],
 ];
 
 function keysHelp() {
@@ -3191,7 +3258,7 @@ function keysHelp() {
 
 
 function currentList() {
-  if (!store || !store.view || ['diary', 'settings', 'dashboard', 'time'].includes(ui.view)) return [];
+  if (!store || !store.view || ['diary', 'settings', 'dashboard', 'calendar', 'time'].includes(ui.view)) return [];
   const today = todayIndia();
   const { open, done } = splitToday(sortForView(visibleProjects(), today), today);
   const showDone = ui.showDoneToday === undefined || ui.showDoneToday === null ? !open.length : !!ui.showDoneToday; // (as listParts: ↓ ↑ go through what is on screen)
@@ -3298,7 +3365,7 @@ function onKey(e) {
   if (e.repeat && !isArrow && e.key !== 'j' && e.key !== 'k') return; // holding x / o / r must not repeat
   const focused = document.activeElement;
   if (isArrow && focused && (focused.type === 'radio' || focused.nodeName === 'SUMMARY')) return;
-  if (isArrow && ['diary', 'settings', 'dashboard', 'time', 'inbox', 'replies', 'apps'].includes(ui.view) && !ui.search) return; // let the page scroll
+  if (isArrow && ['diary', 'settings', 'dashboard', 'calendar', 'time', 'inbox', 'replies', 'apps'].includes(ui.view) && !ui.search) return; // let the page scroll
   const k = e.key;
   if (ui.round) {
     const map = { x: 'done', s: 'add', w: 'note', o: 'ok', c: 'chase', n: 'skip', ArrowRight: 'skip' };
@@ -3317,7 +3384,7 @@ function onKey(e) {
   if (k === 'ArrowRight' || k === 'ArrowLeft') {
     const step = k === 'ArrowRight' ? 1 : -1;
     if (ui.view === 'people' && !ui.search) goPerson(step);
-    else if (ui.selected && !['diary', 'settings', 'dashboard', 'time', 'inbox', 'replies', 'apps'].includes(ui.view)) goProject(step);
+    else if (ui.selected && !['diary', 'settings', 'dashboard', 'calendar', 'time', 'inbox', 'replies', 'apps'].includes(ui.view)) goProject(step);
     else handled = false;
   } else if (k === 'Backspace') {
     if (ui.navStack && ui.navStack.length) goBack(); else handled = false;
@@ -3548,7 +3615,7 @@ async function giveProject(p, person, needsPhoto = !!ui.givePhoto, keep = ui.giv
     await withSyncLock(async () => {
       const steps = person ? projectSteps(p) : [];
       // (the change of person is saved right after this: the server must not act on the older saved copy meanwhile)
-      const out = await teamApi('project.sync', { projectRef: p.id, project: p.name, about: p.about || '', folder: folderOf(p), assigneeId: person ? person.id : 0, steps, needsPhoto, kind: record ? 'log' : '', reason: person ? '' : 'taken', baseCommit: store.base && store.base.commit, pending: true });
+      const out = await teamApi('project.sync', { projectRef: p.id, project: p.name, about: p.about || '', folder: folderOf(p), slot: p.slot || null, assigneeId: person ? person.id : 0, steps, needsPhoto, kind: record ? 'log' : '', reason: person ? '' : 'taken', baseCommit: store.base && store.base.commit, pending: true });
       team.gen++; // a list fetched before this change is old now: it must not move the project back
       store.dispatch('setProjectTeam', { projectId: p.id, userId: person ? person.id : null, name: person ? person.name : '', needsPhoto, record, ...(main && person ? { giveTasks: true } : {}), ...(!main && !person ? { keepOff: true } : {}) });
       const kids = new Set(main ? projectTasks(store.view.data, p.id).map((c) => c.id) : []); // (its projects' tasks too)
@@ -3612,7 +3679,7 @@ function notSent(out, steps) {
 
 /** What was sent for a given project: a change in any part (the short description too) sends it again. */
 function syncSig(userId, p, steps, needsPhoto) {
-  return JSON.stringify([userId, p.name, steps, !!needsPhoto, folderOf(p), p.about || '', !!(p.team && p.team.record)]); // (📒 record: a change sends it again)
+  return JSON.stringify([userId, p.name, steps, !!needsPhoto, folderOf(p), p.slot || null, p.about || '', !!(p.team && p.team.record)]); // (📒 record, 📅 a new time: a change sends it again)
 }
 /** The 📂 project a given task is in (its first one; '' = in none, 📂 Misc too): the team sees the same folders. */
 function folderOf(p) {
@@ -3655,7 +3722,7 @@ async function syncGivenNow(gen) {
     if (m[p.id] === sig) continue;
     const name = p.name, about = p.about || '', who = p.team.name;
     try {
-      const out = await teamApi('project.sync', { projectRef: p.id, project: name, about, folder: folderOf(p), assigneeId: p.state === 'active' ? p.team.userId : 0, steps, needsPhoto: !!p.team.needsPhoto, kind: p.team.record ? 'log' : '', reason: p.state,
+      const out = await teamApi('project.sync', { projectRef: p.id, project: name, about, folder: folderOf(p), slot: p.slot || null, assigneeId: p.state === 'active' ? p.team.userId : 0, steps, needsPhoto: !!p.team.needsPhoto, kind: p.team.record ? 'log' : '', reason: p.state,
         baseCommit: store.base && store.base.commit, pending: store.pending.length > 0 });
       // a re-opened step that was just finished is not made yet: sent again next time
       rememberSync(id, notSent(out, steps).length ? SYNC_RETRY : sig);
@@ -3922,7 +3989,7 @@ function startOwner() {
   render();
   if (onServer && !isMock) takeTeamFromHash(); // "#team…": the team pages of this app (from 👥, a team task chip, Give to team)
   if (onServer && !isMock) startBell();
-  store.init().then(() => { if (store.status === 'saved') dataFreshAt = Date.now(); if (store.canEdit() && !store.view.data.projects.some((p) => p.id === MISC_ID)) store.dispatch('makeMisc', {}); render(); if (ui.capture) focusKey('capture-input'); voiceReady = true; runVoice(); loadTeam(true); if (onServer) loadApps(appsCtx, true); shareLocalKeys(); markShownOpened(); makeBrief(); recordPastScores(); });
+  store.init().then(() => { if (store.status === 'saved') dataFreshAt = Date.now(); if (store.canEdit() && !store.view.data.projects.some((p) => p.id === MISC_ID)) store.dispatch('makeMisc', {}); if (store.canEdit() && nestedGroups(store.view.data).length) store.dispatch('flattenGroups', {}); /* (groups are one level, owner 25 Nov) */ render(); if (ui.capture) focusKey('capture-input'); voiceReady = true; runVoice(); loadTeam(true); if (onServer) loadApps(appsCtx, true); shareLocalKeys(); markShownOpened(); makeBrief(); recordPastScores(); });
   if (started) return;
   started = true;
   // redraw now and then: the running timer, and the "not sent yet" bar appearing after a minute

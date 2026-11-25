@@ -150,11 +150,10 @@ test('📂 add-to puts a task into a project (by name; a task can be in several)
   const heat = P('Heat');
   assert.deepEqual(P('Dryer 2').parentIds, [main.id, heat.id], 'in two projects');
   assert.throws(() => tracker('add-to', 'Dryer 2', 'Heat'), /already in Heat/);
-  // (rule changed, owner asked 23 Oct: a project can be inside another project, never in a circle)
-  assert.match(tracker('add-to', 'Dryers', 'Heat'), /Dryers is now in Heat/, 'a project inside a project');
-  assert.throws(() => tracker('add-to', 'Heat', 'Dryers'), /Dryers is inside Heat, so Heat cannot go into it \(that would be a circle\)/);
-  tracker('remove-from', 'Dryers', 'Heat');
-  assert.deepEqual(P('Dryers').parentIds, undefined, 'out again');
+  // (rule changed again, owner asked 25 Nov: groups are one level — a group never goes into another, nor into a new one)
+  assert.throws(() => tracker('add-to', 'Dryers', 'Heat'), /Dryers is a group\. Groups are one level, so it cannot go into another group\./);
+  assert.throws(() => tracker('add-to', 'Heat', 'Plant', '--create'), /Heat is a group\. Groups are one level/);
+  assert.deepEqual(P('Dryers').parentIds, undefined, 'it stayed at the top');
   assert.throws(() => tracker('add-to', 'Electric kiln', 'Dryer 1'), /a task in a project, so it cannot hold tasks/);
   assert.match(tracker('show', 'Dryer 2'), /in: Dryers, Heat/);
   assert.match(tracker('summary'), /📂 Dryers \[[^\]]+\] \| PROJECT — tasks: (Dryer 2, Dryer 1|Dryer 1, Dryer 2)/);

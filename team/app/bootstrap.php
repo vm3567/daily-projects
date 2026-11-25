@@ -346,6 +346,8 @@ function migrate(PDO $pdo): void {
       UNIQUE KEY sphoto_once (step_id, client_id),
       INDEX (step_id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+    // v44: 📅 a task's time on the calendar (owner, 25 Nov): the day, the start and how long (NULL = not planned)
+    "ALTER TABLE tasks ADD COLUMN slot_day DATE NULL, ADD COLUMN slot_start CHAR(5) NULL, ADD COLUMN slot_mins SMALLINT NULL",
   ];
   $pdo->exec($steps[0]);
   $done = (int)($pdo->query("SELECT v FROM settings WHERE k = 'schema'")->fetchColumn() ?: 0);

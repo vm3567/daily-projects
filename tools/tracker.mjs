@@ -387,6 +387,8 @@ try {
                 : `${other.name} is a task, not a 📂 project. To make a new 📂 project called "${mainQuery}", add --create.`);
           }
         }
+        // groups are one level (owner, 25 Nov): a group never goes into another group, nor into a new one
+        if (!p.misc && isMainProject(state.data, p)) throw new Error(`${p.name} is a group. Groups are one level, so it cannot go into another group.`);
         if (!main) {
           if (p.misc) throw new Error('📂 Misc cannot go into another project.');
           made = `New project ${mainQuery}; ${p.name} is in it`;
@@ -398,7 +400,7 @@ try {
             : main.state === 'finished' ? `${main.name} is finished.`
               : p.misc || main.misc ? '📂 Misc cannot go into a project, and nothing is put into it.'
                 : parentIdsOf(main).length && !isMainProject(state.data, main) ? `${main.name} is a task in a project, so it cannot hold tasks.`
-                  : `${main.name} is inside ${p.name}, so ${p.name} cannot go into it (that would be a circle).`);
+                  : `${p.name} cannot go into ${main.name}.`);
         }
         made = `${p.name} is now in ${main.name}${inIds.length ? ` (and still in ${parentsOf(state.data, p).map((x) => x.name).join(', ')})` : ''}`;
         return [makeOp('addToProject', { projectId: p.id, parentId: main.id })];

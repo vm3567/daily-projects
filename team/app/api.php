@@ -15,6 +15,19 @@ function txt($v, int $max, bool $required = false, string $what = 'This'): strin
   if ($required && $s === '') throw new ApiError("$what is empty.");
   return mb_substr($s, 0, $max);
 }
+/** 📅 A time on the calendar from the app: [day, start, mins] (15 min to 12 h, steps of 15), or null (none / not right). */
+function slot_in($v): ?array {
+  if (!is_array($v)) return null;
+  $day = date_or_null($v['day'] ?? null);
+  $start = is_string($v['start'] ?? null) && preg_match('/^([01]\d|2[0-3]):[0-5]\d$/', $v['start']) ? $v['start'] : null;
+  $mins = is_int($v['mins'] ?? null) && $v['mins'] >= 15 && $v['mins'] <= 720 && $v['mins'] % 15 === 0 ? $v['mins'] : null;
+  return $day && $start && $mins ? [$day, $start, $mins] : null;
+}
+/** A team task's own time on the calendar (null takes it off). */
+function set_task_slot(int $id, ?array $slot): void {
+  q('UPDATE tasks SET slot_day = ?, slot_start = ?, slot_mins = ? WHERE id = ?', [$slot[0] ?? null, $slot[1] ?? null, $slot[2] ?? null, $id]);
+}
+
 function date_or_null($v): ?string {
   $v = (string)($v ?? '');
   if ($v === '') return null;
@@ -129,6 +142,13 @@ function tasks_out(array $tasks, string $day): array {
   $queued = fn($t) => $t['seq'] !== null && $t['status'] === 'open' && (int)$t['seq'] > ($firstSeq[$t['project_ref'] . '|' . $t['assignee_id']] ?? PHP_INT_MAX);
   $about = project_abouts($refs);
   $folder = project_abouts($refs, 'pfo:'); // the owner's 📂 project the given task is in ('' = none): the team sees the same folders
+  $refSlot = project_abouts($refs, 'psl:'); // 📅 a given task's time ("day|start|mins")
+  $slotOf = function ($t) use ($refSlot, $queued) {
+    if (!empty($t['slot_day'])) return ['day' => $t['slot_day'], 'start' => $t['slot_start'], 'mins' => (int)$t['slot_mins']];
+    if ($t['seq'] === null || !$t['project_ref'] || empty($refSlot[$t['project_ref']]) || $queued($t) || $t['status'] !== 'open') return null;
+    [$d, $s, $m] = explode('|', $refSlot[$t['project_ref']]) + ['', '', '0'];
+    return ['day' => $d, 'start' => $s, 'mins' => (int)$m];
+  };
   $turnSince = [];
   foreach ($tasks as $t) {
     if ($t['seq'] === null || !$t['project_ref']) continue;
@@ -142,6 +162,7 @@ function tasks_out(array $tasks, string $day): array {
     'dueDate' => $t['due_date'], 'startDate' => $t['start_date'], 'project' => $t['project'] ?? '', 'projectRef' => $t['project_ref'], 'stepRef' => $t['step_ref'],
     'projectAbout' => $t['seq'] !== null && $t['project_ref'] ? ($about[$t['project_ref']] ?? '') : '',
     'folder' => $t['seq'] !== null && $t['project_ref'] ? ($folder[$t['project_ref']] ?? '') : '',
+    'slot' => $slotOf($t), // 📅 its time on the calendar, or null
     'status' => $t['status'], 'createdAt' => $t['created_at'], 'doneAt' => $t['done_at'],
     // 📒 a record (kind 'log') is never due or late: entries come when there is something to record
     'kind' => ($t['kind'] ?? '') === 'log' ? 'log' : 'task', 'entriesToday' => $entriesToday[$t['id']] ?? 0,
@@ -767,7 +788,7 @@ function handle(string $a, array $in): array {
         $ids = array_map(fn($t) => $t['id'], $list);
         $last = one('SELECT MAX(day) AS d FROM updates WHERE task_id IN (' . implode(',', array_fill(0, count($ids), '?')) . ')', $ids)['d'] ?? null;
         $names = array_values(array_unique(array_map(fn($t) => $t['assignee']['name'], $openAll ?: $list)));
-        $out[] = ['ref' => $ref, 'name' => end($list)['project'] ?: 'Project', 'projectAbout' => end($list)['projectAbout'], 'people' => $names, 'open' => count($open) ?: count($openAll), 'done' => count($done),
+        $out[] = ['ref' => $ref, 'name' => end($list)['project'] ?: 'Task', 'folder' => end($list)['folder'] ?? '', 'projectAbout' => end($list)['projectAbout'], 'people' => $names, 'open' => count($open) ?: count($openAll), 'done' => count($done),
           'current' => $cur ? ['id' => $cur['id'], 'title' => $cur['title'], 'sentToday' => (bool)$cur['today']] : null, 'lastUpdate' => $last,
           'stuck' => (bool)array_filter($openAll, fn($t) => $t['stuck']), 'staffSteps' => count(array_filter($list, fn($t) => $t['createdBy'] === $t['assignee']['id']))];
       }
@@ -908,6 +929,7 @@ function handle(string $a, array $in): array {
         q('UPDATE tasks SET needs_photo = ? WHERE id = ?', [empty($in['needsPhoto']) ? 0 : 1, $id]);
         if (array_key_exists('kind', $in)) q('UPDATE tasks SET kind = ? WHERE id = ?', [($in['kind'] ?? '') === 'log' ? 'log' : null, $id]); // 📒 record or daily update
         if ($start = date_or_null($in['startDate'] ?? null)) q('UPDATE tasks SET start_date = ? WHERE id = ?', [$start, $id]);
+        if (array_key_exists('slot', $in)) set_task_slot($id, slot_in($in['slot'])); // 📅
         audit($me['id'], 'task_edit', "#$id $title");
       } else {
         $cid = client_id($in['clientId'] ?? null); // the form's id: a resend (reply lost) gives back the task already made
@@ -918,12 +940,20 @@ function handle(string $a, array $in): array {
         }
         $id = (int)db()->lastInsertId();
         q('UPDATE tasks SET needs_photo = ?, kind = ? WHERE id = ?', [empty($in['needsPhoto']) ? 0 : 1, ($in['kind'] ?? '') === 'log' ? 'log' : null, $id]);
+        if (array_key_exists('slot', $in)) set_task_slot($id, slot_in($in['slot'])); // 📅
         audit($me['id'], 'task_new', "#$id $title");
         $start = date_or_null($in['startDate'] ?? null);
         if ($start && $start > $day) q('UPDATE tasks SET start_date = ? WHERE id = ?', [$start, $id]); // starts on a later day
         notify([(int)$assignee['id']], 'task', '📥 New task for you', $title . ($vals[7] ? ' · ' . $vals[7] : '') . ($start && $start > $day ? ' · starts ' . date('D j M', strtotime($start)) : ''), '/projects/#team-task=' . $id, 't' . $id);
       }
       return ['task' => tasks_out([own_task($me, $id)], $day)[0]];
+    }
+    case 'task.slot': { // 📅 a manager puts a team task on the calendar, moves it, or takes it off (slot null)
+      require_admin($me);
+      $t = own_task($me, (int)($in['id'] ?? 0));
+      if (($in['slot'] ?? null) !== null && !slot_in($in['slot'])) throw new ApiError('Pick a day, a time and how long.');
+      set_task_slot((int)$t['id'], slot_in($in['slot'] ?? null));
+      return ['task' => tasks_out([own_task($me, (int)$t['id'])], $day)[0]];
     }
     case 'task.status': {
       $t = own_task($me, (int)($in['id'] ?? 0));
@@ -1168,7 +1198,7 @@ function add_staff_step(array $me, string $ref, string $title, array $mine, stri
   q("UPDATE tasks SET status = 'cancelled', done_at = ?, updated_at = ? WHERE project_ref = ? AND step_ref = ? AND status = 'open'", [now(), now(), $ref, $ref . ':whole']);
   carry_whole_update($ref, $me['id']);
   audit($me['id'], 'step_added', "{$mine[0]['project']}: $title");
-  notify(admin_ids(), 'update', "➕ {$me['name']} added a step", ($mine[0]['project'] ?: 'Project') . ': ' . $title, '/projects/#team-task=' . $id);
+  notify(admin_ids(), 'update', "➕ {$me['name']} added a step", ($mine[0]['project'] ?: 'Task') . ': ' . $title, '/projects/#team-task=' . $id);
   return $id;
 }
 
@@ -1181,6 +1211,11 @@ function project_sync(array $me, array $in, string $ref, string $day): array {
     if ($about === '') q('DELETE FROM settings WHERE k = ?', ['pab:' . md5($ref)]); else set_setting('pab:' . md5($ref), $about);
   }
   // the owner's 📂 project this task is in (its name; '' = in none): kept like the description, shown to the team as its folder
+  // 📅 the given task's time on the calendar (by ref, like its group); shown on the step being worked on now
+  if (array_key_exists('slot', $in)) {
+    $slot = slot_in($in['slot']);
+    if (!$slot) q('DELETE FROM settings WHERE k = ?', ['psl:' . md5($ref)]); else set_setting('psl:' . md5($ref), implode('|', $slot));
+  }
   if (array_key_exists('folder', $in)) {
     $folder = txt(preg_replace('/\s+/u', ' ', (string)$in['folder']) ?? '', 200);
     if ($folder === '') q('DELETE FROM settings WHERE k = ?', ['pfo:' . md5($ref)]); else set_setting('pfo:' . md5($ref), $folder);
@@ -1197,8 +1232,8 @@ function project_sync(array $me, array $in, string $ref, string $day): array {
     // the person's own new steps are cancelled too, but Daily Projects still adds them to the project (so nothing is lost)
     foreach ($open as $t) q("UPDATE tasks SET status = 'cancelled', done_at = ?, updated_at = ? WHERE id = ?", [now(), now(), $t['id']]);
     if (empty($in['_server'])) audit($me['id'], 'project_taken_back', $name);
-    $why = ['paused' => 'Your manager paused this project. It comes back to you when it starts again.', 'finished' => 'Your manager finished this project. Thank you!'][$in['reason'] ?? ''] ?? 'Your manager took this project back. Nothing more to do on it.';
-    if ($open) notify(array_map(fn($t) => (int)$t['assignee_id'], $open), 'task', '📁 Off your list: ' . ($name ?: ($open[0]['project'] ?? 'a project')), $why, '/', 'p' . md5($ref));
+    $why = ['paused' => 'Your manager paused this task. It comes back to you when it starts again.', 'finished' => 'Your manager finished this task. Thank you!'][$in['reason'] ?? ''] ?? 'Your manager took this task back. Nothing more to do on it.';
+    if ($open) notify(array_map(fn($t) => (int)$t['assignee_id'], $open), 'task', '📋 Off your list: ' . ($name ?: ($open[0]['project'] ?? 'a task')), $why, '/', 'p' . md5($ref));
     return ['tasks' => [], 'assigneeId' => 0];
   }
   $person = one('SELECT id, active FROM users WHERE id = ?', [$who]);
@@ -1296,7 +1331,7 @@ function project_sync(array $me, array $in, string $ref, string $day): array {
   }
   carry_whole_update($ref, $who);
   $leftBy = array_values(array_diff(array_unique($leftBy), [$who]));
-  if ($leftBy) notify($leftBy, 'task', '📁 Off your list: ' . ($name ?: 'a project'), 'Your manager gave it to ' . user_name($who) . '.', '/', 'p' . md5($ref));
+  if ($leftBy) notify($leftBy, 'task', '📋 Off your list: ' . ($name ?: 'a task'), 'Your manager gave it to ' . user_name($who) . '.', '/', 'p' . md5($ref));
   if ($closed) notify([$who], 'task', count($closed) === 1 ? "✓ Step closed in $name" : '✓ ' . count($closed) . " steps closed in $name", 'Your manager closed: ' . implode(' · ', array_slice($closed, 0, 3)), '/', 'c' . md5($ref));
   $after = $hadSome && !$news ? $current() : null;
   // the order changed (not because a step was finished or closed): tell them which step is theirs now
@@ -1304,7 +1339,7 @@ function project_sync(array $me, array $in, string $ref, string $day): array {
   if (empty($in['_server']) || $news || $closed) audit($me['id'], 'project_given', "$name → #$who");
   if ($news) {
     $n = count($news);
-    notify([$who], 'task', $hadSome ? ($n === 1 ? "➕ New step in $name" : "➕ $n new steps in $name") : "📁 New project for you: $name",
+    notify([$who], 'task', $hadSome ? ($n === 1 ? "➕ New step in $name" : "➕ $n new steps in $name") : "📥 New task for you: $name", // (owner, 25 Nov: groups → tasks → steps; what was given is a task with its steps)
       $hadSome ? implode(' · ', array_slice($news, 0, 3)) : "$n step" . ($n > 1 ? 's' : '') . '. First: ' . $news[0], '/', 'p' . md5($ref));
   }
   // 📒 "record" for the whole given project (owner asked 24 Oct): every open step, and steps the person adds later

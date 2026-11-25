@@ -62,9 +62,9 @@ export function mainBoxItems(ctx, p) {
   }));
   if (create) {
     out.push({
-      kind: 'create', label: `+ Create '${create}' as a new project`,
+      kind: 'create', label: `+ Create '${create}' as a new group`,
       run: () => {
-        ctx.act('createMainProject', { projectId: newId(), name: create, childId: p.id }, `New project 📂 ${create} — ${p.name} is in it`);
+        ctx.act('createMainProject', { projectId: newId(), name: create, childId: p.id }, `New group 📂 ${create} — ${p.name} is in it`);
         again();
       },
     });
@@ -80,14 +80,14 @@ export function mainBox(ctx, p, mode = 'parent') {
   const items = mainBoxItems(ctx, p);
   const index = Math.min(Math.max(0, box.index || 0), Math.max(0, items.length - 1));
   const close = () => { ui.mainBox = null; ctx.render(); };
-  return h('div', { class: 'main-box', key: 'mainbox-wrap-' + p.id, role: 'dialog', 'aria-label': box.mode === 'add' ? 'Add a task here' : 'Add to a project' },
+  return h('div', { class: 'main-box', key: 'mainbox-wrap-' + p.id, role: 'dialog', 'aria-label': box.mode === 'add' ? 'Add a task here' : 'Add to a group' },
     h('div', { class: 'main-box-head' },
-      h('strong', null, box.mode === 'add' ? `Add a task to 📂 ${p.name}` : '📂 Add to a project'),
+      h('strong', null, box.mode === 'add' ? `Add a task to 📂 ${p.name}` : '📂 Add to a group'),
       h('button', { class: 'icon', type: 'button', 'aria-label': 'Close', onClick: close }, '✕')),
-    box.mode === 'add' ? null : h('p', { class: 'muted small' }, 'A task can be in several projects. ✓ = in it now; tap again to take it out.'),
+    box.mode === 'add' ? null : h('p', { class: 'muted small' }, 'A task can be in several groups. ✓ = in it now; tap again to take it out.'),
     h('input', {
       class: 'main-box-input', key: 'mainbox-' + p.id, value: box.q, autocomplete: 'off', 'aria-label': 'Type a name',
-      placeholder: box.mode === 'add' ? 'Type a task name…' : 'Type a project name…',
+      placeholder: box.mode === 'add' ? 'Type a task name…' : 'Type a group name…',
       onInput: (e, el) => { box.q = el.value; box.index = 0; ctx.render(); },
       onKeydown: (e) => {
         if (e.key === 'ArrowDown') { e.preventDefault(); box.index = Math.min(items.length - 1, index + 1); ctx.render(); }
@@ -128,13 +128,13 @@ export function moveBoxItems(ctx, p) {
   }));
   if (create) {
     out.push({
-      kind: 'create', label: `+ Create '${create}' as a new project`,
+      kind: 'create', label: `+ Create '${create}' as a new group`,
       run: () => {
         // the new project with the task in it (Undo puts the task back), then out of the one it came from
         // (from a list row: out of every other one, as picking a project does — moveSteps' setParent)
         const projectId = newId();
         const was = parentsOf(store.view.data, p).filter((m) => !m.misc).map((m) => m.id);
-        if (ctx.act('createMainProject', { projectId, name: create, childId: p.id }, `${p.name} moved to the new project 📂 ${create}`, 6000)) {
+        if (ctx.act('createMainProject', { projectId, name: create, childId: p.id }, `${p.name} moved to the new group 📂 ${create}`, 6000)) {
           if (from && !from.misc) store.dispatch('removeFromProject', { projectId: p.id, parentId: from.id });
           else if (!box.from && was.length) store.dispatch('setParent', { projectId: p.id, parentId: projectId });
         }
@@ -156,13 +156,13 @@ export function moveBox(ctx) {
   const index = Math.min(Math.max(0, box.index || 0), Math.max(0, items.length - 1));
   const close = () => { ui.moveBox = null; ctx.render(); };
   return h('div', { class: 'move-box-wrap', key: 'movebox-wrap', onClick: (e) => { if (e.target === e.currentTarget) close(); } },
-    h('div', { class: 'main-box move-box', role: 'dialog', 'aria-label': `Move ${p.name} to another project` },
+    h('div', { class: 'main-box move-box', role: 'dialog', 'aria-label': `Move ${p.name} to another group` },
       h('div', { class: 'main-box-head' },
         h('strong', null, `Move "${p.name}"`),
         h('button', { class: 'icon', type: 'button', 'aria-label': 'Close', onClick: close }, '✕')),
-      h('p', { class: 'muted small' }, from && !from.misc ? `Out of 📂 ${from.name}, into:` : 'Into the project:'),
+      h('p', { class: 'muted small' }, from && !from.misc ? `Out of 📂 ${from.name}, into:` : 'Into the group:'),
       h('input', {
-        class: 'main-box-input', key: 'movebox-q', value: box.q, autocomplete: 'off', 'aria-label': 'Type a project name', placeholder: 'Type a project name…',
+        class: 'main-box-input', key: 'movebox-q', value: box.q, autocomplete: 'off', 'aria-label': 'Type a group name', placeholder: 'Type a group name…',
         onInput: (e, el) => { box.q = el.value; box.index = 0; ctx.render(); },
         onKeydown: (e) => {
           if (e.key === 'ArrowDown') { e.preventDefault(); box.index = Math.min(items.length - 1, index + 1); ctx.render(); }
@@ -176,7 +176,7 @@ export function moveBox(ctx) {
           class: 'main-box-item' + (i === index ? ' on' : '') + (it.kind === 'create' ? ' create' : ''), type: 'button', role: 'option',
           'aria-selected': String(i === index), onClick: () => it.run(),
         }, it.kind === 'main' ? '📂 ' : '', it.label)))),
-      !items.length ? h('p', { class: 'muted small' }, 'Type a name for a new project.') : null));
+      !items.length ? h('p', { class: 'muted small' }, 'Type a name for a new group.') : null));
 }
 
 /** "+ Add tasks": the task list with tick boxes, to put one or several tasks into the project m at once. */
@@ -227,7 +227,7 @@ export function mainChip(ctx, p) {
   const mains = parentsOf(ctx.store.view.data, p).filter((m) => !m.misc); // (in no project: no "📂 Misc ›", owner 24 Oct)
   if (!mains.length) return null;
   return h('div', { class: 'main-chips', key: 'mainchips-' + p.id }, mains.map((m) => h('button', {
-    class: 'main-chip', key: 'mainchip-' + p.id + '-' + m.id, title: `Open the project ${m.name}`, onClick: () => ctx.openProject(m.id),
+    class: 'main-chip', key: 'mainchip-' + p.id + '-' + m.id, title: `Open the group ${m.name}`, onClick: () => ctx.openProject(m.id),
   }, `📂 ${m.name} ›`)));
 }
 
@@ -235,7 +235,7 @@ export function mainChip(ctx, p) {
 export function projectChips(data, p) {
   const mains = parentsOf(data, p).filter((m) => !m.misc); // (📂 Misc = in no project: no chip, the row stays short — owner, 24 Oct)
   if (!mains.length) return null;
-  return h('span', { class: 'prow-chips' }, mains.map((m) => h('span', { class: 'tag main-tag', key: 'pc-' + m.id, title: `In the project ${m.name}` }, `📂 ${m.name}`)));
+  return h('span', { class: 'prow-chips' }, mains.map((m) => h('span', { class: 'tag main-tag', key: 'pc-' + m.id, title: `In the group ${m.name}` }, `📂 ${m.name}`)));
 }
 
 /** The newest work or team note: { day, text } (email lines are not updates). */
@@ -338,7 +338,6 @@ export function subProjectsBlock(ctx, p, today = todayIndia()) {
     save(c, movedOrder(kids, c.id, e.key === 'ArrowUp' ? -1 : 1));
   };
   return h('section', { class: 'block sub-projects', key: 'subs-' + p.id },
-    innerProjects(ctx, p, today),
     // the same count as its row in 📂 Projects (open ones); paused / finished ones say so (owner, 24 Oct: "6 tasks" vs "TASKS (8)")
     h('h3', null, (() => { const open = all.filter((c) => c.state === 'active').length, rest = all.length - open; return `TASKS (${open})${rest ? ` + ${rest} paused / finished` : ''}`; })()),
     all.length ? stageFilterBar(stageCounts(all, stageOfKid), sf, (k) => { (ctx.ui.subStage ||= {})[p.id] = k; ctx.render(); }) : null,
@@ -368,50 +367,19 @@ export function subProjectsBlock(ctx, p, today = todayIndia()) {
           h('td', { class: 'muted small' }, lu ? `${fmtDay(lu.day)} · ${short(lu.text, 50)}` : '—'),
           // takes the task out of this project only (the task itself stays, with Undo)
           h('td', null, p.misc ? null : h('button', { // (📂 Misc: a task leaves it by going into another project)
-            class: 'link small sub-remove', type: 'button', title: `Take out of project — ${c.name} is kept`, 'aria-label': `Take ${c.name} out of this project`, // (a quiet ✕, not "Remove": it never deletes, owner 24 Oct)
+            class: 'link small sub-remove', type: 'button', title: `Take out of group — ${c.name} is kept`, 'aria-label': `Take ${c.name} out of this group`, // (a quiet ✕, not "Remove": it never deletes, owner 24 Oct)
             onClick: (e) => { if (e && e.stopPropagation) e.stopPropagation(); ctx.act('removeFromProject', { projectId: c.id, parentId: p.id }, `${c.name} taken out of 📂 ${p.name} (the task is kept)`); },
           }, '✕')));
-      }))) : h('p', { class: 'muted small' }, (() => { // a project that only holds projects: say where its tasks are
-        const n = projectParts(data, p.id).tasks.filter((c) => c.state !== 'finished').length;
-        return n ? `No tasks right in it — the projects above hold ${n} task${n === 1 ? '' : 's'}.` : 'No tasks in it yet.';
-      })()),
+      }))) : h('p', { class: 'muted small' }, 'No tasks in it yet.'),
     h('div', { class: 'sub-buttons' },
       p.misc ? null : h('button', { class: 'btn small', type: 'button', onClick: () => openAddTasks(ctx, p) }, '+ Add tasks'),
       h('button', { class: 'btn small', type: 'button', onClick: () => newProjectHere(ctx, p) }, '+ New task here'),
-      p.misc ? null : h('button', { class: 'btn small', type: 'button', title: 'A project inside this one (it holds its own tasks)', onClick: () => newInnerProject(ctx, p) }, '+ 📂 Project inside'),
-      h('button', { class: 'btn small', type: 'button', title: 'Copy this project\'s tasks as a numbered list (for an AI chat or an email)', onClick: () => ctx.copyList && ctx.copyList(all.filter((c) => c.state !== 'finished'), { title: `📂 ${p.name}`, about: p.about || '' }) }, '📋 Copy list')),
+      h('button', { class: 'btn small', type: 'button', title: 'Copy this group\'s tasks as a numbered list (for an AI chat or an email)', onClick: () => ctx.copyList && ctx.copyList(all.filter((c) => c.state !== 'finished'), { title: `📂 ${p.name}`, about: p.about || '' }) }, '📋 Copy list')),
     addTasksPicker(ctx, p),
     newHereBox(ctx, p));
 }
 
 /** "+ New task here": opens a box on the page (a name, and notes you can paste a screenshot or a table into). */
-/** On a project's page: the 📂 projects inside it (each opens; right-click: move, take out…), with their own counts. */
-function innerProjects(ctx, p, today) {
-  const data = ctx.store.view.data;
-  const subs = subProjectsOf(data, p.id).filter((c) => c.state !== 'finished');
-  if (!subs.length) return null;
-  const openIt = (c) => (ctx.ui.view === 'mains' && ctx.showHere ? ctx.showHere(c.id) : ctx.openProject(c.id));
-  return h('div', { class: 'inner-projects', key: 'inner-' + p.id },
-    h('h3', null, `PROJECTS INSIDE (${subs.length})`),
-    h('ul', { class: 'plist' }, subs.map((c) => h('li', {
-      key: 'in-' + c.id, class: 'prow main-row inner-project', onContextmenu: (e) => ctx.openRowMenu && ctx.openRowMenu(c.id, e, p.id),
-    },
-    h('button', { class: 'prow-btn', type: 'button', onClick: () => openIt(c) },
-      h('span', { class: 'dot ' + listColour(data, c, today) }),
-      h('span', { class: 'prow-text' }, h('span', { class: 'prow-name' }, '📂 ', c.name), h('span', { class: 'prow-next' }, projectLine(data, c, today))))))));
-}
-
-/** "+ 📂 Project inside": a new project made inside this one (one Undo takes it away). */
-export function newInnerProject(ctx, p) {
-  const name = globalThis.prompt ? prompt(`Name of the new project inside 📂 ${p.name}:`) : null;
-  if (!name || !name.trim()) return;
-  const projectId = newId();
-  if (!ctx.store.dispatch('createMainProject', { projectId, name: name.trim() })) return;
-  ctx.store.dispatch('addToProject', { projectId, parentId: p.id });
-  ctx.toast(`New project 📂 ${name.trim()} inside 📂 ${p.name}`);
-  ctx.render();
-}
-
 export function newProjectHere(ctx, p) {
   ctx.ui.newHere = p.id;
   ctx.render();
@@ -446,16 +414,16 @@ export function renderProjectsHead(ctx) {
   const inside = inSet.size;
   const loose = activeTasks(data).filter((c) => !inSet.has(c.id)).length;
   const newMain = () => {
-    const name = globalThis.prompt ? prompt('Name of the new project (it holds a few tasks):') : null;
+    const name = globalThis.prompt ? prompt('Name of the new group (it holds tasks):') : null;
     if (!name || !name.trim()) return;
     const projectId = newId();
     if (store.dispatch('createMainProject', { projectId, name: name.trim() })) {
-      ctx.toast(`New project: 📂 ${name.trim()}`);
+      ctx.toast(`New group: 📂 ${name.trim()}`);
       if (ctx.showHere) ctx.showHere(projectId); else ctx.render();
     }
   };
   return h('div', { class: 'mains-head', key: 'mains-head' },
-    h('p', { class: 'muted mains-line' }, `${mains.length} project${mains.length === 1 ? '' : 's'} · ${inside} task${inside === 1 ? '' : 's'} in them${loose ? ` · ${loose} in no project` : ''} · red first`),
-    h('button', { class: 'btn primary new-main', type: 'button', onClick: newMain }, '+ New project'),
-    mains.length ? null : h('p', { class: 'empty-list' }, 'No projects yet. Make one here, or open a task and use ⋯ → 📂 Add to a project.'));
+    h('p', { class: 'muted mains-line' }, `${mains.length} group${mains.length === 1 ? '' : 's'} · ${inside} task${inside === 1 ? '' : 's'} in them${loose ? ` · ${loose} in no group` : ''} · red first`),
+    h('button', { class: 'btn primary new-main', type: 'button', onClick: newMain }, '+ New group'),
+    mains.length ? null : h('p', { class: 'empty-list' }, 'No groups yet. Make one here, or open a task and use ⋯ → 📂 Add to a group.'));
 }

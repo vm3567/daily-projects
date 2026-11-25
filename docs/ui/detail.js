@@ -4,7 +4,7 @@ import { h, fmtDay, fmtTime, fmtSize, HAS_KEYBOARD } from './dom.js';
 import { isPhoto } from './heic.js';
 
 const MOD = /Mac|iPhone|iPad/.test(globalThis.navigator ? navigator.platform || navigator.userAgent || '' : '') ? '⌘' : 'Ctrl';
-import { dotColour, isSnoozed, restUntil, restReason, onlyDaysOf, onlyDaysLabel, onlyDaysChip, remindOnceChip, indiaDateTime, WEEKDAYS, weekdayOf, stepWaitsForReminder, daysBetween, addDays, todayIndia, isOverdue, indiaDate, waitingDays, lastWorkDate, nextStep, stepLinkedTo, personStatus, minutesBetween, fmtMinutes, weekStart, seenUpTo, deleteQuestion, parseDuration } from '../rules.js';
+import { dotColour, isSnoozed, restUntil, restReason, onlyDaysOf, onlyDaysLabel, onlyDaysChip, remindOnceChip, indiaDateTime, WEEKDAYS, weekdayOf, stepWaitsForReminder, daysBetween, addDays, todayIndia, isOverdue, indiaDate, waitingDays, lastWorkDate, nextStep, stepLinkedTo, personStatus, minutesBetween, fmtMinutes, weekStart, seenUpTo, deleteQuestion, parseDuration, slotEnd, timeToMin, minToTime } from '../rules.js';
 import { WAIT_RED_DAYS } from '../config.js';
 import { newId, PRIORITIES, cleanUrl, MAX_SNOOZE_DAYS, ABOUT_MAX } from '../ops.js';
 
@@ -19,7 +19,7 @@ import { stageLine } from './stage.js';
 import { IN_NO_PROJECT } from './workparts.js';
 
 /** 'project' for a 📂 project, 'task' for everything else (what the app once called a project). */
-const kindWord = (ctx, p) => (isMainProject(ctx.store.view.data, p) ? 'project' : 'task');
+const kindWord = (ctx, p) => (isMainProject(ctx.store.view.data, p) ? 'group' : 'task'); // (owner, 25 Nov: 📂 projects are groups)
 
 const REPEAT_WORD = { daily: 'every day', weekly: 'every week', monthly: 'every month' };
 const HISTORY_WORDS = {
@@ -33,7 +33,7 @@ const HISTORY_WORDS = {
   team_ticked: 'Done by the team', team_note: 'Team note', team_step_added: 'Step added by the team', team_step_unticked: 'Opened again by the team',
   team_note_deleted: 'Team note removed', team_moved: 'Moved by the team', mail_note: 'Email reply', mail_task: 'Task made from an email', app_task: '🔌 Task from an app', app_note: '🔌 Update from an app',
   reply_prepared: 'Reply prepared', reply_sent: 'Reply sent', mail_replied: 'Reply sent (seen in Outlook)',
-  step_to_project: 'Step made a task', main_changed: '📂 Project',
+  step_to_project: 'Step made a task', main_changed: '📂 Group',
 };
 
 /** Text box that saves on its own: after a short pause in typing, and when leaving the box. */
@@ -99,7 +99,7 @@ export async function pasteIntoStep(ctx, p, files, stepId = null) {
  */
 export function startNextTask(ctx, p) {
   if (!p || p.misc || p.nextId) return false;
-  const name = globalThis.prompt ? prompt(`What is the next task?\n\n“${p.name}” is finished, and the new task is linked to it (same project, tag and priority).`, '') : null;
+  const name = globalThis.prompt ? prompt(`What is the next task?\n\n“${p.name}” is finished, and the new task is linked to it (same group, tag and priority).`, '') : null;
   if (!name || !name.trim()) return false;
   const nextId = newId();
   const steps = [['createProject', { projectId: nextId, name: name.trim() }], ['linkFollow', { projectId: p.id, nextId }]];
@@ -117,7 +117,7 @@ export function finishProject(ctx, p) {
   const open = openTasksInside(ctx.store.view.data, p);
   const n = open.length, s = n === 1 ? '' : 's';
   const list = open.slice(0, 8).map((t) => `• ${t.name}`).join('\n') + (n > 8 ? `\n… and ${n - 8} more` : '');
-  const all = n && globalThis.confirm ? confirm(`${n} task${s} still open inside 📂 ${p.name}:\n${list}\n\nFinish ${n === 1 ? 'it' : 'them'} too?\nOK = finish the project and ${n === 1 ? 'this task' : 'these tasks'}\nCancel = finish only the project (the task${s} stay${n === 1 ? 's' : ''} open)`) : false;
+  const all = n && globalThis.confirm ? confirm(`${n} task${s} still open inside 📂 ${p.name}:\n${list}\n\nFinish ${n === 1 ? 'it' : 'them'} too?\nOK = finish the group and ${n === 1 ? 'this task' : 'these tasks'}\nCancel = finish only the project (the task${s} stay${n === 1 ? 's' : ''} open)`) : false;
   if (!all) return ctx.act('finish', { projectId: p.id }, `Finished: ${p.name} (moved to Finished)`);
   return ctx.actMany(p.id, [...open.map((t) => ['finish', { projectId: t.id }]), ['finish', { projectId: p.id }]], `Finished: ${p.name} and its ${n} open task${s}`);
 }
@@ -1005,7 +1005,7 @@ function projectMenu(ctx, p) {
     timed ? item('⏱ Add time', () => addTimePrompt(ctx, p)) : null,
     item('✎ Tag, priority, target date', () => { ui.editMeta = true; }),
     // 📂 a task can be in several projects; a project can be inside other projects too (never 📂 Misc)
-    p.misc ? null : item(isMainProject(store.view.data, p) ? '📂 Put inside a project…' : '📂 Add to a project…', () => openMainBox(ctx, p, 'parent')),
+    p.misc || isMainProject(store.view.data, p) ? null : item('📂 Add to a group…', () => openMainBox(ctx, p, 'parent')), // (a group goes into no group: one level, owner 25 Nov)
     p.misc ? null : item(`🗑 Delete ${kindWord(ctx, p)}`, () => { // (📂 Misc stays: it holds every task in no other project)
       if (!confirm(deleteQuestion(ctx.store.view.data, p))) return;
       ctx.act('deleteProject', { projectId: p.id }, `Deleted: ${p.name}`, 10000);
@@ -1025,7 +1025,7 @@ function oldStepsBlock(ctx, p, openSteps) {
     ctx.render();
   };
   return section(`Steps from before (${openSteps.length})`,
-    h('p', { class: 'muted small' }, 'A project holds tasks; steps belong in its tasks. Make each of these a task in this project:'),
+    h('p', { class: 'muted small' }, 'A group holds tasks; steps belong in its tasks. Make each of these a task in this group:'),
     h('ul', { class: 'old-steps', key: 'oldsteps-' + p.id }, openSteps.map((st) => h('li', { key: 'os-' + st.id, class: 'old-step' },
       h('span', null, st.text),
       h('button', { class: 'btn small', type: 'button', onClick: () => makeTask(st) }, '↗ Make it a task')))));
@@ -1058,6 +1058,11 @@ function infoChips(ctx, p, today) {
   }
   // 🔁 how often it should move (its dot follows it); a 📂 project's choice goes to everything inside it
   if (!p.misc && p.state !== 'finished') out.push(chip(`🔁 ${everyText(moveEveryOf(p))}`, `${colourWhy(p, today)} — tap to change how often it should move`, () => { ui.everyOpen = ui.everyOpen === p.id ? null : p.id; ctx.render(); }));
+  // 📅 its time on the calendar (owner, 25 Nov); tap to plan or change it (phones too: no dragging needed)
+  if (!p.misc && !isMainProject(data, p) && p.state !== 'finished') {
+    out.push(chip(p.slot ? `📅 ${slotLabel(p.slot)}` : '📅 Plan', p.slot ? 'Its time on the calendar — tap to change' : 'Give it a day and a time on the calendar',
+      () => { ui.planOpen = ui.planOpen === p.id ? null : p.id; ctx.render(); }, p.slot ? ' on' : ''));
+  }
   if (tagName(data, p)) out.push(chip(`🏷 ${tagName(data, p)}`, 'Tag — tap to change', editMeta));
   out.push(chip(p.priority[0].toUpperCase() + p.priority.slice(1), 'Priority — tap to change', editMeta, p.priority === 'high' ? ' bad' : ''));
   // finished: the day it ended, not a target any more (owner, 24 Oct)
@@ -1072,7 +1077,36 @@ function infoChips(ctx, p, today) {
     out.push(total ? chip(`⏱ ${fmtMinutes(total)}`, `Time on this ${kindWord(ctx, p)} — tap for details`, () => { ui.showTime = ui.showTime === p.id ? null : p.id; ctx.render(); })
       : chip('⏱ Add time', 'Add time worked (not timed)', () => addTimePrompt(ctx, p)));
   }
-  return h('div', { class: 'info-chips', key: 'ic-' + p.id }, out, peopleChips(ctx, p), everyPicker(ctx, p));
+  return h('div', { class: 'info-chips', key: 'ic-' + p.id }, out, peopleChips(ctx, p), everyPicker(ctx, p), planBox(ctx, p, today));
+}
+
+const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+/** "Wed 25 Nov · 10:00–11:30" */
+export function slotLabel(slot) {
+  return `${DOW[new Date(slot.day + 'T00:00:00Z').getUTCDay()]} ${fmtDay(slot.day)} · ${slot.start}–${slotEnd(slot.start, slot.mins)}`;
+}
+export const SLOT_LENGTHS = [15, 30, 45, 60, 90, 120, 180, 240, 360, 480];
+const lengthWord = (m) => (m < 60 ? `${m} min` : `${m / 60} hour${m === 60 ? '' : 's'}`.replace('.5 hours', '½ hours'));
+
+/** 📅 Plan: a day, a start time and how long; Save puts it on the calendar, "Off the calendar" takes it away. */
+function planBox(ctx, p, today) {
+  const { ui } = ctx;
+  if (ui.planOpen !== p.id) return null;
+  const f = (ui.planForm && ui.planForm.id === p.id) ? ui.planForm : (ui.planForm = { id: p.id, day: p.slot ? p.slot.day : today, start: p.slot ? p.slot.start : '10:00', mins: p.slot ? p.slot.mins : 60 });
+  const save = () => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(f.day) || !/^([01]\d|2[0-3]):[0-5]\d$/.test(f.start)) { ctx.toast('Pick a day and a time'); return; }
+    const start = minToTime(Math.round(timeToMin(f.start) / 15) * 15 % (24 * 60)); // (on the quarter hour)
+    ctx.act('setSlot', { projectId: p.id, day: f.day, start, mins: f.mins }, `📅 ${p.name}: ${slotLabel({ day: f.day, start, mins: f.mins })}`);
+    ui.planOpen = null; ui.planForm = null; ctx.render();
+  };
+  return h('div', { class: 'plan-box row', key: 'plan-' + p.id, role: 'group', 'aria-label': 'Plan on the calendar' },
+    h('label', null, 'Day ', h('input', { type: 'date', key: 'plan-day-' + p.id, value: f.day, onChange: (e, el) => { f.day = el.value; } })),
+    h('label', null, 'At ', h('input', { type: 'time', step: '900', key: 'plan-start-' + p.id, value: f.start, onChange: (e, el) => { f.start = el.value; } })),
+    h('label', null, 'For ', h('select', { key: 'plan-mins-' + p.id, value: String(f.mins), onChange: (e, el) => { f.mins = Number(el.value); } },
+      SLOT_LENGTHS.map((m) => h('option', { value: String(m) }, lengthWord(m))))),
+    h('button', { class: 'btn primary small', type: 'button', onClick: save }, 'Save'),
+    p.slot ? h('button', { class: 'btn small', type: 'button', onClick: () => { ctx.act('setSlot', { projectId: p.id, day: null }, `📅 ${p.name}: off the calendar`); ui.planOpen = null; ui.planForm = null; ctx.render(); } }, 'Off the calendar') : null,
+    h('button', { class: 'link small', type: 'button', onClick: () => { ui.planOpen = null; ui.planForm = null; ctx.render(); } }, 'Cancel'));
 }
 
 /** "Move every…": 1, 2, 3, 5, 7, 14, 30 days (the one now is marked). On a 📂 project it says it goes to its tasks too. */
@@ -1245,7 +1279,7 @@ export function renderDetail(ctx) {
     h('div', { class: 'detail-top' },
       h('button', { class: 'icon back', 'aria-label': 'Back to list', onClick: () => { ui.mobile = 'list'; ctx.render(); } }, '←'),
       h('span', { class: `dot ${colour}`, title: colourWhy(p, today) }), // why it has this colour
-      p.misc ? h('h2', { class: 'misc-title' }, `📂 ${IN_NO_PROJECT}`) : autoField('input', { class: 'title-input', value: p.name, 'aria-label': `${kindWord(ctx, p) === 'task' ? 'Task' : 'Project'} name`, title: `Click to change the ${kindWord(ctx, p)} name`, key: 'name-' + p.id },
+      p.misc ? h('h2', { class: 'misc-title' }, `📂 ${IN_NO_PROJECT}`) : autoField('input', { class: 'title-input', value: p.name, 'aria-label': `${kindWord(ctx, p) === 'task' ? 'Task' : 'Group'} name`, title: `Click to change the ${kindWord(ctx, p)} name`, key: 'name-' + p.id },
         (v) => store.dispatch('setProjectField', { projectId: p.id, field: 'name', value: v })),
       p.misc ? null : h('button', {
         class: 'icon edit-title', title: `Change the ${kindWord(ctx, p)} name`, 'aria-label': `Change the ${kindWord(ctx, p)} name`,

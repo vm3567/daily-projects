@@ -36,3 +36,11 @@ place where it fits, not only the screen in the screenshot or the one named:
 - desktop and phone (and the Work Task forwarding page if it still draws anything).
 Before calling it done, go through that list, check each place, and say which places got it (and why any did not).
 Every place gets its own test.
+
+## Learn from every mistake (owner asked, 25 Nov)
+
+- Before starting any work, read `LESSONS.md` and follow it.
+- After each piece of work, add what went wrong (or nearly went wrong) to `LESSONS.md`: one short lesson each,
+  in plain English, with what to do next time. Skip a lesson that is already there; sharpen it instead.
+- When telling the owner the work is done, end with a short "Lessons" list of what was learned this time
+  (or "No new lessons").
