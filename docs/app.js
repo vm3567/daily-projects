@@ -1751,6 +1751,13 @@ function renderCalendar() {
       const mins = p.slot ? p.slot.mins : 60;
       act('setSlot', { projectId: id, day: d, start, mins }, `📅 ${p.name}: ${fmtDay(d)} ${start}`);
     },
+    // dropped on a day: a planned task keeps its time; one with only a target date gets that day as its target date
+    onDay: (id, d) => {
+      const p = find(id);
+      if (!p) return;
+      if (p.slot) act('setSlot', { projectId: id, day: d, start: p.slot.start, mins: p.slot.mins }, `📅 ${p.name}: ${fmtDay(d)} ${p.slot.start}`);
+      else act('setProjectField', { projectId: id, field: 'deadline', value: d }, `📅 ${p.name}: target ${fmtDay(d)}`);
+    },
     onAdd: (d, start) => { ui.calAdd = { day: d, start, mins: 60, name: '' }; render(); focusKey('cal-add-name'); },
   });
 }

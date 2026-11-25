@@ -713,6 +713,14 @@ export function createTeam(opts) {
         if (t.projectRef && t.seq !== null && t.seq !== undefined) { toast(owner ? 'This came from your tasks: change its time on the task (📅 Plan).' : 'This came from the owner\'s tasks: its time is changed there.', 5000); return; }
         try { await api('task.slot', { id: t.id, slot: { day: d, start, mins: t.slot ? t.slot.mins : 60 } }); toast(`📅 ${t.title}: ${fmtDay(d)} ${start}`); load(); } catch (e) { say(e); }
       },
+      // dropped on a day: a task with a time keeps its time on that day (a due date alone is changed on the task: Edit)
+      onDay: async (id, d) => {
+        const t = all.find((x) => String(x.id) === String(id));
+        if (!t) return;
+        if (!t.slot) { toast('Drop it on a time to plan it, or change its due date on the task (Edit).', 5000); return; }
+        if (t.projectRef && t.seq !== null && t.seq !== undefined) { toast(owner ? 'This came from your tasks: change its time on the task (📅 Plan).' : 'This came from the owner\'s tasks: its time is changed there.', 5000); return; }
+        try { await api('task.slot', { id: t.id, slot: { day: d, start: t.slot.start, mins: t.slot.mins } }); toast(`📅 ${t.title}: ${fmtDay(d)} ${t.slot.start}`); load(); } catch (e) { say(e); }
+      },
       onAdd: (d, start) => { state.prefill = { slotDay: d, slotStart: start }; state.giveForm = null; open('give'); },
     });
   }

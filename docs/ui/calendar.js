@@ -86,8 +86,9 @@ export function timeIn(y, from) {
 
 /**
  * The calendar. o: { mode, day, today, items: [{ id, title, day, start, mins, colour, sub? }], allDay: [{ id, title, day,
- * colour }], onNav(day), onMode(mode), onOpen(id), onMove?(id, day, start), onAdd?(day, start), side?: a node beside it,
- * box?: a node above the grid (e.g. the add box) }.
+ * colour }], onNav(day), onMode(mode), onOpen(id), onMove?(id, day, start), onDay?(id, day) (dropped on a day's "all day"
+ * row or a Month day: same time, another day), onAdd?(day, start), side?: a node beside it, box?: a node above the grid
+ * (e.g. the add box) }.
  */
 export function calendarView(o) {
   const { mode, day, today } = o;
@@ -103,8 +104,18 @@ export function calendarView(o) {
   return h('div', { class: 'pcal' + (o.side ? ' with-side' : '') }, bar, o.box || null, h('div', { class: 'pcal-main' }, body, o.side || null));
 }
 
+/** Every task on the calendar can be picked up (owner, 25 Nov: "drag and drop on to another slot, or another day"). */
+const dragStart = (id) => (e) => { if (e.dataTransfer) { e.dataTransfer.setData('text/plain', id); e.dataTransfer.effectAllowed = 'move'; } };
+/** A day's "all day" row or a Month day takes a dropped task: the same time (or none) on that day. */
+const dayDrop = (o, d) => (o.onDay ? {
+  onDragover: (e) => e.preventDefault(),
+  onDrop: (e) => { e.preventDefault(); const id = e.dataTransfer && e.dataTransfer.getData('text/plain'); if (id) o.onDay(id, d); },
+} : {});
+
 function chip(o, t, time) {
-  return h('button', { class: `pcal-chip ${t.colour || 'grey'}`, type: 'button', key: 'ch-' + t.id + t.day, title: t.title, onClick: () => o.onOpen(t.id) },
+  const can = !!(o.onMove || o.onDay);
+  return h('button', { class: `pcal-chip ${t.colour || 'grey'}`, type: 'button', key: 'ch-' + t.id + t.day, title: t.title, onClick: () => o.onOpen(t.id),
+    draggable: can ? 'true' : undefined, onDragstart: can ? dragStart(t.id) : undefined },
     time ? h('span', { class: 'pcal-time' }, t.start + ' ') : null, t.title);
 }
 
@@ -116,7 +127,7 @@ function monthGrid(o, days) {
     ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((n) => h('div', { class: 'pcal-dow', key: 'dw-' + n }, n)),
     days.map((d) => {
       const list = [...(all.get(d) || []).map((t) => [t, false]), ...(timed.get(d) || []).map((t) => [t, true])];
-      return h('div', { class: 'pcal-cell' + (d.slice(0, 7) === month ? '' : ' other') + (d === o.today ? ' today' : ''), key: 'mc-' + d },
+      return h('div', { class: 'pcal-cell' + (d.slice(0, 7) === month ? '' : ' other') + (d === o.today ? ' today' : ''), key: 'mc-' + d, ...dayDrop(o, d) },
         h('button', { class: 'pcal-daynum link', type: 'button', title: 'Open this day', onClick: () => { o.onNav(d); o.onMode('day'); } }, String(Number(d.slice(8)))),
         list.slice(0, 3).map(([t, time]) => chip(o, t, time)),
         list.length > 3 ? h('button', { class: 'link small', type: 'button', onClick: () => { o.onNav(d); o.onMode('day'); } }, `+${list.length - 3} more`) : null);
@@ -147,7 +158,7 @@ function timeGrid(o, days) {
     const el = h('div', {
       class: `pcal-block ${b.colour || 'grey'}`, key: 'bl-' + b.id, draggable: o.onMove ? 'true' : undefined, role: 'button', tabindex: '0',
       title: `${b.title}\n${b.start}–${slotEnd(b.start, b.mins)}${b.sub ? '\n' + b.sub : ''}`,
-      onDragstart: o.onMove ? (e) => { if (e.dataTransfer) { e.dataTransfer.setData('text/plain', b.id); e.dataTransfer.effectAllowed = 'move'; } } : undefined,
+      onDragstart: o.onMove ? dragStart(b.id) : undefined,
       onClick: () => o.onOpen(b.id),
       onKeydown: (e) => { if (e.key === 'Enter') o.onOpen(b.id); },
     }, h('span', { class: 'pcal-time' }, `${b.start}–${slotEnd(b.start, b.mins)}`), h('span', { class: 'pcal-name' }, b.title), b.sub ? h('span', { class: 'pcal-sub' }, b.sub) : null);
@@ -160,8 +171,9 @@ function timeGrid(o, days) {
   }, laneBlocks(o.items.filter((t) => t.day === d)).map(block)), `height:${height}px`);
   const head = css(h('div', { class: 'pcal-head' }, h('div', null),
     days.map((d) => h('div', { class: 'pcal-dayhead' + (d === o.today ? ' today' : ''), key: 'dh-' + d }, `${SHORT[wd(d)]} ${Number(d.slice(8))}`))), cols);
-  const allDayRow = allDay.some((t) => days.includes(t.day)) ? css(h('div', { class: 'pcal-allday' }, h('div', { class: 'pcal-gutter small muted' }, 'all day'),
-    days.map((d) => h('div', { class: 'pcal-alldaycell', key: 'ad-' + d }, allDay.filter((t) => t.day === d).map((t) => chip(o, t, false))))), cols) : null;
+  // (always there when a task can be dropped on a day, so there is somewhere to drop it)
+  const allDayRow = o.onDay || allDay.some((t) => days.includes(t.day)) ? css(h('div', { class: 'pcal-allday' }, h('div', { class: 'pcal-gutter small muted' }, 'all day'),
+    days.map((d) => h('div', { class: 'pcal-alldaycell', key: 'ad-' + d, ...dayDrop(o, d) }, allDay.filter((t) => t.day === d).map((t) => chip(o, t, false))))), cols) : null;
   const gutter = css(h('div', { class: 'pcal-gutter' }, hours.map((m) => css(h('div', { class: 'pcal-hour', key: 'hr-' + m }, minToTime(m)), `top:${(m - from) / 60 * HOUR_PX}px`))), `height:${height}px`);
   return h('div', { class: 'pcal-week' }, head, allDayRow, css(h('div', { class: 'pcal-body' }, gutter, days.map(column)), cols));
 }

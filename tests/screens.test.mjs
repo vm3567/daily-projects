@@ -1060,7 +1060,7 @@ test('📂 Projects page: a click on a project row selects it and stays on the p
   assert.match(mainsSrc, /ctx\.ui\.view === 'mains' && ctx\.showHere \? ctx\.showHere\(c\.id\)/, 'a task in the TASKS table while on the Projects page');
   const here = app.slice(app.indexOf('  showHere: (id) => {'), app.indexOf('  openProject: (id) => {'));
   assert.match(here, /select\(id\);/);
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-66'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-67'/, 'phones get the new copy');
 });
 
 test('📂 project page: "✕ Remove" on a task row takes it out of this project only — the task is kept (and stays in its other projects)', () => {
@@ -1846,7 +1846,7 @@ test('🔌 app wiring (app.js): "🔌 From apps" after ✉ Replies with the wait
   assert.match(app, /function go\(view\) \{\n\s*if \(view !== 'settings'\) forgetOnce\(\);/);
   assert.match(app, /if \(onServer\) loadApps\(appsCtx, force \|\| ui\.view === 'apps'\);/);
   assert.match(app, /replies: '✉ Replies', apps: '🔌 From apps', mains: '📂 Groups' \}\[ui\.view\]/, 'its page title');
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-66'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-67'/, 'phones get the new copy');
 });
 
 test('🔌 the PHP connector (team/connector/worktask-connector.php): the same text the app downloads, placeholders only (no real key), valid PHP 7.4+ (php -l), with wt_push / wt_withdraw / wt_decisions / wt_receive_decision', async () => {
@@ -5440,4 +5440,69 @@ test('📅 Calendar on the staff view (owner, 25 Nov): their own tasks with a ti
   assert.ok(!/ can-add /.test(' ' + find(v, (n) => / pcal-col /.test(' ' + (n.className || '') + ' ')).className + ' '), 'no add');
   block.__on.click();
   assert.equal(s.state.sel, 'task:11');
+});
+
+test('📅 drag anything on the calendar to another time or day (owner, 25 Nov: "make it dragabale, so i drag and drop on to another slot, or another day"): all-day and Month items can be picked up; a day\'s "all day" row and a Month day take a drop (onDay); the owner keeps a time, or moves the target date; the team pages move a timed task\'s day', async () => {
+  const cal = await import('../docs/ui/calendar.js');
+  const calls = [];
+  const find = (n, f) => (f(n) ? n : (n.childNodes || []).map((c) => find(c, f)).find(Boolean));
+  const all = (n, f, out = []) => { if (f(n)) out.push(n); (n.childNodes || []).forEach((c) => all(c, f, out)); return out; };
+  const drag = (id) => { const dt = { set: '', setData(k, v) { this.set = v; }, getData() { return this.set; } }; return dt; };
+  const o = {
+    mode: 'week', day: '2026-11-25', today: '2026-11-25',
+    items: [{ id: 'k1', title: 'Fire the kiln', day: '2026-11-25', start: '10:00', mins: 90, colour: 'red' }],
+    allDay: [{ id: 'x', title: 'Order clay', day: '2026-11-26', colour: 'yellow' }],
+    onNav() {}, onMode() {}, onOpen() {},
+    onMove: (id, d, t) => calls.push(['move', id, d, t]), onDay: (id, d) => calls.push(['day', id, d]),
+  };
+  const el = cal.calendarView(o);
+  const chip = find(el, (n) => / pcal-chip /.test(' ' + (n.className || '') + ' '));
+  assert.equal(chip.getAttribute('draggable'), 'true', 'an all-day item can be picked up');
+  const dt = drag();
+  chip.__on.dragstart({ dataTransfer: dt });
+  assert.equal(dt.set, 'x');
+  // onto a time: it gets that time
+  const col = find(el, (n) => n.getAttribute && n.getAttribute('data-day') === '2026-11-27');
+  col.__on.drop({ preventDefault() {}, clientY: cal.HOUR_PX * 2, dataTransfer: dt }, { getBoundingClientRect: () => ({ top: 0 }) });
+  assert.deepEqual(calls.at(-1), ['move', 'x', '2026-11-27', '09:00']);
+  // onto another day's "all day" row: that day
+  const cells = all(el, (n) => (n.className || '') === 'pcal-alldaycell');
+  assert.equal(cells.length, 7);
+  let stopped = false;
+  cells[5].__on.dragover({ preventDefault() { stopped = true; } });
+  assert.ok(stopped, 'the row says "drop here"');
+  cells[5].__on.drop({ preventDefault() {}, dataTransfer: { getData: () => 'k1' } });
+  assert.deepEqual(calls.at(-1), ['day', 'k1', '2026-11-28'], 'Saturday');
+  // a week with no all-day item still has the row to drop on
+  assert.ok(cal.calendarView({ ...o, allDay: [] }).textContent.includes('all day'));
+  // Month: every item can be picked up, each day takes a drop
+  const month = cal.calendarView({ ...o, mode: 'month' });
+  assert.ok(all(month, (n) => / pcal-chip /.test(' ' + (n.className || '') + ' ')).every((c) => c.getAttribute('draggable') === 'true'));
+  const dayCell = find(month, (n) => / pcal-cell /.test(' ' + (n.className || '') + ' ') && !/ other /.test(' ' + n.className + ' ') && (n.textContent || '').startsWith('30'));
+  dayCell.__on.drop({ preventDefault() {}, dataTransfer: { getData: () => 'k1' } });
+  assert.deepEqual(calls.at(-1), ['day', 'k1', '2026-11-30']);
+  // a page that only looks (the staff view): nothing to pick up or drop on
+  const still = cal.calendarView({ ...o, onMove: null, onDay: null });
+  assert.equal(find(still, (n) => / pcal-chip /.test(' ' + (n.className || '') + ' ')).getAttribute('draggable'), null);
+  assert.equal(all(still, (n) => (n.className || '') === 'pcal-alldaycell')[0].__on, undefined);
+  // the owner's pages: a planned task keeps its time; one with only a target date gets that day as its target date
+  const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
+  assert.match(app, /onDay: \(id, d\) => \{\n\s*const p = find\(id\);\n\s*if \(!p\) return;\n\s*if \(p\.slot\) act\('setSlot', \{ projectId: id, day: d, start: p\.slot\.start, mins: p\.slot\.mins \}/);
+  assert.match(app, /else act\('setProjectField', \{ projectId: id, field: 'deadline', value: d \}/);
+  // the team pages: a timed task moves to that day at the same time; one from the owner's tasks does not
+  const tasks = [
+    { id: 61, title: 'Fire the kiln', assignee: { id: 3, name: 'Valar' }, status: 'open', repeat: 'daily', today: null, dueToday: true, slot: { day: '2026-11-25', start: '10:00', mins: 60 } },
+    { id: 62, title: 'Shoot the tiles', assignee: { id: 4, name: 'Ravi' }, status: 'open', repeat: 'once', projectRef: 'cal1', seq: 1, today: null, slot: { day: '2026-11-26', start: '11:00', mins: 60 } },
+  ];
+  const sent = [];
+  const { t } = fakeTeam({ 'tasks.list': () => ({ ok: true, tasks }), 'task.slot': (b) => { sent.push(b); return { ok: true, task: tasks[0] }; }, 'users.list': () => ({ ok: true, users: [] }) });
+  t.state.calDay = '2026-11-25'; t.state.calMode = 'week';
+  t.go('calendar'); await tick(); await tick();
+  const row = all(t.view(), (n) => (n.className || '') === 'pcal-alldaycell');
+  row[4].__on.drop({ preventDefault() {}, dataTransfer: { getData: () => '61' } }); await tick();
+  assert.deepEqual(sent, [{ id: 61, slot: { day: '2026-11-27', start: '10:00', mins: 60 } }], 'Friday, still 10:00');
+  row[4].__on.drop({ preventDefault() {}, dataTransfer: { getData: () => '62' } }); await tick();
+  assert.equal(sent.length, 1, 'from the owner\'s tasks: changed there');
+  // the "all day" row is tall enough to hit when dropping (a real mouse drop missed it when it was one line high)
+  assert.match(readFileSync(new URL('../docs/styles.css', import.meta.url), 'utf8'), /\.pcal-alldaycell \{[^}]*min-height: 34px;/);
 });

@@ -67,3 +67,6 @@ Each lesson: what went wrong, then what to do next time.
 21. **A form or box is made when the page is drawn.** Twice a test read a form's values (the 📅 Plan box, the Give
     form) before the page had drawn it, and failed.
     → In a test, draw the page (render / view) after opening a box, then read or change its values.
+22. **A drop area that is only one line high is missed by a real mouse.** The calendar's "all day" row passed every
+    check (they send the drop straight to it) but a real drag in the browser landed outside it.
+    → Give every drop area a sensible minimum size, and try one real mouse drag in the browser before calling it done.
