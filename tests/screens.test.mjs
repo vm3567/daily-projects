@@ -1060,7 +1060,7 @@ test('📂 Projects page: a click on a project row selects it and stays on the p
   assert.match(mainsSrc, /ctx\.ui\.view === 'mains' && ctx\.showHere \? ctx\.showHere\(c\.id\)/, 'a task in the TASKS table while on the Projects page');
   const here = app.slice(app.indexOf('  showHere: (id) => {'), app.indexOf('  openProject: (id) => {'));
   assert.match(here, /select\(id\);/);
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-69'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-70'/, 'phones get the new copy');
 });
 
 test('📂 project page: "✕ Remove" on a task row takes it out of this project only — the task is kept (and stays in its other projects)', () => {
@@ -1846,7 +1846,7 @@ test('🔌 app wiring (app.js): "🔌 From apps" after ✉ Replies with the wait
   assert.match(app, /function go\(view\) \{\n\s*if \(view !== 'settings'\) forgetOnce\(\);/);
   assert.match(app, /if \(onServer\) loadApps\(appsCtx, force \|\| ui\.view === 'apps'\);/);
   assert.match(app, /replies: '✉ Replies', apps: '🔌 From apps', mains: '📂 Groups' \}\[ui\.view\]/, 'its page title');
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-69'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-70'/, 'phones get the new copy');
 });
 
 test('🔌 the PHP connector (team/connector/worktask-connector.php): the same text the app downloads, placeholders only (no real key), valid PHP 7.4+ (php -l), with wt_push / wt_withdraw / wt_decisions / wt_receive_decision', async () => {
@@ -5515,4 +5515,11 @@ test('📅 drag anything on the calendar to another time or day (owner, 25 Nov: 
   assert.equal(sent.length, 1, 'from the owner\'s tasks: changed there');
   // the "all day" row is tall enough to hit when dropping (a real mouse drop missed it when it was one line high)
   assert.match(readFileSync(new URL('../docs/styles.css', import.meta.url), 'utf8'), /\.pcal-alldaycell \{[^}]*min-height: 34px;/);
+});
+
+test('no colour dot at the start of a row in any list (owner, 25 Nov: "remove this color dots, confusing"): the owner\'s lists, the team pages and the staff view share the row', () => {
+  const css = readFileSync(new URL('../docs/styles.css', import.meta.url), 'utf8');
+  assert.match(css, /\n\.prow-btn > \.dot \{ display: none; \}/);
+  assert.ok(css.indexOf('.prow-btn > .dot { display: none; }') > css.indexOf('.prow-btn .dot { margin-top: 5px; }'), 'after the old rule, so it wins');
+  for (const f of ['../docs/app.js', '../docs/ui/team.js', '../docs/ui/staff.js']) assert.match(readFileSync(new URL(f, import.meta.url), 'utf8'), /class: 'prow-btn'/, f + ' draws its rows with it');
 });

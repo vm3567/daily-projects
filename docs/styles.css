@@ -1382,6 +1382,10 @@ button.stage-chip.tap { cursor: pointer; font-size: 12.5px; padding: 3px 10px; }
   .pv-prev { left: 6px; } .pv-next { right: 6px; }
 }
 
+/* no colour dot at the start of a row in any list (owner, 25 Nov: "remove this color dots, confusing"): the row's own
+   label already says why ("No update for 27 days", "Target 2 Dec is near") */
+.prow-btn > .dot { display: none; }
+
 /* ---------------------------------------------------------------- 🎨 a fresh look (owner, 3 Nov: "only give the app a fresh look")
    A clean dashboard style: a soft grey page with white rounded cards (computer), quieter lines, pill tags,
    softer buttons and rows. Only the look: no page, button or rule changes. */
