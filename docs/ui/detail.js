@@ -920,12 +920,24 @@ function peopleChips(ctx, p) {
 }
 
 function section(title, ...children) {
-  return h('section', { class: 'block' }, h('h3', null, title), ...children);
+  // keyed by its title, so a part shown or hidden above it (🧘 ⚙ More details) never mixes up its rows when the page is redrawn
+  const name = typeof title === 'string' ? title : (title && title.textContent) || '';
+  return h('section', { class: 'block', key: name ? 'sec-' + name : undefined }, h('h3', null, title), ...children);
 }
 
 /** "Steps  ·  X ticks the next one" — the key shown where it is used (computer only). */
 function stepsTitle() {
   return HAS_KEYBOARD ? h('span', { title: 'Press X to tick the next one' }, 'Steps') : 'Steps';
+}
+
+/** 🧘 Simple mode (owner, 25 Nov): a task page shows its main parts; ⚙ More details shows the rest (stage, how often, priority,
+ *  tag, time, status, short description, ▶ Start, 💤 Snooze). Off in Settings: everything, as before. */
+const full = (ctx, p) => !ctx.ui.simple || ctx.ui.moreDetails === p.id;
+function moreDetailsToggle(ctx, p) {
+  if (!ctx.ui.simple || p.misc) return null;
+  const open = ctx.ui.moreDetails === p.id;
+  return h('button', { class: 'link small more-details', type: 'button', key: 'md-' + p.id, 'aria-expanded': String(open),
+    onClick: () => { ctx.ui.moreDetails = open ? null : p.id; ctx.render(); } }, open ? '▴ Fewer details' : '⚙ More details');
 }
 
 /** Pause / Finish (or Unpause / Reopen / Delete) — always visible at the top. */
@@ -938,9 +950,9 @@ function stateButtons(ctx, p) {
     return [
       running
         ? h('button', { class: 'btn timer-on', title: 'Stop the timer', onClick: () => ctx.stopTimer() }, `⏸ ${ctx.clockText(t.start)}`)
-        : timed && !p.misc ? h('button', { class: 'btn', title: `Start timing your work on this ${kindWord(ctx, p)}`, onClick: () => ctx.startTimer(p) }, '▶ Start') : null,
+        : timed && !p.misc && full(ctx, p) ? h('button', { class: 'btn', title: `Start timing your work on this ${kindWord(ctx, p)}`, onClick: () => ctx.startTimer(p) }, '▶ Start') : null,
       // 💤 Snooze on the page itself (the owner uses it daily; also in the ⋯ menu)
-      !p.misc && (!isSnoozed(p, todayIndia()) || restReason(p, todayIndia()) === 'onlyDays') ? h('button', {
+      !p.misc && full(ctx, p) && (!isSnoozed(p, todayIndia()) || restReason(p, todayIndia()) === 'onlyDays') ? h('button', { // (🧘 Simple mode: in the ⋯ menu)
         class: 'btn', title: 'Hide it from Today for some days',
         onClick: () => { ui.snoozeOpen = p.id; ctx.render(); setTimeout(() => { const n = document.querySelector(`[data-key="snooze-${p.id}"]`); if (n) { n.focus(); n.select(); } }, 30); },
       }, '💤 Snooze') : null,
@@ -1057,14 +1069,15 @@ function infoChips(ctx, p, today) {
       () => { ui.onlyDaysOpen = ui.onlyDaysOpen === p.id ? null : p.id; ctx.render(); }));
   }
   // 🔁 how often it should move (its dot follows it); a 📂 project's choice goes to everything inside it
-  if (!p.misc && p.state !== 'finished') out.push(chip(`🔁 ${everyText(moveEveryOf(p))}`, `${colourWhy(p, today)} — tap to change how often it should move`, () => { ui.everyOpen = ui.everyOpen === p.id ? null : p.id; ctx.render(); }));
+  const more = full(ctx, p);
+  if (!p.misc && p.state !== 'finished' && more) out.push(chip(`🔁 ${everyText(moveEveryOf(p))}`, `${colourWhy(p, today)} — tap to change how often it should move`, () => { ui.everyOpen = ui.everyOpen === p.id ? null : p.id; ctx.render(); }));
   // 📅 its time on the calendar (owner, 25 Nov); tap to plan or change it (phones too: no dragging needed)
   if (!p.misc && !isMainProject(data, p) && p.state !== 'finished') {
     out.push(chip(p.slot ? `📅 ${slotLabel(p.slot)}` : '📅 Plan', p.slot ? 'Its time on the calendar — tap to change' : 'Give it a day and a time on the calendar',
       () => { ui.planOpen = ui.planOpen === p.id ? null : p.id; ctx.render(); }, p.slot ? ' on' : ''));
   }
-  if (tagName(data, p)) out.push(chip(`🏷 ${tagName(data, p)}`, 'Tag — tap to change', editMeta));
-  out.push(chip(p.priority[0].toUpperCase() + p.priority.slice(1), 'Priority — tap to change', editMeta, p.priority === 'high' ? ' bad' : ''));
+  if (tagName(data, p) && more) out.push(chip(`🏷 ${tagName(data, p)}`, 'Tag — tap to change', editMeta));
+  if (more || p.priority === 'high') out.push(chip(p.priority[0].toUpperCase() + p.priority.slice(1), 'Priority — tap to change', editMeta, p.priority === 'high' ? ' bad' : '')); // (🧘 only High shows)
   // finished: the day it ended, not a target any more (owner, 24 Oct)
   if (p.state === 'finished') out.push(chip(`✓ Finished ${p.stateChangedAt ? fmtDay(indiaDate(p.stateChangedAt)) : ''}`.trim(), 'The day it was finished', null, ' good'));
   else out.push(chip(p.deadline ? `${overdue ? 'Overdue' : 'Target'} ${fmtDay(p.deadline)}` : '+ Target date', 'Target date — tap to change', editMeta, overdue ? ' bad' : ''));
@@ -1072,7 +1085,7 @@ function infoChips(ctx, p, today) {
   const timer = store.view.data.timer;
   const logs = p.timeLogs || [];
   const timed = timerOn(data);
-  if (timed || logs.length) {
+  if ((timed || logs.length) && more) {
     const total = minutesBetween(p, '0000-01-01', today, timer);
     out.push(total ? chip(`⏱ ${fmtMinutes(total)}`, `Time on this ${kindWord(ctx, p)} — tap for details`, () => { ui.showTime = ui.showTime === p.id ? null : p.id; ctx.render(); })
       : chip('⏱ Add time', 'Add time worked (not timed)', () => addTimePrompt(ctx, p)));
@@ -1292,9 +1305,9 @@ export function renderDetail(ctx) {
         onClick: () => { const n = document.querySelector(`[data-key="name-${p.id}"]`); if (n) { n.focus(); n.select(); } },
       }, '✎'),
       h('div', { class: 'state-buttons' }, stateButtons(ctx, p))),
-    aboutLine(ctx, p),
+    p.about || full(ctx, p) ? aboutLine(ctx, p) : null,
     colour === 'red' || colour === 'yellow' ? h('div', { class: 'why-line ' + colour, key: 'why-' + p.id }, `${colour === 'red' ? '🔴' : '🟡'} ${colourWhy(p, today)}`) : null, // why it is not green, in words (owner, 24 Oct)
-    p.misc ? null : stageLine(ctx, p), // (📂 In no project only holds tasks: no stage, priority, target, time or status — owner 24 Oct) the Stage chip near the top: ⚪ Not started · 🔵 In progress · 🟠 Waiting: … · ✅ Done (tap to change)
+    p.misc || !full(ctx, p) ? null : stageLine(ctx, p), // (🧘 Simple mode: under ⚙ More details) (📂 In no project only holds tasks: no stage, priority, target, time or status — owner 24 Oct) the Stage chip near the top: ⚪ Not started · 🔵 In progress · 🟠 Waiting: … · ✅ Done (tap to change)
     projectMenu(ctx, p),
     mainBox(ctx, p, 'parent'),
     snoozeBar(ctx, p),
@@ -1302,12 +1315,13 @@ export function renderDetail(ctx) {
     remindOnceBar(ctx, p),
     teamBar(ctx, p),
     p.misc ? null : infoChips(ctx, p, today),
+    moreDetailsToggle(ctx, p),
     quickLinks(ctx, p), // its links and files near the top: one click opens (owner asked, 22 Oct)
     projectEmailCards(ctx, p, today), // from an email: who wrote, the newest lines, and the reply (✉ Reply ready)
     ui.editMeta ? metaLine(ctx, p, today) : null,
     ui.showTime === p.id ? timeLine(ctx, p, today) : null,
     teamMessages(ctx, p),
-    p.misc ? null : statusLine(ctx, p),
+    p.misc || !(full(ctx, p) || p.status) ? null : statusLine(ctx, p), // (🧘 Simple mode: shown when it has words)
     p.state !== 'active' ? h('p', { class: 'banner' }, p.state === 'paused' ? `This ${kindWord(ctx, p)} is paused. It is hidden from Today.` : `This ${kindWord(ctx, p)} is finished.`,
       p.state === 'finished' && !p.nextId && !p.misc && !isMainProject(store.view.data, p) ? [' ', h('button', { class: 'link', type: 'button', onClick: () => startNextTask(ctx, p) }, '➜ Start the next task from it')] : null) : null,
     followChips(ctx, p), // ↩ came from / ➜ next task (owner, 29 Oct)

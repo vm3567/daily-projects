@@ -516,6 +516,7 @@ export function createTeam(opts) {
     const needs = t ? (t.stuck || []).length + (t.unread || []).length + (t.suggestions || []).length : 0;
     const ps = push ? push.state() : 'no';
     const listOn = (v) => !state.sel && state.view === v;
+    const S = !!(opts.simple && opts.toProjects); // (only the owner: their own pages have the Groups and Calendar)
     // the same menu as the owner's projects page (owner, 23 Oct): the search box on top, then the lists with their
     // counts and the red / yellow / green count under the first, a line, the rest
     const today = (t && t.tasks) || [];
@@ -530,13 +531,15 @@ export function createTeam(opts) {
         item('Team today', listOn('today') && !state.personFilter, () => { state.personFilter = 0; state.boardPage = 1; go('today'); }, t ? String(today.length) : null),
         t ? h('li', { class: 'menu-dots', key: 'dots', title: needs ? `${needs} need you` : '' },
           h('span', { class: 'dot red' }), String(dots.red), ' ', h('span', { class: 'dot yellow' }), String(dots.yellow), ' ', h('span', { class: 'dot green' }), String(dots.green)) : null,
-        item('✅ Tasks', listOn('tasks') && !state.closed, () => { state.closed = false; go('tasks'); }),
-        item('📂 Groups', listOn('projects'), () => go('projects')),
-        item('📅 Calendar', listOn('calendar'), () => go('calendar')),
-        item('🔁 Follow-up', listOn('followup'), () => go('followup')),
+        // 🧘 Simple mode (owner, 25 Nov: "one app, not two"): the owner's Groups and Calendar hold the team's too, so not
+        // here; Follow-up's 🔔 Chase is on each task's ⋯ menu; the Weekly report goes (Settings → Simple mode shows them)
+        item(S ? '✅ Team tasks' : '✅ Tasks', listOn('tasks') && !state.closed, () => { state.closed = false; go('tasks'); }),
+        S ? null : item('📂 Groups', listOn('projects'), () => go('projects')),
+        S ? null : item('📅 Calendar', listOn('calendar'), () => go('calendar')),
+        S ? null : item('🔁 Follow-up', listOn('followup'), () => go('followup')),
         h('li', { class: 'menu-sep' }),
         item('Done / cancelled', listOn('tasks') && state.closed, () => { state.closed = true; go('tasks'); }),
-        item('📊 Weekly report', listOn('report'), () => go('report')),
+        S ? null : item('📊 Weekly report', listOn('report'), () => go('report')),
         item(opts.openPeople ? 'People ↗ (in My tasks)' : 'People', listOn('people'), () => (opts.openPeople ? opts.openPeople() : go('people'))), // (the owner: one People page, in My projects — said, so the jump is expected)
         item('Settings', listOn('settings'), () => go('settings')),
         t && t.people && t.people.length ? [h('li', { class: 'menu-head' }, 'Team'), t.people.map((p) => {
@@ -1049,6 +1052,7 @@ export function createTeam(opts) {
     return h('div', { class: 'proj-menu', role: 'menu' },
       h('button', { class: 'menu-row', onClick: () => { close(); open('edit:' + t.id); } }, '✎ Edit task'),
       h('button', { class: 'menu-row', onClick: () => { close(); state.moving = t.id; render(); } }, '↔ Move to another person…'),
+      h('button', { class: 'menu-row', onClick: () => { close(); render(); chase({ taskId: t.id, person: t.assignee }).then((ok) => { if (ok) loadDetail(); }); } }, `🔔 Chase ${t.assignee ? t.assignee.name : ''}`.trim()), // (also here: Follow-up is hidden in Simple mode)
       h('label', { class: 'menu-row' }, '📎 Add instruction photo / PDF', h('input', { type: 'file', accept: 'image/*,application/pdf', multiple: true, class: 'visually-hidden',
         onChange: (e, el) => { const files = [...el.files].slice(0, 10); el.value = ''; close(); render(); addFiles(t.id, files).then(() => { toast('Added ✓'); reload(); }); } })),
       t.seq !== null && t.seq !== undefined ? null : h('button', { class: 'menu-row danger', onClick: () => { close(); if (ask.confirm('Cancel this task?')) setStatus(t, 'cancelled'); else render(); } }, '✖ Cancel task'));

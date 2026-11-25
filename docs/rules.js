@@ -257,7 +257,8 @@ export function colourShort(p, today = todayIndia()) {
   const days = daysWithoutWork(p, today);
   if (c === 'yellow' && days < moveEveryOf(p) && dateSoon(p, today)) return soonText(p, today);
   if (ownTarget(p) && p.deadline < today) return `Overdue · ${shortDay(p.deadline)}`;
-  return colourWhy(p, today).split(' · ')[0];
+  // shorter on a list row (owner, 25 Nov): "27 days no update" (the task page keeps the whole sentence)
+  return colourWhy(p, today).split(' · ')[0].replace(/^No update for (\d+ days?)$/, '$1 no update');
 }
 
 /**

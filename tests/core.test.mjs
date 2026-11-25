@@ -3484,3 +3484,14 @@ test('🔁 a calendar time can repeat (owner, 25 Nov: "calendar option for recur
   assert.ok(!unplannedTasks(s.data, '2026-12-25').some((x) => x.id === 'p1'), 'repeating: still planned weeks later');
   assert.equal(plannedAhead(p, '2026-11-25'), false, 'a repeating time does not hold off the "no update" colour');
 });
+
+test('a list row\'s reason is shorter (owner, 25 Nov): "27 days no update", "1 day no update"; the task page keeps the whole sentence', async () => {
+  const { colourShort, colourWhy, moveEveryOf } = await import('../docs/rules.js');
+  const s = withProject('2026-10-01');
+  const p = s.data.projects[0];
+  assert.equal(colourShort(p, '2026-10-28'), '27 days no update');
+  assert.match(colourWhy(p, '2026-10-28'), /^No update for 27 days · should move every 3 days/);
+  applyOp(s, op('setMoveEvery', { projectId: 'p1', days: 1 }, '2026-10-01'));
+  assert.equal(moveEveryOf(p), 1);
+  assert.equal(colourShort(p, '2026-10-02'), '1 day no update');
+});

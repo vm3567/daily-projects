@@ -1060,7 +1060,7 @@ test('📂 Projects page: a click on a project row selects it and stays on the p
   assert.match(mainsSrc, /ctx\.ui\.view === 'mains' && ctx\.showHere \? ctx\.showHere\(c\.id\)/, 'a task in the TASKS table while on the Projects page');
   const here = app.slice(app.indexOf('  showHere: (id) => {'), app.indexOf('  openProject: (id) => {'));
   assert.match(here, /select\(id\);/);
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-70'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-71'/, 'phones get the new copy');
 });
 
 test('📂 project page: "✕ Remove" on a task row takes it out of this project only — the task is kept (and stays in its other projects)', () => {
@@ -1092,7 +1092,7 @@ test('📋 Copy list buttons: on a project page (its tasks) and on the task list
   assert.match(mainsSrc, /const all = orderedTasks\(data, p, today\)\.filter\(\(c\) => !isMainProject\(data, c\)\);/, 'the table\'s list: the project\'s own order, tasks only');
   assert.match(mainsSrc, /ctx\.copyList\(all\.filter\(\(c\) => c\.state !== 'finished'\), \{ title: `📂 \$\{p\.name\}`, about: p\.about \|\| '' \}\) \}, '📋 Copy list'\)/, 'in the project\'s own order');
   assert.match(app, /onClick: \(\) => copyList\(currentList\(\), \{ title: viewTitle\(\) \}\) \}, '📋 Copy list'\)/);
-  assert.match(app, /!ui\.search && list\.length && ui\.view !== 'mains' \? h\('button', \{ class: 'btn small copy-list'/, 'not on the 📂 Projects list (each project page has its own)');
+  assert.match(app, /!ui\.search && list\.length && ui\.view !== 'mains' && !ui\.simple \? h\('button', \{ class: 'btn small copy-list'/, 'not on the 📂 Projects list (each project page has its own); 🧘 not in Simple mode (owner, 25 Nov)');
   assert.match(app, /new ClipboardItem\(\{ 'text\/html': new Blob\(\[html\]/, 'rich copy for email, plain for AI');
 });
 
@@ -1104,7 +1104,7 @@ test('✅ Tasks: "All tasks N" | "No project N" switch (both red first, remember
   assert.match(app, /taskListView\(\) && !ui\.search && !ui\.adding \? taskFilterSwitch\(\) : showSort/, 'the switch replaces My order / Red first on Tasks and in groups (owner asked, 22 Oct)');
   // (groups are gone, owner 23 Oct: ✅ Tasks only)
   assert.match(app, /function taskListView\(\) \{\n  return ui\.view === 'all';/);
-  assert.match(app, /if \(\(ui\.sort !== 'red' && !taskListView\(\)\) \|\| ui\.search\) return list;/, 'Tasks and groups are always red first');
+  assert.match(app, /if \(\(ui\.sort !== 'red' && !ui\.simple && !taskListView\(\)\) \|\| ui\.search\) return list;/, 'Tasks and groups are always red first (and everything in 🧘 Simple mode, owner 25 Nov)');
   assert.match(app, /taskFilter: ui\.taskFilter,/, 'remembered');
 });
 
@@ -1174,7 +1174,7 @@ test('menu order (owner, 22 Oct): Today, Tasks, Projects, Replies, Inbox, Groups
   for (const bit of order) { const i = menu.indexOf(bit); assert.ok(i > at, `${bit} in its place`); at = i; }
   assert.ok(!menu.includes('menu-person'), 'People shows just its count');
   assert.match(menu, /moreOpen \? 'More ▾' : 'More ▸'/);
-  assert.match(app, /const moreOpen = !!ui\.moreMenu \|\| \['diary', 'dashboard', 'time'\]\.includes\(ui\.view\);/, 'open while one of them is on screen');
+  assert.match(app, /const moreOpen = !!ui\.moreMenu \|\| \(ui\.simple \? \['paused', 'finished'\] : \['diary', 'dashboard', 'time'\]\)\.includes\(ui\.view\);/, 'open while one of them is on screen (🧘 Simple mode: Paused and Finished are in More, owner 25 Nov)');
 });
 
 test('✅ Tasks and groups: a select box on each row (instead of +), a bar "N selected · 📂 Add to project… · Select all · Clear" that puts all selected tasks into one project (or a new one); Today keeps its tick box', async () => {
@@ -1837,7 +1837,7 @@ test('🔌 From apps: ✓ Approve sends the version of the words on the screen; 
 test('🔌 app wiring (app.js): "🔌 From apps" after ✉ Replies with the waiting count (worktask.in only), its page, the Settings section, #apps from a phone alert, the key forgotten when leaving Settings; offline copy daily-projects-app-27', async () => {
   const { readFileSync } = await import('node:fs');
   const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
-  assert.match(app, /item\('replies', '✉ Replies', readyCount\(data, today\)\),[^\n]*\n\s*onServer \? item\('apps', '🔌 From apps', appsPending\(\)\) : null,/, 'right after ✉ Replies, with the count');
+  assert.match(app, /S \? null : item\('replies', '✉ Replies', readyCount\(data, today\)\),[^\n]*\n\s*onServer && !S \? item\('apps', '🔌 From apps', appsPending\(\)\) : null,/, 'right after ✉ Replies, with the count (both hidden in 🧘 Simple mode, owner 25 Nov)');
   assert.match(app, /if \(ui\.view === 'apps' && !ui\.search\) return h\('div', \{ class: 'col-inner' \}, head, timerStrip\(\), onServer \? renderFromApps\(appsCtx\)/);
   assert.match(app, /onServer \? renderConnectionsSettings\(appsCtx\) : null,/);
   assert.match(app, /base: \(\) => new URL\('\.\.\/api\/', location\.href\)\.href/, 'the address apps use: this host\'s /api/');
@@ -1846,7 +1846,7 @@ test('🔌 app wiring (app.js): "🔌 From apps" after ✉ Replies with the wait
   assert.match(app, /function go\(view\) \{\n\s*if \(view !== 'settings'\) forgetOnce\(\);/);
   assert.match(app, /if \(onServer\) loadApps\(appsCtx, force \|\| ui\.view === 'apps'\);/);
   assert.match(app, /replies: '✉ Replies', apps: '🔌 From apps', mains: '📂 Groups' \}\[ui\.view\]/, 'its page title');
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-70'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-71'/, 'phones get the new copy');
 });
 
 test('🔌 the PHP connector (team/connector/worktask-connector.php): the same text the app downloads, placeholders only (no real key), valid PHP 7.4+ (php -l), with wt_push / wt_withdraw / wt_decisions / wt_receive_decision', async () => {
@@ -3554,7 +3554,7 @@ test('Stage on ✅ Tasks (app.js): the chip on each row, the filter chips under 
   assert.match(app, /if \(ui\.view === 'all' && stage\) return byStage\(visibleProjects\(\{ stage: false \}\), ui\.stageFilter, \(p\) => taskStage\(p\)\.stage\);/);
   assert.match(app, /stageFilterBar\(stageCounts\(visibleProjects\(\{ stage: false \}\), \(p\) => taskStage\(p\)\.stage\), ui\.stageFilter,/, 'counts within the All / No project list');
   assert.match(app, /taskListView\(\) && !ui\.search && !ui\.adding \? stageFilterChips\(\) : null,/);
-  assert.match(app, /ui\.view === 'all' && !isMainProject\(store\.view\.data, p\) \? stageChip\(taskStage\(p\)\) : null/);
+  assert.match(app, /ui\.view === 'all' && !ui\.simple && !isMainProject\(store\.view\.data, p\) \? stageChip\(taskStage\(p\)\) : null/, '(🧘 not in Simple mode, owner 25 Nov)');
   assert.match(app, /return stageOf\(p, p\.team \? teamProgress\(p\.id\) : null\);/, 'a given task: stuck on the team = waiting');
   const css = readFileSync(new URL('../docs/styles.css', import.meta.url), 'utf8');
   for (const c of ['.stage-chip.stage-inprogress', '.stage-chip.stage-waiting', '.stage-chip.stage-done', '.stage-filter.on']) assert.ok(css.includes(c), c);
@@ -4292,7 +4292,7 @@ test('Review2 15 (owner, 24 Oct): a red / yellow list row says why in a chip ("T
   applyOps(s, [makeOp('createProject', { projectId: 'r', name: 'Quiet one', deadline: null })]);
   const p = s.data.projects[0];
   p.createdAt = plus(td(), -5) + 'T09:00:00+05:30'; p.activeSince = plus(td(), -5);
-  assert.match(colourShort(p, td()), /^No update for \d+ days$/);
+  assert.match(colourShort(p, td()), /^\d+ days no update$/, 'shorter on a row (owner, 25 Nov)');
 });
 
 test('Review2 16 (owner, 24 Oct): team pages never show "📂 Misc" on a task in no project', async () => {
@@ -5497,7 +5497,7 @@ test('📅 drag anything on the calendar to another time or day (owner, 25 Nov: 
   assert.equal(all(still, (n) => (n.className || '') === 'pcal-alldaycell')[0].__on, undefined);
   // the owner's pages: a planned task keeps its time; one with only a target date gets that day as its target date
   const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
-  assert.match(app, /onDay: \(id, d\) => \{\n\s*const p = find\(id\);\n\s*if \(!p\) return;\n\s*if \(p\.slot\) act\('setSlot', \{ projectId: id, \.\.\.movedSlot\(p\.slot, d, p\.slot\.start\) \}/, 'keeps its time (and 🔁 its repeat)');
+  assert.match(app, /onDay: \(id, d\) => \{\n\s*if \(String\(id\)\.startsWith\('team:'\)\) \{ moveTeamTask\(id, d, null\); return; \}\n\s*const p = find\(id\);\n\s*if \(!p\) return;\n\s*if \(p\.slot\) act\('setSlot', \{ projectId: id, \.\.\.movedSlot\(p\.slot, d, p\.slot\.start\) \}/, 'keeps its time (and 🔁 its repeat)');
   assert.match(app, /else act\('setProjectField', \{ projectId: id, field: 'deadline', value: d \}/);
   // the team pages: a timed task moves to that day at the same time; one from the owner's tasks does not
   const tasks = [
@@ -5522,4 +5522,55 @@ test('no colour dot at the start of a row in any list (owner, 25 Nov: "remove th
   assert.match(css, /\n\.prow-btn > \.dot \{ display: none; \}/);
   assert.ok(css.indexOf('.prow-btn > .dot { display: none; }') > css.indexOf('.prow-btn .dot { margin-top: 5px; }'), 'after the old rule, so it wins');
   for (const f of ['../docs/app.js', '../docs/ui/team.js', '../docs/ui/staff.js']) assert.match(readFileSync(new URL(f, import.meta.url), 'utf8'), /class: 'prow-btn'/, f + ' draws its rows with it');
+});
+
+test('🧘 Simple mode (owner, 25 Nov: "app is overwhelming me", "do 1,2,3,4,6"): a task page shows its main parts, ⚙ More details shows the rest; Settings has the switch; the owner\'s menu and Today are shorter; the team menu has no second Groups / Calendar / Follow-up / Weekly report (🔔 Chase is on each task\'s ⋯); the owner\'s Calendar shows the team\'s timed tasks', async () => {
+  const find = (n, f) => (f(n) ? n : (n.childNodes || []).map((c) => find(c, f)).find(Boolean));
+  const btnTxt = (el, t) => find(el, (n) => n.nodeName === 'BUTTON' && (n.textContent || '').includes(t));
+  // the task page
+  const s = mainsState();
+  const ctx = liveCtx(s, { selected: 'p1', update: {}, simple: true });
+  ctx.toast = () => {};
+  let page = renderDetail(ctx);
+  assert.ok(!btnTxt(page, '💤 Snooze'), 'no Snooze button at the top (it is in ⋯)');
+  assert.ok(!btnTxt(page, '🔁 every'), 'no "every N days" chip');
+  assert.ok(!(page.textContent || '').includes('+ Add a short description'), 'no empty short description');
+  assert.ok(btnTxt(page, '📅 Plan') && btnTxt(page, 'Finish task'), 'the main parts stay');
+  btnTxt(page, '⚙ More details').__on.click();
+  page = renderDetail(ctx);
+  assert.ok(btnTxt(page, '💤 Snooze') && btnTxt(page, '🔁 every'), '⚙ More details shows the rest');
+  assert.ok(btnTxt(page, '▴ Fewer details'));
+  ctx.ui.simple = false; ctx.ui.moreDetails = null;
+  page = renderDetail(ctx);
+  assert.ok(btnTxt(page, '💤 Snooze') && !btnTxt(page, '⚙ More details'), 'Simple mode off: everything, as before');
+  // the owner's pages (app.js)
+  const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
+  assert.match(app, /simple: saved\.full !== true,/, 'on unless turned off');
+  assert.match(app, /h\('h3', null, '🧘 Simple mode'\),\n\s*h\('label', \{ class: 'check' \}, h\('input', \{ type: 'checkbox', checked: ui\.simple \? true : undefined, onChange: \(e, el\) => \{ ui\.simple = el\.checked; resetRedOrder\(\); rememberUi\(\); render\(\); \} \}\)/, 'the switch in Settings');
+  assert.match(app, /S \? null : item\('paused', 'Paused'/); assert.match(app, /S \? null : item\('finished', 'Finished'/);
+  assert.match(app, /moreOpen \? \(S \? \[item\('paused', 'Paused'/, 'Paused and Finished under More');
+  assert.match(app, /ui\.simple \? null : h\('div', \{ class: 'progress-btns' \}/, 'no Summary / Daily round');
+  assert.match(app, /showSort && !ui\.adding && !ui\.simple \? sortSwitch\(\) : null/, 'no My order / Red first switch');
+  assert.match(app, /ui\.view === 'today' && !ui\.search && !ui\.simple \? renderBrief\(\) : null/, 'no AI brief');
+  assert.match(app, /get simple\(\) \{ return ui\.simple; \}/, 'the team pages hear it');
+  // one calendar: the team's timed tasks (given from Team) on the owner's Calendar; open and drag go to the team task
+  assert.match(app, /items: \[\.\.\.timed, \.\.\.teamCalendarItems\(days\)\]/);
+  assert.match(app, /filter\(\(t\) => t\.slot && !\(t\.projectRef && t\.seq !== null && t\.seq !== undefined\)\)/, 'not one given from your own tasks (it is that task)');
+  assert.match(app, /onOpen: \(id\) => \(String\(id\)\.startsWith\('team:'\) \? \(location\.hash = '#team-task=' \+ String\(id\)\.slice\(5\)\) : openFromCalendar\(id\)\)/);
+  assert.match(app, /if \(String\(id\)\.startsWith\('team:'\)\) \{ moveTeamTask\(id, d, start\); return; \}/);
+  assert.match(app, /await teamApi\('task\.slot', \{ id: t\.id, slot \}\)/);
+  // the team menu
+  const menuText = (simple, toProjects) => {
+    const { t } = fakeTeam({}, { simple, toProjects });
+    return t.view().textContent;
+  };
+  const plain = menuText(false, () => {}), simple = menuText(true, () => {});
+  for (const w of ['📂 Groups', '📅 Calendar', '🔁 Follow-up', '📊 Weekly report']) {
+    assert.ok(plain.includes(w), 'Simple mode off: ' + w);
+    assert.ok(!simple.includes(w), 'Simple mode: no ' + w);
+  }
+  assert.ok(simple.includes('✅ Team tasks') && simple.includes('Team today') && simple.includes('Done / cancelled'));
+  assert.ok(menuText(true, null).includes('📅 Calendar'), 'a manager who is not the owner keeps them (no owner pages)');
+  const team = readFileSync(new URL('../docs/ui/team.js', import.meta.url), 'utf8');
+  assert.match(team, /chase\(\{ taskId: t\.id, person: t\.assignee \}\)[^\n]*\}, `🔔 Chase \$\{t\.assignee \? t\.assignee\.name : ''\}`\.trim\(\)\)/, '🔔 Chase on the task\'s ⋯ menu');
 });

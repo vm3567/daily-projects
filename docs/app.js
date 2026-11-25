@@ -216,7 +216,7 @@ async function teamPages(user, more = {}) {
   if (!user) user = (await api('me')).user;
   const push = browserPush(api, user.id);
   const { photo, viewer, signOut } = serverTools(api, { waiting: () => (t ? t.state.outbox.length : 0), push: () => push });
-  t = createTeam({ root, api, rules, user, toast, signOut, onAuth: () => signInAgain(), photo, viewer, box: idbOutbox(), shrink: shrinkPhoto, push, appLink: location.origin + '/', ...more });
+  t = createTeam({ root, api, rules, user, toast, signOut, onAuth: () => signInAgain(), photo, viewer, box: idbOutbox(), shrink: shrinkPhoto, push, appLink: location.origin + '/', get simple() { return ui.simple; }, ...more });
   setInterval(() => { if (document.visibilityState === 'visible' && (space === 'team' || !store)) t.act.liveCheck(); }, 20000); // new work comes in by itself
   setInterval(() => { if (t.state.outbox.length) t.act.flush(); }, 30000);
   window.addEventListener('online', () => { t.setOffline(false); t.act.flush(); });
@@ -345,6 +345,7 @@ const ui = {
   menuOpen: false,
   briefFolded: !!saved.briefFolded,
   moreMenu: !!saved.moreMenu, // the menu's More ▸ (Diary, Dashboard, Time report) is open
+  simple: saved.full !== true, // 🧘 Simple mode (owner, 25 Nov: "app is overwhelming me"): on unless turned off in Settings (this device)
   taskFilter: saved.taskFilter === 'loose' ? 'loose' : 'all', // ✅ Tasks: 'all' tasks, or 'loose' = only tasks not in any 📂 project
   sort: saved.sortV === 2 && saved.sort === 'mine' ? 'mine' : 'red', // 'red' = red first (red, yellow, green, grey: the default); 'mine' = my drag order, kept only when picked after this became the default
   adding: false,
@@ -466,7 +467,7 @@ function restoreScrollOnce() {
 
 function rememberUi() {
   device.setUi({
-    scroll: device.ui().scroll, view: ui.view, selected: ui.selected, briefFolded: ui.briefFolded, sort: ui.sort, sortV: 2, taskFilter: ui.taskFilter, moreMenu: !!ui.moreMenu, showDone: ui.showDone, showMore: ui.showMore, folded: ui.folded });
+    scroll: device.ui().scroll, view: ui.view, selected: ui.selected, briefFolded: ui.briefFolded, sort: ui.sort, sortV: 2, taskFilter: ui.taskFilter, moreMenu: !!ui.moreMenu, full: !ui.simple, showDone: ui.showDone, showMore: ui.showMore, folded: ui.folded });
 }
 
 const ctx = {
@@ -1129,7 +1130,8 @@ function renderMenu() {
   const today = todayIndia();
   const counts = colourCounts(data, today);
 
-  const moreOpen = !!ui.moreMenu || ['diary', 'dashboard', 'time'].includes(ui.view);
+  const moreOpen = !!ui.moreMenu || (ui.simple ? ['paused', 'finished'] : ['diary', 'dashboard', 'time']).includes(ui.view);
+  const S = ui.simple; // 🧘 Simple mode: Today · Tasks · Groups · Calendar · Inbox · Team · People · Settings (the rest in Settings → Simple mode)
   return h('nav', { class: 'menu-inner' },
     h('div', { class: 'brand' }, h('img', { src: 'icons/icon-192.png', alt: '', width: 28, height: 28 }), h('span', null, 'Task List')),
     h('input', {
@@ -1147,13 +1149,13 @@ function renderMenu() {
       item('all', '✅ Tasks', activeTasks(data).length),
       item('mains', '📂 Groups', mainProjects(data).filter((m) => m.state !== 'finished' && !m.misc).length), // (the page's own count: "In no project" is not a project, owner 24 Oct)
       item('calendar', '📅 Calendar', calendarItems(data, today, today, today).timed.length), // (owner, 25 Nov: what is planned today)
-      item('replies', '✉ Replies', readyCount(data, today)), // replies ready to send
-      onServer ? item('apps', '🔌 From apps', appsPending()) : null, // approvals your apps sent, waiting for ✓ / ✕
+      S ? null : item('replies', '✉ Replies', readyCount(data, today)), // replies ready to send
+      onServer && !S ? item('apps', '🔌 From apps', appsPending()) : null, // approvals your apps sent, waiting for ✓ / ✕
       item('inbox', '📥 Inbox', (data.inbox || []).length),
       onServer ? h('li', { key: 'team-menu' }, h('a', { class: 'menu-item', href: '#team', title: 'Tasks you gave and their daily updates' }, h('span', null, '👥 Team'))) : null, // (also on the 👥 icon; on a phone the menu is where it is found)
       h('li', { class: 'menu-sep', key: 'sep' }),
-      item('paused', 'Paused', count((p) => p.state === 'paused')),
-      item('finished', 'Finished', count((p) => p.state === 'finished')),
+      S ? null : item('paused', 'Paused', count((p) => p.state === 'paused')),
+      S ? null : item('finished', 'Finished', count((p) => p.state === 'finished')),
       item('people', 'People', (data.people || []).length), // (open People to see each person)
       item('settings', 'Settings'),
       // More ▸: Diary, Dashboard and Time report, folded away (open while one of them is on screen)
@@ -1161,7 +1163,8 @@ function renderMenu() {
         class: 'menu-item more-toggle', 'aria-expanded': String(moreOpen),
         onClick: () => { ui.moreMenu = !moreOpen; rememberUi(); render(); },
       }, moreOpen ? 'More ▾' : 'More ▸')),
-      moreOpen ? [item('diary', 'Diary'), item('dashboard', 'Dashboard'), item('time', 'Time report')] : null),
+      moreOpen ? (S ? [item('paused', 'Paused', count((p) => p.state === 'paused')), item('finished', 'Finished', count((p) => p.state === 'finished'))]
+        : [item('diary', 'Diary'), item('dashboard', 'Dashboard'), item('time', 'Time report')]) : null),
     h('button', { class: 'keys-hint', onClick: () => { ui.showKeys = true; ui.menuOpen = false; render(); } }, 'Keyboard shortcuts: press ?'));
 }
 
@@ -1242,7 +1245,7 @@ function projectRow(p, today, opts = {}) {
         h('span', { class: 'prow-name' }, isMainProject(store.view.data, p) ? '📂 ' : '', p.misc ? IN_NO_PROJECT : p.name, // (📂 Misc: one name everywhere, owner 24 Oct)
           p.state !== 'active' ? h('span', { class: 'tag' }, p.stateChangedAt && (p.state === 'paused' || p.state === 'finished') ? `${p.state === 'paused' ? 'paused since' : 'finished'} ${fmtDay(indiaDate(p.stateChangedAt))}` : p.state) : null,
           p.priority === 'high' ? h('span', { class: 'tag high' }, 'High') : null,
-          ui.view === 'all' && !isMainProject(store.view.data, p) ? stageChip(taskStage(p)) : null), // ✅ Tasks: the Stage chip on each row
+          ui.view === 'all' && !ui.simple && !isMainProject(store.view.data, p) ? stageChip(taskStage(p)) : null), // ✅ Tasks: the Stage chip on each row (🧘 not in Simple mode)
         asProject ? h('span', { class: 'prow-next' }, projectLine(store.view.data, p, today)) : null, // "2 projects · 5 tasks · 1 red"
         asProject ? null : h('span', { class: 'prow-next' }, ns ? `Next: ${ns.text}` : '', // (no next step: nothing said — the + on the left adds one)
           ns && ns.waiting ? waitingTag(ns) : null,
@@ -1723,6 +1726,36 @@ async function openReplyDraft(m) {
  * 📅 Calendar (owner, 25 Nov): Day / Week / Month (a phone opens on Day). Drag a block to move it; drag a task from
  * "Not on the calendar" onto a time to plan it; click an empty time to add a task there. A block opens its task.
  */
+/**
+ * 📅 The team's tasks with a time, on the owner's Calendar too (owner, 25 Nov: "one app, not two"). Only tasks given from
+ * 👥 Team: one given from your own tasks is that task, already on the calendar. Fetched when the Calendar is open, once a minute.
+ */
+const teamCal = { at: 0, tasks: [], loading: false, rules: null };
+function teamCalendarTasks() {
+  if (!onServer) return [];
+  if (!teamCal.loading && Date.now() - teamCal.at > 60000) {
+    teamCal.loading = true;
+    Promise.all([teamApi('tasks.list'), teamCal.rules || import('../logic.js')])
+      .then(([out, rules]) => { teamCal.rules = rules; teamCal.tasks = (out.tasks || []).filter((t) => t.slot && !(t.projectRef && t.seq !== null && t.seq !== undefined)); teamCal.at = Date.now(); render(); })
+      .catch(() => { teamCal.at = Date.now(); }) // (tried again in a minute)
+      .finally(() => { teamCal.loading = false; });
+  }
+  return teamCal.rules ? teamCal.tasks : [];
+}
+/** A team task on the owner's Calendar: its blocks, each day it is due (🔁 a daily / weekly one too), with who does it. */
+function teamCalendarItems(days) {
+  return teamCalendarTasks().flatMap((t) => days.filter((d) => teamCal.rules.slotDueOn(t, d)).map((d) => ({
+    id: 'team:' + t.id, title: t.title, day: d, start: t.slot.start, mins: t.slot.mins, sub: '👥 ' + t.assignee.name,
+    colour: t.today ? 'green' : t.stuck || t.late ? 'red' : t.dueToday ? 'yellow' : 'grey' })));
+}
+/** A team task dragged on the owner's Calendar: its time moves on the team server (as on the team pages). */
+async function moveTeamTask(id, d, start) {
+  const t = teamCal.tasks.find((x) => 'team:' + x.id === String(id));
+  if (!t) return;
+  const slot = { day: d, start: start || t.slot.start, mins: t.slot.mins };
+  try { await teamApi('task.slot', { id: t.id, slot }); t.slot = slot; toast(`📅 ${t.title} (${t.assignee.name}): ${fmtDay(d)} ${slot.start}`); teamCal.at = 0; render(); } catch (e) { toast(e.message, 5000); }
+}
+
 function renderCalendar() {
   const today = todayIndia();
   const data = store.view.data;
@@ -1741,17 +1774,19 @@ function renderCalendar() {
       onClick: () => openFromCalendar(p.id),
     }, h('span', { class: 'dot ' + dotColour(p, today) }), ' ', p.name))) : h('p', { class: 'muted small' }, 'Every open task has a time.'));
   return calendarView({
-    mode, day, today, items: timed, allDay, side, box: ui.calAdd ? calendarAddBox(un) : null,
+    mode, day, today, items: [...timed, ...teamCalendarItems(days)], allDay, side, box: ui.calAdd ? calendarAddBox(un) : null,
     onNav: (d) => { ui.calDay = d; render(); },
     onMode: (m) => { ui.calMode = m; render(); },
-    onOpen: (id) => openFromCalendar(id),
+    onOpen: (id) => (String(id).startsWith('team:') ? (location.hash = '#team-task=' + String(id).slice(5)) : openFromCalendar(id)),
     onMove: (id, d, start) => {
+      if (String(id).startsWith('team:')) { moveTeamTask(id, d, start); return; }
       const p = find(id);
       if (!p) return;
       act('setSlot', { projectId: id, ...movedSlot(p.slot, d, start) }, `📅 ${p.name}: ${fmtDay(d)} ${start}`); // (🔁 a repeating time keeps repeating)
     },
     // dropped on a day: a planned task keeps its time; one with only a target date gets that day as its target date
     onDay: (id, d) => {
+      if (String(id).startsWith('team:')) { moveTeamTask(id, d, null); return; }
       const p = find(id);
       if (!p) return;
       if (p.slot) act('setSlot', { projectId: id, ...movedSlot(p.slot, d, p.slot.start) }, `📅 ${p.name}: ${fmtDay(d)} ${p.slot.start}`);
@@ -2131,7 +2166,7 @@ let redOrder = null; // fixed "Red first" order, so rows do not jump while you o
 function resetRedOrder() { redOrder = null; }
 
 function sortForView(list, today) {
-  if ((ui.sort !== 'red' && !taskListView()) || ui.search) return list; // (✅ Tasks is always red first)
+  if ((ui.sort !== 'red' && !ui.simple && !taskListView()) || ui.search) return list; // (✅ Tasks and 🧘 Simple mode: always red first)
   const ids = list.map((p) => p.id);
   if (redOrder && redOrder.view === ui.view && ids.length === redOrder.ids.length && ids.every((id) => redOrder.pos.has(id))) {
     return [...list].sort((a, b) => redOrder.pos.get(a.id) - redOrder.pos.get(b.id));
@@ -2223,7 +2258,7 @@ function progressLine(today) {
       h('div', { class: 'progress-text' },
         h('strong', null, `${done} of ${active.length}`), done === active.length ? ' on track — all of them! 🎉' : ' on track',
         streakBadge()),
-      h('div', { class: 'progress-btns' },
+      ui.simple ? null : h('div', { class: 'progress-btns' }, // (🧘 Simple mode: no Summary / Daily round)
         h('button', { class: 'btn small', title: "Everything you did today, ready to send", onClick: openSummary }, '📋 Summary'),
         done < active.length && !ui.round
           ? h('button', { class: 'btn primary small round-start', title: 'One task at a time (key: g)', onClick: startRound }, '▶ Daily round', keyHint('G'))
@@ -2351,11 +2386,11 @@ function renderListColumn() {
     ui.view === 'today' && !ui.search ? eveningCheck(today) : null,
     ui.view === 'today' && !ui.search ? followUpRow() : null,
     ui.view === 'today' && !ui.search ? inboxReminder() : null,
-    ui.view === 'today' && !ui.search ? renderBrief() : null,
+    ui.view === 'today' && !ui.search && !ui.simple ? renderBrief() : null,
     h('div', { class: 'list-tools' },
       ui.view === 'mains' && !ui.search ? renderProjectsHead(ctx) : ui.view === 'finished' || ui.view === 'paused' || ui.search ? null : newProjectForm(),
-      taskListView() && !ui.search && !ui.adding ? taskFilterSwitch() : showSort && !ui.adding ? sortSwitch() : null,
-      !ui.search && list.length && ui.view !== 'mains' ? h('button', { class: 'btn small copy-list', type: 'button', title: 'Copy these as a numbered list (for an AI chat or an email)', onClick: () => copyList(currentList(), { title: viewTitle() }) }, '📋 Copy list') : null),
+      taskListView() && !ui.search && !ui.adding ? taskFilterSwitch() : showSort && !ui.adding && !ui.simple ? sortSwitch() : null, // (🧘 always red first)
+      !ui.search && list.length && ui.view !== 'mains' && !ui.simple ? h('button', { class: 'btn small copy-list', type: 'button', title: 'Copy these as a numbered list (for an AI chat or an email)', onClick: () => copyList(currentList(), { title: viewTitle() }) }, '📋 Copy list') : null),
     taskListView() && !ui.search && !ui.adding ? stageFilterChips() : null,
     pickBar(list),
     ...listParts(list, today),
@@ -2489,6 +2524,10 @@ function renderSettings() {
   const provider = data.settings.aiProvider || 'claude';
   const usage = data.aiUsage.date === todayIndia() ? data.aiUsage.count : 0;
   return h('div', { class: 'settings' },
+    h('section', { class: 'block', key: 'simple-mode' }, h('h3', null, '🧘 Simple mode'),
+      h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: ui.simple ? true : undefined, onChange: (e, el) => { ui.simple = el.checked; resetRedOrder(); rememberUi(); render(); } }),
+        ' Show only what you use every day'),
+      h('p', { class: 'muted small' }, 'On: the menu is Today, Tasks, Groups, Calendar, Inbox, Team, People and Settings (Paused and Finished under More); a task page shows its main parts (⚙ More details shows the rest); Today is always red first. Off: everything, as before. Nothing is deleted. Saved on this device.')),
     h('section', { class: 'block' }, h('h3', null, onServer ? 'Account' : 'GitHub access key'),
       h('p', null, isMock ? 'Test mode (no real GitHub).' : onServer ? 'Signed in to Task List ✓ Your tasks are private to you.' : 'Connected to your private data ✓'),
       h('div', { class: 'row' },

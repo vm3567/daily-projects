@@ -75,3 +75,8 @@ Each lesson: what went wrong, then what to do next time.
     → When a feature adds a new way to "deal with" a task (plan, snooze, give), check `dotColour` / `colourWhy` use it.
 24. **"Every month on the 30th" has no 30th in February.** A monthly repeat must say what happens in short months.
     → For a date that repeats monthly, use the last day of a shorter month, and test February and a 30-day month.
+25. **Hiding a page can hide the only button for something.** Follow-up was the only place with 🔔 Chase.
+    → Before hiding a page in Simple mode, list its buttons and put each one somewhere still shown (Chase went to the task's ⋯).
+26. **The practice server needs port 8090** (the app treats only that port as the test server; any other port sends the
+    page to the live site). Docker can hold 8090.
+    → If 8090 is taken, do not start the practice server on another port; say the screen check was not possible.
