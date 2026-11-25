@@ -1060,7 +1060,7 @@ test('📂 Projects page: a click on a project row selects it and stays on the p
   assert.match(mainsSrc, /ctx\.ui\.view === 'mains' && ctx\.showHere \? ctx\.showHere\(c\.id\)/, 'a task in the TASKS table while on the Projects page');
   const here = app.slice(app.indexOf('  showHere: (id) => {'), app.indexOf('  openProject: (id) => {'));
   assert.match(here, /select\(id\);/);
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-68'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-69'/, 'phones get the new copy');
 });
 
 test('📂 project page: "✕ Remove" on a task row takes it out of this project only — the task is kept (and stays in its other projects)', () => {
@@ -1846,7 +1846,7 @@ test('🔌 app wiring (app.js): "🔌 From apps" after ✉ Replies with the wait
   assert.match(app, /function go\(view\) \{\n\s*if \(view !== 'settings'\) forgetOnce\(\);/);
   assert.match(app, /if \(onServer\) loadApps\(appsCtx, force \|\| ui\.view === 'apps'\);/);
   assert.match(app, /replies: '✉ Replies', apps: '🔌 From apps', mains: '📂 Groups' \}\[ui\.view\]/, 'its page title');
-  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-68'/, 'phones get the new copy');
+  assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /const CACHE = 'daily-projects-app-69'/, 'phones get the new copy');
 });
 
 test('🔌 the PHP connector (team/connector/worktask-connector.php): the same text the app downloads, placeholders only (no real key), valid PHP 7.4+ (php -l), with wt_push / wt_withdraw / wt_decisions / wt_receive_decision', async () => {
@@ -5352,7 +5352,7 @@ test('📅 Calendar on the owner\'s pages: the menu item with today\'s count, th
   assert.match(app, /if \(ui\.view === 'calendar' && !ui\.search\) return h\('div', \{ class: 'col-inner' \}, head, timerStrip\(\), renderCalendar\(\)\);/);
   assert.match(app, /const wide = \['diary', 'settings', 'dashboard', 'calendar', 'time'\]\.includes\(ui\.view\)/, 'it fills the screen');
   assert.match(app, /const mode = ui\.calMode \|\| \(narrow \? 'day' : 'week'\);/, 'a phone opens on Day');
-  assert.match(app, /act\('setSlot', \{ projectId: id, day: d, start, mins \}/, 'drag = move (one Undo)');
+  assert.match(app, /act\('setSlot', \{ projectId: id, \.\.\.movedSlot\(p\.slot, d, start\) \}/, 'drag = move (one Undo; 🔁 a repeating time keeps repeating, owner 25 Nov)');
   assert.match(app, /store\.dispatch\('setSlot', \{ projectId, day: a\.day, start: a\.start, mins: a\.mins \}\);/, 'click = a new task at that time');
   assert.match(app, /'← Back to 📅 Calendar'/);
   assert.match(readFileSync(new URL('../docs/sw.js', import.meta.url), 'utf8'), /'ui\/calendar\.js'/, 'kept for offline');
@@ -5374,6 +5374,16 @@ test('📅 Calendar on the owner\'s pages: the menu item with today\'s count, th
   assert.equal(s.data.projects.find((p) => p.id === 'p1').slot, undefined);
   const groupPage = renderDetail(liveCtx(s, { selected: 'm', update: {} })).textContent;
   assert.ok(!groupPage.includes('📅 Plan'), 'a group is not planned (its tasks are)');
+  // 🔁 Repeat (owner, 25 Nov): every month on the 30th at 10:00
+  find(renderDetail(ctx), (n) => n.nodeName === 'BUTTON' && n.textContent === '📅 Plan').__on.click();
+  const box = renderDetail(ctx);
+  const rep = find(box, (n) => n.nodeName === 'SELECT' && /^plan-repeat-/.test(n.dataset && n.dataset.key || ''));
+  assert.ok(rep, 'a Repeat choice');
+  assert.deepEqual(rep.childNodes.map((o) => o.textContent), ['Does not repeat', 'Every day', 'Mon–Sat', 'Every week', 'Every month']);
+  Object.assign(ctx.ui.planForm, { day: '2026-11-30', start: '10:00', mins: 60, repeat: 'monthly' });
+  find(renderDetail(ctx), (n) => n.nodeName === 'BUTTON' && n.textContent === 'Save').__on.click();
+  assert.deepEqual(ctx.calls.filter((c) => c[0] === 'act:setSlot').at(-1)[1], { projectId: 'p1', day: '2026-11-30', start: '10:00', mins: 60, repeat: 'monthly' });
+  assert.ok(renderDetail(ctx).textContent.includes('📅 🔁 Every month (on the 30th) · 10:00–11:00'), 'the chip says how it repeats');
 });
 
 test('📅 Calendar keeps its own style names (pcal-…): the Dashboard\'s streak calendar already uses .cal / .cal-head / .cal-cell, and sharing them broke the layout once', async () => {
@@ -5487,7 +5497,7 @@ test('📅 drag anything on the calendar to another time or day (owner, 25 Nov: 
   assert.equal(all(still, (n) => (n.className || '') === 'pcal-alldaycell')[0].__on, undefined);
   // the owner's pages: a planned task keeps its time; one with only a target date gets that day as its target date
   const app = readFileSync(new URL('../docs/app.js', import.meta.url), 'utf8');
-  assert.match(app, /onDay: \(id, d\) => \{\n\s*const p = find\(id\);\n\s*if \(!p\) return;\n\s*if \(p\.slot\) act\('setSlot', \{ projectId: id, day: d, start: p\.slot\.start, mins: p\.slot\.mins \}/);
+  assert.match(app, /onDay: \(id, d\) => \{\n\s*const p = find\(id\);\n\s*if \(!p\) return;\n\s*if \(p\.slot\) act\('setSlot', \{ projectId: id, \.\.\.movedSlot\(p\.slot, d, p\.slot\.start\) \}/, 'keeps its time (and 🔁 its repeat)');
   assert.match(app, /else act\('setProjectField', \{ projectId: id, field: 'deadline', value: d \}/);
   // the team pages: a timed task moves to that day at the same time; one from the owner's tasks does not
   const tasks = [

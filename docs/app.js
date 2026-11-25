@@ -22,7 +22,7 @@ import { ServerRepo, SERVER_TOKEN_KEY } from './serverrepo.js';
 import { MockRepo } from './mockrepo.js';
 import { device } from './device.js';
 import { DATA_OWNER, DATA_REPO, DATA_BRANCH, MOVED_TO, REFRESH_MS, AI_DAILY_LIMIT, BRIEF_CLAIM_MINUTES, WAIT_RED_DAYS, NO_WORK_NOTE_DAYS } from './config.js';
-import { dotColour, plannedAhead, greenByTeamOnly, isSnoozed, restUntil, restReason, onlyDaysLabel, openIdFromHash, awakeProjects, activeProjects, nextStep, todayIndia, isSundayIndia, colourCounts, isOverdue, indiaDate, waitingDays, daysWithoutWork, dayScore, greenStreak, addDays, monthOf, fmtMinutes, takeBackWaits, staffStepAction, pasteGoesToProject, emptyPaste, EMPTY_PASTE, ownerTaskMatches, stepPhotosToSend, singleStepClose, versionRequest, askDiaryAgain, pasteInForm, diaryLoadedAt, photoNeedsFetch, teamUndoKey, teamActionUndone, teamProgressOf, projectKeyIgnored, teamMovedTo, serverHolder, keepMovedStep, teamMemberFor, repliesOf, mailThreads, replyMailto, MAILTO_BODY_MAX, emailPath, pasteReason } from './rules.js';
+import { dotColour, plannedAhead, movedSlot, greenByTeamOnly, isSnoozed, restUntil, restReason, onlyDaysLabel, openIdFromHash, awakeProjects, activeProjects, nextStep, todayIndia, isSundayIndia, colourCounts, isOverdue, indiaDate, waitingDays, daysWithoutWork, dayScore, greenStreak, addDays, monthOf, fmtMinutes, takeBackWaits, staffStepAction, pasteGoesToProject, emptyPaste, EMPTY_PASTE, ownerTaskMatches, stepPhotosToSend, singleStepClose, versionRequest, askDiaryAgain, pasteInForm, diaryLoadedAt, photoNeedsFetch, teamUndoKey, teamActionUndone, teamProgressOf, projectKeyIgnored, teamMovedTo, serverHolder, keepMovedStep, teamMemberFor, repliesOf, mailThreads, replyMailto, MAILTO_BODY_MAX, emailPath, pasteReason } from './rules.js';
 import { stageOf, stageCounts, byStage, STAGES, STAGE_LABELS, moveEveryOf, everyText, MOVE_EVERY_PICKS, MOVE_EVERY_DEFAULT, everyDefaultOf, useEveryDefault, colourShort, colourWhy } from './rules.js';
 import { stageChip, stageFilterBar } from './ui/stage.js';
 import { whoFromUser, signInTag, timerOn, projectGiveChanges, UNDO_GRACE_MS, MISC_ID, nestedGroups, calendarItems, unplannedTasks } from './rules.js';
@@ -1748,14 +1748,13 @@ function renderCalendar() {
     onMove: (id, d, start) => {
       const p = find(id);
       if (!p) return;
-      const mins = p.slot ? p.slot.mins : 60;
-      act('setSlot', { projectId: id, day: d, start, mins }, `📅 ${p.name}: ${fmtDay(d)} ${start}`);
+      act('setSlot', { projectId: id, ...movedSlot(p.slot, d, start) }, `📅 ${p.name}: ${fmtDay(d)} ${start}`); // (🔁 a repeating time keeps repeating)
     },
     // dropped on a day: a planned task keeps its time; one with only a target date gets that day as its target date
     onDay: (id, d) => {
       const p = find(id);
       if (!p) return;
-      if (p.slot) act('setSlot', { projectId: id, day: d, start: p.slot.start, mins: p.slot.mins }, `📅 ${p.name}: ${fmtDay(d)} ${p.slot.start}`);
+      if (p.slot) act('setSlot', { projectId: id, ...movedSlot(p.slot, d, p.slot.start) }, `📅 ${p.name}: ${fmtDay(d)} ${p.slot.start}`);
       else act('setProjectField', { projectId: id, field: 'deadline', value: d }, `📅 ${p.name}: target ${fmtDay(d)}`);
     },
     onAdd: (d, start) => { ui.calAdd = { day: d, start, mins: 60, name: '' }; render(); focusKey('cal-add-name'); },

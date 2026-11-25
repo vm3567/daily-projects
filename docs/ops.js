@@ -809,8 +809,9 @@ const handlers = {
     const start = typeof a.start === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(a.start) ? a.start : null;
     const mins = Number.isInteger(a.mins) && a.mins >= 15 && a.mins <= 720 && a.mins % 15 === 0 ? a.mins : null;
     if (!day || !start || !mins) return false;
-    if (p.slot && p.slot.day === day && p.slot.start === start && p.slot.mins === mins) return false;
-    p.slot = { day, start, mins };
+    const repeat = ['daily', 'weekdays', 'weekly', 'monthly'].includes(a.repeat) ? a.repeat : null; // 🔁 (owner, 25 Nov)
+    if (p.slot && p.slot.day === day && p.slot.start === start && p.slot.mins === mins && (p.slot.repeat || null) === repeat) return false;
+    p.slot = repeat ? { day, start, mins, repeat } : { day, start, mins };
     p.updatedAt = op.at;
     return true;
   },

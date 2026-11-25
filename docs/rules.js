@@ -191,7 +191,8 @@ export function dotColour(project, today = todayIndia()) {
  * It has a 📅 calendar time today or later (owner, 25 Nov: "i fixed a calendar time for a task it still shows red"):
  * it is planned, so "no update for N days" waits until that day; once the day passes with no update, it counts again.
  */
-export const plannedAhead = (p, today = todayIndia()) => !!(p && p.slot && p.slot.day >= today);
+// (a repeating time is not a one-off plan: the task still needs its updates, so its colour works as usual)
+export const plannedAhead = (p, today = todayIndia()) => !!(p && p.slot && !p.slot.repeat && p.slot.day >= today);
 
 /** "Move every N days": how often a task or project should have a real update (owner sets it; 3 when not set). */
 export const MOVE_EVERY_DEFAULT = 3;
@@ -1485,6 +1486,27 @@ export function byStage(list, want, stage) {
 /** 'HH:MM' → minutes after midnight; minutes → 'HH:MM'. */
 export const timeToMin = (t) => { const m = /^(\d{2}):(\d{2})$/.exec(String(t || '')); return m ? Number(m[1]) * 60 + Number(m[2]) : null; };
 export const minToTime = (n) => `${String(Math.floor(n / 60)).padStart(2, '0')}:${String(n % 60).padStart(2, '0')}`;
+/** 🔁 A calendar time can repeat (owner, 25 Nov: "calendar option for recurring also"): every day, Mon–Sat, every week. */
+export const SLOT_REPEATS = [['', 'Does not repeat'], ['daily', 'Every day'], ['weekdays', 'Mon–Sat'], ['weekly', 'Every week'], ['monthly', 'Every month']];
+/** Is the slot on `day`? From its first day on: every day, Mon–Sat, or the same weekday each week. Pure: tested. */
+export function slotOn(slot, day) {
+  if (!slot || !day || day < slot.day) return false;
+  const wd = (d) => new Date(d + 'T00:00:00Z').getUTCDay();
+  if (slot.repeat === 'daily') return true;
+  if (slot.repeat === 'weekdays') return wd(day) !== 0;
+  if (slot.repeat === 'weekly') return wd(day) === wd(slot.day);
+  if (slot.repeat === 'monthly') { // the same date each month; the 30th / 31st falls on the last day of a shorter month
+    const last = new Date(Date.UTC(Number(day.slice(0, 4)), Number(day.slice(5, 7)), 0)).getUTCDate();
+    return Number(day.slice(8)) === Math.min(Number(slot.day.slice(8)), last);
+  }
+  return day === slot.day;
+}
+/** A slot dropped at `day` / `start` on the calendar: a one-time, weekly or monthly time moves to that day; a daily or Mon–Sat
+ *  one keeps its first day and only changes its time. Pure: tested. */
+export function movedSlot(slot, day, start) {
+  const r = slot && slot.repeat;
+  return { day: !r || r === 'weekly' || r === 'monthly' ? day : slot.day, start, mins: slot ? slot.mins : 60, ...(r ? { repeat: r } : {}) };
+}
 /** The end of a slot ('10:00', 90 → '11:30'; never past midnight). */
 export const slotEnd = (start, mins) => minToTime(Math.min(24 * 60 - 1, timeToMin(start) + mins));
 /** The Monday of the week of `day` (weeks start on Monday). */
@@ -1510,10 +1532,12 @@ export function monthWeeks(day) {
 export function calendarItems(data, from, to, today = todayIndia()) {
   const tasks = data.projects.filter((p) => p.state !== 'finished' && !p.misc && !isMainProject(data, p));
   const inRange = (d) => !!d && d >= from && d <= to;
-  const timed = tasks.filter((p) => p.slot && inRange(p.slot.day))
-    .map((p) => ({ id: p.id, title: p.name, day: p.slot.day, start: p.slot.start, mins: p.slot.mins, colour: dotColour(p, today) }))
+  const days = [];
+  for (let d = from; d <= to; d = addDays(d, 1)) days.push(d);
+  const timed = tasks.filter((p) => p.slot && p.slot.day <= to) // (🔁 a repeating time: on each of its days)
+    .flatMap((p) => days.filter((d) => slotOn(p.slot, d)).map((d) => ({ id: p.id, title: p.name, day: d, start: p.slot.start, mins: p.slot.mins, colour: dotColour(p, today), ...(p.slot.repeat ? { sub: '🔁' } : {}) })))
     .sort((a, b) => a.day.localeCompare(b.day) || a.start.localeCompare(b.start) || a.title.localeCompare(b.title));
-  const allDay = tasks.filter((p) => inRange(p.deadline) && !(p.slot && p.slot.day === p.deadline))
+  const allDay = tasks.filter((p) => inRange(p.deadline) && !slotOn(p.slot, p.deadline))
     .map((p) => ({ id: p.id, title: p.name, day: p.deadline, colour: dotColour(p, today) }))
     .sort((a, b) => a.day.localeCompare(b.day) || a.title.localeCompare(b.title));
   return { timed, allDay };
@@ -1522,7 +1546,7 @@ export function calendarItems(data, from, to, today = todayIndia()) {
 /** The open tasks with no time on the calendar from `today` on (to plan them), red first, then yellow, then green. */
 export function unplannedTasks(data, today = todayIndia()) {
   const RANK = { red: 0, yellow: 1, green: 2, grey: 3 };
-  return activeTasks(data).filter((p) => !p.misc && !(p.slot && p.slot.day >= today))
+  return activeTasks(data).filter((p) => !p.misc && !(p.slot && (p.slot.day >= today || p.slot.repeat)))
     .map((p) => ({ p, c: dotColour(p, today) })).sort((a, b) => (RANK[a.c] ?? 4) - (RANK[b.c] ?? 4) || a.p.name.localeCompare(b.p.name)).map((x) => x.p);
 }
 

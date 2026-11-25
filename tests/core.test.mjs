@@ -3444,3 +3444,43 @@ test('a task with a 📅 calendar time today or later is not red for "no update"
   assert.equal(dotColour(p, '2026-10-24'), 'yellow', 'target tomorrow');
   assert.equal(dotColour(p, '2026-10-26'), 'red', 'target passed');
 });
+
+test('🔁 a calendar time can repeat (owner, 25 Nov: "calendar option for recurring also", "monthly also … every month on 30th 10 o\'clock"): every day, Mon–Sat, every week, every month; the calendar shows each day; a drag keeps it repeating; its colour still needs updates', async () => {
+  const { slotOn, movedSlot, calendarItems, unplannedTasks, plannedAhead } = await import('../docs/rules.js');
+  const at = (day, repeat) => ({ day, start: '10:00', mins: 60, ...(repeat ? { repeat } : {}) });
+  assert.equal(slotOn(at('2026-11-25'), '2026-11-25'), true);
+  assert.equal(slotOn(at('2026-11-25'), '2026-11-26'), false, 'one time: only that day');
+  assert.equal(slotOn(at('2026-11-25', 'daily'), '2026-11-24'), false, 'never before its first day');
+  assert.equal(slotOn(at('2026-11-25', 'daily'), '2026-11-29'), true, 'every day: Sunday too');
+  assert.equal(slotOn(at('2026-11-25', 'weekdays'), '2026-11-29'), false, 'Mon–Sat: not Sunday');
+  assert.equal(slotOn(at('2026-11-25', 'weekdays'), '2026-11-28'), true);
+  assert.equal(slotOn(at('2026-11-25', 'weekly'), '2026-12-02'), true, 'every Wednesday');
+  assert.equal(slotOn(at('2026-11-25', 'weekly'), '2026-12-03'), false);
+  // every month on the 30th: the last day of February, the 30th otherwise
+  const att = at('2026-11-30', 'monthly');
+  assert.equal(slotOn(att, '2026-12-30'), true);
+  assert.equal(slotOn(att, '2026-12-31'), false);
+  assert.equal(slotOn(att, '2027-02-28'), true, 'February has no 30th: its last day');
+  assert.equal(slotOn(att, '2027-02-27'), false);
+  assert.equal(slotOn(at('2026-12-31', 'monthly'), '2027-04-30'), true, 'the 31st in a 30-day month: the 30th');
+  // a drag: one-time / weekly / monthly move to the day; daily / Mon–Sat keep their first day, only the time changes
+  assert.deepEqual(movedSlot(at('2026-11-25'), '2026-11-27', '14:00'), { day: '2026-11-27', start: '14:00', mins: 60 });
+  assert.deepEqual(movedSlot(at('2026-11-25', 'weekly'), '2026-11-27', '14:00'), { day: '2026-11-27', start: '14:00', mins: 60, repeat: 'weekly' });
+  assert.deepEqual(movedSlot(at('2026-11-25', 'daily'), '2026-11-27', '14:00'), { day: '2026-11-25', start: '14:00', mins: 60, repeat: 'daily' });
+  assert.deepEqual(movedSlot(null, '2026-11-27', '09:00'), { day: '2026-11-27', start: '09:00', mins: 60 }, 'not planned yet');
+  // the change itself keeps the repeat (and a bad one is ignored)
+  const s = withProject('2026-11-20');
+  const p = s.data.projects[0];
+  assert.ok(applyOp(s, op('setSlot', { projectId: 'p1', day: '2026-11-30', start: '10:00', mins: 60, repeat: 'monthly' }, '2026-11-25')));
+  assert.deepEqual(p.slot, { day: '2026-11-30', start: '10:00', mins: 60, repeat: 'monthly' });
+  assert.ok(!applyOp(s, op('setSlot', { projectId: 'p1', day: '2026-11-30', start: '10:00', mins: 60, repeat: 'monthly' }, '2026-11-25')), 'the same again: no change');
+  assert.ok(applyOp(s, op('setSlot', { projectId: 'p1', day: '2026-11-30', start: '10:00', mins: 60, repeat: 'hourly' }, '2026-11-25')));
+  assert.equal(p.slot.repeat, undefined, 'an unknown repeat: a one-time time');
+  // the calendar: on each of its days; it is never "not on the calendar"; its colour still needs updates
+  applyOp(s, op('setSlot', { projectId: 'p1', day: '2026-11-23', start: '09:00', mins: 30, repeat: 'weekdays' }, '2026-11-25'));
+  const { timed } = calendarItems(s.data, '2026-11-23', '2026-11-29', '2026-11-25');
+  assert.deepEqual(timed.map((t) => t.day), ['2026-11-23', '2026-11-24', '2026-11-25', '2026-11-26', '2026-11-27', '2026-11-28'], 'Mon–Sat, not Sunday');
+  assert.equal(timed[0].sub, '🔁');
+  assert.ok(!unplannedTasks(s.data, '2026-12-25').some((x) => x.id === 'p1'), 'repeating: still planned weeks later');
+  assert.equal(plannedAhead(p, '2026-11-25'), false, 'a repeating time does not hold off the "no update" colour');
+});

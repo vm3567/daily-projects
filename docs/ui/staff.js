@@ -822,9 +822,9 @@ export function createStaff(opts) {
       const day = state.calDay || td;
       const days = calendarDays(mode, day), first = days[0], last = days[days.length - 1];
       const mine = folders().tasks.map((x) => x);
-      const items = mine.filter((x) => x.t.slot && x.t.slot.day >= first && x.t.slot.day <= last)
-        .map((x) => ({ id: String(x.t.id), title: x.t.title, day: x.t.slot.day, start: x.t.slot.start, mins: x.t.slot.mins, colour: x.dot }));
-      const allDay = mine.filter((x) => x.t.dueDate && x.t.dueDate >= first && x.t.dueDate <= last && !(x.t.slot && x.t.slot.day === x.t.dueDate))
+      const items = mine.filter((x) => x.t.slot && x.t.slot.day <= last) // (🔁 a repeating task: on each day it is due)
+        .flatMap((x) => days.filter((d) => rules.slotDueOn(x.t, d)).map((d) => ({ id: String(x.t.id), title: x.t.title, day: d, start: x.t.slot.start, mins: x.t.slot.mins, colour: x.dot })));
+      const allDay = mine.filter((x) => x.t.dueDate && x.t.dueDate >= first && x.t.dueDate <= last && !rules.slotDueOn(x.t, x.t.dueDate))
         .map((x) => ({ id: String(x.t.id), title: x.t.title, day: x.t.dueDate, colour: x.dot }));
       body = calendarView({ mode, day, today: td, items, allDay, onNav: (v) => { state.calDay = v; render(); }, onMode: (m) => { state.calMode = m; render(); },
         onOpen: (id) => open('task:' + id), onMove: null, onAdd: null });

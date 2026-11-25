@@ -1622,3 +1622,19 @@ test('📅 slotBody (owner, 25 Nov): the Give form\'s time — a day and a time 
   assert.deepEqual(slotBody({ slotDay: '', slotStart: '' }, true), { slot: null }, 'editing, emptied: off the calendar');
   assert.deepEqual(slotBody({ slotDay: '2026-11-26', slotStart: '' }, false), {}, 'no time: nothing sent');
 });
+
+test('📅 a repeating team task with a time shows on each day it is due (owner, 25 Nov: "calendar option for recurring also"); a one-time task only on its day', async () => {
+  const { slotDueOn } = await import('../team/public_html/logic.js');
+  const slot = { day: '2026-11-23', start: '09:00', mins: 60 };
+  const daily = { repeat: 'daily', skipSunday: true, startDate: '2026-11-01', slot };
+  assert.equal(slotDueOn(daily, '2026-11-26'), true);
+  assert.equal(slotDueOn(daily, '2026-11-29'), false, 'skips Sunday like the task itself');
+  assert.equal(slotDueOn(daily, '2026-11-22'), false, 'not before the time\'s first day');
+  assert.equal(slotDueOn({ repeat: 'weekly', weekday: 3, slot }, '2026-11-25'), true, 'every Wednesday');
+  assert.equal(slotDueOn({ repeat: 'weekly', weekday: 3, slot }, '2026-11-26'), false);
+  assert.equal(slotDueOn({ repeat: 'once', slot }, '2026-11-23'), true);
+  assert.equal(slotDueOn({ repeat: 'once', slot }, '2026-11-24'), false, 'one time: only its day');
+  assert.equal(slotDueOn({ repeat: 'daily' }, '2026-11-24'), false, 'no time: not on the calendar');
+  assert.match(TEAM, /\.flatMap\(\(t\) => days\.filter\(\(d\) => rules\.slotDueOn\(t, d\)\)/, 'the team calendar uses it');
+  assert.match(STAFF, /\.flatMap\(\(x\) => days\.filter\(\(d\) => rules\.slotDueOn\(x\.t, d\)\)/, 'and the staff view');
+});

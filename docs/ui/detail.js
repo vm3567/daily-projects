@@ -14,7 +14,7 @@ import { richArea, richView, addDraftPhotos, readDraft, clearDraft, photoArgs, f
 import { enterAction, richFileIds, textToHtml } from '../rich.js';
 import { projectEmailCards, emailThreadBlock } from './replies.js';
 import { mainBox, mainChip, subProjectsBlock, openMainBox } from './mains.js';
-import { isMainProject, timerOn, childrenOf, projectTasks, openTasksInside, moveEveryOf, everyText, colourWhy, colourShort, todayList, MOVE_EVERY_PICKS } from '../rules.js';
+import { SLOT_REPEATS, isMainProject, timerOn, childrenOf, projectTasks, openTasksInside, moveEveryOf, everyText, colourWhy, colourShort, todayList, MOVE_EVERY_PICKS } from '../rules.js';
 import { stageLine } from './stage.js';
 import { IN_NO_PROJECT } from './workparts.js';
 
@@ -1082,7 +1082,10 @@ function infoChips(ctx, p, today) {
 
 const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 /** "Wed 25 Nov · 10:00–11:30" */
+const ordinal = (n) => n + (n % 10 === 1 && n !== 11 ? 'st' : n % 10 === 2 && n !== 12 ? 'nd' : n % 10 === 3 && n !== 13 ? 'rd' : 'th');
 export function slotLabel(slot) {
+  const r = SLOT_REPEATS.find(([k]) => k && k === slot.repeat);
+  if (r) return `🔁 ${r[1]}${slot.repeat === 'weekly' ? ' (' + DOW[new Date(slot.day + 'T00:00:00Z').getUTCDay()] + ')' : slot.repeat === 'monthly' ? ' (on the ' + ordinal(Number(slot.day.slice(8))) + ')' : ''} · ${slot.start}–${slotEnd(slot.start, slot.mins)}`;
   return `${DOW[new Date(slot.day + 'T00:00:00Z').getUTCDay()]} ${fmtDay(slot.day)} · ${slot.start}–${slotEnd(slot.start, slot.mins)}`;
 }
 export const SLOT_LENGTHS = [15, 30, 45, 60, 90, 120, 180, 240, 360, 480];
@@ -1092,11 +1095,12 @@ const lengthWord = (m) => (m < 60 ? `${m} min` : `${m / 60} hour${m === 60 ? '' 
 function planBox(ctx, p, today) {
   const { ui } = ctx;
   if (ui.planOpen !== p.id) return null;
-  const f = (ui.planForm && ui.planForm.id === p.id) ? ui.planForm : (ui.planForm = { id: p.id, day: p.slot ? p.slot.day : today, start: p.slot ? p.slot.start : '10:00', mins: p.slot ? p.slot.mins : 60 });
+  const f = (ui.planForm && ui.planForm.id === p.id) ? ui.planForm : (ui.planForm = { id: p.id, day: p.slot ? p.slot.day : today, start: p.slot ? p.slot.start : '10:00', mins: p.slot ? p.slot.mins : 60, repeat: (p.slot && p.slot.repeat) || '' });
   const save = () => {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(f.day) || !/^([01]\d|2[0-3]):[0-5]\d$/.test(f.start)) { ctx.toast('Pick a day and a time'); return; }
     const start = minToTime(Math.round(timeToMin(f.start) / 15) * 15 % (24 * 60)); // (on the quarter hour)
-    ctx.act('setSlot', { projectId: p.id, day: f.day, start, mins: f.mins }, `📅 ${p.name}: ${slotLabel({ day: f.day, start, mins: f.mins })}`);
+    const slot = { day: f.day, start, mins: f.mins, ...(f.repeat ? { repeat: f.repeat } : {}) };
+    ctx.act('setSlot', { projectId: p.id, ...slot }, `📅 ${p.name}: ${slotLabel(slot)}`);
     ui.planOpen = null; ui.planForm = null; ctx.render();
   };
   return h('div', { class: 'plan-box row', key: 'plan-' + p.id, role: 'group', 'aria-label': 'Plan on the calendar' },
@@ -1104,6 +1108,8 @@ function planBox(ctx, p, today) {
     h('label', null, 'At ', h('input', { type: 'time', step: '900', key: 'plan-start-' + p.id, value: f.start, onChange: (e, el) => { f.start = el.value; } })),
     h('label', null, 'For ', h('select', { key: 'plan-mins-' + p.id, value: String(f.mins), onChange: (e, el) => { f.mins = Number(el.value); } },
       SLOT_LENGTHS.map((m) => h('option', { value: String(m) }, lengthWord(m))))),
+    h('label', null, 'Repeat ', h('select', { key: 'plan-repeat-' + p.id, value: f.repeat, onChange: (e, el) => { f.repeat = el.value; } },
+      SLOT_REPEATS.map(([k, word]) => h('option', { value: k }, word)))),
     h('button', { class: 'btn primary small', type: 'button', onClick: save }, 'Save'),
     p.slot ? h('button', { class: 'btn small', type: 'button', onClick: () => { ctx.act('setSlot', { projectId: p.id, day: null }, `📅 ${p.name}: off the calendar`); ui.planOpen = null; ui.planForm = null; ctx.render(); } }, 'Off the calendar') : null,
     h('button', { class: 'link small', type: 'button', onClick: () => { ui.planOpen = null; ui.planForm = null; ctx.render(); } }, 'Cancel'));

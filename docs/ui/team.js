@@ -698,9 +698,9 @@ export function createTeam(opts) {
     const days = calendarDays(mode, day), first = days[0], last = days[days.length - 1];
     const all = state.data.tasks || [];
     const colour = (t) => (t.today ? 'green' : t.stuck || t.late ? 'red' : t.dueToday ? 'yellow' : 'grey');
-    const items = all.filter((t) => t.slot && t.slot.day >= first && t.slot.day <= last)
-      .map((t) => ({ id: String(t.id), title: t.title, day: t.slot.day, start: t.slot.start, mins: t.slot.mins, colour: colour(t), sub: t.assignee.name }));
-    const allDay = all.filter((t) => t.dueDate && t.dueDate >= first && t.dueDate <= last && !(t.slot && t.slot.day === t.dueDate))
+    const items = all.filter((t) => t.slot && t.slot.day <= last) // (🔁 a repeating task: on each day it is due)
+      .flatMap((t) => days.filter((d) => rules.slotDueOn(t, d)).map((d) => ({ id: String(t.id), title: t.title, day: d, start: t.slot.start, mins: t.slot.mins, colour: colour(t), sub: t.assignee.name })));
+    const allDay = all.filter((t) => t.dueDate && t.dueDate >= first && t.dueDate <= last && !rules.slotDueOn(t, t.dueDate))
       .map((t) => ({ id: String(t.id), title: `${t.title} · ${t.assignee.name}`, day: t.dueDate, colour: colour(t) }));
     return calendarView({
       mode, day, today: td, items, allDay,

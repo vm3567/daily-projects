@@ -14,6 +14,13 @@ export function dueOn(t, day) {
   return !(t.skipSunday && wd === 0);
 }
 
+/** 📅 Is a team task's calendar time on `day`? A repeating task (daily / weekly) is there on each day it is due, from its
+ *  time's first day on (owner, 25 Nov: "calendar option for recurring also"); a one-time task only on that day. Pure: tested. */
+export function slotDueOn(t, day) {
+  if (!t || !t.slot || !day || day < t.slot.day) return false;
+  return t.repeat === 'daily' || t.repeat === 'weekly' ? dueOn(t, day) : day === t.slot.day;
+}
+
 /** What a waiting outbox item belongs to: later items of the same thing wait behind one that keeps failing. */
 export const itemKey = (it) => (it.kind === 'step' ? 'p:' + it.projectRef : it.kind === 'suggest' ? 's:' + it.id : 't:' + it.taskId);
 

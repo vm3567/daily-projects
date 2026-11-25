@@ -73,3 +73,5 @@ Each lesson: what went wrong, then what to do next time.
 23. **A new kind of plan must count in the colour rule.** The calendar added a planned time, but `dotColour` only
     looked at days since the last update, so a task planned for Saturday still showed red.
     → When a feature adds a new way to "deal with" a task (plan, snooze, give), check `dotColour` / `colourWhy` use it.
+24. **"Every month on the 30th" has no 30th in February.** A monthly repeat must say what happens in short months.
+    → For a date that repeats monthly, use the last day of a shorter month, and test February and a 30-day month.
